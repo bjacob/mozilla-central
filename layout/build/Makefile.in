@@ -335,4 +335,6 @@ endif #}
 
 LOCAL_INCLUDES	+= -I$(topsrcdir)/dom/camera
 
+SHARED_LIBRARY_LIBS += $(DEPTH)/dom/refgraph/$(LIB_PREFIX)domrefgraph_s.$(LIB_SUFFIX)
+
 DEFINES += -D_IMPL_NS_LAYOUT

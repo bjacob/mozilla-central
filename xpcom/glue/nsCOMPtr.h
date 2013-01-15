@@ -39,6 +39,7 @@
 
 #include "nsCycleCollectionNoteChild.h"
 
+#include "mozilla/RefgraphInstrumentation.h"
 
 /*
   WARNING:
@@ -103,11 +104,11 @@
   */
 
 #ifndef NSCAP_ADDREF
-  #define NSCAP_ADDREF(this, ptr)     (ptr)->AddRef()
+  #define NSCAP_ADDREF(this, ptr) NS_ADDREF(ptr)
 #endif
 
 #ifndef NSCAP_RELEASE
-  #define NSCAP_RELEASE(this, ptr)    (ptr)->Release()
+  #define NSCAP_RELEASE(this, ptr) NS_RELEASE(ptr)
 #endif
 
   // Clients can define |NSCAP_LOG_ASSIGNMENT| to perform logging.
@@ -420,8 +421,10 @@ nsCOMPtr_base
       NS_COM_GLUE void NS_FASTCALL   assign_from_helper( const nsCOMPtr_helper&, const nsIID& );
       NS_COM_GLUE void** NS_FASTCALL begin_assignment();
 
+      void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
     protected:
       NS_MAY_ALIAS_PTR(nsISupports) mRawPtr;
+      refgraph::StrongRefMarker mMarker;
 
       void
       assign_assuming_AddRef( nsISupports* newPtr )
@@ -448,7 +451,7 @@ nsCOMPtr_base
 template <class T>
 class nsCOMPtr MOZ_FINAL
 #ifdef NSCAP_FEATURE_USE_BASE
-    : private nsCOMPtr_base
+    : protected nsCOMPtr_base
 #endif
   {
 
@@ -481,9 +484,11 @@ class nsCOMPtr MOZ_FINAL
 
     private:
       T* mRawPtr;
+      refgraph::StrongRefMarker mMarker;
 #endif
 
     public:
+      void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
       typedef T element_type;
       
 #ifndef NSCAP_FEATURE_USE_BASE
@@ -833,9 +838,10 @@ class nsCOMPtr MOZ_FINAL
 
 template <>
 class nsCOMPtr<nsISupports>
-    : private nsCOMPtr_base
+    : protected nsCOMPtr_base
   {
     public:
+      void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
       typedef nsISupports element_type;
 
         // Constructors
@@ -1142,6 +1148,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             const char* aName,
                             uint32_t aFlags = 0)
 {
+  aField.SetTraversedByCC();
   CycleCollectionNoteChild(aCallback, aField.get(), aName, aFlags);
 }
 

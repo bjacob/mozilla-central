@@ -9,6 +9,8 @@
 #include "nsTHashtable.h"
 #include "nsHashKeys.h"
 
+#include "mozilla/RefgraphInstrumentation.h"
+
 class nsIFrame;
 
 namespace mozilla {
@@ -165,6 +167,7 @@ protected:
 
     const FramePropertyDescriptor* mProperty;
     void* mValue;
+    refgraph::StrongRefMarker mDummyMarker;
   };
 
   /**

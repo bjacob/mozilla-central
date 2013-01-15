@@ -90,3 +90,4 @@ toolkit.jar:
    content/global/macWindowMenu.js             (macWindowMenu.js)
 #endif
    content/global/svg/svgBindings.xml          (/layout/svg/resources/content/svgBindings.xml)
+   content/global/refgraph.html

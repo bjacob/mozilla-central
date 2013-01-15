@@ -37,6 +37,7 @@ nsCOMArray_base::nsCOMArray_base(const nsCOMArray_base& aOther)
     // make sure we do only one allocation
     mArray.SetCapacity(aOther.Count());
     AppendObjects(aOther);
+    mArray.mMarker.SetHereditary();
 }
 
 nsCOMArray_base::~nsCOMArray_base()

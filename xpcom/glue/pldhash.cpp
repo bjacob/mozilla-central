@@ -18,6 +18,8 @@
 #include "nsAlgorithm.h"
 #include "mozilla/Likely.h"
 
+#include "mozilla/RefgraphInstrumentation.h"
+
 #ifdef PL_DHASHMETER
 # if defined MOZILLA_CLIENT && defined DEBUG_XXXbrendan
 #  include "nsTraceMalloc.h"
@@ -81,7 +83,11 @@ using namespace mozilla;
 void *
 PL_DHashAllocTable(PLDHashTable *table, uint32_t nbytes)
 {
-    return malloc(nbytes);
+    void *ptr = malloc(nbytes);
+#ifndef NO_MOZ_GLUE
+    refgraph_set_type(ptr, "pldhash entryStore");
+#endif
+    return ptr;
 }
 
 void

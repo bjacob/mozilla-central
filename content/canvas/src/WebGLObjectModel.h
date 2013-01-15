@@ -9,6 +9,8 @@
 #include "nsCycleCollectionNoteChild.h"
 #include "nsICanvasRenderingContextInternal.h"
 
+#include "mozilla/RefgraphInstrumentation.h"
+
 // Manual reflection of WebIDL typedefs
 typedef uint32_t WebGLenum;
 typedef uint32_t WebGLbitfield;
@@ -235,6 +237,8 @@ public:
         return *get();
     }
 
+    void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
+
 private:
 
     static void AddRefOnPtr(T* rawPtr) {
@@ -264,6 +268,7 @@ private:
 
 protected:
     T *mRawPtr;
+    refgraph::StrongRefMarker mMarker;
 };
 
 // This class is a mixin for objects that are tied to a specific
@@ -340,6 +345,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             const char* aName,
                             uint32_t aFlags = 0)
 {
+  aField.SetTraversedByCC();
   CycleCollectionNoteEdgeName(aCallback, aName, aFlags);
   aCallback.NoteXPCOMChild(aField);
 }

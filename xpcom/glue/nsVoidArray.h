@@ -10,6 +10,7 @@
 #include "nsDebug.h"
 
 #include "mozilla/StandardInteger.h"
+#include "mozilla/RefgraphInstrumentation.h"
 
 // Comparator callback function for sorting array values.
 typedef int (* nsVoidArrayComparatorFunc)
@@ -134,6 +135,7 @@ protected:
   };
 
   Impl* mImpl;
+  refgraph::StrongRefMarker mMarker;
 #if DEBUG_VOIDARRAY
   int32_t mMaxCount;
   int32_t mMaxSize;
@@ -146,6 +148,8 @@ protected:
 private:
   /// Copy constructors are not allowed
   nsVoidArray(const nsVoidArray& other);
+
+  friend class nsCOMArray_base;
 };
 
 //===================================================================

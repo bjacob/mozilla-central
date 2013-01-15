@@ -1,0 +1,71 @@
+<html>
+<script>
+  var refgraph;
+  function start() {
+    refgraph = new Refgraph();
+  }
+  function indent(level) {
+    var r = "";
+    for (var i = 0; i < level; i++) {
+      r += "    ";
+    }
+    return r;
+  }
+  function dumpVertex(vertex, level, root_address, itbcc) {
+    var ind = indent(level);
+    var output = "";
+    output += ind + "type name: " + vertex.typeName + "\n";
+    output += ind + "address: 0x" + vertex.address.toString(16) + "\n";
+    output += ind + "size: " + vertex.size + " bytes\n";
+    if (level >= 2 &&
+        root_address == vertex.address &&
+        itbcc == false)
+    {
+      output += ind + "*** CYCLE NOT TRAVERSED BY THE CC! ***\n";
+    }
+    if (level <= 2) {
+      var edgeCount = vertex.edgeCount;
+      for (var i = 0; i < edgeCount; i++) {
+        var edge = vertex.edge(i);
+        if (edge.isStrong) {
+          var isTraversedByCC = edge.isTraversedByCC;
+          output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " edge\n";
+          output += dumpVertex(edge.target, level + 1, root_address, itbcc && isTraversedByCC);
+        }
+      }
+    }
+    return output;
+  }
+  function typeSearch() {
+    var searchQuery = document.getElementById("searchquery").value;
+    var searchResults = refgraph.typeSearch(searchQuery);
+    var resultText = "";
+    for (var i = 0; i < searchResults.length; i++) {
+      if (searchResults[i].typeName) {
+        resultText += searchResults[i].objectCount + " " + searchResults[i].typeName + "\n";
+      } else {
+        resultText += searchResults[i].objectCount + " <No type information>\n";
+      }
+    }
+    if (searchResults.length >= 1) {
+      var typeName = searchResults[0].typeName;
+      resultText += "\n\nFirst result: " + typeName + "\n";
+      var vertexCount = 0;
+      for(var vertex = refgraph.findVertex(typeName, null);
+          vertex != null && vertexCount < 10;
+          vertex = refgraph.findVertex(typeName, vertex))
+      {
+        resultText += "\n\nVertex:\n\n";
+        resultText += dumpVertex(vertex, 0, vertex.address, true);
+        vertexCount++;
+      }
+    }
+    document.getElementById("results").textContent = resultText;
+  }
+</script>
+<body onload="start()">
+  Type search: <input type="text" id="searchquery">
+  <input type="button" value="Search" onClick="typeSearch()"/>
+  <pre id="results"/>
+</body>
+</html>

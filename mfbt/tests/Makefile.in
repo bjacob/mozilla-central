@@ -30,7 +30,7 @@ MOZ_GLUE_LDFLAGS =
 WRAP_LDFLAGS=
 
 # Since we link directly with MFBT object files, define IMPL_MFBT
-DEFINES += -DIMPL_MFBT
+DEFINES += -DIMPL_MFBT -DNO_MOZ_GLUE
 
 include $(topsrcdir)/config/rules.mk
 

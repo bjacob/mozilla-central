@@ -20,8 +20,8 @@ class NS_COM_GLUE nsCOMArray_base
 {
     friend class nsArray;
 protected:
-    nsCOMArray_base() {}
-    nsCOMArray_base(int32_t aCount) : mArray(aCount) {}
+    nsCOMArray_base() { mArray.mMarker.SetHereditary(); }
+    nsCOMArray_base(int32_t aCount) : mArray(aCount) { mArray.mMarker.SetHereditary(); }
     nsCOMArray_base(const nsCOMArray_base& other);
     ~nsCOMArray_base();
 
@@ -59,6 +59,8 @@ protected:
     bool RemoveObject(nsISupports *aObject);
 
 public:
+    void SetTraversedByCC() { mArray.SetTraversedByCC(); }
+
     // elements in the array (including null elements!)
     int32_t Count() const {
         return mArray.Length();
@@ -129,6 +131,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
     aFlags |= CycleCollectionEdgeNameArrayFlag;
+    aField.SetTraversedByCC();
     size_t length = aField.Count();
     for (size_t i = 0; i < length; ++i) {
         CycleCollectionNoteChild(aCallback, aField[i], aName, aFlags);
@@ -292,6 +295,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
     aFlags |= CycleCollectionEdgeNameArrayFlag;
+    aField.SetTraversedByCC();
     size_t length = aField.Count();
     for (size_t i = 0; i < length; ++i) {
         CycleCollectionNoteChild(aCallback, aField[i], aName, aFlags);

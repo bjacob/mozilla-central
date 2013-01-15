@@ -123,6 +123,7 @@ nsTArray_base<Alloc>::EnsureCapacity(size_type capacity, size_type elemSize) {
     header->mCapacity = capacity;
     header->mIsAutoArray = 0;
     mHdr = header;
+    refgraph::SetType(mHdr);
 
     return true;
   }
@@ -175,6 +176,7 @@ nsTArray_base<Alloc>::EnsureCapacity(size_type capacity, size_type elemSize) {
   header->mCapacity = newCapacity;
 
   mHdr = header;
+  refgraph::SetType(mHdr);
 
   return true;
 }
@@ -199,6 +201,8 @@ nsTArray_base<Alloc>::ShrinkCapacity(size_type elemSize, size_t elemAlign) {
 
     Alloc::Free(mHdr);
     mHdr = header;
+    refgraph::SetType(mHdr);
+
     return;
   }
 
@@ -215,6 +219,7 @@ nsTArray_base<Alloc>::ShrinkCapacity(size_type elemSize, size_t elemAlign) {
     return;
   mHdr = static_cast<Header*>(ptr);
   mHdr->mCapacity = length;
+  refgraph::SetType(mHdr);
 }
 
 template<class Alloc>
@@ -413,6 +418,7 @@ nsTArray_base<Alloc>::EnsureNotUsingAutoArrayBuffer(size_type elemSize) {
     memcpy(header, mHdr, size);
     header->mCapacity = Length();
     mHdr = header;
+    refgraph::SetType(mHdr);
   }
   
   return true;

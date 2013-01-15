@@ -76,7 +76,7 @@ struct BLK_HDR
     size_t   size;
 };
 
-#define XPT_MIN_BLOCK_SIZE 32
+#define XPT_MIN_BLOCK_SIZE 1
 
 /* XXX this is lame. Should clone the code to do this bitwise */
 #define ALIGN_RND(s,a) ((a)==1?(s):((((s)+(a)-1)/(a))*(a)))

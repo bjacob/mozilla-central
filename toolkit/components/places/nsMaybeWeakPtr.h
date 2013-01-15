@@ -86,9 +86,10 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
   aFlags |= CycleCollectionEdgeNameArrayFlag;
+  aField.SetTraversedByCC();
   size_t length = aField.Length();
   for (size_t i = 0; i < length; ++i) {
-    CycleCollectionNoteChild(aCallback, aField[i].get(), aName, aFlags);
+    ImplCycleCollectionTraverse(aCallback, aField[i], aName, aFlags);
   }
 }
 

@@ -21,6 +21,8 @@
 #include "nsTraceRefcnt.h"
 #include NEW_H
 
+#include "mozilla/RefgraphInstrumentation.h"
+
 //
 // nsTArray is a resizable array class, like std::vector.
 //
@@ -268,6 +270,8 @@ protected:
   typedef nsTArrayHeader Header;
 
 public:
+  void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
+
   typedef uint32_t size_type;
   typedef uint32_t index_type;
 
@@ -391,6 +395,8 @@ protected:
   // The array's elements (prefixed with a Header).  This pointer is never
   // null.  If the array is empty, then this will point to sEmptyHdr.
   Header *mHdr;
+  refgraph::StrongRefMarker mMarker;
+  friend class nsCOMArray_base;
 
   Header* Hdr() const { 
     return mHdr;
@@ -1357,6 +1363,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
   aFlags |= CycleCollectionEdgeNameArrayFlag;
+  aField.SetTraversedByCC();
   size_t length = aField.Length();
   for (size_t i = 0; i < length; ++i) {
     ImplCycleCollectionTraverse(aCallback, aField[i], aName, aFlags);
@@ -1533,7 +1540,7 @@ public:
 // the auto array to make its size a multiple of alignof(void*) == 8 bytes.
 
 MOZ_STATIC_ASSERT(sizeof(nsAutoTArray<uint32_t, 2>) ==
-                  sizeof(void*) + sizeof(nsTArrayHeader) + sizeof(uint32_t) * 2,
+                  sizeof(void*) + sizeof(nsTArrayHeader) + sizeof(uint32_t) * 2 + sizeof(refgraph::StrongRefMarker),
                   "nsAutoTArray shouldn't contain any extra padding, "
                   "see the comment");
 

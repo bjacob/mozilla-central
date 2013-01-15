@@ -26,12 +26,14 @@
 #include "nsISupportsImpl.h"
 #endif
 
+#include "mozilla/RefgraphInstrumentation.h"
+
 /**
  * Macro for adding a reference to an interface.
  * @param _ptr The interface pointer.
  */
 #define NS_ADDREF(_ptr) \
-  (_ptr)->AddRef()
+  refgraph::SetType(&*(_ptr))->AddRef()
 
 /**
  * Macro for adding a reference to this. This macro should be used
@@ -40,7 +42,7 @@
  * that entire problem.
  */
 #define NS_ADDREF_THIS() \
-  AddRef()
+  NS_ADDREF(this)
 
 
 extern "C++" {
@@ -56,7 +58,7 @@ void
 ns_if_addref( T expr )
 {
     if (expr) {
-        expr->AddRef();
+        NS_ADDREF(expr);
     }
 }
 

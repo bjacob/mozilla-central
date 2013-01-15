@@ -38,7 +38,7 @@ FramePropertyTable::Set(nsIFrame* aFrame, const FramePropertyDescriptor* aProper
     // We need to expand the single current entry to an array
     PropertyValue current = entry->mProp;
     entry->mProp.mProperty = nullptr;
-    MOZ_STATIC_ASSERT(sizeof(nsTArray<PropertyValue>) <= sizeof(void *),
+    MOZ_STATIC_ASSERT(sizeof(nsTArray<PropertyValue>) <= sizeof(void *) + sizeof(refgraph::StrongRefMarker),
                       "Property array must fit entirely within entry->mProp.mValue");
     new (&entry->mProp.mValue) nsTArray<PropertyValue>(4);
     entry->mProp.ToArray()->AppendElement(current);

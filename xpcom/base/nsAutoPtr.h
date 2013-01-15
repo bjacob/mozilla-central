@@ -16,6 +16,8 @@
 
 #include "nsCycleCollectionNoteChild.h"
 
+#include "mozilla/RefgraphInstrumentation.h"
+
 /*****************************************************************************/
 
 // template <class T> class nsAutoPtrGetterTransfers;
@@ -844,7 +846,7 @@ class nsRefPtr
       assign_with_AddRef( T* rawPtr )
         {
           if ( rawPtr )
-            rawPtr->AddRef();
+            NSCAP_ADDREF(this, rawPtr);
           assign_assuming_AddRef(rawPtr);
         }
 
@@ -866,10 +868,12 @@ class nsRefPtr
 
     private:
       T* mRawPtr;
+      refgraph::StrongRefMarker mMarker;
 
     public:
+      void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
       typedef T element_type;
-      
+
      ~nsRefPtr()
         {
           if ( mRawPtr )
@@ -889,7 +893,7 @@ class nsRefPtr
           // copy-constructor
         {
           if ( mRawPtr )
-            mRawPtr->AddRef();
+            NSCAP_ADDREF(this, mRawPtr);
         }
 
       nsRefPtr( T* aRawPtr )
@@ -897,7 +901,7 @@ class nsRefPtr
           // construct from a raw pointer (of the right type)
         {
           if ( mRawPtr )
-            mRawPtr->AddRef();
+            NSCAP_ADDREF(this, mRawPtr);
         }
 
       template <typename I>
@@ -1088,6 +1092,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             const char* aName,
                             uint32_t aFlags = 0)
 {
+  aField.SetTraversedByCC();
   CycleCollectionNoteChild(aCallback, aField.get(), aName, aFlags);
 }
 

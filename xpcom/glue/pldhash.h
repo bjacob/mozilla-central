@@ -12,6 +12,7 @@
  */
 #include "mozilla/Types.h"
 #include "nscore.h"
+#include "mozilla/RefgraphInstrumentation.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -174,6 +175,7 @@ struct PLDHashTable {
     uint32_t            removedCount;   /* removed entry sentinels in table */
     uint32_t            generation;     /* entry storage generation number */
     char                *entryStore;    /* entry storage */
+    refgraph::StrongRefMarker mMarker;
 #ifdef PL_DHASHMETER
     struct PLDHashStats {
         uint32_t        searches;       /* total number of table searches */

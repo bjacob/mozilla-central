@@ -26,6 +26,8 @@ EXPORTS_mozilla += \
   MSStdInt.h \
   NullPtr.h \
   RangedPtr.h \
+  RefgraphInstrumentation.h \
+  RefgraphSTLAllocatorBypassingInstrumentation.h \
   RefPtr.h \
   Scoped.h \
   StandardInteger.h \

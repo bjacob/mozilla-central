@@ -9,11 +9,20 @@ VPATH           = @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
-# Build jemalloc3 as a replace-malloc lib when building with mozjemalloc
-ifndef MOZ_JEMALLOC
-DIRS += jemalloc
-endif
+MODULE = memory
+LIBRARY_NAME = refgraph_replace_malloc
+FORCE_SHARED_LIB = 1
+NO_DIST_INSTALL = 1
 
-DIRS += refgraph
+CPPSRCS = \
+  refgraph_replace_malloc.cpp \
+  refgraph_scanner.cpp \
+  $(NULL)
+
+LOCAL_INCLUDES += -I$(topsrcdir)/memory/build
+
+MOZ_GLUE_LDFLAGS = # Don't link against mozglue
+WRAP_LDFLAGS = # Never wrap malloc function calls with -Wl,--wrap
+STL_FLAGS =
 
 include $(topsrcdir)/config/rules.mk

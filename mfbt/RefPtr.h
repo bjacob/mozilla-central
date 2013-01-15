@@ -10,6 +10,7 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/RefgraphInstrumentation.h"
 
 namespace mozilla {
 
@@ -53,6 +54,9 @@ class RefCounted
     void AddRef() {
       MOZ_ASSERT(refCnt >= 0);
       ++refCnt;
+      // it is tempting to call refgraph::SetType here, but
+      // that would be inconsistent with the fact that elsewhere we call it
+      // on the RefPtr side where we call AddRef, not in AddRef itself.
     }
 
     void Release() {
@@ -147,10 +151,13 @@ class RefPtr
     }
 
     T* ptr;
+    refgraph::StrongRefMarker mMarker;
 
     static MOZ_ALWAYS_INLINE T* ref(T* t) {
-      if (t)
+      if (t) {
         t->AddRef();
+        refgraph::SetType(t);
+      }
       return t;
     }
 

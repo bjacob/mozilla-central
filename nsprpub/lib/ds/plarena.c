@@ -96,6 +96,8 @@ PR_IMPLEMENT(void) PL_InitArenaPool(
     pool->first.base = pool->first.avail = pool->first.limit =
         (PRUword)PL_ARENA_ALIGN(pool, &pool->first + 1);
     pool->current = &pool->first;
+
+#if 0
     /*
      * Compute the net size so that each arena's gross size is |size|.
      * sizeof(PLArena) + pool->mask is the header and alignment slop
@@ -105,6 +107,8 @@ PR_IMPLEMENT(void) PL_InitArenaPool(
         pool->arenasize = size - (sizeof(PLArena) + pool->mask);
     else
         pool->arenasize = size;
+#endif
+    pool->arenasize = 0;
 #ifdef PL_ARENAMETER
     memset(&pool->stats, 0, sizeof pool->stats);
     pool->stats.name = strdup(name);
@@ -148,7 +152,7 @@ PR_IMPLEMENT(void *) PL_ArenaAllocate(PLArenaPool *pool, PRUint32 nb)
     PR_ASSERT((nb & pool->mask) == 0);
     
     nb = (PRUword)PL_ARENA_ALIGN(pool, nb); /* force alignment */
-
+#if 0
     /* attempt to allocate from arenas at pool->current */
     {
         a = pool->current;
@@ -192,7 +196,7 @@ PR_IMPLEMENT(void *) PL_ArenaAllocate(PLArenaPool *pool, PRUint32 nb)
         }
         UnlockArena();
     }
-
+#endif
     /* attempt to allocate from the heap */ 
     {  
         PRUint32 sz = PR_MAX(pool->arenasize, nb);

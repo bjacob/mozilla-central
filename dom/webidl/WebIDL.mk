@@ -202,3 +202,4 @@ else
 test_webidl_files := $(NULL)
 endif
 
+webidl_files += Refgraph.webidl

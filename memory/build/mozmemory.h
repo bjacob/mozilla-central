@@ -86,6 +86,12 @@ MOZ_JEMALLOC_API void jemalloc_purge_freed_pages();
  */
 MOZ_JEMALLOC_API void jemalloc_free_dirty_pages();
 
+MOZ_JEMALLOC_API void refgraph_dump_to_buffer(const char**, size_t*);
+MOZ_JEMALLOC_API void refgraph_dump_to_file(const char*);
+MOZ_JEMALLOC_API void refgraph_set_type(const void*, const char*);
+MOZ_JEMALLOC_API void* refgraph_uninstrumented_malloc(size_t);
+MOZ_JEMALLOC_API void refgraph_uninstrumented_free(void*);
+
 MOZ_END_EXTERN_C
 
 #endif /* mozmemory_h */

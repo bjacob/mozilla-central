@@ -275,6 +275,55 @@ jemalloc_free_dirty_pages_impl()
     replace_jemalloc_free_dirty_pages();
 }
 
+void
+refgraph_dump_to_buffer_impl(const char** buffer, size_t* length)
+{
+  if (MOZ_UNLIKELY(!replace_malloc_initialized))
+    init();
+  if (!MOZ_LIKELY(!replace_refgraph_dump_to_buffer))
+    replace_refgraph_dump_to_buffer(buffer, length);
+}
+
+void
+refgraph_dump_to_file_impl(const char* filename)
+{
+  if (MOZ_UNLIKELY(!replace_malloc_initialized))
+    init();
+  if (!MOZ_LIKELY(!replace_refgraph_dump_to_file))
+    replace_refgraph_dump_to_file(filename);
+}
+
+void
+refgraph_set_type_impl(const void* pointer, const char* typehint)
+{
+  if (MOZ_UNLIKELY(!replace_malloc_initialized))
+    init();
+  if (!MOZ_LIKELY(!replace_refgraph_set_type))
+    replace_refgraph_set_type(pointer, typehint);
+}
+
+void*
+refgraph_uninstrumented_malloc_impl(size_t size)
+{
+  if (MOZ_UNLIKELY(!replace_malloc_initialized))
+    init();
+  return malloc_table.malloc(size);
+}
+
+void
+refgraph_uninstrumented_free_impl(void* ptr)
+{
+  if (MOZ_UNLIKELY(!replace_malloc_initialized))
+    init();
+  malloc_table.free(ptr);
+}
+
+void je_refgraph_dump_to_buffer(const char** buffer, size_t* length) {}
+void je_refgraph_dump_to_file(const char* name) {}
+void je_refgraph_set_type(const void* pointer, const char* typehint) {}
+void* je_refgraph_uninstrumented_malloc(size_t size) { return NULL; }
+void je_refgraph_uninstrumented_free(void* ptr) {}
+
 /* The following comment and definitions are from jemalloc.c: */
 #if defined(__GLIBC__) && !defined(__UCLIBC__)
 
