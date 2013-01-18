@@ -10,7 +10,9 @@
 
 template<class Alloc>
 nsTArray_base<Alloc>::nsTArray_base()
-  : mHdr(EmptyHdr()) {
+  : mHdr(EmptyHdr())
+  , mMarker(this)
+{
   MOZ_COUNT_CTOR(nsTArray_base);
 }
 

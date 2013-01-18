@@ -65,31 +65,11 @@ bool Refgraph::ParseNumber(const char* start,
   return true;
 }
 
-bool Refgraph::ParseTwoNumbers(const char* start,
-                               const char* end,
-                               uint64_t* result1,
-                               uint64_t* result2)
-{
-  const char* afterFirst;
-  return ParseNumber(start, end, result1, &afterFirst) &&
-         ParseNumber(afterFirst, end, result2);
-}
-
-bool Refgraph::ParseThreeNumbers(const char* start,
-                                 const char* end,
-                                 uint64_t* result1,
-                                 uint64_t* result2,
-                                 uint64_t* result3)
-{
-  const char* afterFirst;
-  const char* afterSecond;
-  return ParseNumber(start, end, result1, &afterFirst) &&
-         ParseNumber(afterFirst, end, result2, &afterSecond) &&
-         ParseNumber(afterSecond, end, result3);
-}
-
 bool Refgraph::Demangle(const char* in, size_t length, string_t& out)
 {
+  if (!length) {
+    return false;
+  }
   const size_t inputBufferCapacity = length + 1;
   if (inputBufferCapacity > mDemanglingInputBufferCapacity) {
     mDemanglingInputBufferCapacity = inputBufferCapacity;
@@ -146,8 +126,11 @@ bool Refgraph::HandleLine_b(const char* start, const char* end)
 
 bool Refgraph::HandleLine_r(const char* start, const char* end)
 {
+  const char* pos = start;
   uint64_t target, offset, flags;
-  bool success = ParseThreeNumbers(start, end, &target, &offset, &flags);
+  bool success = ParseNumber(pos, end, &target, &pos) &&
+                 ParseNumber(pos, end, &offset, &pos) &&
+                 ParseNumber(pos, end, &flags, &pos);
   if (!success) {
     return false;
   }
@@ -160,14 +143,20 @@ bool Refgraph::HandleLine_r(const char* start, const char* end)
   if (flags > 0xf) {
     return false;
   }
+  while(*pos == ' ' && pos != end) {
+    pos++;
+  }
   mCurrentBlock->refs.push_back(ref_t(target, flags, offset));
+  Demangle(pos, end - pos, mCurrentBlock->refs.back().reftypename);
   return true;
 }
 
 bool Refgraph::HandleLine_m(const char* start, const char* end)
 {
   uint64_t address, size;
-  bool success = ParseTwoNumbers(start, end, &address, &size);
+  const char* pos = start;
+  bool success = ParseNumber(pos, end, &address, &pos) &&
+                 ParseNumber(pos, end, &size);
   if (!success) {
     return false;
   }
@@ -279,7 +268,7 @@ bool Refgraph::Parse(const char* buffer, size_t length)
   }
 }
 
-bool Refgraph::ResolveHereditaryStrongRefs()
+void Refgraph::ResolveHereditaryStrongRefs()
 {
   ScopedAssertWorkspacesClear sawc(this);
 
@@ -316,8 +305,87 @@ bool Refgraph::ResolveHereditaryStrongRefs()
 
     bi->workspace = 0;
   }
+}
 
-  return true;
+void Refgraph::RecurseStronglyConnectedComponents(
+                 uint32_t& v_index,
+                 uint32_t& scc_index,
+                 index_vector_t& stack)
+{
+  block_t& v = mBlocks[v_index];
+  v.scc_index = scc_index;
+  v.workspace = scc_index;
+  scc_index++;
+  stack.push_back(v_index);
+
+  for (refs_vector_t::const_iterator ri = v.refs.begin();
+       ri != v.refs.end();
+       ++ri)
+  {
+    if (!(ri->flags & strongRefFlag)) {
+      continue;
+    }
+    uint32_t w_index = ri->target;
+    if (w_index == v_index) {
+      continue;
+    }
+    block_t& w = mBlocks[w_index];
+    if (!w.scc_index) {
+      RecurseStronglyConnectedComponents(w_index, scc_index, stack);
+      v.workspace = std::min(v.workspace, w.workspace);
+    } else if (std::binary_search(stack.begin(), stack.end(), w_index)) {
+      v.workspace = std::min(v.workspace, uint64_t(w.scc_index));
+    }
+  }
+
+  if (v.workspace == v.scc_index) {
+    uint32_t w_index = stack.back();
+    index_vector_t scc;
+    while (w_index != v_index) {
+      stack.pop_back();
+      scc.push_back(w_index);
+      w_index = stack.back();
+    }
+    MOZ_ASSERT(stack.back() == v_index);
+    stack.pop_back();
+    if (scc.size()) {
+      scc.push_back(v_index);
+      mSCCs.push_back(scc);
+    }
+  }
+}
+
+void Refgraph::ComputeStronglyConnectedComponents()
+{
+  ScopedAssertWorkspacesClear sawc(this);
+
+  index_vector_t stack;
+  uint32_t scc_index = 1;
+
+  for (uint32_t vertex_index = 0;
+       vertex_index < mBlocks.size();
+       ++vertex_index)
+  {
+    block_t& v = mBlocks[vertex_index];
+    if (!v.scc_index) {
+      RecurseStronglyConnectedComponents(vertex_index, scc_index, stack);
+    }
+  }
+
+  for (blocks_vector_t::iterator bi = mBlocks.begin();
+       bi != mBlocks.end();
+       ++bi)
+  {
+    bi->scc_index = -1;
+    bi->workspace = 0;
+  }
+
+  for (size_t i = 0; i < mSCCs.size(); i++) {
+    index_vector_t& scc = mSCCs[i];
+    for (size_t j = 0; j < scc.size(); j++) {
+      mBlocks[scc[j]].scc_index = i;
+    }
+  }
 }
 
 void Refgraph::AssertWorkspacesClear()
@@ -355,14 +423,17 @@ bool Refgraph::Acquire()
     return false;
   }
 
-  for (block_index_t index = 0;
+  for (uint32_t index = 0;
        index < mBlocks.size();
        index++)
   {
     mMapTypesToBlockIndices.insert(map_types_to_block_indices_t::value_type(mBlocks[index].type, index));
   }
 
-  return ResolveHereditaryStrongRefs();
+  ResolveHereditaryStrongRefs();
+  ComputeStronglyConnectedComponents();
+
+  return true;
 }
 
 already_AddRefed<Refgraph>
@@ -409,6 +480,34 @@ Refgraph::FindVertex(const nsAString& typeName,
   return r.forget();
 }
 
+already_AddRefed<RefgraphVertex>
+Refgraph::FindVertex(uint64_t address)
+{
+  block_t b;
+  b.address = address;
+  blocks_vector_t::const_iterator it = std::lower_bound(mBlocks.begin(), mBlocks.end(), b);
+  if (it == mBlocks.end() || it->address != address) {
+    return nullptr;
+  }
+  nsRefPtr<RefgraphVertex> r = new RefgraphVertex(this, *it);
+  return r.forget();
+}
+
+uint32_t Refgraph::SccCount() const {
+  return mSCCs.size();
+}
+
+void Refgraph::Scc(uint32_t index, nsTArray<nsRefPtr<RefgraphVertex> >& result)
+{
+  if (index >= SccCount()) {
+    return;
+  }
+  index_vector_t& scc = mSCCs[index];
+  for (size_t i = 0; i < scc.size(); i++) {
+    result.AppendElement(new RefgraphVertex(this, mBlocks[scc[i]]));
+  }
+}
+
 RefgraphEdge::RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref)
   : mParent(parent)
   , mRef(ref)
@@ -429,6 +528,10 @@ bool RefgraphEdge::IsStrong() const {
 
 bool RefgraphEdge::IsTraversedByCC() const {
   return mRef->flags & traversedByCCFlag;
+}
+
+void RefgraphEdge::GetRefTypeName(nsString& retval) const {
+  retval = NS_ConvertASCIItoUTF16(nsDependentCString(mRef->reftypename.c_str()));
 }
 
 RefgraphVertex::RefgraphVertex(Refgraph* parent, map_types_to_block_indices_t::const_iterator block)
@@ -462,6 +565,10 @@ void RefgraphVertex::GetTypeName(nsString& retval) const {
 
 uint32_t RefgraphVertex::EdgeCount() const {
   return mBlock.refs.size();
+}
+
+uint32_t RefgraphVertex::SccIndex() const {
+  return mBlock.scc_index;
 }
 
 already_AddRefed<RefgraphEdge>

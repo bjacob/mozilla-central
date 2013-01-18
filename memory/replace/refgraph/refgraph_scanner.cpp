@@ -110,6 +110,7 @@ class Scanner
     blocks_vector_t::const_iterator target;
     size_t offset;
     uint32_t flags;
+    const char* reftypename;
 
     bool operator<(const ref_t& other) const {
       return target->address + offset < other.target->address + other.offset;
@@ -285,7 +286,7 @@ void Scanner::Scan()
   Print("# m <address> <size>   block metrics: address and size\n");
   Print("# a <address>          gives a frame of allocation call stack\n");
   Print("# t <typename>         type of object (mangled)\n");
-  Print("# r <index> <offset> <flags>  gives a reference into another block\n");
+  Print("# r <index> <offset> <flags> <reftypename> gives a reference into another block\n");
 
   Print("\n");
   Print("n ", mBlocks.size(), "\n");
@@ -419,6 +420,7 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
       r.target = target;
       r.offset = offset;
       r.flags = 0;
+      r.reftypename = nullptr;
       refs.push_back(r);
       current_ref = &refs.back();
     }
@@ -436,7 +438,14 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
 
     scanPos += sizeof(marker_t);
 
+    assertion(scanPos <= stop - sizeof(const char*));
+
+    const char* reftypename = *reinterpret_cast<const char**>(scanPos);
+
+    scanPos += sizeof(const char*);
+
     current_ref->flags |= flags;
+    current_ref->reftypename = reftypename;
   }
 
   if (!refs.size())
@@ -448,6 +457,7 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
   do {
     blocks_vector_t::const_iterator target = it->target;
     size_t offset = it->offset;
+    const char* reftypename = it->reftypename;
     uint32_t flags = 0;
 
     do {
@@ -455,11 +465,17 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
       ++it;
     } while (it != refs.end() &&
              it->target == target &&
-             it->offset == offset);
+             it->offset == offset &&
+             it->reftypename == reftypename);
 
     Print("r ", target - mBlocks.begin());
     Print(" ", offset);
-    Print(" ", flags, "\n");
+    Print(" ", flags);
+    if (reftypename) {
+      Print(" ", reftypename, "\n");
+    } else {
+      Print("\n");
+    }
 
   } while (it != refs.end());
 }

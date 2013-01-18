@@ -159,16 +159,21 @@ append_list_elem(list_elem_t* elem)
   list_elem_t* last = s->prev;
   tie_list_elems(last, elem);
   tie_list_elems(elem, s);
-  uintptr_t payload_address = reinterpret_cast<uintptr_t>(payload_for_list_elem(elem));
-  gPagesMap.MapInterval(payload_address, payload_address + elem->payload_size - 1);
+  payload_t* payload = payload_for_list_elem(elem);
+  uintptr_t payload_address = reinterpret_cast<uintptr_t>(payload);
+  size_t payload_size = payload_size_for_list_elem(elem);
+  gPagesMap.MapInterval(payload_address, payload_address + payload_size - 1);
 }
 
 inline void
 remove_list_elem(list_elem_t* elem)
 {
   assertion(is_actual_list_elem(elem));
-  uintptr_t payload_address = reinterpret_cast<uintptr_t>(payload_for_list_elem(elem));
-  gPagesMap.UnmapInterval(payload_address, payload_address + elem->payload_size - 1);
+  payload_t* payload = payload_for_list_elem(elem);
+  uintptr_t payload_address = reinterpret_cast<uintptr_t>(payload);
+  size_t payload_size = payload_size_for_list_elem(elem);
+  memset(payload, 0x5a, payload_size);
+  gPagesMap.UnmapInterval(payload_address, payload_address + payload_size - 1);
   elem->marker = 0;
   tie_list_elems(elem->prev, elem->next);
 }
@@ -344,27 +349,31 @@ void *replace_realloc(void *oldp, size_t newsize)
     return instrument_new_block(real_block, extra_space, newsize);
   }
 
-  list_elem_t* elem = list_elem_for_payload(static_cast<payload_t*>(oldp));
-  real_block_t* old_real_block = real_block_for_list_elem(elem);
-  const char* type = elem->type;
-  size_t typeOffset = elem->typeOffset;
-  remove_list_elem(elem);
+  list_elem_t* old_elem = list_elem_for_payload(static_cast<payload_t*>(oldp));
+  real_block_t* old_real_block = real_block_for_list_elem(old_elem);
 
   if (!newsize) {
     // this is just a free
+    remove_list_elem(old_elem);
     gMallocFuncsTable->free(old_real_block);
     return dummy_malloc_0();
   }
 
-  real_block_t* new_real_block = static_cast<real_block_t*>(gMallocFuncsTable->realloc(old_real_block, newsize + extra_space));
-  if (!new_real_block)
-    return NULL;
+  // we can't use realloc, because remove_list_elem wants to overwrite the old block with 0x5a's.
+  real_block_t* new_real_block = static_cast<real_block_t*>(gMallocFuncsTable->malloc(newsize + extra_space));
+  payload_t* new_payload = nullptr;
+  if (new_real_block) {
+    new_payload = instrument_new_block(new_real_block, extra_space, newsize);
+    list_elem_t* new_elem = list_elem_for_payload(new_payload);
+    new_elem->type = old_elem->type;
+    new_elem->typeOffset = old_elem->typeOffset;
 
-  payload_t* payload = instrument_new_block(new_real_block, extra_space, newsize);
-  elem = list_elem_for_payload(payload);
-  elem->type = type;
-  elem->typeOffset = typeOffset;
-  return payload;
+    size_t size_to_copy = std::min(newsize, payload_size_for_list_elem(old_elem));
+    memcpy(new_payload, payload_for_list_elem(old_elem), size_to_copy);
+  }
+  remove_list_elem(old_elem);
+  gMallocFuncsTable->free(old_real_block);
+  return new_payload;
 }
 
 void replace_free(void *ptr)

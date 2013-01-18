@@ -1,8 +1,13 @@
 <html>
 <script>
+  var sccIndex = 0;
   var refgraph;
   function start() {
+    window.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
+        .getInterface(Components.interfaces.nsIDOMWindowUtils)
+        .cycleCollect();
     refgraph = new Refgraph();
+    document.getElementById("scccount").innerHTML = refgraph.sccCount;
   }
   function indent(level) {
     var r = "";
@@ -17,6 +22,9 @@
     output += ind + "type name: " + vertex.typeName + "\n";
     output += ind + "address: 0x" + vertex.address.toString(16) + "\n";
     output += ind + "size: " + vertex.size + " bytes\n";
+    if (vertex.sccIndex != refgraph.ALONE_IN_SCC) {
+      output += ind + "belongs to SCC " + vertex.sccIndex + "\n";
+    }
     if (level >= 2 &&
         root_address == vertex.address &&
         itbcc == false)
@@ -29,7 +37,7 @@
         var edge = vertex.edge(i);
         if (edge.isStrong) {
           var isTraversedByCC = edge.isTraversedByCC;
-          output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " edge\n";
+          output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " " + edge.refTypeName + " edge\n";
           output += dumpVertex(edge.target, level + 1, root_address, itbcc && isTraversedByCC);
         }
       }
@@ -37,8 +45,8 @@
     return output;
   }
   function typeSearch() {
-    var searchQuery = document.getElementById("searchquery").value;
-    var searchResults = refgraph.typeSearch(searchQuery);
+    var typeSearchInput = document.getElementById("typesearchinput").value;
+    var searchResults = refgraph.typeSearch(typeSearchInput);
     var resultText = "";
     for (var i = 0; i < searchResults.length; i++) {
       if (searchResults[i].typeName) {
@@ -62,10 +70,74 @@
     }
     document.getElementById("results").textContent = resultText;
   }
+  function addressSearch() {
+    var addressSearchInput = document.getElementById("addresssearchinput").value;
+    var address = parseInt(addressSearchInput, 16);
+    var vertex = refgraph.findVertex(address);
+    var resultText = "";
+    if (vertex) {
+      resultText += dumpVertex(vertex, 0, vertex.address, true);
+    }
+    document.getElementById("results").textContent = resultText;
+  }
+  function sscNext() {
+    sccIndex = Math.min(sccIndex+1, refgraph.sccCount - 1);
+    printScc();
+  }
+  function sscPrev() {
+    sccIndex = Math.max(sccIndex-1,0);
+    printScc();
+  }
+  function sccSearch() {
+    var sccSearchInput = document.getElementById("sccsearchinput").value;
+    sccIndex = parseInt(sccSearchInput, 10);
+    printScc();
+  }
+  function printScc() {
+    var scc = refgraph.scc(sccIndex);
+    var resultText = "";
+    resultText = "SCC " + sccIndex + " has " + scc.length + " vertices.\n\n";
+    for (var i = 0; i < scc.length; i++) {
+      var vertex = scc[i];
+      resultText += "type name: " + vertex.typeName + "\n";
+      resultText += "address: 0x" + vertex.address.toString(16) + "\n";
+      resultText += "size: " + vertex.size + " bytes\n";
+      resultText += "SCC edges:\n";
+      for (var j = 0; j < vertex.edgeCount; j++) {
+        var edge = vertex.edge(j);
+        if (!edge.isStrong) {
+          continue;
+        }
+        var target = edge.target;
+        if (target.address == vertex.address) {
+          continue;
+        }
+        if (target.sccIndex == sccIndex) {
+          resultText += "    " + edge.refTypeName + " to " + target.typeName + " at " + target.address.toString(16) + "\n";
+          if (!edge.isTraversedByCC) {
+            resultText += "        NOT TRAVERSED BY CC\n";
+          }
+        }
+      }
+    }
+    document.getElementById("results").textContent = resultText;
+  }
+  
 </script>
 <body onload="start()">
-  Type search: <input type="text" id="searchquery">
+  Type search: <input type="text" id="typesearchinput"/>
   <input type="button" value="Search" onClick="typeSearch()"/>
+  <br/>
+  Address search: <input type="text" id="addresssearchinput"/>
+  <input type="button" value="Search" onClick="addressSearch()"/>
+  <br/>
+  SCC search
+  <input type="text" id="sccsearchinput"/>
+  out of <div id="scccount"></div>
+  <input type="button" value="Search" onClick="sccSearch()"/>
+
+  <input type="button" value="<" onclick="sscPrev()"></intput><div id="scccount2"></div> <input type="button" value=">" onclick="sscNext()"></intput>
+  <br/>
   <pre id="results"/>
 </body>
 </html>

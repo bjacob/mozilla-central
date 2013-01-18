@@ -400,6 +400,7 @@ nsCOMPtr_base
 
       nsCOMPtr_base( nsISupports* rawPtr = 0 )
           : mRawPtr(rawPtr)
+          , mMarker(this)
         {
           // nothing else to do here
         }
@@ -458,7 +459,7 @@ class nsCOMPtr MOZ_FINAL
 #ifdef NSCAP_FEATURE_USE_BASE
   #define NSCAP_CTOR_BASE(x) nsCOMPtr_base(x)
 #else
-  #define NSCAP_CTOR_BASE(x) mRawPtr(x)
+  #define NSCAP_CTOR_BASE(x) mRawPtr(x), mMarker(this)
 
     private:
       void    assign_with_AddRef( nsISupports* );

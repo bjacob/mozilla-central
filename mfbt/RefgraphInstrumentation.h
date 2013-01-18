@@ -30,15 +30,35 @@ const marker_t traversedByCCFlag        = 0x4;
 class StrongRefMarker
 {
   volatile marker_t mMarker;
+  volatile const char* mRefTypeName;
 
 public:
 
   StrongRefMarker()
     : mMarker(baseMarker | strongRefFlag)
+    , mRefTypeName(nullptr)
   {
   }
 
-  ~StrongRefMarker() { mMarker = 0; }
+  template<typename T>
+  StrongRefMarker(const T* parent)
+    : mMarker(baseMarker | strongRefFlag)
+    , mRefTypeName(nullptr)
+  {
+    SetParent(parent);
+  }
+
+  template<typename T>
+  void SetParent(const T* parent) {
+    if (parent) {
+      mRefTypeName = typeid(*parent).name();
+    }
+  }
+
+  ~StrongRefMarker() {
+    mMarker = 0;
+    mRefTypeName = nullptr;
+  }
 
   void SetHereditary() { mMarker |= hereditaryStrongRefFlag; }
 

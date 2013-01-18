@@ -4,22 +4,23 @@
 
 interface RefgraphTypeSearchResult {
   readonly attribute DOMString typeName;
-  readonly attribute long objectCount;
+  readonly attribute unsigned long objectCount;
 };
 
 interface RefgraphVertex {
   readonly attribute DOMString typeName;
-  readonly attribute long long address;
-  readonly attribute long long size;
-
-  readonly attribute long edgeCount;
-  RefgraphEdge edge(long index);
+  readonly attribute unsigned long long address;
+  readonly attribute unsigned long long size;
+  readonly attribute unsigned long edgeCount;
+  RefgraphEdge edge(unsigned long index);
+  readonly attribute unsigned long sccIndex;
 };
 
 interface RefgraphEdge {
   readonly attribute RefgraphVertex target;
   readonly attribute boolean isStrong;
   readonly attribute boolean isTraversedByCC;
+  readonly attribute DOMString refTypeName;
 };
 
 [Constructor]
@@ -28,4 +29,12 @@ interface Refgraph {
   sequence<RefgraphTypeSearchResult> typeSearch(DOMString query);
   [Creator]
   RefgraphVertex? findVertex(DOMString typeName, RefgraphVertex? previousVertex);
+  [Creator]
+  RefgraphVertex? findVertex(unsigned long long address);
+
+  readonly attribute unsigned long sccCount;
+  const unsigned long ALONE_IN_SCC = 0xffffffff;
+
+  [Creator]
+  sequence<RefgraphVertex> scc(unsigned long index);
 };

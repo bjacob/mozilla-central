@@ -87,6 +87,7 @@ PL_DHashAllocTable(PLDHashTable *table, uint32_t nbytes)
 #ifndef NO_MOZ_GLUE
     refgraph_set_type(ptr, "pldhash entryStore");
 #endif
+    table->mMarker.SetParent(table);
     return ptr;
 }
 

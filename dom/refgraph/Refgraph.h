@@ -72,13 +72,12 @@ typedef std::basic_string<char,
                           >
         string_t;
 
-typedef uint32_t block_index_t;
-
 struct ref_t
 {
-  block_index_t target;
+  uint32_t target;
   uint32_t flags;
   uint64_t offset;
+  string_t reftypename;
 
   ref_t()
     : target(0)
@@ -86,7 +85,7 @@ struct ref_t
     , offset(0)
   {}
 
-  ref_t(block_index_t t, uint32_t f, uint64_t o)
+  ref_t(uint32_t t, uint32_t f, uint64_t o)
     : target(t)
     , flags(f)
     , offset(o)
@@ -99,25 +98,32 @@ typedef std::vector<ref_t, stl_allocator_bypassing_instrumentation<ref_t> >
 struct block_t {
   uint64_t address;
   uint64_t size;
-  uint64_t typehash;
-  uint64_t workspace;
   string_t type;
   stack_t stack;
   refs_vector_t refs;
+  uint64_t workspace;
+  uint32_t scc_index;
 
   block_t()
     : address(0)
     , size(0)
-    , typehash(0)
     , workspace(0)
+    , scc_index(0)
   {}
 
+  bool operator<(const block_t& other) {
+    return address < other.address;
+  }
+
+  bool operator==(const block_t& other) {
+    return address == other.address;
+  }
 };
 
 typedef std::vector<block_t, stl_allocator_bypassing_instrumentation<block_t> >
         blocks_vector_t;
 
-typedef std::multimap<string_t, block_index_t>
+typedef std::multimap<string_t, uint32_t>
         map_types_to_block_indices_t;
 
 class Refgraph;
@@ -147,6 +153,7 @@ public:
   already_AddRefed<RefgraphVertex> Target() const;
   bool IsStrong() const;
   bool IsTraversedByCC() const;
+  void GetRefTypeName(nsString& retval) const;
 };
 
 class RefgraphVertex
@@ -175,9 +182,17 @@ public:
   uint64_t Size() const;
   void GetTypeName(nsString& retval) const;
   uint32_t EdgeCount() const;
+  uint32_t SccIndex() const;
 
   already_AddRefed<RefgraphEdge> Edge(uint32_t index) const;
 };
+
+typedef std::vector<uint32_t, stl_allocator_bypassing_instrumentation<uint32_t> >
+        index_vector_t;
+
+typedef std::vector<index_vector_t,
+                    stl_allocator_bypassing_instrumentation<index_vector_t> >
+        index_vector_vector_t;
 
 class Refgraph {
 
@@ -190,6 +205,8 @@ class Refgraph {
   block_t* mCurrentBlock;
 
   map_types_to_block_indices_t mMapTypesToBlockIndices;
+
+  index_vector_vector_t mSCCs;
 
   char* mDemanglingInputBuffer;
   char* mDemanglingOutputBuffer;
@@ -208,7 +225,12 @@ class Refgraph {
   void AssertWorkspacesClear();
 
   bool Parse(const char* buffer, size_t length);
-  bool ResolveHereditaryStrongRefs();
+  void ResolveHereditaryStrongRefs();
+  void RecurseStronglyConnectedComponents(
+         uint32_t& vertex_index,
+         uint32_t& scc_index,
+         index_vector_t& stack);
+  void ComputeStronglyConnectedComponents();
   bool Acquire();
 
   bool HandleLine(const char* start, const char* end);
@@ -223,15 +245,6 @@ class Refgraph {
                    const char* end,
                    uint64_t* result,
                    const char** actualEnd = nullptr);
-  bool ParseTwoNumbers(const char* start,
-                       const char* end,
-                       uint64_t* result1,
-                       uint64_t* result2);
-  bool ParseThreeNumbers(const char* start,
-                        const char* end,
-                        uint64_t* result1,
-                        uint64_t* result2,
-                        uint64_t* result3);
 
   Refgraph()
     : mCurrentBlock(nullptr)
@@ -266,6 +279,11 @@ public:
   already_AddRefed<RefgraphVertex>
   FindVertex(const nsAString& typeName,
              RefgraphVertex* previousVertex);
+  already_AddRefed<RefgraphVertex>
+  FindVertex(uint64_t address);
+
+  uint32_t SccCount() const;
+  void Scc(uint32_t index, nsTArray<nsRefPtr<RefgraphVertex> >& result);
 };
 
 } // namespace refgraph

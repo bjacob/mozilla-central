@@ -884,12 +884,14 @@ class nsRefPtr
 
       nsRefPtr()
             : mRawPtr(0)
+            , mMarker(this)
           // default constructor
         {
         }
 
       nsRefPtr( const nsRefPtr<T>& aSmartPtr )
             : mRawPtr(aSmartPtr.mRawPtr)
+            , mMarker(this)
           // copy-constructor
         {
           if ( mRawPtr )
@@ -898,6 +900,7 @@ class nsRefPtr
 
       nsRefPtr( T* aRawPtr )
             : mRawPtr(aRawPtr)
+            , mMarker(this)
           // construct from a raw pointer (of the right type)
         {
           if ( mRawPtr )
@@ -907,11 +910,13 @@ class nsRefPtr
       template <typename I>
       nsRefPtr( const already_AddRefed<I>& aSmartPtr )
             : mRawPtr(aSmartPtr.mRawPtr)
+            , mMarker(this)
           // construct from |dont_AddRef(expr)|
         {
         }
 
       nsRefPtr( const nsCOMPtr_helper& helper )
+            : mMarker(this)
         {
           void* newRawPtr;
           if (NS_FAILED(helper(NS_GET_TEMPLATE_IID(T), &newRawPtr)))
