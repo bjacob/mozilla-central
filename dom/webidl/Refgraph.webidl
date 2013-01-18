@@ -12,11 +12,13 @@ interface RefgraphVertex {
   readonly attribute unsigned long long address;
   readonly attribute unsigned long long size;
   readonly attribute unsigned long edgeCount;
+  [Creator]
   RefgraphEdge edge(unsigned long index);
   readonly attribute unsigned long sccIndex;
 };
 
 interface RefgraphEdge {
+  [Creator]
   readonly attribute RefgraphVertex target;
   readonly attribute boolean isStrong;
   readonly attribute boolean isTraversedByCC;

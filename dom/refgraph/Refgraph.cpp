@@ -512,7 +512,6 @@ RefgraphEdge::RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref)
   : mParent(parent)
   , mRef(ref)
 {
-  SetIsDOMBinding();
 }
 
 already_AddRefed<RefgraphVertex>
@@ -539,7 +538,6 @@ RefgraphVertex::RefgraphVertex(Refgraph* parent, map_types_to_block_indices_t::c
   , mBlockIterator(block)
   , mBlock(mParent->mBlocks[mBlockIterator->second])
 {
-  SetIsDOMBinding();
 }
 
 RefgraphVertex::RefgraphVertex(Refgraph* parent, const block_t& block)
@@ -547,7 +545,6 @@ RefgraphVertex::RefgraphVertex(Refgraph* parent, const block_t& block)
   , mBlockIterator(mParent->mMapTypesToBlockIndices.end())
   , mBlock(block)
 {
-  SetIsDOMBinding();
 }
 
 
@@ -578,7 +575,7 @@ RefgraphVertex::Edge(uint32_t index) const {
 }
 
 JSObject*
-Refgraph::WrapObject(JSContext *cx, JSObject *scope, bool*)
+Refgraph::WrapObject(JSContext *cx, JSObject *scope)
 {
     return RefgraphBinding::Wrap(cx, scope, this);
 }
@@ -613,9 +610,9 @@ NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphTypeSearchResult, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphTypeSearchResult, Release)
 
 JSObject*
-RefgraphVertex::WrapObject(JSContext *cx, JSObject *scope, bool *triedToWrap)
+RefgraphVertex::WrapObject(JSContext *cx, JSObject *scope)
 {
-    return dom::RefgraphVertexBinding::Wrap(cx, scope, this, triedToWrap);
+    return dom::RefgraphVertexBinding::Wrap(cx, scope, this);
 }
 
 nsISupports*
@@ -623,20 +620,23 @@ RefgraphVertex::GetParentObject() const {
   return mParent->GetParentObject();
 }
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_1(RefgraphVertex, mParent)
+NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphVertex)
 
-NS_IMPL_CYCLE_COLLECTING_ADDREF(RefgraphVertex)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(RefgraphVertex)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphVertex)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(RefgraphVertex)
-  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphVertex)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphVertex, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphVertex, Release)
 
 JSObject*
-RefgraphEdge::WrapObject(JSContext *cx, JSObject *scope, bool *triedToWrap)
+RefgraphEdge::WrapObject(JSContext *cx, JSObject *scope)
 {
-    return dom::RefgraphEdgeBinding::Wrap(cx, scope, this, triedToWrap);
+    return dom::RefgraphEdgeBinding::Wrap(cx, scope, this);
 }
 
 nsISupports*
@@ -644,13 +644,16 @@ RefgraphEdge::GetParentObject() const {
   return mParent->GetParentObject();
 }
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_1(RefgraphEdge, mParent)
+NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphEdge)
 
-NS_IMPL_CYCLE_COLLECTING_ADDREF(RefgraphEdge)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(RefgraphEdge)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphEdge)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(RefgraphEdge)
-  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphEdge)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdge, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdge, Release)
 

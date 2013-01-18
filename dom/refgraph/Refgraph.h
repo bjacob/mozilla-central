@@ -7,8 +7,6 @@
 #include "mozilla/RefgraphSTLAllocatorBypassingInstrumentation.h"
 #include "mozilla/RefgraphInstrumentation.h"
 
-#include "nsWrapperCache.h"
-
 #include <vector>
 #include <string>
 #include <map>
@@ -131,8 +129,6 @@ class RefgraphEdge;
 class RefgraphVertex;
 
 class RefgraphEdge
-  : public nsISupports
-  , public nsWrapperCache
 {
   friend class Refgraph;
 
@@ -145,10 +141,10 @@ public:
 
   nsISupports* GetParentObject() const;
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope, bool *triedToWrap);
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(RefgraphEdge)
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphEdge)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphEdge)
 
   already_AddRefed<RefgraphVertex> Target() const;
   bool IsStrong() const;
@@ -157,8 +153,6 @@ public:
 };
 
 class RefgraphVertex
-  : public nsISupports
-  , public nsWrapperCache
 {
   friend class Refgraph;
 
@@ -171,12 +165,12 @@ public:
   RefgraphVertex(Refgraph* parent, map_types_to_block_indices_t::const_iterator block);
   RefgraphVertex(Refgraph* parent, const block_t& block);
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope, bool *triedToWrap);
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
 
   nsISupports* GetParentObject() const;
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(RefgraphVertex)
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphVertex)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphVertex)
 
   uint64_t Address() const;
   uint64_t Size() const;
@@ -266,7 +260,7 @@ public:
     return mParentObject;
   }
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope, bool* triedToWrap = nullptr);
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(Refgraph)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(Refgraph)
