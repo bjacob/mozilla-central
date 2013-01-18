@@ -1885,19 +1885,17 @@ js::str_search(JSContext *cx, unsigned argc, Value *vp)
 
     /* Per ECMAv5 15.5.4.12 (5) The last index property is ignored and left unchanged. */
     size_t i = 0;
-    ScopedMatchPairs matches(&cx->tempLifoAlloc());
+    MatchPair match;
 
-    RegExpRunStatus status = g.regExp().execute(cx, chars, length, &i, matches);
+    RegExpRunStatus status = g.regExp().executeMatchOnly(cx, chars, length, &i, match);
     if (status == RegExpRunStatus_Error)
         return false;
 
-    if (status == RegExpRunStatus_Success) {
-        res->updateFromMatchPairs(cx, stableStr, matches);
-        args.rval().setInt32(matches[0].start);
-    } else {
-        args.rval().setInt32(-1);
-    }
+    if (status == RegExpRunStatus_Success)
+        res->updateLazily(cx, stableStr, &g.regExp(), 0);
 
+    JS_ASSERT_IF(status == RegExpRunStatus_Success_NotFound, match.start == -1);
+    args.rval().setInt32(match.start);
     return true;
 }
 
@@ -2342,6 +2340,116 @@ BuildDollarReplacement(JSContext *cx, JSString *textstrArg, JSLinearString *reps
     return true;
 }
 
+struct StringRange
+{
+    size_t start;
+    size_t length;
+
+    StringRange(size_t s, size_t l)
+      : start(s), length(l)
+    { }
+};
+
+static JSString *
+AppendSubstrings(JSContext *cx, Handle<JSStableString*> stableStr,
+                 const StringRange *ranges, size_t rangesLen)
+{
+    JS_ASSERT(rangesLen);
+
+    /* For single substrings, construct a dependent string. */
+    if (rangesLen == 1)
+        return js_NewDependentString(cx, stableStr, ranges[0].start, ranges[0].length);
+
+    /* Collect substrings into a rope. */
+    RopeBuilder rope(cx);
+    for (size_t i = 0; i < rangesLen; i++) {
+        const StringRange &sr = ranges[i];
+
+        RootedString substr(cx, js_NewDependentString(cx, stableStr, sr.start, sr.length));
+        if (!substr)
+            return NULL;
+
+        /* Appending to the rope permanently roots the substring. */
+        rope.append(substr);
+    }
+
+    return rope.result();
+}
+
+static bool
+str_replace_regexp_remove(JSContext *cx, CallArgs args, HandleString str, RegExpShared &re)
+{
+    Rooted<JSStableString*> stableStr(cx, str->ensureStable(cx));
+    if (!stableStr)
+        return false;
+
+    Vector<StringRange, 16, SystemAllocPolicy> ranges;
+
+    StableCharPtr chars = stableStr->chars();
+    size_t charsLen = stableStr->length();
+
+    MatchPair match;
+    size_t startIndex = 0; /* Index used for iterating through the string. */
+    size_t lastIndex = 0;  /* Index after last successful match. */
+    size_t lazyIndex = 0;  /* Index before last successful match. */
+
+    /* Accumulate StringRanges for unmatched substrings. */
+    while (startIndex <= charsLen) {
+        if (!JS_CHECK_OPERATION_LIMIT(cx))
+            return false;
+
+        RegExpRunStatus status = re.executeMatchOnly(cx, chars, charsLen, &startIndex, match);
+        if (status == RegExpRunStatus_Error)
+            return false;
+        if (status == RegExpRunStatus_Success_NotFound)
+            break;
+
+        /* Include the latest unmatched substring. */
+        if (size_t(match.start) > lastIndex) {
+            if (!ranges.append(StringRange(lastIndex, match.start - lastIndex)))
+                return false;
+        }
+
+        lazyIndex = lastIndex;
+        lastIndex = startIndex;
+
+        /* Non-global removal executes at most once. */
+        if (!re.global())
+            break;
+
+        if (match.isEmpty())
+            startIndex++;
+    }
+
+    /* If unmatched, return the input string. */
+    if (!lastIndex) {
+        args.rval().setString(str);
+        return true;
+    }
+
+    /* The last successful match updates the RegExpStatics. */
+    cx->regExpStatics()->updateLazily(cx, stableStr, &re, lazyIndex);
+
+    /* Include any remaining part of the string. */
+    if (lastIndex < charsLen) {
+        if (!ranges.append(StringRange(lastIndex, charsLen - lastIndex)))
+            return false;
+    }
+
+    /* Handle the empty string before calling .begin(). */
+    if (ranges.empty()) {
+        args.rval().setString(cx->runtime->emptyString);
+        return true;
+    }
+
+    JSString *result = AppendSubstrings(cx, stableStr, ranges.begin(), ranges.length());
+    if (!result)
+        return false;
+
+    args.rval().setString(result);
+    return true;
+}
+
 static inline bool
 str_replace_regexp(JSContext *cx, CallArgs args, ReplaceData &rdata)
 {
@@ -2353,6 +2461,12 @@ str_replace_regexp(JSContext *cx, CallArgs args, ReplaceData &rdata)
 
     RegExpStatics *res = cx->regExpStatics();
     RegExpShared &re = rdata.g.regExp();
+
+    /* Optimize removal. */
+    if (rdata.repstr && rdata.repstr->length() == 0 && !rdata.dollar) {
+        JS_ASSERT(!rdata.lambda && !rdata.elembase);
+        return str_replace_regexp_remove(cx, args, rdata.str, re);
+    }
 
     Value tmp;
     if (!DoMatch(cx, res, rdata.str, re, ReplaceRegExpCallback, &rdata, REPLACE_ARGS, &tmp))
@@ -3315,8 +3429,8 @@ StringObject::assignInitialShape(JSContext *cx)
 {
     JS_ASSERT(nativeEmpty());
 
-    RootedId lengthid(cx, NameToId(cx->names().length));
-    return addDataProperty(cx, lengthid, LENGTH_SLOT, JSPROP_PERMANENT | JSPROP_READONLY);
+    return addDataProperty(cx, cx->names().length, LENGTH_SLOT,
+                           JSPROP_PERMANENT | JSPROP_READONLY);
 }
 
 JSObject *
@@ -3726,25 +3840,6 @@ js::InflateUTF8String(JSContext *cx, const char *bytes, size_t *lengthp)
     return NULL;
 }
 
-/*
- * May be called with null cx.
- */
-char *
-js::DeflateString(JSContext *maybecx, const jschar *chars, size_t nchars)
-{
-    AutoAssertNoGC nogc;
-    size_t nbytes = nchars;
-    char *bytes = maybecx
-                  ? maybecx->pod_malloc<char>(nbytes + 1)
-                  : js_pod_malloc<char>(nbytes + 1);
-    if (!bytes)
-        return NULL;
-    for (size_t i = 0; i < nbytes; i++)
-        bytes[i] = (char) chars[i];
-    bytes[nbytes] = 0;
-    return bytes;
-}
-
 size_t
 js::GetDeflatedStringLength(JSContext *cx, const jschar *chars, size_t nchars)
 {
@@ -3760,6 +3855,7 @@ js::DeflateStringToBuffer(JSContext *maybecx, const jschar *src, size_t srclen,
         for (size_t i = 0; i < dstlen; i++)
             dst[i] = (char) src[i];
         if (maybecx) {
+            AutoSuppressGC suppress(maybecx);
             JS_ReportErrorNumber(maybecx, js_GetErrorMessage, NULL,
                                  JSMSG_BUFFER_TOO_SMALL);
         }
@@ -3781,6 +3877,7 @@ js::InflateStringToBuffer(JSContext *maybecx, const char *src, size_t srclen,
             for (size_t i = 0; i < dstlen; i++)
                 dst[i] = (unsigned char) src[i];
             if (maybecx) {
+                AutoSuppressGC suppress(maybecx);
                 JS_ReportErrorNumber(maybecx, js_GetErrorMessage, NULL,
                                      JSMSG_BUFFER_TOO_SMALL);
             }
@@ -3797,6 +3894,10 @@ bool
 js::InflateUTF8StringToBuffer(JSContext *cx, const char *src, size_t srclen,
                               jschar *dst, size_t *dstlenp)
 {
+    mozilla::Maybe<AutoSuppressGC> suppress;
+    if (cx)
+        suppress.construct(cx);
+
     size_t dstlen, origDstlen, offset, j, n;
     uint32_t v;
 

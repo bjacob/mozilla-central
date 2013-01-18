@@ -642,8 +642,14 @@ StackSpace::containingSegment(const StackFrame *target) const
 void
 StackSpace::markFrame(JSTracer *trc, StackFrame *fp, Value *slotsEnd)
 {
+    /*
+     * JM may leave values with object/string type but a null payload on the
+     * stack. This can happen if the script was initially compiled by Ion,
+     * which replaced dead values with undefined, and later ran under JM which
+     * assumed values were of the original type.
+     */
     Value *slotsBegin = fp->slots();
-    gc::MarkValueRootRange(trc, slotsBegin, slotsEnd, "vm_stack");
+    gc::MarkValueRootRangeMaybeNullPayload(trc, slotsEnd - slotsBegin, slotsBegin, "vm_stack");
 }
 
 void
@@ -1740,8 +1746,8 @@ StackIter::isConstructing() const
     return false;
 }
 
-TaggedFramePtr
-StackIter::taggedFramePtr() const
+AbstractFramePtr
+StackIter::abstractFramePtr() const
 {
     switch (data_.state_) {
       case DONE:
@@ -1750,12 +1756,12 @@ StackIter::taggedFramePtr() const
         break;
       case SCRIPTED:
         JS_ASSERT(interpFrame());
-        return TaggedFramePtr(interpFrame());
+        return AbstractFramePtr(interpFrame());
       case NATIVE:
         break;
     }
     JS_NOT_REACHED("Unexpected state");
-    return TaggedFramePtr();
+    return AbstractFramePtr();
 }
 
 void
@@ -2136,17 +2142,17 @@ AllFramesIter::settleOnNewState()
     state_ = fp_ ? SCRIPTED : DONE;
 }
 
-TaggedFramePtr
-AllFramesIter::taggedFramePtr() const
+AbstractFramePtr
+AllFramesIter::abstractFramePtr() const
 {
     switch (state_) {
       case SCRIPTED:
-        return TaggedFramePtr(interpFrame());
+        return AbstractFramePtr(interpFrame());
       case ION:
         break;
       case DONE:
         break;
     }
     JS_NOT_REACHED("Unexpected state");
-    return TaggedFramePtr();
+    return AbstractFramePtr();
 }

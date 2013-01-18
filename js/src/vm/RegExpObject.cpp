@@ -296,20 +296,20 @@ RegExpObject::assignInitialShape(JSContext *cx)
     RootedObject self(cx, this);
 
     /* The lastIndex property alone is writable but non-configurable. */
-    if (!addDataProperty(cx, NameToId(cx->names().lastIndex), LAST_INDEX_SLOT, JSPROP_PERMANENT))
+    if (!addDataProperty(cx, cx->names().lastIndex, LAST_INDEX_SLOT, JSPROP_PERMANENT))
         return UnrootedShape(NULL);
 
     /* Remaining instance properties are non-writable and non-configurable. */
     unsigned attrs = JSPROP_PERMANENT | JSPROP_READONLY;
-    if (!self->addDataProperty(cx, NameToId(cx->names().source), SOURCE_SLOT, attrs))
+    if (!self->addDataProperty(cx, cx->names().source, SOURCE_SLOT, attrs))
         return UnrootedShape(NULL);
-    if (!self->addDataProperty(cx, NameToId(cx->names().global), GLOBAL_FLAG_SLOT, attrs))
+    if (!self->addDataProperty(cx, cx->names().global, GLOBAL_FLAG_SLOT, attrs))
         return UnrootedShape(NULL);
-    if (!self->addDataProperty(cx, NameToId(cx->names().ignoreCase), IGNORE_CASE_FLAG_SLOT, attrs))
+    if (!self->addDataProperty(cx, cx->names().ignoreCase, IGNORE_CASE_FLAG_SLOT, attrs))
         return UnrootedShape(NULL);
-    if (!self->addDataProperty(cx, NameToId(cx->names().multiline), MULTILINE_FLAG_SLOT, attrs))
+    if (!self->addDataProperty(cx, cx->names().multiline, MULTILINE_FLAG_SLOT, attrs))
         return UnrootedShape(NULL);
-    return self->addDataProperty(cx, NameToId(cx->names().sticky), STICKY_FLAG_SLOT, attrs);
+    return self->addDataProperty(cx, cx->names().sticky, STICKY_FLAG_SLOT, attrs);
 }
 
 inline bool
@@ -403,12 +403,6 @@ RegExpShared::~RegExpShared()
 #endif
     if (bytecode)
         js_delete<BytecodePattern>(bytecode);
-}
-
-void
-RegExpShared::trace(JSTracer *trc)
-{
-    MarkString(trc, &source, "regexpshared source");
 }
 
 void
@@ -651,6 +645,18 @@ RegExpCompartment::RegExpCompartment(JSRuntime *rt)
 RegExpCompartment::~RegExpCompartment()
 {
     JS_ASSERT(map_.empty());
+
+    /*
+     * RegExpStatics may have prevented a single RegExpShared from
+     * being collected during RegExpCompartment::sweep().
+     */
+    if (!inUse_.empty()) {
+        PendingSet::Enum e(inUse_);
+        RegExpShared *shared = e.front();
+        JS_ASSERT(shared->activeUseCount == 0);
+        js_delete(shared);
+        e.removeFront();
+    }
     JS_ASSERT(inUse_.empty());
 }
 

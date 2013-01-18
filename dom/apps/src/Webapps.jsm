@@ -898,6 +898,8 @@ this.DOMApplicationRegistry = {
       return;
     }
 
+    let app = this.webapps[download.appId];
+
     if (download.cacheUpdate) {
       // Cancel hosted app download.
       try {
@@ -905,7 +907,12 @@ this.DOMApplicationRegistry = {
       } catch (e) { debug (e); }
     } else if (download.channel) {
       // Cancel packaged app download.
-      download.channel.cancel(Cr.NS_BINDING_ABORTED);
+      app.isCanceling = true;
+      try {
+        download.channel.cancel(Cr.NS_BINDING_ABORTED);
+      } catch(e) {
+        delete app.isCanceling;
+      }
     } else {
       return;
     }
@@ -1217,26 +1224,30 @@ this.DOMApplicationRegistry = {
       this.webapps[id] = app;
 
       this._saveApps(function() {
+        let reg = DOMApplicationRegistry;
         aData.app = app;
         app.manifest = aNewManifest || aOldManifest;
         if (!manifest.appcache_path) {
           aData.event = "downloadapplied";
-          DOMApplicationRegistry.broadcastMessage("Webapps:CheckForUpdate:Return:OK",
-                                                  aData);
+          reg.broadcastMessage("Webapps:CheckForUpdate:Return:OK", aData);
         } else {
           // Check if the appcache is updatable, and send "downloadavailable" or
           // "downloadapplied".
           let updateObserver = {
             observe: function(aSubject, aTopic, aObsData) {
+              debug("updateHostedApp: updateSvc.checkForUpdate return for " +
+                    app.manifestURL + " - event is " + aTopic);
               aData.event =
                 aTopic == "offline-cache-update-available" ? "downloadavailable"
                                                            : "downloadapplied";
-              aData.app.downloadAvailable = (aTopic == "downloadavailable");
-              DOMApplicationRegistry.broadcastMessage("Webapps:CheckForUpdate:Return:OK",
-                                                      aData);
+              aData.app.downloadAvailable = (aData.event == "downloadavailable");
+              reg._saveApps();
+              reg.broadcastMessage("Webapps:CheckForUpdate:Return:OK", aData);
             }
           }
-          updateSvc.checkForUpdate(Services.io.newURI(aData.manifestURL, null, null),
+          debug("updateHostedApp: updateSvc.checkForUpdate for " +
+                manifest.fullAppcachePath());
+          updateSvc.checkForUpdate(Services.io.newURI(manifest.fullAppcachePath(), null, null),
                                    app.localId, false, updateObserver);
         }
         delete app.manifest;
@@ -1287,7 +1298,9 @@ this.DOMApplicationRegistry = {
         // "downloadapplied".
         let updateObserver = {
           observe: function(aSubject, aTopic, aObsData) {
-            if (aData.event == "offline-cache-update-available") {
+            debug("onlyCheckAppCache updateSvc.checkForUpdate return for " +
+                  app.manifestURL + " - event is " + aTopic);
+            if (aTopic == "offline-cache-update-available") {
               aData.event = "downloadavailable";
               app.downloadAvailable = true;
               aData.app = app;
@@ -1299,7 +1312,10 @@ this.DOMApplicationRegistry = {
             }
           }
         }
-        updateSvc.checkForUpdate(Services.io.newURI(aData.manifestURL, null, null),
+        let helper = new ManifestHelper(manifest);
+        debug("onlyCheckAppCache - launch updateSvc.checkForUpdate for " +
+              helper.fullAppcachePath());
+        updateSvc.checkForUpdate(Services.io.newURI(helper.fullAppcachePath(), null, null),
                                  app.localId, false, updateObserver);
       });
       return;
@@ -1312,6 +1328,7 @@ this.DOMApplicationRegistry = {
     xhr.channel.loadFlags |= Ci.nsIRequest.INHIBIT_CACHING;
     xhr.responseType = "json";
     if (app.etag) {
+      debug("adding manifest etag:" + app.etag);
       xhr.setRequestHeader("If-None-Match", app.etag);
     }
     xhr.channel.notificationCallbacks =
@@ -1333,6 +1350,7 @@ this.DOMApplicationRegistry = {
           return;
         } else {
           app.etag = xhr.getResponseHeader("Etag");
+          debug("at update got app etag=" + app.etag);
           app.lastCheckedUpdate = Date.now();
           if (app.origin.startsWith("app://")) {
             updatePackagedApp.call(this, manifest);
@@ -1509,6 +1527,7 @@ this.DOMApplicationRegistry = {
           sendError("INSTALL_FROM_DENIED");
         } else {
           app.etag = xhr.getResponseHeader("Etag");
+          debug("at install package got app etag=" + app.etag);
           Services.obs.notifyObservers(aMm, "webapps-ask-install",
                                        JSON.stringify(aData));
         }
@@ -1806,7 +1825,8 @@ this.DOMApplicationRegistry = {
       // We avoid notifying the error to the DOM side if the app download
       // was cancelled via cancelDownload, which already sends its own
       // notification.
-      if (!app.downloading && !app.downloadAvailable && !app.downloadSize) {
+      if (app.isCanceling) {
+        delete app.isCanceling;
         return;
       }
 
@@ -1832,7 +1852,7 @@ this.DOMApplicationRegistry = {
                                   .QueryInterface(Ci.nsIHttpChannel);
       requestChannel.loadFlags |= Ci.nsIRequest.INHIBIT_CACHING;
       if (app.packageEtag) {
-        debug('Add If-None-Match header: ' + app.packageEtag);
+        debug("Add If-None-Match header: " + app.packageEtag);
         requestChannel.setRequestHeader("If-None-Match", app.packageEtag, false);
       }
 

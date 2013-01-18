@@ -25,13 +25,15 @@ EXPORTS_mozilla += \
   MathAlgorithms.h \
   MSStdInt.h \
   NullPtr.h \
+  Range.h \
   RangedPtr.h \
   RefgraphInstrumentation.h \
   RefgraphSTLAllocatorBypassingInstrumentation.h \
   RefPtr.h \
   Scoped.h \
-  StandardInteger.h \
   SHA1.h \
+  SplayTree.h \
+  StandardInteger.h \
   ThreadLocal.h \
   TypeTraits.h \
   Types.h \
