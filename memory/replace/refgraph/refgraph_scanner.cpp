@@ -17,6 +17,8 @@
 #include <vector>
 #include <algorithm>
 
+#include <cxxabi.h>
+
 #undef malloc_good_size
 
 namespace refgraph {
@@ -276,6 +278,48 @@ void Scanner::Print(const void* ptr)
   Print(reinterpret_cast<uintptr_t>(ptr));
 }
 
+static const char* Demangled(const char* in)
+{
+  static char* sDemanglingInputBuffer = nullptr;
+  static char* sDemanglingOutputBuffer = nullptr;
+  static size_t sDemanglingInputBufferCapacity = 0;
+  static size_t sDemanglingOutputBufferCapacity = 0;
+
+  size_t length = strlen(in);
+
+  if (!length) {
+    return nullptr;
+  }
+
+  const size_t requiredInputBufferCapacity = length + 1;
+  if (requiredInputBufferCapacity > sDemanglingInputBufferCapacity) {
+    sDemanglingInputBufferCapacity = requiredInputBufferCapacity;
+    sDemanglingInputBuffer = static_cast<char*>(
+      gMallocFuncsTable->realloc(sDemanglingInputBuffer, sDemanglingInputBufferCapacity));
+  }
+
+  // better over-estimate requiredOutputBufferCapacity: if we under-estimate it,
+  // the stupid GCC runtime will try to call realloc,
+  // which will deadlock/crash if called here.
+  const size_t requiredOutputBufferCapacity = 2 * length + 0x1000;
+  if (requiredOutputBufferCapacity > sDemanglingOutputBufferCapacity) {
+    sDemanglingOutputBufferCapacity = requiredOutputBufferCapacity;
+    sDemanglingOutputBuffer = static_cast<char*>(
+      gMallocFuncsTable->realloc(sDemanglingOutputBuffer, sDemanglingOutputBufferCapacity));
+  }
+
+  memcpy(sDemanglingInputBuffer, in, length + 1);
+  int status = 0;
+  size_t actualOutCapacity = sDemanglingOutputBufferCapacity;
+  abi::__cxa_demangle(sDemanglingInputBuffer, sDemanglingOutputBuffer, &actualOutCapacity, &status);
+  MOZ_ASSERT(actualOutCapacity == sDemanglingOutputBufferCapacity,
+             "Thank you. Now go away.");
+  if (status) {
+    return nullptr;
+  }
+  return sDemanglingOutputBuffer;
+}
+
 void Scanner::Scan()
 {
   Print("# All numbers are in hexadecimal.\n");
@@ -384,7 +428,10 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
 
   list_elem_t* elem = list_elem_for_payload((payload_t*)(block->address));
   if (elem->type) {
-    Print("t ", elem->type, "\n");
+    const char* demangled = Demangled(elem->type);
+    if (demangled) {
+      Print("t ", demangled, "\n");
+    }
   }
 
   uintptr_t start = block->address;
@@ -459,7 +506,10 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
         Print("n ", refname, "\n");
       }
       if (reftypename) {
-        Print("u ", reftypename, "\n");
+        const char* demangled = Demangled(reftypename);
+        if (demangled) {
+          Print("u ", demangled, "\n");
+        }
       }
     }
   }

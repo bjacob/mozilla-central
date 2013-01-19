@@ -204,10 +204,6 @@ class Refgraph {
 
   index_vector_vector_t mSCCs;
 
-  char* mDemanglingInputBuffer;
-  char* mDemanglingOutputBuffer;
-  size_t mDemanglingInputBufferCapacity, mDemanglingOutputBufferCapacity;
-
   class ScopedAssertWorkspacesClear {
     Refgraph* r;
   public:
@@ -215,8 +211,6 @@ class Refgraph {
     ~ScopedAssertWorkspacesClear();
   };
   friend class ScopedAssertWorkspacesClear;
-
-  bool Demangle(const char* in, size_t length, string_t& out);
 
   void AssertWorkspacesClear();
 
@@ -251,16 +245,10 @@ class Refgraph {
     : mParent(parent)
     , mCurrentBlock(nullptr)
     , mCurrentRef(nullptr)
-    , mDemanglingInputBuffer(nullptr)
-    , mDemanglingOutputBuffer(nullptr)
-    , mDemanglingInputBufferCapacity(0)
-    , mDemanglingOutputBufferCapacity(0)
   {}
 
   ~Refgraph()
   {
-    delete[] mDemanglingInputBuffer;
-    delete[] mDemanglingOutputBuffer;
   }
 
 public:

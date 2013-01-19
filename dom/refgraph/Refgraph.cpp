@@ -6,7 +6,6 @@
 
 #include "mozilla/Assertions.h"
 
-#include <cxxabi.h>
 #include <cstdio>
 #include <algorithm>
 
@@ -63,37 +62,6 @@ bool Refgraph::ParseNumber(const char* start,
   if (actualEnd) {
     *actualEnd = ptr;
   }
-  return true;
-}
-
-bool Refgraph::Demangle(const char* in, size_t length, string_t& out)
-{
-  if (!length) {
-    return false;
-  }
-  const size_t inputBufferCapacity = length + 1;
-  if (inputBufferCapacity > mDemanglingInputBufferCapacity) {
-    mDemanglingInputBufferCapacity = inputBufferCapacity;
-    mDemanglingInputBuffer = static_cast<char*>(
-      realloc(mDemanglingInputBuffer, mDemanglingInputBufferCapacity));
-  }
-  const size_t outputBufferCapacity = std::max(size_t(4096), 2 * length);
-  if (outputBufferCapacity > mDemanglingOutputBufferCapacity) {
-    mDemanglingOutputBufferCapacity = outputBufferCapacity;
-    mDemanglingOutputBuffer = static_cast<char*>(
-      realloc(mDemanglingOutputBuffer, mDemanglingOutputBufferCapacity));
-  }
-  memcpy(mDemanglingInputBuffer, in, length);
-  mDemanglingInputBuffer[length] = 0;
-  int status = 0;
-  size_t actualOutCapacity = mDemanglingOutputBufferCapacity;
-  abi::__cxa_demangle(mDemanglingInputBuffer, mDemanglingOutputBuffer, &actualOutCapacity, &status);
-  MOZ_ASSERT(actualOutCapacity == mDemanglingOutputBufferCapacity,
-             "Thank you. Now go away.");
-  if (status) {
-    return false;
-  }
-  out.assign(mDemanglingOutputBuffer);
   return true;
 }
 
@@ -201,11 +169,12 @@ bool Refgraph::HandleLine_n(const char* start, const char* end)
 
 bool Refgraph::HandleLine_t(const char* start, const char* end)
 {
-  while(*start == ' ' && start != end) {
-    start++;
+  const char* pos = start;
+  while(*pos == ' ' && pos != end) {
+    pos++;
   }
 
-  if (start == end) {
+  if (pos == end) {
     return false;
   }
 
@@ -213,7 +182,7 @@ bool Refgraph::HandleLine_t(const char* start, const char* end)
     return false;
   }
 
-  Demangle(start, end - start, mCurrentBlock->type);
+  mCurrentBlock->type.assign(start, end - start);
   return true;
 }
 
@@ -231,7 +200,8 @@ bool Refgraph::HandleLine_u(const char* start, const char* end)
   if (!mCurrentRef) {
     return false;
   }
-  Demangle(pos, end - pos, mCurrentRef->reftypename);
+
+  mCurrentRef->reftypename.assign(pos, end - pos);
   return true;
 }
 
