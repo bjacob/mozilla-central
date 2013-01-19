@@ -270,7 +270,7 @@ protected:
   typedef nsTArrayHeader Header;
 
 public:
-  void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
+  void SetTraversedByCC(const char* name) { mMarker.SetTraversedByCC(name); }
 
   typedef uint32_t size_type;
   typedef uint32_t index_type;
@@ -1363,7 +1363,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
   aFlags |= CycleCollectionEdgeNameArrayFlag;
-  aField.SetTraversedByCC();
+  aField.SetTraversedByCC(aName);
   size_t length = aField.Length();
   for (size_t i = 0; i < length; ++i) {
     ImplCycleCollectionTraverse(aCallback, aField[i], aName, aFlags);

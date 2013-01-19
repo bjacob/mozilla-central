@@ -237,7 +237,7 @@ public:
         return *get();
     }
 
-    void SetTraversedByCC() { mMarker.SetTraversedByCC(); }
+    void SetTraversedByCC(const char* name) { mMarker.SetTraversedByCC(name); }
 
 private:
 
@@ -345,7 +345,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             const char* aName,
                             uint32_t aFlags = 0)
 {
-  aField.SetTraversedByCC();
+  aField.SetTraversedByCC(aName);
   CycleCollectionNoteEdgeName(aCallback, aName, aFlags);
   aCallback.NoteXPCOMChild(aField);
 }

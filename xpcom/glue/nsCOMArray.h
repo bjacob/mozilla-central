@@ -59,7 +59,7 @@ protected:
     bool RemoveObject(nsISupports *aObject);
 
 public:
-    void SetTraversedByCC() { mArray.SetTraversedByCC(); }
+    void SetTraversedByCC(const char* name) { mArray.mMarker.SetTraversedByCC(name); }
 
     // elements in the array (including null elements!)
     int32_t Count() const {
@@ -131,7 +131,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
     aFlags |= CycleCollectionEdgeNameArrayFlag;
-    aField.SetTraversedByCC();
+    aField.SetTraversedByCC(aName);
     size_t length = aField.Count();
     for (size_t i = 0; i < length; ++i) {
         CycleCollectionNoteChild(aCallback, aField[i], aName, aFlags);
@@ -295,7 +295,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
     aFlags |= CycleCollectionEdgeNameArrayFlag;
-    aField.SetTraversedByCC();
+    aField.SetTraversedByCC(aName);
     size_t length = aField.Count();
     for (size_t i = 0; i < length; ++i) {
         CycleCollectionNoteChild(aCallback, aField[i], aName, aFlags);

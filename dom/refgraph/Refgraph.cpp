@@ -14,9 +14,10 @@ using namespace mozilla;
 using namespace mozilla::dom;
 using namespace refgraph;
 
+template<typename T>
 bool Refgraph::ParseNumber(const char* start,
                            const char* end,
-                           uint64_t* result,
+                           T* result,
                            const char** actualEnd)
 {
   const char* ptr = start;
@@ -38,7 +39,7 @@ bool Refgraph::ParseNumber(const char* start,
     }
   }
 
-  uint64_t n = 0;
+  T n = 0;
   while(true) {
     char c = *ptr;
     char d;
@@ -112,7 +113,7 @@ bool Refgraph::HandleLine_a(const char* start, const char* end)
 
 bool Refgraph::HandleLine_b(const char* start, const char* end)
 {
-  uint64_t n;
+  uint32_t n;
   bool success = ParseNumber(start, end, &n);
   if (!success) {
     return false;
@@ -120,34 +121,46 @@ bool Refgraph::HandleLine_b(const char* start, const char* end)
   if (n >= mBlocks.size()) {
     return false;
   }
+  if (mCurrentBlock) {
+    mCurrentBlock->refs.shrink_to_fit();
+    mCurrentBlock->stack.shrink_to_fit();
+    mCurrentBlock->weakrefs.shrink_to_fit();
+  }
   mCurrentBlock = &mBlocks[n];
   return true;
 }
 
-bool Refgraph::HandleLine_r(const char* start, const char* end)
+bool Refgraph::HandleLine_f(const char* start, const char* end)
 {
-  const char* pos = start;
-  uint64_t target, offset, flags;
-  bool success = ParseNumber(pos, end, &target, &pos) &&
-                 ParseNumber(pos, end, &offset, &pos) &&
-                 ParseNumber(pos, end, &flags, &pos);
+  if (!mCurrentRef) {
+    return false;
+  }
+  bool success = ParseNumber(start, end, &mCurrentRef->flags);
   if (!success) {
     return false;
   }
-  if (target >= mBlocks.size()) {
+  if (mCurrentRef->flags > 0xf) {
     return false;
   }
+  return true;
+}
+
+bool Refgraph::HandleLine_s(const char* start, const char* end)
+{
+  const char* pos = start;
   if (!mCurrentBlock) {
     return false;
   }
-  if (flags > 0xf) {
+  mCurrentBlock->refs.push_back(ref_t());
+  mCurrentRef = &mCurrentBlock->refs.back();
+  bool success = ParseNumber(pos, end, &mCurrentRef->target, &pos) &&
+                 ParseNumber(pos, end, &mCurrentRef->offset, &pos);
+  if (!success) {
     return false;
   }
-  while(*pos == ' ' && pos != end) {
-    pos++;
+  if (mCurrentRef->target >= mBlocks.size()) {
+    return false;
   }
-  mCurrentBlock->refs.push_back(ref_t(target, flags, offset));
-  Demangle(pos, end - pos, mCurrentBlock->refs.back().reftypename);
   return true;
 }
 
@@ -165,6 +178,24 @@ bool Refgraph::HandleLine_m(const char* start, const char* end)
   }
   mCurrentBlock->address = address;
   mCurrentBlock->size = size;
+  return true;
+}
+
+bool Refgraph::HandleLine_n(const char* start, const char* end)
+{
+  const char* pos = start;
+  while(*pos == ' ' && pos != end) {
+    pos++;
+  }
+
+  if (pos == end) {
+    return false;
+  }
+
+  if (!mCurrentRef) {
+    return false;
+  }
+  mCurrentRef->refname.assign(pos, end - pos);
   return true;
 }
 
@@ -186,14 +217,51 @@ bool Refgraph::HandleLine_t(const char* start, const char* end)
   return true;
 }
 
-bool Refgraph::HandleLine_n(const char* start, const char* end)
+bool Refgraph::HandleLine_u(const char* start, const char* end)
 {
-  uint64_t n;
+  const char* pos = start;
+  while(*pos == ' ' && pos != end) {
+    pos++;
+  }
+
+  if (pos == end) {
+    return false;
+  }
+
+  if (!mCurrentRef) {
+    return false;
+  }
+  Demangle(pos, end - pos, mCurrentRef->reftypename);
+  return true;
+}
+
+bool Refgraph::HandleLine_w(const char* start, const char* end)
+{
+  const char* pos = start;
+  uint32_t target;
+  bool success = ParseNumber(pos, end, &target, &pos);
+  if (!success) {
+    return false;
+  }
+  if (target >= mBlocks.size()) {
+    return false;
+  }
+  if (!mCurrentBlock) {
+    return false;
+  }
+  mCurrentBlock->weakrefs.push_back(target);
+  return true;
+}
+
+bool Refgraph::HandleLine_c(const char* start, const char* end)
+{
+  uint32_t n;
   bool success = ParseNumber(start, end, &n);
   if (!success) {
     return false;
   }
   mBlocks.resize(n);
+  mBlocks.shrink_to_fit();
   return true;
 }
 
@@ -224,10 +292,14 @@ bool Refgraph::HandleLine(const char* start, const char* end)
   switch (c) {
     case 'a': return HandleLine_a(start, end);
     case 'b': return HandleLine_b(start, end);
+    case 'c': return HandleLine_c(start, end);
+    case 'f': return HandleLine_f(start, end);
     case 'm': return HandleLine_m(start, end);
     case 'n': return HandleLine_n(start, end);
-    case 'r': return HandleLine_r(start, end);
+    case 's': return HandleLine_s(start, end);
     case 't': return HandleLine_t(start, end);
+    case 'u': return HandleLine_u(start, end);
+    case 'w': return HandleLine_w(start, end);
     default: return false;
   }
 }
@@ -334,7 +406,7 @@ void Refgraph::RecurseStronglyConnectedComponents(
       RecurseStronglyConnectedComponents(w_index, scc_index, stack);
       v.workspace = std::min(v.workspace, w.workspace);
     } else if (std::binary_search(stack.begin(), stack.end(), w_index)) {
-      v.workspace = std::min(v.workspace, uint64_t(w.scc_index));
+      v.workspace = std::min(v.workspace, w.scc_index);
     }
   }
 
@@ -413,6 +485,11 @@ Refgraph::ScopedAssertWorkspacesClear::~ScopedAssertWorkspacesClear()
 
 bool Refgraph::Acquire()
 {
+  // can only be called once. If you want a new Refgraph, construct a new object.
+  if (!mBlocks.empty()) {
+    return false;
+  }
+
   const char* buffer;
   size_t length;
   refgraph_dump_to_buffer(&buffer, &length);
@@ -527,6 +604,10 @@ bool RefgraphEdge::IsStrong() const {
 
 bool RefgraphEdge::IsTraversedByCC() const {
   return mRef->flags & traversedByCCFlag;
+}
+
+void RefgraphEdge::GetRefName(nsString& retval) const {
+  retval = NS_ConvertASCIItoUTF16(nsDependentCString(mRef->refname.c_str()));
 }
 
 void RefgraphEdge::GetRefTypeName(nsString& retval) const {

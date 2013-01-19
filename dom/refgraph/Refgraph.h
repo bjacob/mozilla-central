@@ -73,8 +73,9 @@ typedef std::basic_string<char,
 struct ref_t
 {
   uint32_t target;
-  uint32_t flags;
+  uint8_t flags;
   uint64_t offset;
+  string_t refname;
   string_t reftypename;
 
   ref_t()
@@ -82,24 +83,28 @@ struct ref_t
     , flags(0)
     , offset(0)
   {}
-
-  ref_t(uint32_t t, uint32_t f, uint64_t o)
-    : target(t)
-    , flags(f)
-    , offset(o)
-  {}
 };
 
 typedef std::vector<ref_t, stl_allocator_bypassing_instrumentation<ref_t> >
         refs_vector_t;
 
+typedef std::vector<uint32_t, stl_allocator_bypassing_instrumentation<uint32_t> >
+        index_vector_t;
+
+typedef std::vector<index_vector_t,
+                    stl_allocator_bypassing_instrumentation<index_vector_t> >
+        index_vector_vector_t;
+
 struct block_t {
   uint64_t address;
   uint64_t size;
+
   string_t type;
   stack_t stack;
   refs_vector_t refs;
-  uint64_t workspace;
+  index_vector_t weakrefs;
+
+  uint32_t workspace;
   uint32_t scc_index;
 
   block_t()
@@ -149,6 +154,7 @@ public:
   already_AddRefed<RefgraphVertex> Target() const;
   bool IsStrong() const;
   bool IsTraversedByCC() const;
+  void GetRefName(nsString& retval) const;
   void GetRefTypeName(nsString& retval) const;
 };
 
@@ -181,13 +187,6 @@ public:
   already_AddRefed<RefgraphEdge> Edge(uint32_t index) const;
 };
 
-typedef std::vector<uint32_t, stl_allocator_bypassing_instrumentation<uint32_t> >
-        index_vector_t;
-
-typedef std::vector<index_vector_t,
-                    stl_allocator_bypassing_instrumentation<index_vector_t> >
-        index_vector_vector_t;
-
 class Refgraph {
 
   friend class RefgraphVertex;
@@ -197,6 +196,7 @@ class Refgraph {
 
   blocks_vector_t mBlocks;
   block_t* mCurrentBlock;
+  ref_t* mCurrentRef;
 
   map_types_to_block_indices_t mMapTypesToBlockIndices;
 
@@ -230,18 +230,24 @@ class Refgraph {
   bool HandleLine(const char* start, const char* end);
   bool HandleLine_a(const char* start, const char* end);
   bool HandleLine_b(const char* start, const char* end);
+  bool HandleLine_c(const char* start, const char* end);
+  bool HandleLine_f(const char* start, const char* end);
   bool HandleLine_m(const char* start, const char* end);
   bool HandleLine_n(const char* start, const char* end);
-  bool HandleLine_r(const char* start, const char* end);
+  bool HandleLine_s(const char* start, const char* end);
   bool HandleLine_t(const char* start, const char* end);
+  bool HandleLine_u(const char* start, const char* end);
+  bool HandleLine_w(const char* start, const char* end);
 
+  template<typename T>
   bool ParseNumber(const char* start,
                    const char* end,
-                   uint64_t* result,
+                   T* result,
                    const char** actualEnd = nullptr);
 
   Refgraph()
     : mCurrentBlock(nullptr)
+    , mCurrentRef(nullptr)
     , mDemanglingInputBuffer(nullptr)
     , mDemanglingOutputBuffer(nullptr)
     , mDemanglingInputBufferCapacity(0)

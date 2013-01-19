@@ -37,7 +37,13 @@
         var edge = vertex.edge(i);
         if (edge.isStrong) {
           var isTraversedByCC = edge.isTraversedByCC;
-          output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " " + edge.refTypeName + " edge\n";
+          if (edge.refName) {
+            output += ind + "reference name: " + edge.refName + "\n";
+          }
+          if (edge.refTypeName) {
+            output += ind + "reference type name: " + edge.refTypeName + "\n";
+          }
+          output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " by the CC\n";
           output += dumpVertex(edge.target, level + 1, root_address, itbcc && isTraversedByCC);
         }
       }
@@ -113,7 +119,7 @@
           continue;
         }
         if (target.sccIndex == sccIndex) {
-          resultText += "    " + edge.refTypeName + " to " + target.typeName + " at " + target.address.toString(16) + "\n";
+          resultText += "    " + edge.refTypeName + " " + edge.refName + " to " + target.typeName + " at " + target.address.toString(16) + "\n";
           if (!edge.isTraversedByCC) {
             resultText += "        NOT TRAVERSED BY CC\n";
           }

@@ -23,6 +23,7 @@ interface RefgraphEdge {
   readonly attribute boolean isStrong;
   readonly attribute boolean isTraversedByCC;
   readonly attribute DOMString refTypeName;
+  readonly attribute DOMString refName;
 };
 
 [Constructor]

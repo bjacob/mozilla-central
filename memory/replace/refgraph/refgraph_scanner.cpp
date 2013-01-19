@@ -111,6 +111,7 @@ class Scanner
     size_t offset;
     uint32_t flags;
     const char* reftypename;
+    const char* refname;
 
     bool operator<(const ref_t& other) const {
       return target->address + offset < other.target->address + other.offset;
@@ -281,15 +282,19 @@ void Scanner::Scan()
   Print("# All addresses are user (a.k.a. \"payload\") addresses.\n");
   Print("#\n");
   Print("# Legend:\n");
-  Print("# n <count>            gives the number of blocks\n");
+  Print("# c <count>            gives the number of blocks\n");
   Print("# b <index>            starts the description of block with given index\n");
   Print("# m <address> <size>   block metrics: address and size\n");
   Print("# a <address>          gives a frame of allocation call stack\n");
   Print("# t <typename>         type of object (mangled)\n");
-  Print("# r <index> <offset> <flags> <reftypename> gives a reference into another block\n");
+  Print("# s <index> <offset>   starts the description of a strong reference\n");
+  Print("# f <flags>            gives the current strong reference's flags\n");
+  Print("# n <name>             gives the current strong reference's name\n");
+  Print("# u <typename>         gives the current strong reference's type name\n");
+  Print("# w <index>            gives a weak reference into another block\n");
 
   Print("\n");
-  Print("n ", mBlocks.size(), "\n");
+  Print("c ", mBlocks.size(), "\n");
 
   uintptr_t total_blocks = 0;
   uintptr_t total_payloads_size = 0;
@@ -397,7 +402,10 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
 
   refs_vector_t refs;
 
-  ref_t* current_ref = nullptr;
+  typedef std::vector<uint32_t, stl_allocator_bypassing_instrumentation<uint32_t> >
+          index_vector_t;
+
+  index_vector_t weakrefs;
 
   while (scanPos != stop) {
     uintptr_t scanned = *reinterpret_cast<uintptr_t*>(scanPos);
@@ -411,73 +419,70 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
     if (MOZ_LIKELY(target == mBlocks.end()))
       continue;
 
-    size_t offset = scanned - target->address;
+    bool isStrong = false;
+    marker_t flags = 0;
+    if (scanPos <= stop - sizeof(marker_t)) {
+      marker_t marker = *reinterpret_cast<marker_t*>(scanPos);
+      flags = marker ^ baseMarker;
+      isStrong = flags < 0x10;
+    }
 
-    if (!current_ref ||
-        current_ref->target != target)
-    {
+    if (isStrong) {
+      scanPos += sizeof(marker_t);
       ref_t r;
       r.target = target;
-      r.offset = offset;
-      r.flags = 0;
-      r.reftypename = nullptr;
+      r.offset = scanned - target->address;
+      r.flags = flags;
+
+      assertion(scanPos <= stop - 2 * sizeof(const char*));
+      r.reftypename = *reinterpret_cast<const char**>(scanPos);
+      scanPos += sizeof(const char*);
+      r.refname = *reinterpret_cast<const char**>(scanPos);
+      scanPos += sizeof(const char*);
+
       refs.push_back(r);
-      current_ref = &refs.back();
+    } else {
+      weakrefs.push_back(target - mBlocks.begin());
     }
-
-    if (scanPos > stop - sizeof(marker_t))
-      continue;
-
-    marker_t marker = *reinterpret_cast<marker_t*>(scanPos);
-
-    marker_t flags = marker ^ baseMarker;
-
-    // test if we found a marker
-    if (flags > 0xf)
-      continue;
-
-    scanPos += sizeof(marker_t);
-
-    assertion(scanPos <= stop - sizeof(const char*));
-
-    const char* reftypename = *reinterpret_cast<const char**>(scanPos);
-
-    scanPos += sizeof(const char*);
-
-    current_ref->flags |= flags;
-    current_ref->reftypename = reftypename;
   }
 
-  if (!refs.size())
-    return;
+  if (!refs.empty()) {
+    std::sort(refs.begin(), refs.end());
+    for(refs_vector_t::const_iterator it = refs.begin();
+        it != refs.end();
+        ++it)
+    {
+      uint32_t target = it->target - mBlocks.begin();
+      size_t offset = it->offset;
+      const char* reftypename = it->reftypename;
+      const char* refname = it->refname;
+      uint32_t flags = it->flags;
 
-  std::sort(refs.begin(), refs.end());
-
-  refs_vector_t::iterator it = refs.begin();
-  do {
-    blocks_vector_t::const_iterator target = it->target;
-    size_t offset = it->offset;
-    const char* reftypename = it->reftypename;
-    uint32_t flags = 0;
-
-    do {
-      flags |= it->flags;
-      ++it;
-    } while (it != refs.end() &&
-             it->target == target &&
-             it->offset == offset &&
-             it->reftypename == reftypename);
-
-    Print("r ", target - mBlocks.begin());
-    Print(" ", offset);
-    Print(" ", flags);
-    if (reftypename) {
-      Print(" ", reftypename, "\n");
-    } else {
-      Print("\n");
+      Print("s ", target, " ", offset, "\n");
+      Print("f ", flags, "\n");
+      if (refname) {
+        Print("n ", refname, "\n");
+      }
+      if (reftypename) {
+        Print("u ", reftypename, "\n");
+      }
     }
+  }
 
-  } while (it != refs.end());
+  if (!weakrefs.empty()) {
+    std::sort(weakrefs.begin(), weakrefs.end());
+    uint32_t last = -1;
+    for(index_vector_t::const_iterator it = weakrefs.begin();
+        it != weakrefs.end();
+        ++it)
+    {
+      if (*it == last) {
+        continue;
+      }
+      Print("w ", *it, "\n");
+      last = *it;
+    }
+  }
 }
 
 } // end namespace refgraph

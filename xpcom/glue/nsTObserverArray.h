@@ -74,7 +74,7 @@ class nsAutoTObserverArray : protected nsTObserverArray_base {
     typedef T           elem_type;
     typedef nsTArray<T> array_type;
 
-    void SetTraversedByCC() { mArray.SetTraversedByCC(); }
+    void SetTraversedByCC(const char* name) { mArray.SetTraversedByCC(name); }
 
     nsAutoTObserverArray() {
     }
@@ -387,7 +387,7 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             uint32_t aFlags = 0)
 {
   aFlags |= CycleCollectionEdgeNameArrayFlag;
-  aField.SetTraversedByCC();
+  aField.SetTraversedByCC(aName);
   size_t length = aField.Length();
   for (size_t i = 0; i < length; ++i) {
     ImplCycleCollectionTraverse(aCallback, aField.ElementAt(i), aName, aFlags);
