@@ -4,10 +4,6 @@
 
 #include "refgraph.h"
 
-#ifdef REFGRAPH_BACKTRACE
-#include <execinfo.h>
-#endif
-
 #include <cerrno>
 #include <cstring>
 #include <algorithm>
@@ -178,47 +174,13 @@ remove_list_elem(list_elem_t* elem)
   tie_list_elems(elem->prev, elem->next);
 }
 
-#if (defined __GNUC__)
-#define REFGRAPH_DONT_INLINE __attribute__((noinline))
-#elif (defined _MSC_VER)
-#define REFGRAPH_DONT_INLINE __declspec(noinline)
-#else
-#define REFGRAPH_DONT_INLINE
-#endif
-
-#ifdef REFGRAPH_BACKTRACE
-#define REFGRAPH_BACKTRACE_GETTER REFGRAPH_DONT_INLINE
-#else
-#define REFGRAPH_BACKTRACE_GETTER
-#endif
-
-#ifdef REFGRAPH_BACKTRACE
-static int already_getting_backtrace = 0;
-#endif
-
-REFGRAPH_BACKTRACE_GETTER static payload_t*
+static payload_t*
 instrument_new_block(real_block_t* real_block, size_t extra_space, size_t size)
 {
   // can't use list_elem_for_real_block here because it asserts that the block is already instrumented
   list_elem_t* elem = reinterpret_cast<list_elem_t*>(reinterpret_cast<char*>(real_block) + extra_space - sizeof(list_elem_t));
   init_list_elem(elem, real_block, size);
   append_list_elem(elem);
-
-#ifdef REFGRAPH_BACKTRACE
-  if (!already_getting_backtrace) {
-    already_getting_backtrace++;
-
-    memset(elem->allocation_backtrace, 0, sizeof(elem->allocation_backtrace));
-    const size_t skipped_frames = 3;
-    const size_t raw_backtrace_size = backtrace_size + skipped_frames;
-    void *raw_backtrace[raw_backtrace_size];
-    size_t raw_frames = backtrace(raw_backtrace, raw_backtrace_size);
-    for (size_t i = skipped_frames; i < raw_frames; i++)
-      elem->allocation_backtrace[i - skipped_frames] = raw_backtrace[i];
-
-    already_getting_backtrace--;
-  }
-#endif
 
   return payload_for_list_elem(elem);
 }
@@ -450,18 +412,6 @@ size_t replace_malloc_good_size(size_t size)
 void replace_init(const malloc_table_t* table)
 {
   gMallocFuncsTable = table;
-
-#ifdef REFGRAPH_BACKTRACE
-  if (already_getting_backtrace)
-    return;
-
-  already_getting_backtrace++;
-
-  void *dummy;
-  backtrace(&dummy, 1);
-
-  already_getting_backtrace--;
-#endif
 }
 
 inline list_elem_t*

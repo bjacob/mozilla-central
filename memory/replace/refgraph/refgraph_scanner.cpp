@@ -138,8 +138,8 @@ private:
   FindInHeapNontrivialCase(uintptr_t address) const;
 
   void Print(const char* str);
-  void Print(uintptr_t n);
   void Print(const void* ptr);
+  void Print(uintptr_t n);
 
   template<typename A, typename B>
   void Print(A a, B b)
@@ -211,7 +211,7 @@ Scanner::FindInHeapNontrivialCase(uintptr_t address) const {
   if (it->address > address) {
     if (it == mBlocks.begin())
       return mBlocks.end();
-    it--;
+    --it;
   }
 
   assertion(it->address <= address);
@@ -386,11 +386,6 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
   if (elem->type) {
     Print("t ", elem->type, "\n");
   }
-#ifdef REFGRAPH_BACKTRACE
-  for (size_t i = 0; i < backtrace_size; i++) {
-    Print("a ", elem->allocation_backtrace[i], "\n");
-  }
-#endif
 
   uintptr_t start = block->address;
   uintptr_t stop = start + (block->size / sizeof(void*)) * sizeof(void*);

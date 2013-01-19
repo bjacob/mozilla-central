@@ -16,9 +16,6 @@
 
 #include <pthread.h>
 
-// enable recording call stacks to allocation sites for each block
-// #define REFGRAPH_BACKTRACE
-
 namespace refgraph {
 
 #ifdef DEBUG
@@ -57,10 +54,6 @@ extern const malloc_table_t* gMallocFuncsTable;
 
 #define list_elem_size_guaranteed_to_be_multiple_of 16
 
-#ifdef REFGRAPH_BACKTRACE
-const size_t backtrace_size = 8;
-#endif
-
 // This is the linked-list-element structure that we are storing at the beginning of each block.
 // So we allocate larger blocks than requested, and store this linked list element just before
 // the payload.
@@ -71,10 +64,6 @@ struct list_elem_t
   list_elem_t* next;
   size_t offset_into_real_block;
   size_t payload_size;
-
-#ifdef REFGRAPH_BACKTRACE
-  void* allocation_backtrace[backtrace_size];
-#endif
 
   const char* type;
   size_t typeOffset;
