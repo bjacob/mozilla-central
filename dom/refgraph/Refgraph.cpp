@@ -661,8 +661,6 @@ Refgraph::WrapObject(JSContext *cx, JSObject *scope)
     return RefgraphBinding::Wrap(cx, scope, this);
 }
 
-NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(Refgraph)
-
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Refgraph)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
@@ -678,8 +676,6 @@ RefgraphTypeSearchResult::WrapObject(JSContext *cx, JSObject *scope)
 {
     return RefgraphTypeSearchResultBinding::Wrap(cx, scope, this);
 }
-
-NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphTypeSearchResult)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphTypeSearchResult)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -700,8 +696,6 @@ nsISupports*
 RefgraphVertex::GetParentObject() const {
   return mParent->GetParentObject();
 }
-
-NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphVertex)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphVertex)
 NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
@@ -725,8 +719,6 @@ RefgraphEdge::GetParentObject() const {
   return mParent->GetParentObject();
 }
 
-NS_IMPL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphEdge)
-
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphEdge)
 NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -737,4 +729,3 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdge, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdge, Release)
-
