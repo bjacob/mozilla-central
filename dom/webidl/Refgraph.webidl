@@ -14,19 +14,19 @@ interface RefgraphVertex {
   readonly attribute unsigned long edgeCount;
   [Creator]
   RefgraphEdge edge(unsigned long index);
+
   readonly attribute unsigned long sccIndex;
+  const unsigned long ALONE_IN_SCC = 0xffffffff;
 };
 
 interface RefgraphEdge {
   [Creator]
   readonly attribute RefgraphVertex target;
-  readonly attribute boolean isStrong;
   readonly attribute boolean isTraversedByCC;
   readonly attribute DOMString refTypeName;
   readonly attribute DOMString refName;
 };
 
-[Constructor]
 interface Refgraph {
   [Creator]
   sequence<RefgraphTypeSearchResult> typeSearch(DOMString query);
@@ -36,8 +36,18 @@ interface Refgraph {
   RefgraphVertex? findVertex(unsigned long long address);
 
   readonly attribute unsigned long sccCount;
-  const unsigned long ALONE_IN_SCC = 0xffffffff;
 
   [Creator]
   sequence<RefgraphVertex> scc(unsigned long index);
+};
+
+[Constructor]
+interface RefgraphController {
+  [Creator]
+  Refgraph? snapshot();
+  /*
+  void snapshotToFile(DOMString fileName);
+  [Creator]
+  Refgraph? loadFromFile(DOMString fileName);
+  */
 };

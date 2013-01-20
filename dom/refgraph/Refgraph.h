@@ -152,7 +152,6 @@ public:
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphEdge)
 
   already_AddRefed<RefgraphVertex> Target() const;
-  bool IsStrong() const;
   bool IsTraversedByCC() const;
   void GetRefName(nsString& retval) const;
   void GetRefTypeName(nsString& retval) const;
@@ -187,12 +186,15 @@ public:
   already_AddRefed<RefgraphEdge> Edge(uint32_t index) const;
 };
 
+class RefgraphController;
+
 class Refgraph {
 
   friend class RefgraphVertex;
   friend class RefgraphEdge;
+  friend class RefgraphController;
 
-  nsRefPtr<nsISupports> mParentObject;
+  nsRefPtr<RefgraphController> mParent;
 
   blocks_vector_t mBlocks;
   block_t* mCurrentBlock;
@@ -245,8 +247,9 @@ class Refgraph {
                    T* result,
                    const char** actualEnd = nullptr);
 
-  Refgraph()
-    : mCurrentBlock(nullptr)
+  Refgraph(RefgraphController* parent)
+    : mParent(parent)
+    , mCurrentBlock(nullptr)
     , mCurrentRef(nullptr)
     , mDemanglingInputBuffer(nullptr)
     , mDemanglingOutputBuffer(nullptr)
@@ -262,17 +265,12 @@ class Refgraph {
 
 public:
 
-  nsISupports *GetParentObject() const {
-    return mParentObject;
-  }
+  nsISupports *GetParentObject() const;
 
   virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(Refgraph)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(Refgraph)
-
-  static already_AddRefed<Refgraph>
-  Constructor(nsISupports*, mozilla::ErrorResult&);
 
   void TypeSearch(const nsAString& query,
                   nsTArray<nsRefPtr<RefgraphTypeSearchResult> >& result);
@@ -284,6 +282,35 @@ public:
 
   uint32_t SccCount() const;
   void Scc(uint32_t index, nsTArray<nsRefPtr<RefgraphVertex> >& result);
+};
+
+class RefgraphController {
+
+  nsRefPtr<nsISupports> mParent;
+
+public:
+
+  nsISupports *GetParentObject() const { return mParent; }
+
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphController)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphController)
+
+  RefgraphController(nsISupports* aParent)
+    : mParent(aParent)
+  {}
+
+  static already_AddRefed<RefgraphController>
+  Constructor(nsISupports*, mozilla::ErrorResult&);
+
+  already_AddRefed<Refgraph>
+  Snapshot();
+
+  void SnapshotToFile(const nsAString& filename);
+
+  already_AddRefed<Refgraph>
+  LoadFromFile(const nsAString& filename);
 };
 
 } // namespace refgraph

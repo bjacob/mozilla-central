@@ -342,40 +342,30 @@ bool Refgraph::Parse(const char* buffer, size_t length)
 
 void Refgraph::ResolveHereditaryStrongRefs()
 {
-  ScopedAssertWorkspacesClear sawc(this);
-
   for (blocks_vector_t::iterator bi = mBlocks.begin();
        bi != mBlocks.end();
        ++bi)
   {
-    for (refs_vector_t::iterator ri = bi->refs.begin();
-       ri != bi->refs.end();
-       ++ri)
-    {
-      if (ri->flags & hereditaryStrongRefFlag) {
-        mBlocks[ri->target].workspace = 1;
-        ri->flags ^= hereditaryStrongRefFlag;
-        MOZ_ASSERT(ri->flags & strongRefFlag);
-      }
-    }
-  }
-
-  for (blocks_vector_t::iterator bi = mBlocks.begin();
-       bi != mBlocks.end();
-       ++bi)
-  {
-    if (!bi->workspace) {
-      continue;
-    }
-
     for (refs_vector_t::iterator ri = bi->refs.begin();
          ri != bi->refs.end();
          ++ri)
     {
-      ri->flags |= strongRefFlag;
+      if (ri->flags & hereditaryFlag) {
+        ri->flags ^= hereditaryFlag;
+        block_t& hereditary_block = mBlocks[ri->target];
+        for (index_vector_t::iterator weakref_it = hereditary_block.weakrefs.begin();
+            weakref_it != hereditary_block.weakrefs.end();
+            ++weakref_it)
+        {
+          ref_t r;
+          r.target = *weakref_it;
+          r.flags = ri->flags;
+          r.reftypename.assign("(inherited)");
+          hereditary_block.refs.push_back(r);
+        }
+        hereditary_block.weakrefs.clear();
+      }
     }
-
-    bi->workspace = 0;
   }
 }
 
@@ -394,9 +384,6 @@ void Refgraph::RecurseStronglyConnectedComponents(
        ri != v.refs.end();
        ++ri)
   {
-    if (!(ri->flags & strongRefFlag)) {
-      continue;
-    }
     uint32_t w_index = ri->target;
     if (w_index == v_index) {
       continue;
@@ -513,13 +500,6 @@ bool Refgraph::Acquire()
   return true;
 }
 
-already_AddRefed<Refgraph>
-Refgraph::Constructor(nsISupports*, mozilla::ErrorResult&) {
-  nsRefPtr<Refgraph> r = new Refgraph;
-  r->Acquire();
-  return r.forget();
-}
-
 void Refgraph::TypeSearch(const nsAString& name, nsTArray<nsRefPtr<RefgraphTypeSearchResult> >& retval)
 {
   string_t t(NS_LossyConvertUTF16toASCII(name).get());
@@ -598,10 +578,6 @@ RefgraphEdge::Target() const
   return r.forget();
 }
 
-bool RefgraphEdge::IsStrong() const {
-  return mRef->flags & strongRefFlag;
-}
-
 bool RefgraphEdge::IsTraversedByCC() const {
   return mRef->flags & traversedByCCFlag;
 }
@@ -655,6 +631,44 @@ RefgraphVertex::Edge(uint32_t index) const {
   return r.forget();
 }
 
+already_AddRefed<RefgraphController>
+RefgraphController::Constructor(nsISupports* aGlobal, mozilla::ErrorResult&) {
+  nsRefPtr<RefgraphController> r = new RefgraphController(aGlobal);
+  return r.forget();
+}
+
+already_AddRefed<Refgraph>
+RefgraphController::Snapshot()
+{
+  nsRefPtr<Refgraph> r = new Refgraph(this);
+  if (!r->Acquire()) {
+    return nullptr;
+  }
+  return r.forget();
+}
+
+JSObject*
+RefgraphController::WrapObject(JSContext *cx, JSObject *scope)
+{
+    return RefgraphControllerBinding::Wrap(cx, scope, this);
+}
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphController)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphController)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphController, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphController, Release)
+
+nsISupports*
+Refgraph::GetParentObject() const {
+  return mParent->GetParentObject();
+}
+
 JSObject*
 Refgraph::WrapObject(JSContext *cx, JSObject *scope)
 {
@@ -662,14 +676,15 @@ Refgraph::WrapObject(JSContext *cx, JSObject *scope)
 }
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Refgraph)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Refgraph)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(Refgraph, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(Refgraph, Release)
-
 
 JSObject*
 RefgraphTypeSearchResult::WrapObject(JSContext *cx, JSObject *scope)

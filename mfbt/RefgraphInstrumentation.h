@@ -22,10 +22,9 @@ namespace refgraph {
 
 typedef uint64_t marker_t;
 
-const marker_t baseMarker               = 0xb762f23059c146c0;
-const marker_t strongRefFlag            = 0x1;
-const marker_t hereditaryStrongRefFlag  = 0x2;
-const marker_t traversedByCCFlag        = 0x4;
+const marker_t strongRefBaseMarker      = 0xb762f23059c146c0;
+const marker_t hereditaryFlag           = 0x1;
+const marker_t traversedByCCFlag        = 0x2;
 
 class StrongRefMarker
 {
@@ -36,7 +35,7 @@ class StrongRefMarker
 public:
 
   StrongRefMarker()
-    : mMarker(baseMarker | strongRefFlag)
+    : mMarker(strongRefBaseMarker)
     , mRefTypeName(nullptr)
     , mRefName(nullptr)
   {
@@ -44,7 +43,7 @@ public:
 
   template<typename T>
   StrongRefMarker(const T* parent)
-    : mMarker(baseMarker | strongRefFlag)
+    : mMarker(strongRefBaseMarker)
     , mRefTypeName(nullptr)
     , mRefName(nullptr)
   {
@@ -64,7 +63,7 @@ public:
     mRefName = nullptr;
   }
 
-  void SetHereditary() { mMarker |= hereditaryStrongRefFlag; }
+  void SetHereditary() { mMarker |= hereditaryFlag; }
 
   void SetTraversedByCC(const char *name) {
     mMarker |= traversedByCCFlag;

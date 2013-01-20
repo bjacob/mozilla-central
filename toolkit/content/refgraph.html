@@ -2,11 +2,13 @@
 <script>
   var sccIndex = 0;
   var refgraph;
+  var controller;
   function start() {
     window.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
         .getInterface(Components.interfaces.nsIDOMWindowUtils)
         .cycleCollect();
-    refgraph = new Refgraph();
+    controller = new RefgraphController;
+    refgraph = controller.snapshot();
     document.getElementById("scccount").innerHTML = refgraph.sccCount;
   }
   function indent(level) {
@@ -35,17 +37,15 @@
       var edgeCount = vertex.edgeCount;
       for (var i = 0; i < edgeCount; i++) {
         var edge = vertex.edge(i);
-        if (edge.isStrong) {
-          var isTraversedByCC = edge.isTraversedByCC;
-          if (edge.refName) {
-            output += ind + "reference name: " + edge.refName + "\n";
-          }
-          if (edge.refTypeName) {
-            output += ind + "reference type name: " + edge.refTypeName + "\n";
-          }
-          output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " by the CC\n";
-          output += dumpVertex(edge.target, level + 1, root_address, itbcc && isTraversedByCC);
+        var isTraversedByCC = edge.isTraversedByCC;
+        if (edge.refName) {
+          output += ind + "reference name: " + edge.refName + "\n";
         }
+        if (edge.refTypeName) {
+          output += ind + "reference type name: " + edge.refTypeName + "\n";
+        }
+        output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " by the CC\n";
+        output += dumpVertex(edge.target, level + 1, root_address, itbcc && isTraversedByCC);
       }
     }
     return output;
@@ -111,9 +111,6 @@
       resultText += "SCC edges:\n";
       for (var j = 0; j < vertex.edgeCount; j++) {
         var edge = vertex.edge(j);
-        if (!edge.isStrong) {
-          continue;
-        }
         var target = edge.target;
         if (target.address == vertex.address) {
           continue;
