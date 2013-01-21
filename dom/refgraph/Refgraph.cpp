@@ -182,7 +182,7 @@ bool Refgraph::HandleLine_t(const char* start, const char* end)
     return false;
   }
 
-  mCurrentBlock->type.assign(start, end - start);
+  mCurrentBlock->type.assign(pos, end - pos);
   return true;
 }
 
@@ -339,15 +339,15 @@ void Refgraph::ResolveHereditaryStrongRefs()
   }
 }
 
-void Refgraph::RecurseStronglyConnectedComponents(
+void Refgraph::RecurseCycles(
                  uint32_t& v_index,
-                 uint32_t& scc_index,
+                 uint32_t& cycle_index,
                  index_vector_t& stack)
 {
   block_t& v = mBlocks[v_index];
-  v.scc_index = scc_index;
-  v.workspace = scc_index;
-  scc_index++;
+  v.cycle_index = cycle_index;
+  v.workspace = cycle_index;
+  cycle_index++;
   stack.push_back(v_index);
 
   for (refs_vector_t::const_iterator ri = v.refs.begin();
@@ -359,45 +359,58 @@ void Refgraph::RecurseStronglyConnectedComponents(
       continue;
     }
     block_t& w = mBlocks[w_index];
-    if (!w.scc_index) {
-      RecurseStronglyConnectedComponents(w_index, scc_index, stack);
+    if (!w.cycle_index) {
+      RecurseCycles(w_index, cycle_index, stack);
       v.workspace = std::min(v.workspace, w.workspace);
     } else if (std::binary_search(stack.begin(), stack.end(), w_index)) {
-      v.workspace = std::min(v.workspace, w.scc_index);
+      v.workspace = std::min(v.workspace, w.cycle_index);
     }
   }
 
-  if (v.workspace == v.scc_index) {
+  if (v.workspace == v.cycle_index) {
     uint32_t w_index = stack.back();
-    index_vector_t scc;
+    index_vector_t cycle_vertices;
     while (w_index != v_index) {
       stack.pop_back();
-      scc.push_back(w_index);
+      cycle_vertices.push_back(w_index);
       w_index = stack.back();
     }
     MOZ_ASSERT(stack.back() == v_index);
     stack.pop_back();
-    if (scc.size()) {
-      scc.push_back(v_index);
-      mSCCs.push_back(scc);
+    if (cycle_vertices.size()) {
+      mCycles.push_back(cycle_t());
+      mCycles.back().vertices = cycle_vertices;
+      mCycles.back().vertices.push_back(v_index);
     }
   }
 }
 
-void Refgraph::ComputeStronglyConnectedComponents()
+struct sort_vertices_by_type_functor {
+  Refgraph* mParent;
+
+  sort_vertices_by_type_functor(Refgraph* parent)
+    : mParent(parent)
+  {}
+
+  bool operator()(uint32_t a, uint32_t b) const {
+    return mParent->Blocks()[a].type < mParent->Blocks()[b].type;
+  }
+};
+
+void Refgraph::ComputeCycles()
 {
   ScopedAssertWorkspacesClear sawc(this);
 
   index_vector_t stack;
-  uint32_t scc_index = 1;
+  uint32_t cycle_index = 1;
 
   for (uint32_t vertex_index = 0;
        vertex_index < mBlocks.size();
        ++vertex_index)
   {
     block_t& v = mBlocks[vertex_index];
-    if (!v.scc_index) {
-      RecurseStronglyConnectedComponents(vertex_index, scc_index, stack);
+    if (!v.cycle_index) {
+      RecurseCycles(vertex_index, cycle_index, stack);
     }
   }
 
@@ -405,14 +418,71 @@ void Refgraph::ComputeStronglyConnectedComponents()
        bi != mBlocks.end();
        ++bi)
   {
-    bi->scc_index = -1;
+    bi->cycle_index = -1;
     bi->workspace = 0;
   }
 
-  for (size_t i = 0; i < mSCCs.size(); i++) {
-    index_vector_t& scc = mSCCs[i];
-    for (size_t j = 0; j < scc.size(); j++) {
-      mBlocks[scc[j]].scc_index = i;
+  typedef std::vector<string_t, stl_allocator_bypassing_instrumentation<string_t> >
+          string_vector_t;
+
+  string_vector_t cycleNames(mCycles.size());
+
+  for (size_t i = 0; i < mCycles.size(); i++)
+  {
+    cycle_t& cycle = mCycles[i];
+
+    std::sort(cycle.vertices.begin(), cycle.vertices.end(),
+              sort_vertices_by_type_functor(this));
+
+    cycle.isTraversedByCC = true;
+    const index_vector_t& cycle_vertices = mCycles[i].vertices;
+    for (size_t i = 0; i < cycle_vertices.size(); i++) {
+      const block_t& b = mBlocks[cycle_vertices[i]];
+      for (refs_vector_t::const_iterator ri = b.refs.begin();
+          ri != b.refs.end();
+          ++ri)
+      {
+        if (!(ri->flags & traversedByCCFlag)) {
+          const block_t& target_block = mBlocks[ri->target];
+          if (target_block.cycle_index == b.cycle_index) {
+            cycle.isTraversedByCC = false;
+            break;
+          }
+        }
+      }
+      if (!cycle.isTraversedByCC) {
+        break;
+      }
+    }
+
+    cycle.name.clear();
+    cycle.name.reserve(8 * cycle.vertices.size());
+    string_t last_type;
+    for (index_vector_t::const_iterator it = cycle.vertices.begin();
+        it != cycle.vertices.end();
+        ++it)
+    {
+      if (mBlocks[*it].type != last_type) {
+        const string_t& this_type = mBlocks[*it].type;
+        if (it != cycle.vertices.begin()) {
+          cycle.name += " / ";
+        }
+        if (this_type.empty()) {
+          cycle.name += "(unknown)";
+        } else {
+          cycle.name += this_type;
+        }
+        last_type = this_type;
+      }
+    }
+  }
+
+  std::sort(mCycles.begin(), mCycles.end());
+
+  for (size_t i = 0; i < mCycles.size(); i++) {
+    index_vector_t& cycle_vertices = mCycles[i].vertices;
+    for (size_t j = 0; j < cycle_vertices.size(); j++) {
+      mBlocks[cycle_vertices[j]].cycle_index = i;
     }
   }
 }
@@ -465,7 +535,7 @@ bool Refgraph::Acquire()
   }
 
   ResolveHereditaryStrongRefs();
-  ComputeStronglyConnectedComponents();
+  ComputeCycles();
 
   return true;
 }
@@ -520,42 +590,47 @@ Refgraph::FindVertex(uint64_t address)
   return r.forget();
 }
 
-uint32_t Refgraph::SccCount() const {
-  return mSCCs.size();
+uint32_t Refgraph::CycleCount() const {
+  return mCycles.size();
 }
 
-void Refgraph::Scc(uint32_t index, nsTArray<nsRefPtr<RefgraphVertex> >& result)
+already_AddRefed<RefgraphCycle> Refgraph::Cycle(uint32_t index)
 {
-  if (index >= SccCount()) {
-    return;
+  if (index >= CycleCount()) {
+    return nullptr;
   }
-  index_vector_t& scc = mSCCs[index];
-  for (size_t i = 0; i < scc.size(); i++) {
-    result.AppendElement(new RefgraphVertex(this, mBlocks[scc[i]]));
-  }
+  nsRefPtr<RefgraphCycle> r = new RefgraphCycle(this, index);
+  return r.forget();
 }
 
-bool Refgraph::IsSccTraversedByCC(uint32_t index) const
+RefgraphCycle::RefgraphCycle(Refgraph* parent, uint32_t index)
+  : mParent(parent)
+  , mIndex(index)
 {
-  if (index >= SccCount()) {
-    return false;
+}
+
+bool RefgraphCycle::IsTraversedByCC() const
+{
+  return mParent->mCycles[mIndex].isTraversedByCC;
+}
+
+uint32_t RefgraphCycle::VertexCount() const
+{
+  return mParent->mCycles[mIndex].vertices.size();
+}
+
+already_AddRefed<RefgraphVertex> RefgraphCycle::Vertex(uint32_t index) const
+{
+  if (index >= VertexCount()) {
+    return nullptr;
   }
-  const index_vector_t& scc = mSCCs[index];
-  for (size_t i = 0; i < scc.size(); i++) {
-    const block_t& b = mBlocks[scc[i]];
-    for (refs_vector_t::const_iterator ri = b.refs.begin();
-         ri != b.refs.end();
-         ++ri)
-    {
-      if (!(ri->flags & traversedByCCFlag)) {
-        const block_t& target_block = mBlocks[ri->target];
-        if (target_block.scc_index == index) {
-          return false;
-        }
-      }
-    }
-  }
-  return true;
+  uint32_t block_index = mParent->mCycles[mIndex].vertices[index];
+  nsRefPtr<RefgraphVertex> r = new RefgraphVertex(mParent, mParent->mBlocks[block_index]);
+  return r.forget();
+}
+
+void RefgraphCycle::GetName(nsString& retval) const {
+  retval = NS_ConvertASCIItoUTF16(nsDependentCString(mParent->mCycles[mIndex].name.c_str()));
 }
 
 RefgraphEdge::RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref)
@@ -614,12 +689,15 @@ uint32_t RefgraphVertex::EdgeCount() const {
   return mBlock.refs.size();
 }
 
-uint32_t RefgraphVertex::SccIndex() const {
-  return mBlock.scc_index;
+uint32_t RefgraphVertex::CycleIndex() const {
+  return mBlock.cycle_index;
 }
 
 already_AddRefed<RefgraphEdge>
 RefgraphVertex::Edge(uint32_t index) const {
+  if (index >= mBlock.refs.size()) {
+    return nullptr;
+  }
   nsRefPtr<RefgraphEdge> r = new RefgraphEdge(mParent, mBlock.refs.begin() + index);
   return r.forget();
 }
@@ -737,3 +815,25 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdge, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdge, Release)
+
+JSObject*
+RefgraphCycle::WrapObject(JSContext *cx, JSObject *scope)
+{
+    return dom::RefgraphCycleBinding::Wrap(cx, scope, this);
+}
+
+nsISupports*
+RefgraphCycle::GetParentObject() const {
+  return mParent->GetParentObject();
+}
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphCycle)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphCycle)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphCycle, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphCycle, Release)

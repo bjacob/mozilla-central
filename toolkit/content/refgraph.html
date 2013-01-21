@@ -1,6 +1,7 @@
 <html>
 <script>
-  var sccIndex = -1;
+  var cycleIndex = -1;
+  var cycle;
   var refgraph;
   var controller;
   function start() {
@@ -9,7 +10,7 @@
         .cycleCollect();
     controller = new RefgraphController;
     refgraph = controller.snapshot();
-    document.getElementById("scccount").innerHTML = refgraph.sccCount;
+    document.getElementById("cyclecount").innerHTML = refgraph.cycleCount;
   }
   function indent(level) {
     var r = "";
@@ -24,8 +25,8 @@
     output += ind + "type name: " + vertex.typeName + "\n";
     output += ind + "address: 0x" + vertex.address.toString(16) + "\n";
     output += ind + "size: " + vertex.size + " bytes\n";
-    if (vertex.sccIndex != vertex.ALONE_IN_SCC) {
-      output += ind + "belongs to SCC " + vertex.sccIndex + "\n";
+    if (vertex.cycleIndex != vertex.ALONE_IN_Cycle) {
+      output += ind + "belongs to Cycle " + vertex.cycleIndex + "\n";
     }
     if (level >= 2 &&
         root_address == vertex.address &&
@@ -87,71 +88,74 @@
     document.getElementById("results").textContent = resultText;
   }
   function sscNext() {
-    if (refgraph.sccCount == 0) {
+    if (refgraph.cycleCount == 0) {
       return;
     }
     var nonTraversedByCCOnly = document.getElementById("nonTraversedByCCOnly").checked;
     while (true) {
-      sccIndex = Math.min(sccIndex+1, refgraph.sccCount - 1);
-      if (sccIndex == refgraph.sccCount - 1) {
+      cycleIndex = Math.min(cycleIndex+1, refgraph.cycleCount - 1);
+      cycle = refgraph.cycle(cycleIndex);
+      if (cycleIndex == refgraph.cycleCount - 1) {
         break;
       }
       if (!nonTraversedByCCOnly) {
         break;
       }
-      if (!refgraph.isSccTraversedByCC(sccIndex)) {
+      if (!cycle.isTraversedByCC) {
         break;
       }
     }
-    printScc();
+    printCycle();
   }
   function sscPrev() {
-    if (refgraph.sccCount == 0) {
+    if (refgraph.cycleCount == 0) {
       return;
     }
     var nonTraversedByCCOnly = document.getElementById("nonTraversedByCCOnly").checked;
     while (true) {
-      sccIndex = Math.max(sccIndex-1, 0);
-      if (sccIndex == 0) {
+      cycleIndex = Math.max(cycleIndex-1, 0);
+      cycle = refgraph.cycle(cycleIndex);
+      if (cycleIndex == 0) {
         break;
       }
       if (!nonTraversedByCCOnly) {
         break;
       }
-      if (!refgraph.isSccTraversedByCC(sccIndex)) {
+      if (!cycle.isTraversedByCC) {
         break;
       }
     }
-    printScc();
+    printCycle();
   }
-  function sccSearch() {
-    var sccSearchInput = document.getElementById("sccsearchinput").value;
-    var result = parseInt(sccSearchInput, 10);
+  function cycleSearch() {
+    var cycleSearchInput = document.getElementById("cyclesearchinput").value;
+    var result = parseInt(cycleSearchInput, 10);
     if (result) {
-      sccIndex = result;
+      cycleIndex = result;
     }
-    printScc();
+    printCycle();
   }
-  function printScc() {
-    var scc = refgraph.scc(sccIndex);
+  function printCycle() {
     var resultText = "";
-    resultText = "SCC " + sccIndex + " has " + scc.length + " vertices.\n\n";
-    if (!refgraph.isSccTraversedByCC(sccIndex)) {
+    var vertexCount = cycle.vertexCount;
+    resultText = "Cycle " + cycleIndex + " has " + vertexCount + " vertices.\n\n";
+    if (!cycle.isTraversedByCC) {
       resultText += "Is NOT traversed by the CC!\n\n";
     }
-    for (var i = 0; i < scc.length; i++) {
-      var vertex = scc[i];
+    resultText += "Types involved: " + cycle.name + "\n\n";
+    for (var i = 0; i < vertexCount; i++) {
+      var vertex = cycle.vertex(i);
       resultText += "type name: " + vertex.typeName + "\n";
       resultText += "address: 0x" + vertex.address.toString(16) + "\n";
       resultText += "size: " + vertex.size + " bytes\n";
-      resultText += "SCC edges:\n";
+      resultText += "Cycle edges:\n";
       for (var j = 0; j < vertex.edgeCount; j++) {
         var edge = vertex.edge(j);
         var target = edge.target;
         if (target.address == vertex.address) {
           continue;
         }
-        if (target.sccIndex == sccIndex) {
+        if (target.cycleIndex == cycleIndex) {
           resultText += "    " + edge.refTypeName + " " + edge.refName + " to " + target.typeName + " at 0x" + target.address.toString(16) + "\n";
           if (!edge.isTraversedByCC) {
             resultText += "        NOT TRAVERSED BY CC\n";
@@ -159,6 +163,39 @@
         }
       }
     }
+    document.getElementById("results").textContent = resultText;
+  }
+  function cyclesSummary() {
+    var resultText = "";
+    function report(count, name, vertexCount, isTraversedByCC) {
+      if (count) {
+          resultText += "" + count
+                      + "  [" + vertexCount
+                      + " vertices" + (isTraversedByCC ? "" : ", NON-traversed by CC")
+                      + "]     " + name  + "\n";
+      }
+    }
+    var cycleCount = refgraph.cycleCount;
+    var lastName, lastVertexCount, lastIsTraversedByCC;
+    var count = 0;
+    for (var i = 0; i < cycleCount; i++) {
+      var cycle = refgraph.cycle(i);
+      var name = cycle.name;
+      var vertexCount = cycle.vertexCount;
+      var isTraversedByCC = cycle.isTraversedByCC;
+      if (name != lastName || vertexCount != lastVertexCount || isTraversedByCC != lastIsTraversedByCC) {
+        if (count) {
+          report(count, lastName, lastVertexCount, lastIsTraversedByCC);
+        }
+        lastName = name;
+        lastVertexCount = vertexCount;
+        lastIsTraversedByCC = isTraversedByCC;
+        count = 1;
+      } else {
+        count++;
+      }
+    }
+    report(count, lastName, lastVertexCount, lastIsTraversedByCC);
     document.getElementById("results").textContent = resultText;
   }
   
@@ -170,13 +207,15 @@
   Address search: <input type="text" id="addresssearchinput"/>
   <input type="button" value="Search" onClick="addressSearch()"/>
   <br/>
-  SCC search
-  <input type="text" id="sccsearchinput"/> out of <div id="scccount"></div>
-  <input type="button" value="Search" onClick="sccSearch()"/>
+  <input type="button" value="Cycles summary" onClick="cyclesSummary()"/>
+  <br/>
+  Cycle search
+  <input type="text" id="cyclesearchinput"/> out of <div id="cyclecount"></div>
+  <input type="button" value="Search" onClick="cycleSearch()"/>
 
   <input type="button" value="<" onclick="sscPrev()"></input>
   <input type="button" value=">" onclick="sscNext()"></input>
-  <input type="checkbox" id="nonTraversedByCCOnly" checked="true"></input> Only show SCCs that are not traversed by the CC.
+  <input type="checkbox" id="nonTraversedByCCOnly" checked="true"></input> Only show cycles that are not traversed by the CC.
   <br/>
   <pre id="results"/>
 </body>

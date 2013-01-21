@@ -13,9 +13,9 @@ interface RefgraphVertex {
   readonly attribute unsigned long long size;
   readonly attribute unsigned long edgeCount;
   [Creator]
-  RefgraphEdge edge(unsigned long index);
+  RefgraphEdge? edge(unsigned long index);
 
-  readonly attribute unsigned long sccIndex;
+  readonly attribute unsigned long cycleIndex;
   const unsigned long ALONE_IN_SCC = 0xffffffff;
 };
 
@@ -27,6 +27,14 @@ interface RefgraphEdge {
   readonly attribute DOMString refName;
 };
 
+interface RefgraphCycle {
+  [Creator]
+  RefgraphVertex? vertex(unsigned long index);
+  readonly attribute unsigned long vertexCount;
+  readonly attribute boolean isTraversedByCC;
+  readonly attribute DOMString name;
+};
+
 interface Refgraph {
   [Creator]
   sequence<RefgraphTypeSearchResult> typeSearch(DOMString query);
@@ -35,11 +43,9 @@ interface Refgraph {
   [Creator]
   RefgraphVertex? findVertex(unsigned long long address);
 
-  readonly attribute unsigned long sccCount;
-
   [Creator]
-  sequence<RefgraphVertex> scc(unsigned long index);
-  boolean isSccTraversedByCC(unsigned long index);
+  RefgraphCycle? cycle(unsigned long index);
+  readonly attribute unsigned long cycleCount;
 };
 
 [Constructor]

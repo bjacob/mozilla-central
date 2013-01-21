@@ -91,9 +91,31 @@ typedef std::vector<ref_t, stl_allocator_bypassing_instrumentation<ref_t> >
 typedef std::vector<uint32_t, stl_allocator_bypassing_instrumentation<uint32_t> >
         index_vector_t;
 
-typedef std::vector<index_vector_t,
-                    stl_allocator_bypassing_instrumentation<index_vector_t> >
-        index_vector_vector_t;
+struct cycle_t {
+  index_vector_t vertices;
+  string_t name;
+  bool isTraversedByCC;
+
+  bool operator< (const cycle_t& other) const {
+    if (name < other.name) {
+      return true;
+    }
+    if (name == other.name) {
+      if (vertices.size() > other.vertices.size()) {
+        return true;
+      }
+      if (vertices.size() == other.vertices.size()) {
+        if (!isTraversedByCC && other.isTraversedByCC) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+};
+
+typedef std::vector<cycle_t, stl_allocator_bypassing_instrumentation<cycle_t> >
+        cycles_vector_t;
 
 struct block_t {
   uint64_t address;
@@ -105,13 +127,13 @@ struct block_t {
   index_vector_t weakrefs;
 
   uint32_t workspace;
-  uint32_t scc_index;
+  uint32_t cycle_index;
 
   block_t()
     : address(0)
     , size(0)
     , workspace(0)
-    , scc_index(0)
+    , cycle_index(0)
   {}
 
   bool operator<(const block_t& other) {
@@ -184,18 +206,43 @@ public:
   uint64_t Size() const;
   void GetTypeName(nsString& retval) const;
   uint32_t EdgeCount() const;
-  uint32_t SccIndex() const;
+  uint32_t CycleIndex() const;
 
   already_AddRefed<RefgraphEdge> Edge(uint32_t index) const;
 };
 
+class RefgraphCycle
+{
+  nsRefPtr<Refgraph> mParent;
+  const uint32_t mIndex;
+
+public:
+
+  RefgraphCycle(Refgraph* parent, uint32_t index);
+
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+
+  nsISupports* GetParentObject() const;
+
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphCycle)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphCycle)
+
+  uint32_t VertexCount() const;
+  bool IsTraversedByCC() const;
+  already_AddRefed<RefgraphVertex> Vertex(uint32_t index) const;
+
+  void GetName(nsString& retval) const;
+};
+
 class RefgraphController;
+
 
 class Refgraph {
 
   friend class RefgraphVertex;
   friend class RefgraphEdge;
   friend class RefgraphController;
+  friend class RefgraphCycle;
 
   nsRefPtr<RefgraphController> mParent;
 
@@ -205,7 +252,7 @@ class Refgraph {
 
   map_types_to_block_indices_t mMapTypesToBlockIndices;
 
-  index_vector_vector_t mSCCs;
+  cycles_vector_t mCycles;
 
   class ScopedAssertWorkspacesClear {
     Refgraph* r;
@@ -219,11 +266,11 @@ class Refgraph {
 
   bool Parse(const char* buffer, size_t length);
   void ResolveHereditaryStrongRefs();
-  void RecurseStronglyConnectedComponents(
+  void RecurseCycles(
          uint32_t& vertex_index,
-         uint32_t& scc_index,
+         uint32_t& cycle_index,
          index_vector_t& stack);
-  void ComputeStronglyConnectedComponents();
+  void ComputeCycles();
   bool Acquire();
 
   bool HandleLine(const char* start, const char* end);
@@ -263,6 +310,8 @@ public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(Refgraph)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(Refgraph)
 
+  const blocks_vector_t& Blocks() const { return mBlocks; }
+
   void TypeSearch(const nsAString& query,
                   nsTArray<nsRefPtr<RefgraphTypeSearchResult> >& result);
   already_AddRefed<RefgraphVertex>
@@ -271,9 +320,8 @@ public:
   already_AddRefed<RefgraphVertex>
   FindVertex(uint64_t address);
 
-  uint32_t SccCount() const;
-  void Scc(uint32_t index, nsTArray<nsRefPtr<RefgraphVertex> >& result);
-  bool IsSccTraversedByCC(uint32_t index) const;
+  uint32_t CycleCount() const;
+  already_AddRefed<RefgraphCycle> Cycle(uint32_t index);
 };
 
 class RefgraphController {
