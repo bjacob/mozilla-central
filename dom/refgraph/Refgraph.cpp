@@ -535,6 +535,29 @@ void Refgraph::Scc(uint32_t index, nsTArray<nsRefPtr<RefgraphVertex> >& result)
   }
 }
 
+bool Refgraph::IsSccTraversedByCC(uint32_t index) const
+{
+  if (index >= SccCount()) {
+    return false;
+  }
+  const index_vector_t& scc = mSCCs[index];
+  for (size_t i = 0; i < scc.size(); i++) {
+    const block_t& b = mBlocks[scc[i]];
+    for (refs_vector_t::const_iterator ri = b.refs.begin();
+         ri != b.refs.end();
+         ++ri)
+    {
+      if (!(ri->flags & traversedByCCFlag)) {
+        const block_t& target_block = mBlocks[ri->target];
+        if (target_block.scc_index == index) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 RefgraphEdge::RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref)
   : mParent(parent)
   , mRef(ref)

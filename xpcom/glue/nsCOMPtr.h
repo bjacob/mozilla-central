@@ -398,7 +398,15 @@ nsCOMPtr_base
   {
     public:
 
-      nsCOMPtr_base( nsISupports* rawPtr = 0 )
+      template<typename Derived>
+      nsCOMPtr_base(Derived* d, nsISupports* rawPtr )
+          : mRawPtr(rawPtr)
+          , mMarker(d)
+        {
+          // nothing else to do here
+        }
+
+      nsCOMPtr_base(nsISupports* rawPtr = 0 )
           : mRawPtr(rawPtr)
           , mMarker(this)
         {
@@ -457,7 +465,7 @@ class nsCOMPtr MOZ_FINAL
   {
 
 #ifdef NSCAP_FEATURE_USE_BASE
-  #define NSCAP_CTOR_BASE(x) nsCOMPtr_base(x)
+  #define NSCAP_CTOR_BASE(x) nsCOMPtr_base(this, x)
 #else
   #define NSCAP_CTOR_BASE(x) mRawPtr(x), mMarker(this)
 

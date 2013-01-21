@@ -39,6 +39,7 @@ interface Refgraph {
 
   [Creator]
   sequence<RefgraphVertex> scc(unsigned long index);
+  boolean isSccTraversedByCC(unsigned long index);
 };
 
 [Constructor]

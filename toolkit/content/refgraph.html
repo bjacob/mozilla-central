@@ -1,6 +1,6 @@
 <html>
 <script>
-  var sccIndex = 0;
+  var sccIndex = -1;
   var refgraph;
   var controller;
   function start() {
@@ -87,22 +87,58 @@
     document.getElementById("results").textContent = resultText;
   }
   function sscNext() {
-    sccIndex = Math.min(sccIndex+1, refgraph.sccCount - 1);
+    if (refgraph.sccCount == 0) {
+      return;
+    }
+    var nonTraversedByCCOnly = document.getElementById("nonTraversedByCCOnly").checked;
+    while (true) {
+      sccIndex = Math.min(sccIndex+1, refgraph.sccCount - 1);
+      if (sccIndex == refgraph.sccCount - 1) {
+        break;
+      }
+      if (!nonTraversedByCCOnly) {
+        break;
+      }
+      if (!refgraph.isSccTraversedByCC(sccIndex)) {
+        break;
+      }
+    }
     printScc();
   }
   function sscPrev() {
-    sccIndex = Math.max(sccIndex-1,0);
+    if (refgraph.sccCount == 0) {
+      return;
+    }
+    var nonTraversedByCCOnly = document.getElementById("nonTraversedByCCOnly").checked;
+    while (true) {
+      sccIndex = Math.max(sccIndex-1, 0);
+      if (sccIndex == 0) {
+        break;
+      }
+      if (!nonTraversedByCCOnly) {
+        break;
+      }
+      if (!refgraph.isSccTraversedByCC(sccIndex)) {
+        break;
+      }
+    }
     printScc();
   }
   function sccSearch() {
     var sccSearchInput = document.getElementById("sccsearchinput").value;
-    sccIndex = parseInt(sccSearchInput, 10);
+    var result = parseInt(sccSearchInput, 10);
+    if (result) {
+      sccIndex = result;
+    }
     printScc();
   }
   function printScc() {
     var scc = refgraph.scc(sccIndex);
     var resultText = "";
     resultText = "SCC " + sccIndex + " has " + scc.length + " vertices.\n\n";
+    if (!refgraph.isSccTraversedByCC(sccIndex)) {
+      resultText += "Is NOT traversed by the CC!\n\n";
+    }
     for (var i = 0; i < scc.length; i++) {
       var vertex = scc[i];
       resultText += "type name: " + vertex.typeName + "\n";
@@ -116,7 +152,7 @@
           continue;
         }
         if (target.sccIndex == sccIndex) {
-          resultText += "    " + edge.refTypeName + " " + edge.refName + " to " + target.typeName + " at " + target.address.toString(16) + "\n";
+          resultText += "    " + edge.refTypeName + " " + edge.refName + " to " + target.typeName + " at 0x" + target.address.toString(16) + "\n";
           if (!edge.isTraversedByCC) {
             resultText += "        NOT TRAVERSED BY CC\n";
           }
@@ -135,11 +171,12 @@
   <input type="button" value="Search" onClick="addressSearch()"/>
   <br/>
   SCC search
-  <input type="text" id="sccsearchinput"/>
-  out of <div id="scccount"></div>
+  <input type="text" id="sccsearchinput"/> out of <div id="scccount"></div>
   <input type="button" value="Search" onClick="sccSearch()"/>
 
-  <input type="button" value="<" onclick="sscPrev()"></intput><div id="scccount2"></div> <input type="button" value=">" onclick="sscNext()"></intput>
+  <input type="button" value="<" onclick="sscPrev()"></input>
+  <input type="button" value=">" onclick="sscNext()"></input>
+  <input type="checkbox" id="nonTraversedByCCOnly" checked="true"></input> Only show SCCs that are not traversed by the CC.
   <br/>
   <pre id="results"/>
 </body>

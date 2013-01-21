@@ -273,6 +273,7 @@ public:
 
   uint32_t SccCount() const;
   void Scc(uint32_t index, nsTArray<nsRefPtr<RefgraphVertex> >& result);
+  bool IsSccTraversedByCC(uint32_t index) const;
 };
 
 class RefgraphController {
