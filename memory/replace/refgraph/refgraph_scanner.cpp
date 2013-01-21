@@ -288,7 +288,7 @@ static const char* Demangled(const char* in)
   abi::__cxa_demangle(in, output, &output_capacity, &status);
   EndWorkingAroundGCCDemanglerStupidity();
   if (status) {
-    return nullptr;
+    return in;
   }
   return output;
 }
