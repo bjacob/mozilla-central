@@ -67,6 +67,7 @@ private:
     if (NS_IsCycleCollectorThread()) { \
       NS_ERROR("Changing refcount of " #_class " object during Traverse is " \
                "not permitted!"); \
+      NS_ABORT(); \
     } \
     else { \
       NS_ASSERT_OWNINGTHREAD(_class); \

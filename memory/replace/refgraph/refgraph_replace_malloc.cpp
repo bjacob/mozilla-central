@@ -13,6 +13,33 @@
 namespace refgraph {
 
 const malloc_table_t* gMallocFuncsTable = nullptr;
+
+static bool gIsAnyThreadWorkingAroundGCCDemanglerStupidity = false;
+static __thread bool gIsThisThreadWorkingAroundGCCDemanglerStupidity = false;
+
+void BeginWorkingAroundGCCDemanglerStupidity() {
+  assertion(!gIsAnyThreadWorkingAroundGCCDemanglerStupidity);
+  assertion(!gIsThisThreadWorkingAroundGCCDemanglerStupidity);
+  gIsAnyThreadWorkingAroundGCCDemanglerStupidity = true;
+  gIsThisThreadWorkingAroundGCCDemanglerStupidity = true;
+}
+
+void EndWorkingAroundGCCDemanglerStupidity() {
+  assertion(gIsAnyThreadWorkingAroundGCCDemanglerStupidity);
+  assertion(gIsThisThreadWorkingAroundGCCDemanglerStupidity);
+  gIsAnyThreadWorkingAroundGCCDemanglerStupidity = false;
+  gIsThisThreadWorkingAroundGCCDemanglerStupidity = false;
+}
+
+bool IsWorkingAroundGCCDemanglerStupidity() {
+  if (MOZ_UNLIKELY(gIsAnyThreadWorkingAroundGCCDemanglerStupidity)) {
+    if (MOZ_UNLIKELY(gIsThisThreadWorkingAroundGCCDemanglerStupidity)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 class PagesMap {
   uint8_t* map;
   uintptr_t first_represented_page, last_represented_page;
@@ -134,7 +161,7 @@ sentinel(void)
   static bool sentinel_object_initialized = false;
 
   if (!sentinel_object_initialized) {
-    init_list_elem(&sentinel_object, NULL, 0);
+    init_list_elem(&sentinel_object, nullptr, 0);
     sentinel_object.marker = 0;
     sentinel_object_initialized = true;
   }
@@ -208,7 +235,7 @@ void* replace_malloc(size_t size)
   real_block_t* real_block = static_cast<real_block_t*>(gMallocFuncsTable->malloc(size + extra_space));
 
   if (!real_block)
-    return NULL;
+    return nullptr;
 
   return instrument_new_block(real_block, extra_space, size);
 }
@@ -217,7 +244,7 @@ int replace_posix_memalign(void **memptr, size_t alignment, size_t size)
 {
   AutoLock autoLock;
 
-  *memptr = NULL;
+  *memptr = nullptr;
 
   if ((!alignment) ||
       (alignment & (alignment - 1)))
@@ -237,7 +264,7 @@ int replace_posix_memalign(void **memptr, size_t alignment, size_t size)
   int ret = gMallocFuncsTable->posix_memalign((void**)(&real_block), alignment, size + alignment);
 
   if (ret) {
-    *memptr = NULL;
+    *memptr = nullptr;
     return ret;
   }
   *memptr = instrument_new_block(real_block, alignment, size);
@@ -252,7 +279,7 @@ void *replace_aligned_alloc(size_t alignment, size_t size)
       (alignment & (alignment - 1)))
   {
     errno = EINVAL;
-    return NULL;
+    return nullptr;
   }
 
   if (!size)
@@ -264,7 +291,7 @@ void *replace_aligned_alloc(size_t alignment, size_t size)
   real_block_t* real_block = static_cast<real_block_t*>(gMallocFuncsTable->aligned_alloc(alignment, size + alignment));
 
   if (!real_block)
-    return NULL;
+    return nullptr;
 
   return instrument_new_block(real_block, alignment, size);
 }
@@ -281,19 +308,28 @@ void *replace_calloc(size_t num, size_t size)
   const size_t size_t_max = -1;
 
   if (num > size_t_max / size)
-    return NULL;
+    return nullptr;
 
   size_t bytes = num * size;
   assertion(bytes / size == num);
   real_block_t* real_block = static_cast<real_block_t*>(gMallocFuncsTable->calloc(1, bytes + extra_space));
   if (!real_block)
-    return NULL;
+    return nullptr;
 
   return instrument_new_block(real_block, extra_space, bytes);
 }
 
 void *replace_realloc(void *oldp, size_t newsize)
 {
+  if (MOZ_UNLIKELY(IsWorkingAroundGCCDemanglerStupidity())) {
+    if (newsize <= max_demangled_name_length) {
+      static char demangled_name_buffer[max_demangled_name_length];
+      return demangled_name_buffer;
+    } else {
+      return nullptr;
+    }
+  }
+
   AutoLock autoLock;
 
   const size_t extra_space = sizeof(list_elem_t);
@@ -340,13 +376,17 @@ void *replace_realloc(void *oldp, size_t newsize)
 
 void replace_free(void *ptr)
 {
-  AutoLock autoLock;
-
   if (!ptr)
     return;
 
   if (ptr == dummy_malloc_0())
     return;
+
+  if (MOZ_UNLIKELY(IsWorkingAroundGCCDemanglerStupidity())) {
+    return;
+  }
+
+  AutoLock autoLock;
 
   list_elem_t* elem = list_elem_for_payload(static_cast<payload_t*>(ptr));
   real_block_t* old_real_block = real_block_for_list_elem(elem);
@@ -365,7 +405,7 @@ void *replace_memalign(size_t alignment, size_t size)
       (alignment & (alignment - 1)))
   {
     errno = EINVAL;
-    return NULL;
+    return nullptr;
   }
 
   while (alignment < sizeof(list_elem_t))
@@ -373,7 +413,7 @@ void *replace_memalign(size_t alignment, size_t size)
 
   real_block_t* real_block =static_cast<real_block_t*>(gMallocFuncsTable->memalign(alignment, size + alignment));
   if (!real_block)
-    return NULL;
+    return nullptr;
 
   return instrument_new_block(real_block, alignment, size);
 }
@@ -389,7 +429,7 @@ void *replace_valloc(size_t size)
 
   real_block_t* real_block = static_cast<real_block_t*>(gMallocFuncsTable->valloc(size + alignment));
   if (!real_block)
-    return NULL;
+    return nullptr;
 
   return instrument_new_block(real_block, alignment, size);
 }

@@ -280,44 +280,17 @@ void Scanner::Print(const void* ptr)
 
 static const char* Demangled(const char* in)
 {
-  static char* sDemanglingInputBuffer = nullptr;
-  static char* sDemanglingOutputBuffer = nullptr;
-  static size_t sDemanglingInputBufferCapacity = 0;
-  static size_t sDemanglingOutputBufferCapacity = 0;
-
   size_t length = strlen(in);
-
-  if (!length) {
-    return nullptr;
-  }
-
-  const size_t requiredInputBufferCapacity = length + 1;
-  if (requiredInputBufferCapacity > sDemanglingInputBufferCapacity) {
-    sDemanglingInputBufferCapacity = requiredInputBufferCapacity;
-    sDemanglingInputBuffer = static_cast<char*>(
-      gMallocFuncsTable->realloc(sDemanglingInputBuffer, sDemanglingInputBufferCapacity));
-  }
-
-  // better over-estimate requiredOutputBufferCapacity: if we under-estimate it,
-  // the stupid GCC runtime will try to call realloc,
-  // which will deadlock/crash if called here.
-  const size_t requiredOutputBufferCapacity = 2 * length + 0x1000;
-  if (requiredOutputBufferCapacity > sDemanglingOutputBufferCapacity) {
-    sDemanglingOutputBufferCapacity = requiredOutputBufferCapacity;
-    sDemanglingOutputBuffer = static_cast<char*>(
-      gMallocFuncsTable->realloc(sDemanglingOutputBuffer, sDemanglingOutputBufferCapacity));
-  }
-
-  memcpy(sDemanglingInputBuffer, in, length + 1);
   int status = 0;
-  size_t actualOutCapacity = sDemanglingOutputBufferCapacity;
-  abi::__cxa_demangle(sDemanglingInputBuffer, sDemanglingOutputBuffer, &actualOutCapacity, &status);
-  MOZ_ASSERT(actualOutCapacity == sDemanglingOutputBufferCapacity,
-             "Thank you. Now go away.");
+  char output[max_demangled_name_length];
+  size_t output_capacity = max_demangled_name_length;
+  BeginWorkingAroundGCCDemanglerStupidity();
+  abi::__cxa_demangle(in, output, &output_capacity, &status);
+  EndWorkingAroundGCCDemanglerStupidity();
   if (status) {
     return nullptr;
   }
-  return sDemanglingOutputBuffer;
+  return output;
 }
 
 void Scanner::Scan()

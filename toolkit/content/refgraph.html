@@ -24,7 +24,7 @@
     output += ind + "type name: " + vertex.typeName + "\n";
     output += ind + "address: 0x" + vertex.address.toString(16) + "\n";
     output += ind + "size: " + vertex.size + " bytes\n";
-    if (vertex.sccIndex != refgraph.ALONE_IN_SCC) {
+    if (vertex.sccIndex != vertex.ALONE_IN_SCC) {
       output += ind + "belongs to SCC " + vertex.sccIndex + "\n";
     }
     if (level >= 2 &&

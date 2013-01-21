@@ -126,7 +126,10 @@ struct block_t {
 typedef std::vector<block_t, stl_allocator_bypassing_instrumentation<block_t> >
         blocks_vector_t;
 
-typedef std::multimap<string_t, uint32_t>
+typedef std::multimap<string_t,
+                      uint32_t,
+                      std::less<string_t>,
+                      stl_allocator_bypassing_instrumentation<std::pair<const string_t, uint32_t> > >
         map_types_to_block_indices_t;
 
 class Refgraph;

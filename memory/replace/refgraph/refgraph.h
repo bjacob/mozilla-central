@@ -30,6 +30,10 @@ inline void assertion(bool condition)
 #define assertion(...)
 #endif
 
+void BeginWorkingAroundGCCDemanglerStupidity();
+void EndWorkingAroundGCCDemanglerStupidity();
+bool IsWorkingAroundGCCDemanglerStupidity();
+
 class AutoLock
 {
   static pthread_mutex_t sLock;
@@ -51,6 +55,7 @@ const size_t page_size = 1 << page_exponent;
 
 extern const malloc_table_t* gMallocFuncsTable;
 
+const size_t max_demangled_name_length = page_size;
 
 #define list_elem_size_guaranteed_to_be_multiple_of 16
 
