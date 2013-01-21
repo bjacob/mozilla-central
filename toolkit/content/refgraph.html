@@ -87,17 +87,28 @@
     }
     document.getElementById("results").textContent = resultText;
   }
-  function sscNext() {
+  function cycleNext() {
     if (refgraph.cycleCount == 0) {
       return;
     }
     var nonTraversedByCCOnly = document.getElementById("nonTraversedByCCOnly").checked;
+    var skipdupes = document.getElementById("skipdupes").checked;
     while (true) {
       cycleIndex = Math.min(cycleIndex+1, refgraph.cycleCount - 1);
+      var oldcycle = cycle;
       cycle = refgraph.cycle(cycleIndex);
       if (cycleIndex == refgraph.cycleCount - 1) {
         break;
       }
+      if (skipdupes &&
+          cycle &&
+          cycle.name == oldcycle.name &&
+          cycle.vertexCount == oldcycle.vertexCount &&
+          cycle.isTraversedByCC == oldcycle.isTraversedByCC)
+      {
+        continue;
+      }
+
       if (!nonTraversedByCCOnly) {
         break;
       }
@@ -107,16 +118,26 @@
     }
     printCycle();
   }
-  function sscPrev() {
+  function cyclePrev() {
     if (refgraph.cycleCount == 0) {
       return;
     }
     var nonTraversedByCCOnly = document.getElementById("nonTraversedByCCOnly").checked;
+    var skipdupes = document.getElementById("skipdupes").checked;
     while (true) {
       cycleIndex = Math.max(cycleIndex-1, 0);
+      var oldcycle = cycle;
       cycle = refgraph.cycle(cycleIndex);
       if (cycleIndex == 0) {
         break;
+      }
+      if (skipdupes &&
+          cycle &&
+          cycle.name == oldcycle.name &&
+          cycle.vertexCount == oldcycle.vertexCount &&
+          cycle.isTraversedByCC == oldcycle.isTraversedByCC)
+      {
+        continue;
       }
       if (!nonTraversedByCCOnly) {
         break;
@@ -213,9 +234,12 @@
   <input type="text" id="cyclesearchinput"/> out of <div id="cyclecount"></div>
   <input type="button" value="Search" onClick="cycleSearch()"/>
 
-  <input type="button" value="<" onclick="sscPrev()"></input>
-  <input type="button" value=">" onclick="sscNext()"></input>
-  <input type="checkbox" id="nonTraversedByCCOnly" checked="true"></input> Only show cycles that are not traversed by the CC.
+  <input type="button" value="<" onclick="cyclePrev()"></input>
+  <input type="button" value=">" onclick="cycleNext()"></input>
+  <br/>
+  <input type="checkbox" id="nonTraversedByCCOnly" checked="true"></input> Only show cycles that are not traversed by the CC
+  <br/>
+  <input type="checkbox" id="skipdupes" checked="true"></input> Skip duplicate cycles
   <br/>
   <pre id="results"/>
 </body>
