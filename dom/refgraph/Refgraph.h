@@ -61,9 +61,6 @@ public:
   };
 };
 
-typedef std::vector<uint64_t, stl_allocator_bypassing_instrumentation<uint64_t> >
-        stack_t;
-
 typedef std::basic_string<char,
                           std::char_traits<char>,
                           stl_allocator_bypassing_instrumentation<char>
@@ -122,9 +119,10 @@ struct block_t {
   uint64_t size;
 
   string_t type;
-  stack_t stack;
   refs_vector_t refs;
   index_vector_t weakrefs;
+  index_vector_t backrefs;
+  index_vector_t backweakrefs;
 
   uint32_t workspace;
   uint32_t cycle_index;
@@ -209,6 +207,14 @@ public:
   uint32_t CycleIndex() const;
 
   already_AddRefed<RefgraphEdge> Edge(uint32_t index) const;
+
+  uint32_t WeakEdgeCount() const;
+  uint32_t BackEdgeCount() const;
+  uint32_t BackWeakEdgeCount() const;
+
+  already_AddRefed<RefgraphVertex> WeakEdge(uint32_t index) const;
+  already_AddRefed<RefgraphVertex> BackEdge(uint32_t index) const;
+  already_AddRefed<RefgraphVertex> BackWeakEdge(uint32_t index) const;
 };
 
 class RefgraphCycle
@@ -256,7 +262,8 @@ class Refgraph {
 
   class ScopedAssertWorkspacesClear {
     Refgraph* r;
-  public:
+
+public:
     ScopedAssertWorkspacesClear(Refgraph*);
     ~ScopedAssertWorkspacesClear();
   };
@@ -271,10 +278,10 @@ class Refgraph {
          uint32_t& cycle_index,
          index_vector_t& stack);
   void ComputeCycles();
+  void ResolveBackRefs();
   bool Acquire();
 
   bool HandleLine(const char* start, const char* end);
-  bool HandleLine_a(const char* start, const char* end);
   bool HandleLine_b(const char* start, const char* end);
   bool HandleLine_c(const char* start, const char* end);
   bool HandleLine_f(const char* start, const char* end);

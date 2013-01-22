@@ -65,20 +65,6 @@ bool Refgraph::ParseNumber(const char* start,
   return true;
 }
 
-bool Refgraph::HandleLine_a(const char* start, const char* end)
-{
-  uint64_t n;
-  bool success = ParseNumber(start, end, &n);
-  if (!success) {
-    return false;
-  }
-  if (!mCurrentBlock) {
-    return false;
-  }
-  mCurrentBlock->stack.push_back(n);
-  return true;
-}
-
 bool Refgraph::HandleLine_b(const char* start, const char* end)
 {
   uint32_t n;
@@ -91,8 +77,9 @@ bool Refgraph::HandleLine_b(const char* start, const char* end)
   }
   if (mCurrentBlock) {
     mCurrentBlock->refs.shrink_to_fit();
-    mCurrentBlock->stack.shrink_to_fit();
     mCurrentBlock->weakrefs.shrink_to_fit();
+    mCurrentBlock->backrefs.shrink_to_fit();
+    mCurrentBlock->backweakrefs.shrink_to_fit();
   }
   mCurrentBlock = &mBlocks[n];
   return true;
@@ -260,7 +247,6 @@ bool Refgraph::HandleLine(const char* start, const char* end)
   }
 
   switch (c) {
-    case 'a': return HandleLine_a(start, end);
     case 'b': return HandleLine_b(start, end);
     case 'c': return HandleLine_c(start, end);
     case 'f': return HandleLine_f(start, end);
@@ -422,22 +408,24 @@ void Refgraph::ComputeCycles()
     bi->workspace = 0;
   }
 
-  typedef std::vector<string_t, stl_allocator_bypassing_instrumentation<string_t> >
-          string_vector_t;
+  for (size_t i = 0; i < mCycles.size(); i++) {
+    index_vector_t& cycle_vertices = mCycles[i].vertices;
+    for (size_t j = 0; j < cycle_vertices.size(); j++) {
+      mBlocks[cycle_vertices[j]].cycle_index = i;
+    }
+  }
 
-  string_vector_t cycleNames(mCycles.size());
-
-  for (size_t i = 0; i < mCycles.size(); i++)
+  for (size_t c = 0; c < mCycles.size(); c++)
   {
-    cycle_t& cycle = mCycles[i];
+    cycle_t& cycle = mCycles[c];
 
     std::sort(cycle.vertices.begin(), cycle.vertices.end(),
               sort_vertices_by_type_functor(this));
 
     cycle.isTraversedByCC = true;
-    const index_vector_t& cycle_vertices = mCycles[i].vertices;
-    for (size_t i = 0; i < cycle_vertices.size(); i++) {
-      const block_t& b = mBlocks[cycle_vertices[i]];
+    const index_vector_t& cycle_vertices = mCycles[c].vertices;
+    for (size_t v = 0; v < cycle_vertices.size(); v++) {
+      const block_t& b = mBlocks[cycle_vertices[v]];
       for (refs_vector_t::const_iterator ri = b.refs.begin();
           ri != b.refs.end();
           ++ri)
@@ -510,6 +498,28 @@ Refgraph::ScopedAssertWorkspacesClear::~ScopedAssertWorkspacesClear()
   r->AssertWorkspacesClear();
 }
 
+void Refgraph::ResolveBackRefs()
+{
+  for (uint32_t b = 0;
+       b < mBlocks.size();
+       ++b)
+  {
+    for (refs_vector_t::iterator ri = mBlocks[b].refs.begin();
+         ri != mBlocks[b].refs.end();
+         ++ri)
+    {
+      mBlocks[ri->target].backrefs.push_back(b);
+    }
+
+    for (index_vector_t::iterator wi = mBlocks[b].weakrefs.begin();
+         wi != mBlocks[b].weakrefs.end();
+         ++wi)
+    {
+      mBlocks[*wi].backweakrefs.push_back(b);
+    }
+  }
+}
+
 bool Refgraph::Acquire()
 {
   // can only be called once. If you want a new Refgraph, construct a new object.
@@ -536,6 +546,7 @@ bool Refgraph::Acquire()
 
   ResolveHereditaryStrongRefs();
   ComputeCycles();
+  ResolveBackRefs();
 
   return true;
 }
@@ -695,10 +706,58 @@ uint32_t RefgraphVertex::CycleIndex() const {
 
 already_AddRefed<RefgraphEdge>
 RefgraphVertex::Edge(uint32_t index) const {
-  if (index >= mBlock.refs.size()) {
+  if (index >= EdgeCount()) {
     return nullptr;
   }
   nsRefPtr<RefgraphEdge> r = new RefgraphEdge(mParent, mBlock.refs.begin() + index);
+  return r.forget();
+}
+
+uint32_t
+RefgraphVertex::WeakEdgeCount() const
+{
+  return mBlock.weakrefs.size();
+}
+
+uint32_t
+RefgraphVertex::BackEdgeCount() const
+{
+  return mBlock.backrefs.size();
+}
+
+uint32_t
+RefgraphVertex::BackWeakEdgeCount() const
+{
+  return mBlock.backweakrefs.size();
+}
+
+already_AddRefed<RefgraphVertex>
+RefgraphVertex::WeakEdge(uint32_t index) const
+{
+  if (index >= WeakEdgeCount()) {
+    return nullptr;
+  }
+  nsRefPtr<RefgraphVertex> r = new RefgraphVertex(mParent, mParent->mBlocks[mBlock.weakrefs[index]]);
+  return r.forget();
+}
+
+already_AddRefed<RefgraphVertex>
+RefgraphVertex::BackEdge(uint32_t index) const
+{
+  if (index >= BackEdgeCount()) {
+    return nullptr;
+  }
+  nsRefPtr<RefgraphVertex> r = new RefgraphVertex(mParent, mParent->mBlocks[mBlock.backrefs[index]]);
+  return r.forget();
+}
+
+already_AddRefed<RefgraphVertex>
+RefgraphVertex::BackWeakEdge(uint32_t index) const
+{
+  if (index >= BackWeakEdgeCount()) {
+    return nullptr;
+  }
+  nsRefPtr<RefgraphVertex> r = new RefgraphVertex(mParent, mParent->mBlocks[mBlock.backweakrefs[index]]);
   return r.forget();
 }
 

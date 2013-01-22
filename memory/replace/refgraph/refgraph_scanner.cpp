@@ -301,7 +301,6 @@ void Scanner::Scan()
   Print("# c <count>            gives the number of blocks\n");
   Print("# b <index>            starts the description of block with given index\n");
   Print("# m <address> <size>   block metrics: address and size\n");
-  Print("# a <address>          gives a frame of allocation call stack\n");
   Print("# t <typename>         type of object (mangled)\n");
   Print("# s <index> <offset>   starts the description of a strong reference\n");
   Print("# f <flags>            gives the current strong reference's flags\n");

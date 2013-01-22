@@ -101,7 +101,7 @@
         break;
       }
       if (skipdupes &&
-          cycle &&
+          cycle && oldcycle &&
           cycle.name == oldcycle.name &&
           cycle.vertexCount == oldcycle.vertexCount &&
           cycle.isTraversedByCC == oldcycle.isTraversedByCC)
@@ -164,11 +164,13 @@
       resultText += "Is NOT traversed by the CC!\n\n";
     }
     resultText += "Types involved: " + cycle.name + "\n\n";
+    var reachableFromOutside = false;
     for (var i = 0; i < vertexCount; i++) {
       var vertex = cycle.vertex(i);
       resultText += "type name: " + vertex.typeName + "\n";
       resultText += "address: 0x" + vertex.address.toString(16) + "\n";
       resultText += "size: " + vertex.size + " bytes\n";
+      resultText += "cycleIndex: " + vertex.cycleIndex + "\n";
       resultText += "Cycle edges:\n";
       for (var j = 0; j < vertex.edgeCount; j++) {
         var edge = vertex.edge(j);
@@ -183,6 +185,22 @@
           }
         }
       }
+      var backEdgeCount = vertex.backEdgeCount;
+      var backWeakEdgeCount = vertex.backWeakEdgeCount;
+      var backRefCount = 0;
+      var backWeakRefCount = 0;
+      for (var e = 0; e < backEdgeCount; e++) {
+        if (vertex.backEdge(e).cycleIndex != cycleIndex) {
+          backRefCount++;
+        }
+      }
+      for (var e = 0; e < backWeakEdgeCount; e++) {
+        if (vertex.backWeakEdge(e).cycleIndex != cycleIndex) {
+          backWeakRefCount++;
+        }
+      }
+      resultText += "backRefCount: " + backRefCount + "\n";
+      resultText += "backWeakRefCount: " + backWeakRefCount + "\n\n\n";
     }
     document.getElementById("results").textContent = resultText;
   }
