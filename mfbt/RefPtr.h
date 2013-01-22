@@ -102,13 +102,13 @@ class RefPtr
     struct DontRef {};
 
   public:
-    RefPtr() : ptr(0) { }
-    RefPtr(const RefPtr& o) : ptr(ref(o.ptr)) {}
-    RefPtr(const TemporaryRef<T>& o) : ptr(o.drop()) {}
-    RefPtr(T* t) : ptr(ref(t)) {}
+    RefPtr() : ptr(0), mMarker(this) { }
+    RefPtr(const RefPtr& o) : ptr(ref(o.ptr)), mMarker(this) {}
+    RefPtr(const TemporaryRef<T>& o) : ptr(o.drop()), mMarker(this) {}
+    RefPtr(T* t) : ptr(ref(t)), mMarker(this) {}
 
     template<typename U>
-    RefPtr(const RefPtr<U>& o) : ptr(ref(o.get())) {}
+    RefPtr(const RefPtr<U>& o) : ptr(ref(o.get())), mMarker(this) {}
 
     ~RefPtr() { unref(ptr); }
 
