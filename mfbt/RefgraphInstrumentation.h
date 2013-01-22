@@ -8,9 +8,7 @@
 #ifndef mozilla_RefgraphInstrumentation_h_
 #define mozilla_RefgraphInstrumentation_h_
 
-#if (!defined NO_MOZ_GLUE) && (!defined MOZ_REFGRAPH_REPLACE_MALLOC_IMPLEMENTATION)
 #include "mozmemory.h"
-#endif
 
 #include "mozilla/StandardInteger.h"
 #include "mozilla/Assertions.h"

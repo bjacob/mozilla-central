@@ -11,7 +11,6 @@
 #include "mozilla/Types.h"
 #include "mozilla/Likely.h"
 
-#define MOZ_REFGRAPH_REPLACE_MALLOC_IMPLEMENTATION
 #include "mozilla/RefgraphInstrumentation.h"
 
 #include <pthread.h>

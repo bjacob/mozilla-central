@@ -280,9 +280,8 @@ void Scanner::Print(const void* ptr)
 
 static const char* Demangled(const char* in)
 {
-  size_t length = strlen(in);
   int status = 0;
-  char output[max_demangled_name_length];
+  static char output[max_demangled_name_length];
   size_t output_capacity = max_demangled_name_length;
   BeginWorkingAroundGCCDemanglerStupidity();
   abi::__cxa_demangle(in, output, &output_capacity, &status);
