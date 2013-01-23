@@ -36,7 +36,7 @@ namespace refgraph {
 
 typedef uint64_t marker_t;
 
-const marker_t strongRefBaseMarker      = 0xb762f23059c146c0;
+const marker_t strongRefBaseMarker      = 0xb762f23059c146c0ull;
 const marker_t hereditaryFlag           = 0x1;
 const marker_t traversedByCCFlag        = 0x2;
 

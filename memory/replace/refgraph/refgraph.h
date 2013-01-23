@@ -78,7 +78,7 @@ struct list_elem_t
 };
 
 // randomly chosen to minimize collisions
-const uint64_t list_elem_marker_value = 0x8313f73b0b58dc49;
+const uint64_t list_elem_marker_value = 0x8313f73b0b58dc49ull;
 
 // dummy types to add some type safety to our pointers
 struct real_block_t {};
