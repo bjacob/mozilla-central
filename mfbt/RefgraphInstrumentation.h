@@ -14,7 +14,23 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Types.h"
 
+#if defined(_CPPRTTI) || defined(__GXX_RTTI)
+#define MOZ_HAVE_RTTI
+#endif
+
+#ifdef MOZ_HAVE_RTTI
 #include <typeinfo>
+#endif
+
+template<typename T>
+const char* ___(const T* t)
+{
+#ifdef MOZ_HAVE_RTTI
+  return typeid(*t).name();
+#else
+  return __PRETTY_FUNCTION__;
+#endif
+}
 
 namespace refgraph {
 
@@ -51,7 +67,7 @@ public:
   template<typename T>
   void SetParent(const T* parent) {
     if (parent) {
-      mRefTypeName = typeid(*parent).name();
+      mRefTypeName = ___(parent);
     }
   }
 
@@ -73,7 +89,7 @@ template <typename T>
 T* SetType(T* pointer)
 {
 #ifndef NO_MOZ_GLUE
-  refgraph_set_type(pointer, typeid(*pointer).name());
+  refgraph_set_type(pointer, ___(pointer));
 #endif
   return pointer;
 }
