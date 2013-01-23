@@ -119,6 +119,9 @@ AC_SUBST(TOP_DIST)
 
 MOZ_DEFAULT_COMPILER
 
+# refgraph needs rtti
+_MOZ_USE_RTTI=1
+
 COMPILE_ENVIRONMENT=1
 MOZ_ARG_DISABLE_BOOL(compile-environment,
 [  --disable-compile-environment
