@@ -272,6 +272,7 @@ public:
   void AssertWorkspacesClear();
 
   bool Parse(const char* buffer, size_t length);
+  bool ParseFile(const char* filename);
   void ResolveHereditaryStrongRefs();
   void RecurseCycles(
          uint32_t& vertex_index,
@@ -279,7 +280,9 @@ public:
          index_vector_t& stack);
   void ComputeCycles();
   void ResolveBackRefs();
-  bool Acquire();
+  bool Snapshot();
+  bool LoadFromFile(const char* filename);
+  void PostProcess();
 
   bool HandleLine(const char* start, const char* end);
   bool HandleLine_b(const char* start, const char* end);

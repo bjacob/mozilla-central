@@ -62,9 +62,7 @@ interface Refgraph {
 interface RefgraphController {
   [Creator]
   Refgraph? snapshot();
-  /*
   void snapshotToFile(DOMString fileName);
   [Creator]
   Refgraph? loadFromFile(DOMString fileName);
-  */
 };

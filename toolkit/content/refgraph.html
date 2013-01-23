@@ -5,12 +5,36 @@
   var refgraph;
   var controller;
   function start() {
+    controller = new RefgraphController;
+  }
+  function snapshot() {
     window.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
         .getInterface(Components.interfaces.nsIDOMWindowUtils)
         .cycleCollect();
     controller = new RefgraphController;
-    refgraph = controller.snapshot();
+    var newrefgraph = controller.snapshot();
+    if (!newrefgraph) {
+      alert("snapshot failed");
+      return;
+    }
+    refgraph = newrefgraph;
     document.getElementById("cyclecount").innerHTML = refgraph.cycleCount;
+    document.getElementById("results").textContent = "";
+  }
+  function loadfromfile() {
+    var filename = document.getElementById("loadfileinput").value;
+    var newrefgraph = controller.loadFromFile(filename);
+    if (!newrefgraph) {
+      alert("loading file failed");
+      return;
+    }
+    refgraph = newrefgraph;
+    document.getElementById("cyclecount").innerHTML = refgraph.cycleCount;
+    document.getElementById("results").textContent = "";
+  }
+  function snapshottofile() {
+    var filename = document.getElementById("savefileinput").value;
+    controller.snapshotToFile(filename);
   }
   function indent(level) {
     var r = "";
@@ -240,6 +264,13 @@
   
 </script>
 <body onload="start()">
+  <input type="button" value="Take a snapshot of this browser" onClick="snapshot()"/><br/>
+  Load snapshot from file: <input type="text" id="loadfileinput"/>
+  <input type="button" value="Load" onClick="loadfromfile()"/>
+  <br/>
+  Take a snapshot and save to: <input type="text" id="savefileinput"/>
+  <input type="button" value="Save" onClick="snapshottofile()"/>
+  <br/>
   Type search: <input type="text" id="typesearchinput"/>
   <input type="button" value="Search" onClick="typeSearch()"/>
   <br/>

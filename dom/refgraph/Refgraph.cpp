@@ -267,9 +267,7 @@ bool Refgraph::Parse(const char* buffer, size_t length)
   const char* last = buffer + length - 1;
   size_t line_number = 0;
 
-  if (!length ||
-      *pos != '#' ||
-      *last != '\n')
+  if (!length)
   {
     return false;
   }
@@ -277,6 +275,7 @@ bool Refgraph::Parse(const char* buffer, size_t length)
   while (true) {
     if (MOZ_UNLIKELY(*pos == '\n')) {
       bool r = HandleLine(line_start, pos);
+      ++line_number;
       if (MOZ_UNLIKELY(!r)) {
         size_t length = pos - line_start;
         int ilength = std::min(int(length), 256);
@@ -290,10 +289,35 @@ bool Refgraph::Parse(const char* buffer, size_t length)
         return true;
       }
       line_start = pos + 1;
-      ++line_number;
     }
     ++pos;
   }
+}
+
+bool Refgraph::ParseFile(const char* filename)
+{
+  FILE* file = fopen(filename, "r");
+
+  if (!file) {
+    fprintf(stderr, "Refgraph: error opening file %s\n", filename);
+    return nullptr;
+  }
+
+  const size_t line_max_len = 256;
+  char line[line_max_len + 1];
+  size_t line_number = 0;
+
+  while (fgets(line, line_max_len, file)) {
+    size_t len = strlen(line);
+    bool r = len && HandleLine(line, line + len - 1);
+    ++line_number;
+    if (MOZ_UNLIKELY(!r)) {
+      fprintf(stderr, "Refgraph: error parsing line %lu (length %lu):\n%s\n\n",
+              line_number, len, line);
+      return false;
+    }
+  }
+  return true;
 }
 
 void Refgraph::ResolveHereditaryStrongRefs()
@@ -520,7 +544,21 @@ void Refgraph::ResolveBackRefs()
   }
 }
 
-bool Refgraph::Acquire()
+void Refgraph::PostProcess()
+{
+  for (uint32_t index = 0;
+       index < mBlocks.size();
+       index++)
+  {
+    mMapTypesToBlockIndices.insert(map_types_to_block_indices_t::value_type(mBlocks[index].type, index));
+  }
+
+  ResolveHereditaryStrongRefs();
+  ComputeCycles();
+  ResolveBackRefs();
+}
+
+bool Refgraph::Snapshot()
 {
   // can only be called once. If you want a new Refgraph, construct a new object.
   if (!mBlocks.empty()) {
@@ -537,17 +575,24 @@ bool Refgraph::Acquire()
     return false;
   }
 
-  for (uint32_t index = 0;
-       index < mBlocks.size();
-       index++)
-  {
-    mMapTypesToBlockIndices.insert(map_types_to_block_indices_t::value_type(mBlocks[index].type, index));
+  PostProcess();
+  return true;
+}
+
+bool Refgraph::LoadFromFile(const char* filename)
+{
+  // can only be called once. If you want a new Refgraph, construct a new object.
+  if (!mBlocks.empty()) {
+    return false;
   }
 
-  ResolveHereditaryStrongRefs();
-  ComputeCycles();
-  ResolveBackRefs();
+  bool result = ParseFile(filename);
+  if (!result) {
+    mBlocks.clear();
+    return false;
+  }
 
+  PostProcess();
   return true;
 }
 
@@ -771,10 +816,24 @@ already_AddRefed<Refgraph>
 RefgraphController::Snapshot()
 {
   nsRefPtr<Refgraph> r = new Refgraph(this);
-  if (!r->Acquire()) {
+  if (!r->Snapshot()) {
     return nullptr;
   }
   return r.forget();
+}
+
+already_AddRefed<Refgraph>
+RefgraphController::LoadFromFile(const nsAString& filename)
+{
+  nsRefPtr<Refgraph> r = new Refgraph(this);
+  if (!r->LoadFromFile(NS_LossyConvertUTF16toASCII(filename).get())) {
+    return nullptr;
+  }
+  return r.forget();
+}
+
+void RefgraphController::SnapshotToFile(const nsAString& filename) {
+  refgraph_dump_to_file(NS_LossyConvertUTF16toASCII(filename).get());
 }
 
 JSObject*
