@@ -436,7 +436,7 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
     marker_t flags = 0;
     if (scanPos <= stop - sizeof(marker_t)) {
       marker_t marker = *reinterpret_cast<marker_t*>(scanPos);
-      flags = marker ^ strongRefBaseMarker;
+      flags = marker ^ strongRefBaseMarker2;
       isStrong = flags < 0x10;
     }
 

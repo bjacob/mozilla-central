@@ -34,22 +34,25 @@ const char* ___(const T* t)
 
 namespace refgraph {
 
-typedef uint64_t marker_t;
+typedef uint32_t marker_t;
 
-const marker_t strongRefBaseMarker      = 0xb762f23059c146c0ull;
+const marker_t strongRefBaseMarker1     = 0xb762f23d;
+const marker_t strongRefBaseMarker2     = 0x59c146c0;
 const marker_t hereditaryFlag           = 0x1;
 const marker_t traversedByCCFlag        = 0x2;
 
 class StrongRefMarker
 {
-  volatile marker_t mMarker;
+  volatile marker_t mMarker1;
+  volatile marker_t mMarker2;
   volatile const char* mRefTypeName;
   volatile const char* mRefName;
 
 public:
 
   StrongRefMarker()
-    : mMarker(strongRefBaseMarker)
+    : mMarker1(strongRefBaseMarker1)
+    , mMarker2(strongRefBaseMarker2)
     , mRefTypeName(nullptr)
     , mRefName(nullptr)
   {
@@ -57,7 +60,8 @@ public:
 
   template<typename T>
   StrongRefMarker(const T* parent)
-    : mMarker(strongRefBaseMarker)
+    : mMarker1(strongRefBaseMarker1)
+    , mMarker2(strongRefBaseMarker2)
     , mRefTypeName(nullptr)
     , mRefName(nullptr)
   {
@@ -72,15 +76,18 @@ public:
   }
 
   ~StrongRefMarker() {
-    mMarker = 0;
+    mMarker1 = 0;
+    mMarker2 = 0;
     mRefTypeName = nullptr;
     mRefName = nullptr;
   }
 
-  void SetHereditary() { mMarker |= hereditaryFlag; }
+  void SetHereditary() {
+    mMarker2 |= hereditaryFlag;
+  }
 
   void SetTraversedByCC(const char *name) {
-    mMarker |= traversedByCCFlag;
+    mMarker2 |= traversedByCCFlag;
     mRefName = name;
   }
 };

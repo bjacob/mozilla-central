@@ -33,14 +33,14 @@ const nsTArrayHeader* nsTArray_base<Alloc>::GetAutoArrayBufferUnsafe(size_t elem
 
   // If we're on a 32-bit system and elemAlign is 8, we need to adjust our
   // pointer to take into account the extra alignment in the auto array.
-
+#if 0
   MOZ_STATIC_ASSERT(sizeof(void*) != 4 ||
                     (MOZ_ALIGNOF(mozilla::AlignedElem<8>) == 8 &&
                      sizeof(nsAutoTArray<mozilla::AlignedElem<8>, 1>) ==
                        sizeof(void*) + sizeof(nsTArrayHeader) +
                        4 + sizeof(mozilla::AlignedElem<8>)),
                     "auto array padding wasn't what we expected");
-
+#endif
   // We don't support alignments greater than 8 bytes.
   NS_ABORT_IF_FALSE(elemAlign <= 4 || elemAlign == 8, "unsupported alignment.");
   if (sizeof(void*) == 4 && elemAlign == 8) {
