@@ -199,9 +199,24 @@
           }
         }
       }
-      if (!isReferencedByOutside) {
-        resultText += "This cycle is NOT (strong-)referenced by outside!\n";
-        resultText += "Breaking this cycle would destroy all these vertices!\n\n";
+      var isWeakReferencedByOutside = false;
+      for (var i = 0; i < vertexCount; i++) {
+        var vertex = cycle.vertex(i);
+        var backWeakEdgeCount = vertex.backWeakEdgeCount;
+        for (var e = 0; e < backWeakEdgeCount; e++) {
+          var back = vertex.backWeakEdge(e);
+          if (back.cycleIndex != cycleIndex) {
+            var t = back.typeName;
+            isWeakReferencedByOutside = true;
+            backRefCount++;
+          }
+        }
+      }
+      if (!isReferencedByOutside && !isWeakReferencedByOutside) {
+        resultText += "This cycle is NOT referenced at all by outside heap blocks!\n";
+        resultText += "Almost certainly leaked!\n";
+      } else if (!isReferencedByOutside) {
+        resultText += "This cycle is NOT strong-referenced by outside!\n";
       }
     }
     resultText += "Types involved: " + cycle.name + "\n\n";
