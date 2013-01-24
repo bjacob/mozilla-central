@@ -150,7 +150,6 @@ init_list_elem(list_elem_t* elem, real_block_t* real_block, size_t payload_size)
   elem->payload_size = payload_size;
   elem->offset_into_real_block = (size_t)(((char*)elem) - ((char*)real_block));
   elem->type = nullptr;
-  elem->typeOffset = size_t(-1);
 }
 
 // Returns the initial linked list element
@@ -364,7 +363,6 @@ void *replace_realloc(void *oldp, size_t newsize)
     new_payload = instrument_new_block(new_real_block, extra_space, newsize);
     list_elem_t* new_elem = list_elem_for_payload(new_payload);
     new_elem->type = old_elem->type;
-    new_elem->typeOffset = old_elem->typeOffset;
 
     size_t size_to_copy = std::min(newsize, payload_size_for_list_elem(old_elem));
     memcpy(new_payload, payload_for_list_elem(old_elem), size_to_copy);
@@ -477,7 +475,7 @@ list_elem_for_arbitrary_pointer(const void* pointer)
 void
 replace_refgraph_set_type(const void* pointer, const char* type)
 {
-  if (!pointer)
+  if (!pointer || !type || !type[0])
     return;
 
   AutoLock autoLock;
@@ -485,13 +483,5 @@ replace_refgraph_set_type(const void* pointer, const char* type)
   list_elem_t* elem = list_elem_for_arbitrary_pointer(pointer);
   if (!elem)
     return;
-  uintptr_t payload_address = reinterpret_cast<uintptr_t>(payload_for_list_elem(elem));
-  uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
-  assertion(address >= payload_address);
-  assertion(address < payload_address + elem->payload_size);
-  uintptr_t offset = address - payload_address;
-  if (offset <= elem->typeOffset) {
-    elem->type = type;
-    elem->typeOffset = offset;
-  }
+  elem->type = type;
 }

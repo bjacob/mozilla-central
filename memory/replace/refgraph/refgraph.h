@@ -68,9 +68,7 @@ struct list_elem_t
   list_elem_t* next;
   size_t offset_into_real_block;
   size_t payload_size;
-
   const char* type;
-  size_t typeOffset;
 
   // Marker allowing to identify instrumented blocks.
   // Used when scanning to find if an arbitrary pointer falls into a block.
