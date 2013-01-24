@@ -1,0 +1,21 @@
+commit 7c81dfd774548e2d99b5112c9a7d52a9d50b75af
+Author: Benoit Jacob <bjacob@mozilla.com>
+Date:   Thu Jan 24 15:47:21 2013 -0500
+
+    To run B2G with refgraph, apply this diff to gonk-misc/
+
+diff --git a/b2g.sh b/b2g.sh
+index ba481ce..8574389 100755
+--- a/b2g.sh
++++ b/b2g.sh
+@@ -31,6 +31,10 @@ if [ -f "/system/b2g/libdmd.so" ]; then
+   LD_PRELOAD="/system/b2g/libdmd.so $LD_PRELOAD"
+   export DMD="1"
+ fi
++if [ -f "/system/b2g/librefgraph.so" ]; then
++  log "Running with Refgraph."
++  LD_PRELOAD="/system/b2g/librefgraph.so $LD_PRELOAD"
++fi
+ export LD_PRELOAD
+ 
+ export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/system/b2g
