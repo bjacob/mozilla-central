@@ -134,7 +134,7 @@ struct block_t {
     , cycle_index(0)
   {}
 
-  bool operator<(const block_t& other) {
+  bool operator<(const block_t& other) const {
     return address < other.address;
   }
 

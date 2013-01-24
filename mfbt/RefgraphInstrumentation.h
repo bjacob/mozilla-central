@@ -13,6 +13,7 @@
 #include "mozilla/StandardInteger.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Types.h"
+#include "mozilla/NullPtr.h"
 
 #if defined(_CPPRTTI) || defined(__GXX_RTTI)
 #define MOZ_HAVE_RTTI
@@ -22,8 +23,10 @@
 #include <typeinfo>
 #endif
 
+namespace refgraph {
+
 template<typename T>
-const char* ___(const T* t)
+const char* gettypename(const T* t)
 {
 #ifdef MOZ_HAVE_RTTI
   return typeid(*t).name();
@@ -31,8 +34,6 @@ const char* ___(const T* t)
   return __PRETTY_FUNCTION__;
 #endif
 }
-
-namespace refgraph {
 
 typedef uint32_t marker_t;
 
@@ -71,7 +72,7 @@ public:
   template<typename T>
   void SetParent(const T* parent) {
     if (parent) {
-      mRefTypeName = ___(parent);
+      mRefTypeName = gettypename(parent);
     }
   }
 
@@ -96,7 +97,7 @@ template <typename T>
 T* SetType(T* pointer)
 {
 #ifndef NO_MOZ_GLUE
-  refgraph_set_type(pointer, ___(pointer));
+  refgraph_set_type(pointer, gettypename(pointer));
 #endif
   return pointer;
 }

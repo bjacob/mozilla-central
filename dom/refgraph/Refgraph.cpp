@@ -1,6 +1,7 @@
 #include "Refgraph.h"
 
 #include "nsContentUtils.h"
+#include "nsJSEnvironment.h"
 
 #include "mozmemory.h"
 
@@ -75,12 +76,14 @@ bool Refgraph::HandleLine_b(const char* start, const char* end)
   if (n >= mBlocks.size()) {
     return false;
   }
+#ifndef ANDROID
   if (mCurrentBlock) {
     mCurrentBlock->refs.shrink_to_fit();
     mCurrentBlock->weakrefs.shrink_to_fit();
     mCurrentBlock->backrefs.shrink_to_fit();
     mCurrentBlock->backweakrefs.shrink_to_fit();
   }
+#endif
   mCurrentBlock = &mBlocks[n];
   return true;
 }
@@ -218,7 +221,9 @@ bool Refgraph::HandleLine_c(const char* start, const char* end)
     return false;
   }
   mBlocks.resize(n);
+#ifndef ANDROID
   mBlocks.shrink_to_fit();
+#endif
   return true;
 }
 
@@ -279,8 +284,9 @@ bool Refgraph::Parse(const char* buffer, size_t length)
       if (MOZ_UNLIKELY(!r)) {
         size_t length = pos - line_start;
         int ilength = std::min(int(length), 256);
-        fprintf(stderr, "Refgraph: error parsing line %lu (length %lu):\n%.*s\n\n",
-                line_number, length, ilength, line_start);
+        fprintf(stderr, "Refgraph: error parsing line %u (length %u):\n%.*s\n\n",
+                unsigned(line_number), unsigned(length),
+                ilength, line_start);
         return false;
       }
       // Since we already checked that the last character is '\n',
@@ -312,8 +318,8 @@ bool Refgraph::ParseFile(const char* filename)
     bool r = len && HandleLine(line, line + len - 1);
     ++line_number;
     if (MOZ_UNLIKELY(!r)) {
-      fprintf(stderr, "Refgraph: error parsing line %lu (length %lu):\n%s\n\n",
-              line_number, len, line);
+      fprintf(stderr, "Refgraph: error parsing line %u (length %u):\n%s\n\n",
+              unsigned(line_number), unsigned(len), line);
       return false;
     }
   }
@@ -815,6 +821,7 @@ RefgraphController::Constructor(nsISupports* aGlobal, mozilla::ErrorResult&) {
 already_AddRefed<Refgraph>
 RefgraphController::Snapshot()
 {
+  nsJSContext::CycleCollectNow(nullptr, -1, true);
   nsRefPtr<Refgraph> r = new Refgraph(this);
   if (!r->Snapshot()) {
     return nullptr;
@@ -833,6 +840,7 @@ RefgraphController::LoadFromFile(const nsAString& filename)
 }
 
 void RefgraphController::SnapshotToFile(const nsAString& filename) {
+  nsJSContext::CycleCollectNow(nullptr, -1, true);
   refgraph_dump_to_file(NS_LossyConvertUTF16toASCII(filename).get());
 }
 

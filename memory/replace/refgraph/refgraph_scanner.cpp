@@ -4,6 +4,9 @@
 
 #include "refgraph.h"
 #include "mozilla/RefgraphInstrumentation.h"
+
+#define refgraph_uninstrumented_free gMallocFuncsTable->free
+#define refgraph_uninstrumented_malloc gMallocFuncsTable->malloc
 #include "mozilla/RefgraphSTLAllocatorBypassingInstrumentation.h"
 
 #include <cstdarg>
@@ -17,7 +20,9 @@
 #include <vector>
 #include <algorithm>
 
+#ifdef MOZ_HAVE_RTTI
 #include <cxxabi.h>
+#endif
 
 #undef malloc_good_size
 
@@ -45,7 +50,7 @@ public:
 
   virtual void Write(const char* buf, size_t bufsize)
   {
-    write(mFileDescriptor, buf, bufsize);
+    (void) write(mFileDescriptor, buf, bufsize);
   }
 };
 
@@ -280,8 +285,9 @@ void Scanner::Print(const void* ptr)
 
 static const char* Demangled(const char* in)
 {
-  int status = 0;
   static char output[max_demangled_name_length];
+#ifdef MOZ_HAVE_RTTI
+  int status = 0;
   size_t output_capacity = max_demangled_name_length;
   BeginWorkingAroundGCCDemanglerStupidity();
   abi::__cxa_demangle(in, output, &output_capacity, &status);
@@ -290,6 +296,22 @@ static const char* Demangled(const char* in)
     return in;
   }
   return output;
+#else
+  const char prefix[] = "with T = ";
+  const char* pos = strstr(in, prefix);
+  if (!pos) {
+    return in;
+  }
+  strncpy(output,
+          pos + sizeof(prefix) - 1,
+          max_demangled_name_length - 1);
+  size_t len = strlen(output);
+  if (!len) {
+    return in;
+  }
+  output[len - 1] = 0;
+  return output;
+#endif
 }
 
 void Scanner::Scan()
@@ -434,14 +456,17 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
 
     bool isStrong = false;
     marker_t flags = 0;
-    if (scanPos <= stop - sizeof(marker_t)) {
-      marker_t marker = *reinterpret_cast<marker_t*>(scanPos);
-      flags = marker ^ strongRefBaseMarker2;
-      isStrong = flags < 0x10;
+    if (scanPos <= stop - 2 * sizeof(marker_t)) {
+      marker_t marker1 = *reinterpret_cast<marker_t*>(scanPos);
+      if (marker1 == strongRefBaseMarker1) {
+        marker_t marker2 = *reinterpret_cast<marker_t*>(scanPos + sizeof(marker_t));
+        flags = marker2 ^ strongRefBaseMarker2;
+        isStrong = flags < 0x10;
+      }
     }
 
     if (isStrong) {
-      scanPos += sizeof(marker_t);
+      scanPos += 2 * sizeof(marker_t);
       ref_t r;
       r.target = target;
       r.offset = scanned - target->address;
@@ -515,8 +540,11 @@ void replace_refgraph_dump_to_buffer(const char** buffer, size_t* length)
 void replace_refgraph_dump_to_file(const char* filename)
 {
   int fd = open(filename,
-                O_WRONLY | O_TRUNC | O_CREAT,
-                S_IRUSR | S_IWUSR);
+                O_WRONLY | O_TRUNC | O_CREAT
+#ifndef ANDROID
+                , S_IRUSR | S_IWUSR
+#endif
+               );
   if (fd < 0) {
     fprintf(stderr, "could not open %s for writing\n", filename);
     return;

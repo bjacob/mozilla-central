@@ -4,6 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/dom/Refgraph.h"
+
 #include "mozilla/nsMemoryInfoDumper.h"
 
 #include "mozilla/ClearOnShutdown.h"
@@ -46,6 +48,8 @@
 #else
 #define LOG(...)
 #endif
+
+#include "mozmemory.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -790,6 +794,24 @@ nsMemoryInfoDumper::DumpMemoryReportsToFileImpl(
   const nsAString& aIdentifier)
 {
   MOZ_ASSERT(!aIdentifier.IsEmpty());
+
+  {
+    nsCString filename = nsPrintfCString("refgraph-%d",
+                                          getpid());
+    nsCOMPtr<nsIFile> tmpFile;
+
+    nsresult rv = NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(tmpFile));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    tmpFile->AppendRelativeNativePath(filename);
+
+    nsString tmpFilePath;
+    tmpFile->GetPath(tmpFilePath);
+
+    LOG("logging refgraph to %s", NS_ConvertUTF16toUTF8(tmpFilePath).get());
+    refgraph::RefgraphController(nullptr).SnapshotToFile(tmpFilePath);
+    return NS_OK;
+  }
 
   // Open a new file named something like
   //

@@ -9,10 +9,9 @@ VPATH           = @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
-MODULE = memory
-LIBRARY_NAME = refgraph_replace_malloc
+MODULE = refgraph
+LIBRARY_NAME = refgraph
 FORCE_SHARED_LIB = 1
-NO_DIST_INSTALL = 1
 
 CPPSRCS = \
   refgraph_replace_malloc.cpp \

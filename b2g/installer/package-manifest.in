@@ -57,6 +57,7 @@
 #ifdef MOZ_DMD
 @BINPATH@/@DLL_PREFIX@dmd@DLL_SUFFIX@
 #endif
+@BINPATH@/@DLL_PREFIX@refgraph@DLL_SUFFIX@
 #ifdef XP_MACOSX
 @BINPATH@/XUL
 #else
