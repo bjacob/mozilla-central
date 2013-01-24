@@ -186,6 +186,23 @@
     resultText = "Cycle " + cycleIndex + " has " + vertexCount + " vertices.\n\n";
     if (!cycle.isTraversedByCC) {
       resultText += "Is NOT traversed by the CC!\n\n";
+      var isReferencedByOutside = false;
+      for (var i = 0; i < vertexCount; i++) {
+        var vertex = cycle.vertex(i);
+        var backEdgeCount = vertex.backEdgeCount;
+        for (var e = 0; e < backEdgeCount; e++) {
+          var back = vertex.backEdge(e);
+          if (back.cycleIndex != cycleIndex) {
+            var t = back.typeName;
+            isReferencedByOutside = true;
+            backRefCount++;
+          }
+        }
+      }
+      if (!isReferencedByOutside) {
+        resultText += "This cycle is NOT (strong-)referenced by outside!\n";
+        resultText += "Breaking this cycle would destroy all these vertices!\n\n";
+      }
     }
     resultText += "Types involved: " + cycle.name + "\n\n";
     var reachableFromOutside = false;
@@ -214,7 +231,10 @@
       var backRefCount = 0;
       var backWeakRefCount = 0;
       for (var e = 0; e < backEdgeCount; e++) {
-        if (vertex.backEdge(e).cycleIndex != cycleIndex) {
+        var back = vertex.backEdge(e);
+        if (back.cycleIndex != cycleIndex) {
+          var t = back.typeName;
+          resultText += "referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address + "\n";
           backRefCount++;
         }
       }
