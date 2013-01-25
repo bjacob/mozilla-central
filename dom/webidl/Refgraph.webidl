@@ -16,7 +16,7 @@ interface RefgraphVertex {
   RefgraphEdge? edge(unsigned long index);
 
   readonly attribute unsigned long cycleIndex;
-  const unsigned long ALONE_IN_SCC = 0xffffffff;
+  const unsigned long ALONE_IN_CYCLE = 0xffffffff;
 
   readonly attribute unsigned long weakEdgeCount;
   readonly attribute unsigned long backEdgeCount;

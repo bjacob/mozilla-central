@@ -19,7 +19,9 @@
     }
     refgraph = newrefgraph;
     document.getElementById("cyclecount").innerHTML = refgraph.cycleCount;
-    document.getElementById("results").textContent = "";
+    cycle = null;
+    cycleIndex = -1;
+    cyclesSummary();
   }
   function loadfromfile() {
     var filename = document.getElementById("loadfileinput").value;
@@ -30,7 +32,9 @@
     }
     refgraph = newrefgraph;
     document.getElementById("cyclecount").innerHTML = refgraph.cycleCount;
-    document.getElementById("results").textContent = "";
+    cycle = null;
+    cycleIndex = -1;
+    cyclesSummary();
   }
   function snapshottofile() {
     var filename = document.getElementById("savefileinput").value;
@@ -49,7 +53,8 @@
     output += ind + "type name: " + vertex.typeName + "\n";
     output += ind + "address: 0x" + vertex.address.toString(16) + "\n";
     output += ind + "size: " + vertex.size + " bytes\n";
-    if (vertex.cycleIndex != vertex.ALONE_IN_Cycle) {
+    if (vertex.cycleIndex != vertex.ALONE_IN_CYCLE) {
+        console.log("" + vertex.cycleIndex + " != " + vertex.ALONE_IN_CYCLE);
       output += ind + "belongs to Cycle " + vertex.cycleIndex + "\n";
     }
     if (level >= 2 &&
@@ -226,7 +231,10 @@
       resultText += "type name: " + vertex.typeName + "\n";
       resultText += "address: 0x" + vertex.address.toString(16) + "\n";
       resultText += "size: " + vertex.size + " bytes\n";
-      resultText += "cycleIndex: " + vertex.cycleIndex + "\n";
+      if (vertex.cycleIndex != vertex.ALONE_IN_CYCLE) {
+        console.log("" + vertex.cycleIndex + " != " + vertex.ALONE_IN_CYCLE);
+        resultText += "cycleIndex: " + vertex.cycleIndex + "\n";
+      }
       resultText += "Cycle edges:\n";
       for (var j = 0; j < vertex.edgeCount; j++) {
         var edge = vertex.edge(j);
@@ -253,12 +261,15 @@
           backRefCount++;
         }
       }
+      resultText += "backRefCount: " + backRefCount + "\n";
       for (var e = 0; e < backWeakEdgeCount; e++) {
-        if (vertex.backWeakEdge(e).cycleIndex != cycleIndex) {
+        var back = vertex.backWeakEdge(e);
+        if (back.cycleIndex != cycleIndex) {
+          var t = back.typeName;
+          resultText += "weak-referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address + "\n";
           backWeakRefCount++;
         }
       }
-      resultText += "backRefCount: " + backRefCount + "\n";
       resultText += "backWeakRefCount: " + backWeakRefCount + "\n\n\n";
     }
     document.getElementById("results").textContent = resultText;
