@@ -54,8 +54,7 @@ MALLOC_DECL(jemalloc_purge_freed_pages, void, void)
 MALLOC_DECL(jemalloc_free_dirty_pages, void, void)
 #  endif
 
-MALLOC_DECL(refgraph_dump_to_buffer, void, const char**, size_t*)
-MALLOC_DECL(refgraph_dump_to_file, void, const char*)
+MALLOC_DECL(refgraph_dump, void, int)
 MALLOC_DECL(refgraph_set_type, void, const void*, const char*)
 MALLOC_DECL(refgraph_uninstrumented_malloc, void*, size_t)
 MALLOC_DECL(refgraph_uninstrumented_free, void, void*)

@@ -1417,7 +1417,7 @@ public:
 
         return NS_OK;
     }
-    NS_IMETHOD NoteRefCountedObject(uintptr_t aAddress, uint32_t refCount,
+    NS_IMETHOD NoteRefCountedObject(uint64_t aAddress, uint32_t refCount,
                                     const char *aObjectDescription)
     {
         if (!mDisableLog) {
@@ -1436,7 +1436,7 @@ public:
         }                     
         return NS_OK;
     }
-    NS_IMETHOD NoteGCedObject(uintptr_t aAddress, bool aMarked,
+    NS_IMETHOD NoteGCedObject(uint64_t aAddress, bool aMarked,
                               const char *aObjectDescription)
     {
         if (!mDisableLog) {
@@ -1455,7 +1455,7 @@ public:
         }
         return NS_OK;
     }
-    NS_IMETHOD NoteEdge(uintptr_t aToAddress, const char *aEdgeName)
+    NS_IMETHOD NoteEdge(uint64_t aToAddress, const char *aEdgeName)
     {
         if (!mDisableLog) {
             fprintf(mStream, "> %p %s\n", (void*)aToAddress, aEdgeName);
@@ -1477,7 +1477,7 @@ public:
         }                     
         return NS_OK;
     }
-    NS_IMETHOD DescribeRoot(uintptr_t aAddress, uint32_t aKnownEdges)
+    NS_IMETHOD DescribeRoot(uint64_t aAddress, uint32_t aKnownEdges)
     {
         if (!mDisableLog) {
             fprintf(mStream, "%p [known=%u]\n", (void*)aAddress, aKnownEdges);
@@ -1491,7 +1491,7 @@ public:
         }
         return NS_OK;
     }
-    NS_IMETHOD DescribeGarbage(uintptr_t aAddress)
+    NS_IMETHOD DescribeGarbage(uint64_t aAddress)
     {
         if (!mDisableLog) {
             fprintf(mStream, "%p [garbage]\n", (void*)aAddress);
@@ -1766,7 +1766,7 @@ private:
             return;
         mEdgeBuilder.Add(childPi);
         if (mListener) {
-            mListener->NoteEdge((uintptr_t)child, edgeName.get());
+            mListener->NoteEdge((uint64_t)child, edgeName.get());
         }
         ++childPi->mInternalRefs;
     }
@@ -1928,7 +1928,7 @@ GCGraphBuilder::DescribeRefCountedNode(nsrefcnt refCount, const char *objName)
     sCollector->mVisitedRefCounted++;
 
     if (mListener) {
-        mListener->NoteRefCountedObject((uintptr_t)mCurrPi->mPointer, refCount,
+        mListener->NoteRefCountedObject((uint64_t)mCurrPi->mPointer, refCount,
                                         objName);
     }
 
@@ -1942,7 +1942,7 @@ GCGraphBuilder::DescribeGCedNode(bool isMarked, const char *objName)
     sCollector->mVisitedGCed++;
 
     if (mListener) {
-        mListener->NoteGCedObject((uintptr_t)mCurrPi->mPointer, isMarked,
+        mListener->NoteGCedObject((uint64_t)mCurrPi->mPointer, isMarked,
                                   objName);
     }
 
@@ -2390,7 +2390,7 @@ nsCycleCollector::CollectWhite(nsICycleCollectorListener *aListener)
     if (aListener) {
         for (uint32_t i = 0; i < count; ++i) {
             PtrInfo *pinfo = mWhiteNodes->ElementAt(i);
-            aListener->DescribeGarbage((uintptr_t)pinfo->mPointer);
+            aListener->DescribeGarbage((uint64_t)pinfo->mPointer);
         }
         aListener->End();
     }
@@ -2985,7 +2985,7 @@ nsCycleCollector::BeginCollection(bool aMergeCompartments,
                 if (pi->mColor == black &&
                     pi->mRefCount > 0 && pi->mRefCount < UINT32_MAX &&
                     pi->mInternalRefs != pi->mRefCount) {
-                    aListener->DescribeRoot((uintptr_t)pi->mPointer,
+                    aListener->DescribeRoot((uint64_t)pi->mPointer,
                                             pi->mInternalRefs);
                 }
             }

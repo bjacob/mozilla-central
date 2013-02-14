@@ -2,6 +2,7 @@
 
 #include "nsContentUtils.h"
 #include "nsJSEnvironment.h"
+#include "nsICycleCollectorListener.h"
 
 #include "mozmemory.h"
 
@@ -9,6 +10,9 @@
 
 #include <cstdio>
 #include <algorithm>
+
+#include <unistd.h>
+#include <fcntl.h>
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -227,6 +231,115 @@ bool Refgraph::HandleLine_c(const char* start, const char* end)
   return true;
 }
 
+bool Refgraph::HandleLine_v(const char* start, const char* end)
+{
+  return true;
+  const char* pos = start;
+  uint64_t address;
+  bool success = ParseNumber(pos, end, &address, &pos);
+  if (!success) {
+    return false;
+  }
+  if (pos == end) {
+    return false;
+  }
+  while(*pos == ' ' && pos != end) {
+    pos++;
+  }
+  block_t b;
+  b.address = address;
+  blocks_vector_t::iterator it = std::lower_bound(mBlocks.begin(), mBlocks.end(), b);
+  if (it == mBlocks.end() ||
+      address < it->address ||
+      address >= it->address + it->size)
+  {
+    // be graceful on not-found vertex: could conceivably be a non-heap vertex (?)
+    return true;
+  }
+  mCurrentBlock = &mBlocks[it - mBlocks.begin()];
+
+  // overwrite any type information we had --- the CC knows better, when it knows
+  mCurrentBlock->type.assign(pos, end - pos);
+  return true;
+}
+
+bool Refgraph::HandleLine_e(const char* start, const char* end)
+{
+  return true;
+  const char* pos = start;
+  uint64_t address;
+  bool success = ParseNumber(pos, end, &address, &pos);
+  if (!success) {
+    return false;
+  }
+  if (pos == end) {
+    return false;
+  }
+  while(*pos == ' ' && pos != end) {
+    pos++;
+  }
+  if (!mCurrentBlock) {
+    return false;
+  }
+  for (refs_vector_t::iterator it1 = mCurrentBlock->refs.begin();
+      it1 != mCurrentBlock->refs.end();
+      ++it1)
+  {
+    block_t& targetBlock1 = mBlocks[it1->target];
+    if (targetBlock1.contains(address)) {
+      it1->flags |= traversedByCCFlag;
+      it1->refname.assign(pos, end - pos);
+    }
+    for (refs_vector_t::iterator it2 = targetBlock1.refs.begin();
+        it2 != targetBlock1.refs.end();
+        ++it2)
+    {
+      block_t& targetBlock2 = mBlocks[it1->target];
+      if (targetBlock2.contains(address)) {
+        it2->flags |= traversedByCCFlag;
+        it2->refname.assign(pos, end - pos);
+      }
+    }
+  }
+  return true;
+}
+
+bool Refgraph::HandleLine_star(const char* start, const char* end)
+{
+  size_t n = end - start;
+  const size_t bufsize = 0x4000;
+  if (n == 0 || n >= bufsize) {
+    return false;
+  }
+  char buf[bufsize];
+  memcpy(buf, start, n);
+  buf[n] = 0;
+  if (strstr(buf, "BEGIN REFGRAPH DUMP")) {
+    if (mParserState != ParserDefaultState) {
+      return false;
+    }
+    mParserState = ParserInRefgraphDump;
+  } else if (strstr(buf, "END REFGRAPH DUMP")) {
+    if (mParserState != ParserInRefgraphDump) {
+      return false;
+    }
+    mParserState = ParserDefaultState;
+  } else if (strstr(buf, "BEGIN CC DUMP")) {
+    if (mParserState != ParserDefaultState) {
+      return false;
+    }
+    mParserState = ParserInCCDump;
+  } else if (strstr(buf, "END CC DUMP")) {
+    if (mParserState != ParserInCCDump) {
+      return false;
+    }
+    mParserState = ParserDefaultState;
+  }
+  return true;
+}
+
+
+
 bool Refgraph::HandleLine(const char* start, const char* end)
 {
   if (MOZ_UNLIKELY(*end != '\n')) {
@@ -251,52 +364,35 @@ bool Refgraph::HandleLine(const char* start, const char* end)
     return false;
   }
 
-  switch (c) {
-    case 'b': return HandleLine_b(start, end);
-    case 'c': return HandleLine_c(start, end);
-    case 'f': return HandleLine_f(start, end);
-    case 'm': return HandleLine_m(start, end);
-    case 'n': return HandleLine_n(start, end);
-    case 's': return HandleLine_s(start, end);
-    case 't': return HandleLine_t(start, end);
-    case 'u': return HandleLine_u(start, end);
-    case 'w': return HandleLine_w(start, end);
-    default: return false;
-  }
-}
-
-bool Refgraph::Parse(const char* buffer, size_t length)
-{
-  const char* line_start = buffer;
-  const char* pos = buffer;
-  const char* last = buffer + length - 1;
-  size_t line_number = 0;
-
-  if (!length)
-  {
-    return false;
-  }
-
-  while (true) {
-    if (MOZ_UNLIKELY(*pos == '\n')) {
-      bool r = HandleLine(line_start, pos);
-      ++line_number;
-      if (MOZ_UNLIKELY(!r)) {
-        size_t length = pos - line_start;
-        int ilength = std::min(int(length), 256);
-        fprintf(stderr, "Refgraph: error parsing line %u (length %u):\n%.*s\n\n",
-                unsigned(line_number), unsigned(length),
-                ilength, line_start);
-        return false;
+  switch (mParserState) {
+    case ParserDefaultState:
+      switch (c) {
+        case '*': return HandleLine_star(start, end);
+        default: return false;
       }
-      // Since we already checked that the last character is '\n',
-      // it is enough to check for the end of the buffer here.
-      if (MOZ_UNLIKELY(pos == last)) {
-        return true;
+    case ParserInRefgraphDump:
+      switch (c) {
+        case 'b': return HandleLine_b(start, end);
+        case 'c': return HandleLine_c(start, end);
+        case 'f': return HandleLine_f(start, end);
+        case 'm': return HandleLine_m(start, end);
+        case 'n': return HandleLine_n(start, end);
+        case 's': return HandleLine_s(start, end);
+        case 't': return HandleLine_t(start, end);
+        case 'u': return HandleLine_u(start, end);
+        case 'w': return HandleLine_w(start, end);
+        case '*': return HandleLine_star(start, end);
+        default: return false;
       }
-      line_start = pos + 1;
-    }
-    ++pos;
+    case ParserInCCDump:
+      switch (c) {
+        case 'v': return HandleLine_v(start, end);
+        case 'e': return HandleLine_e(start, end);
+        case '*': return HandleLine_star(start, end);
+        default: return false;
+      }
+    default:
+      return false;
   }
 }
 
@@ -309,7 +405,7 @@ bool Refgraph::ParseFile(const char* filename)
     return nullptr;
   }
 
-  const size_t line_max_len = 256;
+  const size_t line_max_len = 0x4000;
   char line[line_max_len + 1];
   size_t line_number = 0;
 
@@ -320,9 +416,11 @@ bool Refgraph::ParseFile(const char* filename)
     if (MOZ_UNLIKELY(!r)) {
       fprintf(stderr, "Refgraph: error parsing line %u (length %u):\n%s\n\n",
               unsigned(line_number), unsigned(len), line);
+      fclose(file);
       return false;
     }
   }
+  fclose(file);
   return true;
 }
 
@@ -375,10 +473,11 @@ void Refgraph::RecurseCycles(
       continue;
     }
     block_t& w = mBlocks[w_index];
+
     if (!w.cycle_index) {
       RecurseCycles(w_index, cycle_index, stack);
       v.workspace = std::min(v.workspace, w.workspace);
-    } else if (std::binary_search(stack.begin(), stack.end(), w_index)) {
+    } else if (std::find(stack.begin(), stack.end(), w_index) != stack.end()) {
       v.workspace = std::min(v.workspace, w.cycle_index);
     }
   }
@@ -564,35 +663,14 @@ void Refgraph::PostProcess()
   ResolveBackRefs();
 }
 
-bool Refgraph::Snapshot()
+bool Refgraph::LoadFromFile(const nsAString& filename)
 {
   // can only be called once. If you want a new Refgraph, construct a new object.
   if (!mBlocks.empty()) {
     return false;
   }
 
-  const char* buffer;
-  size_t length;
-  refgraph_dump_to_buffer(&buffer, &length);
-  bool result = Parse(buffer, length);
-  refgraph_uninstrumented_free((void*)buffer);
-  if (!result) {
-    mBlocks.clear();
-    return false;
-  }
-
-  PostProcess();
-  return true;
-}
-
-bool Refgraph::LoadFromFile(const char* filename)
-{
-  // can only be called once. If you want a new Refgraph, construct a new object.
-  if (!mBlocks.empty()) {
-    return false;
-  }
-
-  bool result = ParseFile(filename);
+  bool result = ParseFile(NS_LossyConvertUTF16toASCII(filename).get());
   if (!result) {
     mBlocks.clear();
     return false;
@@ -818,30 +896,28 @@ RefgraphController::Constructor(nsISupports* aGlobal, mozilla::ErrorResult&) {
   return r.forget();
 }
 
-already_AddRefed<Refgraph>
-RefgraphController::Snapshot()
-{
-  nsJSContext::CycleCollectNow(nullptr, -1, true);
-  nsRefPtr<Refgraph> r = new Refgraph(this);
-  if (!r->Snapshot()) {
-    return nullptr;
-  }
-  return r.forget();
-}
+static void RefgraphCCDump(FILE* f);
 
 already_AddRefed<Refgraph>
 RefgraphController::LoadFromFile(const nsAString& filename)
 {
   nsRefPtr<Refgraph> r = new Refgraph(this);
-  if (!r->LoadFromFile(NS_LossyConvertUTF16toASCII(filename).get())) {
+  if (!r->LoadFromFile(filename)) {
     return nullptr;
   }
   return r.forget();
 }
 
 void RefgraphController::SnapshotToFile(const nsAString& filename) {
-  nsJSContext::CycleCollectNow(nullptr, -1, true);
-  refgraph_dump_to_file(NS_LossyConvertUTF16toASCII(filename).get());
+  nsCString cfilename = NS_LossyConvertUTF16toASCII(filename);
+  FILE* f = fopen(cfilename.get(), "w");
+  if (!f) {
+    fprintf(stderr, "could not open %s for writing\n", cfilename.get());
+    return;
+  }
+  refgraph_dump(fileno(f));
+  RefgraphCCDump(f);
+  fclose(f);
 }
 
 JSObject*
@@ -963,3 +1039,133 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphCycle, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphCycle, Release)
+
+
+class RefgraphCCDumper MOZ_FINAL : public nsICycleCollectorListener
+{
+public:
+    RefgraphCCDumper(FILE* file)
+      : mFile(file)
+      , mPrintEdges(false)
+    {}
+
+    ~RefgraphCCDumper()
+    {}
+
+    NS_DECL_ISUPPORTS
+
+    NS_IMETHOD AllTraces(nsICycleCollectorListener** aListener)
+    {
+        NS_ADDREF(*aListener = this);
+        return NS_OK;
+    }
+
+    NS_IMETHOD GetWantAllTraces(bool* aAllTraces)
+    {
+        *aAllTraces = true;
+        return NS_OK;
+    }
+
+    NS_IMETHOD GetDisableLog(bool* aDisableLog)
+    {
+        *aDisableLog = true;
+        return NS_OK;
+    }
+
+    NS_IMETHOD SetDisableLog(bool)
+    {
+        return NS_OK;
+    }
+
+    NS_IMETHOD GetWantAfterProcessing(bool* aWantAfterProcessing)
+    {
+        *aWantAfterProcessing = false;
+        return NS_OK;
+    }
+
+    NS_IMETHOD SetWantAfterProcessing(bool)
+    {
+        return NS_OK;
+    }
+
+    NS_IMETHOD GetFilenameIdentifier(nsAString& aIdentifier)
+    {
+        aIdentifier.Truncate();
+        return NS_OK;
+    }
+
+    NS_IMETHOD SetFilenameIdentifier(const nsAString&)
+    {
+        return NS_OK;
+    }
+
+    NS_IMETHOD Begin()
+    {
+        int ret = fprintf(mFile, "*** BEGIN CC DUMP ***\n\n");
+        MOZ_ASSERT(ret > 0);
+        (void) ret;
+        return NS_OK;
+    }
+
+    NS_IMETHOD NoteRefCountedObject(uint64_t aAddress, uint32_t refCount,
+                                    const char *aObjectDescription)
+    {
+        int ret = fprintf(mFile, "v %llx %s\n", (long long unsigned) aAddress, aObjectDescription);
+        MOZ_ASSERT(ret > 0);
+        (void) ret;
+        mPrintEdges = true;
+        (void) refCount;
+        return NS_OK;
+    }
+    NS_IMETHOD NoteGCedObject(uint64_t aAddress, bool aMarked,
+                              const char *aObjectDescription)
+    {
+        mPrintEdges = false;
+        return NS_OK;
+    }
+    NS_IMETHOD NoteEdge(uint64_t aToAddress, const char *aEdgeName)
+    {
+        if (mPrintEdges) {
+          int ret = fprintf(mFile, "e %llx %s\n", (long long unsigned) aToAddress, aEdgeName);
+          MOZ_ASSERT(ret > 0);
+          (void) ret;
+        }
+        return NS_OK;
+    }
+    NS_IMETHOD BeginResults()
+    {
+        return NS_OK;
+    }
+    NS_IMETHOD DescribeRoot(uint64_t, uint32_t)
+    {
+        return NS_OK;
+    }
+    NS_IMETHOD DescribeGarbage(uint64_t)
+    {
+        return NS_OK;
+    }
+    NS_IMETHOD End()
+    {
+        int ret = fprintf(mFile, "*** END CC DUMP ***\n\n");
+        MOZ_ASSERT(ret > 0);
+        (void) ret;
+        return NS_OK;
+    }
+    NS_IMETHOD ProcessNext(nsICycleCollectorHandler*,
+                           bool*)
+    {
+        return NS_ERROR_FAILURE;
+    }
+
+private:
+    FILE* mFile;
+    bool mPrintEdges;
+};
+
+NS_IMPL_ISUPPORTS1(RefgraphCCDumper, nsICycleCollectorListener)
+
+static void RefgraphCCDump(FILE* f)
+{
+    nsCOMPtr<nsICycleCollectorListener> listener = new RefgraphCCDumper(f);
+    nsJSContext::CycleCollectNow(listener, -1, true);
+}

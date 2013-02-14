@@ -138,8 +138,13 @@ struct block_t {
     return address < other.address;
   }
 
-  bool operator==(const block_t& other) {
+  bool operator==(const block_t& other) const {
     return address == other.address;
+  }
+
+  bool contains(uint64_t otherAddress) const {
+    return address <= otherAddress &&
+           (address + size) > otherAddress;
   }
 };
 
@@ -253,8 +258,16 @@ class Refgraph {
   nsRefPtr<RefgraphController> mParent;
 
   blocks_vector_t mBlocks;
+
+  // parser state
+
   block_t* mCurrentBlock;
   ref_t* mCurrentRef;
+  enum ParserState {
+    ParserDefaultState,
+    ParserInRefgraphDump,
+    ParserInCCDump
+  } mParserState;
 
   map_types_to_block_indices_t mMapTypesToBlockIndices;
 
@@ -271,7 +284,6 @@ public:
 
   void AssertWorkspacesClear();
 
-  bool Parse(const char* buffer, size_t length);
   bool ParseFile(const char* filename);
   void ResolveHereditaryStrongRefs();
   void RecurseCycles(
@@ -280,20 +292,22 @@ public:
          index_vector_t& stack);
   void ComputeCycles();
   void ResolveBackRefs();
-  bool Snapshot();
-  bool LoadFromFile(const char* filename);
+  bool LoadFromFile(const nsAString& filename);
   void PostProcess();
 
   bool HandleLine(const char* start, const char* end);
   bool HandleLine_b(const char* start, const char* end);
   bool HandleLine_c(const char* start, const char* end);
+  bool HandleLine_e(const char* start, const char* end);
   bool HandleLine_f(const char* start, const char* end);
   bool HandleLine_m(const char* start, const char* end);
   bool HandleLine_n(const char* start, const char* end);
   bool HandleLine_s(const char* start, const char* end);
   bool HandleLine_t(const char* start, const char* end);
   bool HandleLine_u(const char* start, const char* end);
+  bool HandleLine_v(const char* start, const char* end);
   bool HandleLine_w(const char* start, const char* end);
+  bool HandleLine_star(const char* start, const char* end);
 
   template<typename T>
   bool ParseNumber(const char* start,
@@ -305,6 +319,7 @@ public:
     : mParent(parent)
     , mCurrentBlock(nullptr)
     , mCurrentRef(nullptr)
+    , mParserState(ParserDefaultState)
   {}
 
   ~Refgraph()
@@ -353,9 +368,6 @@ public:
 
   static already_AddRefed<RefgraphController>
   Constructor(nsISupports*, mozilla::ErrorResult&);
-
-  already_AddRefed<Refgraph>
-  Snapshot();
 
   void SnapshotToFile(const nsAString& filename);
 

@@ -12,7 +12,8 @@
         .getInterface(Components.interfaces.nsIDOMWindowUtils)
         .cycleCollect();
     controller = new RefgraphController;
-    var newrefgraph = controller.snapshot();
+    controller.snapshotToFile("/tmp/refgraph.log");
+    var newrefgraph = controller.loadFromFile("/tmp/refgraph.log");
     if (!newrefgraph) {
       alert("snapshot failed");
       return;
@@ -257,7 +258,7 @@
         var back = vertex.backEdge(e);
         if (back.cycleIndex != cycleIndex) {
           var t = back.typeName;
-          resultText += "referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address + "\n";
+          resultText += "referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
           backRefCount++;
         }
       }
@@ -266,7 +267,7 @@
         var back = vertex.backWeakEdge(e);
         if (back.cycleIndex != cycleIndex) {
           var t = back.typeName;
-          resultText += "weak-referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address + "\n";
+          resultText += "weak-referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
           backWeakRefCount++;
         }
       }

@@ -28,71 +28,6 @@
 
 namespace refgraph {
 
-class Sink
-{
-  bool mIsInternal;
-public:
-  Sink(bool isInternal) : mIsInternal(isInternal) {}
-  virtual void Write(const char* buf, size_t bufsize) = 0;
-  bool IsInternal() const { return mIsInternal; }
-};
-
-class FileDescriptorSink
-  : public Sink
-{
-  int mFileDescriptor;
-
-public:
-  FileDescriptorSink(int fd)
-    : Sink(false)
-    , mFileDescriptor(fd)
-  {}
-
-  virtual void Write(const char* buf, size_t bufsize)
-  {
-    (void) write(mFileDescriptor, buf, bufsize);
-  }
-};
-
-class BufferSink
-  : public Sink
-{
-  char* mBuffer;
-  size_t mBufferLength;
-  size_t mBufferCapacity;
-
-  void EnsureCapacity(size_t requiredCapacity)
-  {
-    if (MOZ_LIKELY(mBufferCapacity >= requiredCapacity))
-      return;
-
-    mBufferCapacity = page_size;
-    while (mBufferCapacity < requiredCapacity)
-      mBufferCapacity *= 2;
-
-    mBuffer = static_cast<char*>(gMallocFuncsTable->realloc(mBuffer, mBufferCapacity));
-  }
-
-public:
-  BufferSink()
-    : Sink(true)
-    , mBuffer(nullptr)
-    , mBufferLength(0)
-    , mBufferCapacity(0)
-  {}
-
-  virtual void Write(const char* buf, size_t bufsize)
-  {
-    size_t newLength = mBufferLength + bufsize;
-    EnsureCapacity(newLength);
-    memcpy(mBuffer + mBufferLength, buf, bufsize);
-    mBufferLength = newLength;
-  }
-
-  const char* Buffer() const { return mBuffer; }
-  size_t BufferLength() const { return mBufferLength; }
-};
-
 static const size_t sBufSize = 65536;
 static const size_t sMaxPrintSize = 4096;
 static const size_t sBufFlushThreshold = sBufSize - sMaxPrintSize;
@@ -129,7 +64,7 @@ class Scanner
           refs_vector_t;
 
 public:
-  Scanner(Sink* sink);
+  Scanner(int fd);
   ~Scanner();
 
   void Scan();
@@ -171,12 +106,12 @@ private:
   uintptr_t mHeapStartAddress;
   uintptr_t mHeapEndAddress;
 
-  Sink* mSink;
+  const int mFileDescriptor;
 };
 
-Scanner::Scanner(Sink* sink)
+Scanner::Scanner(int fd)
   : mPrintBufIndex(0)
-  , mSink(sink)
+  , mFileDescriptor(fd)
 {
   // collect all blocks in a vector
   for (list_elem_t *elem = first_list_elem();
@@ -238,7 +173,7 @@ void Scanner::FlushPrintIfAboveThreshold()
 
 void Scanner::FlushPrint()
 {
-  mSink->Write(mPrintBuf, mPrintBufIndex);
+  (void) write(mFileDescriptor, mPrintBuf, mPrintBufIndex);
   mPrintBufIndex = 0;
 }
 
@@ -316,6 +251,8 @@ static const char* Demangled(const char* in)
 
 void Scanner::Scan()
 {
+  Print("*** BEGIN REFGRAPH DUMP ***\n");
+  Print("\n");
   Print("# All numbers are in hexadecimal.\n");
   Print("# All addresses are user (a.k.a. \"payload\") addresses.\n");
   Print("#\n");
@@ -410,6 +347,8 @@ void Scanner::Scan()
         total_hypothetical_real_usable_size_without_instrumentation - total_payloads_size, "\n");
   Print("#   Total overhead incurred by instrumentation:      ",
         total_real_usable_size - total_hypothetical_real_usable_size_without_instrumentation, "\n");
+  Print("\n");
+  Print("*** END REFGRAPH DUMP ***\n\n");
 
   FlushPrint();
 }
@@ -528,29 +467,7 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
 
 } // end namespace refgraph
 
-void replace_refgraph_dump_to_buffer(const char** buffer, size_t* length)
+void replace_refgraph_dump(int fd)
 {
-  refgraph::BufferSink sink;
-  refgraph::Scanner scanner(&sink);
-  scanner.Scan();
-  *buffer = sink.Buffer();
-  *length = sink.BufferLength();
-}
-
-void replace_refgraph_dump_to_file(const char* filename)
-{
-  int fd = open(filename,
-                O_WRONLY | O_TRUNC | O_CREAT
-#ifndef ANDROID
-                , S_IRUSR | S_IWUSR
-#endif
-               );
-  if (fd < 0) {
-    fprintf(stderr, "could not open %s for writing\n", filename);
-    return;
-  }
-  refgraph::FileDescriptorSink sink(fd);
-  refgraph::Scanner scanner(&sink);
-  scanner.Scan();
-  close(fd);
+  refgraph::Scanner(fd).Scan();
 }

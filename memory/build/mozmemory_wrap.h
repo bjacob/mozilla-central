@@ -217,8 +217,7 @@
 #define jemalloc_purge_freed_pages_impl  mozmem_jemalloc_impl(jemalloc_purge_freed_pages)
 #define jemalloc_free_dirty_pages_impl   mozmem_jemalloc_impl(jemalloc_free_dirty_pages)
 
-#define refgraph_dump_to_buffer_impl        mozmem_malloc_impl(refgraph_dump_to_buffer)
-#define refgraph_dump_to_file_impl          mozmem_malloc_impl(refgraph_dump_to_file)
+#define refgraph_dump_impl                  mozmem_malloc_impl(refgraph_dump)
 #define refgraph_set_type_impl              mozmem_malloc_impl(refgraph_set_type)
 #define refgraph_uninstrumented_malloc_impl mozmem_malloc_impl(refgraph_uninstrumented_malloc)
 #define refgraph_uninstrumented_free_impl   mozmem_malloc_impl(refgraph_uninstrumented_free)

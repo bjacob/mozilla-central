@@ -276,21 +276,12 @@ jemalloc_free_dirty_pages_impl()
 }
 
 void
-refgraph_dump_to_buffer_impl(const char** buffer, size_t* length)
+refgraph_dump_impl(int fd)
 {
   if (MOZ_UNLIKELY(!replace_malloc_initialized))
     init();
-  if (!MOZ_LIKELY(!replace_refgraph_dump_to_buffer))
-    replace_refgraph_dump_to_buffer(buffer, length);
-}
-
-void
-refgraph_dump_to_file_impl(const char* filename)
-{
-  if (MOZ_UNLIKELY(!replace_malloc_initialized))
-    init();
-  if (!MOZ_LIKELY(!replace_refgraph_dump_to_file))
-    replace_refgraph_dump_to_file(filename);
+  if (!MOZ_LIKELY(!replace_refgraph_dump))
+    replace_refgraph_dump(fd);
 }
 
 void
@@ -318,8 +309,7 @@ refgraph_uninstrumented_free_impl(void* ptr)
   malloc_table.free(ptr);
 }
 
-void je_refgraph_dump_to_buffer(const char** buffer, size_t* length) {}
-void je_refgraph_dump_to_file(const char* name) {}
+void je_refgraph_dump(int fd) {}
 void je_refgraph_set_type(const void* pointer, const char* typehint) {}
 void* je_refgraph_uninstrumented_malloc(size_t size) { return NULL; }
 void je_refgraph_uninstrumented_free(void* ptr) {}
