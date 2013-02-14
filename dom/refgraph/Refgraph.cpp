@@ -559,7 +559,9 @@ void Refgraph::ComputeCycles()
           ri != b.refs.end();
           ++ri)
       {
-        if (!(ri->flags & traversedByCCFlag)) {
+        if (!(ri->flags & traversedByCCFlag) &&
+            ri->target != cycle_vertices[v]) /* ignore self-references. Should we? FIXME */
+        {
           const block_t& target_block = mBlocks[ri->target];
           if (target_block.cycle_index == b.cycle_index) {
             cycle.isTraversedByCC = false;

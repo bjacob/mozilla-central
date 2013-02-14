@@ -55,7 +55,6 @@
     output += ind + "address: 0x" + vertex.address.toString(16) + "\n";
     output += ind + "size: " + vertex.size + " bytes\n";
     if (vertex.cycleIndex != vertex.ALONE_IN_CYCLE) {
-        console.log("" + vertex.cycleIndex + " != " + vertex.ALONE_IN_CYCLE);
       output += ind + "belongs to Cycle " + vertex.cycleIndex + "\n";
     }
     if (level >= 2 &&
@@ -233,7 +232,6 @@
       resultText += "address: 0x" + vertex.address.toString(16) + "\n";
       resultText += "size: " + vertex.size + " bytes\n";
       if (vertex.cycleIndex != vertex.ALONE_IN_CYCLE) {
-        console.log("" + vertex.cycleIndex + " != " + vertex.ALONE_IN_CYCLE);
         resultText += "cycleIndex: " + vertex.cycleIndex + "\n";
       }
       resultText += "Cycle edges:\n";
