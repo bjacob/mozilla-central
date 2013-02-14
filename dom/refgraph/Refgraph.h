@@ -367,7 +367,7 @@ public:
   {}
 
   static already_AddRefed<RefgraphController>
-  Constructor(nsISupports*, mozilla::ErrorResult&);
+  Constructor(mozilla::dom::GlobalObject&, mozilla::ErrorResult&);
 
   void SnapshotToFile(const nsAString& filename);
 

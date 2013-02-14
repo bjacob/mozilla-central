@@ -891,8 +891,8 @@ RefgraphVertex::BackWeakEdge(uint32_t index) const
 }
 
 already_AddRefed<RefgraphController>
-RefgraphController::Constructor(nsISupports* aGlobal, mozilla::ErrorResult&) {
-  nsRefPtr<RefgraphController> r = new RefgraphController(aGlobal);
+RefgraphController::Constructor(mozilla::dom::GlobalObject& aGlobal, mozilla::ErrorResult&) {
+  nsRefPtr<RefgraphController> r = new RefgraphController(aGlobal.Get());
   return r.forget();
 }
 
