@@ -31,7 +31,6 @@
 #include "nsITimer.h"
 #include "nsIDOMProgressEvent.h"
 #include "nsDOMEventTargetHelper.h"
-#include "nsContentUtils.h"
 #include "nsDOMFile.h"
 #include "nsDOMBlobBuilder.h"
 #include "nsIPrincipal.h"
@@ -148,13 +147,14 @@ public:
 
   // The WebIDL constructors.
   static already_AddRefed<nsXMLHttpRequest>
-  Constructor(JSContext* aCx,
-              nsISupports* aGlobal,
+  Constructor(const mozilla::dom::GlobalObject& aGlobal,
+              JSContext* aCx,
               const mozilla::dom::MozXMLHttpRequestParameters& aParams,
               ErrorResult& aRv)
   {
-    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal);
-    nsCOMPtr<nsIScriptObjectPrincipal> principal = do_QueryInterface(aGlobal);
+    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.Get());
+    nsCOMPtr<nsIScriptObjectPrincipal> principal =
+      do_QueryInterface(aGlobal.Get());
     if (!window || ! principal) {
       aRv.Throw(NS_ERROR_FAILURE);
       return NULL;
@@ -167,8 +167,8 @@ public:
   }
 
   static already_AddRefed<nsXMLHttpRequest>
-  Constructor(JSContext* aCx,
-              nsISupports* aGlobal,
+  Constructor(const mozilla::dom::GlobalObject& aGlobal,
+              JSContext* aCx,
               const nsAString& ignored,
               ErrorResult& aRv)
   {
@@ -179,7 +179,7 @@ public:
       return nullptr;
     }
 
-    return Constructor(aCx, aGlobal, params, aRv);
+    return Constructor(aGlobal, aCx, params, aRv);
   }
 
   void Construct(nsIPrincipal* aPrincipal,
@@ -702,6 +702,8 @@ protected:
     nsCString value;
   };
   nsTArray<RequestHeader> mModifiedRequestHeaders;
+
+  nsTHashtable<nsCStringHashKey> mAlreadySetHeaders;
 
   // Helper object to manage our XPCOM scriptability bits
   nsXMLHttpRequestXPCOMifier* mXPCOMifier;

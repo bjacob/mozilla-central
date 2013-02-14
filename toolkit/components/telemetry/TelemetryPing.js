@@ -118,8 +118,13 @@ function getSimpleMeasurements() {
   var appTimestamps = {};
   try {
     let o = {};
-    Cu.import("resource:///modules/TelemetryTimestamps.jsm", o);
+    Cu.import("resource://gre/modules/TelemetryTimestamps.jsm", o);
     appTimestamps = o.TelemetryTimestamps.get();
+  } catch (ex) {}
+  try {
+    let o = {};
+    Cu.import("resource://gre/modules/AddonManager.jsm", o);
+    ret.addonManager = o.AddonManagerPrivate.getSimpleMeasures();
   } catch (ex) {}
 
   if (si.process) {
@@ -150,6 +155,10 @@ function getSimpleMeasurements() {
   let shutdownDuration = Telemetry.lastShutdownDuration;
   if (shutdownDuration)
     ret.shutdownDuration = shutdownDuration;
+
+  let failedProfileLockCount = Telemetry.failedProfileLockCount;
+  if (failedProfileLockCount)
+    ret.failedProfileLockCount = failedProfileLockCount;
 
   return ret;
 }
@@ -359,7 +368,7 @@ TelemetryPing.prototype = {
                   "device", "manufacturer", "hardware",
                   "hasMMX", "hasSSE", "hasSSE2", "hasSSE3",
                   "hasSSSE3", "hasSSE4A", "hasSSE4_1", "hasSSE4_2",
-                  "hasEDSP", "hasARMv6", "hasARMv7", "hasNEON"];
+                  "hasEDSP", "hasARMv6", "hasARMv7", "hasNEON", "isWow64"];
     for each (let field in fields) {
       let value;
       try {
@@ -742,9 +751,6 @@ TelemetryPing.prototype = {
       Telemetry.canRecord = false;
       return;
     }
-#ifndef MOZ_PER_WINDOW_PRIVATE_BROWSING
-    Services.obs.addObserver(this, "private-browsing", false);
-#endif
     Services.obs.addObserver(this, "profile-before-change", false);
     Services.obs.addObserver(this, "sessionstore-windows-restored", false);
     Services.obs.addObserver(this, "quit-application-granted", false);
@@ -770,14 +776,16 @@ TelemetryPing.prototype = {
                                  Ci.nsITimer.TYPE_ONE_SHOT);
   },
 
-  verifyPingChecksum: function verifyPingChecksum(ping) {
+  ensurePingChecksum: function ensurePingChecksum(ping) {
     /* A ping from the current session won't have a checksum.  */
     if (!ping.checksum) {
-      return true;
+      return;
     }
 
     let checksumNow = this.hashString(ping.payload);
-    return ping.checksum == checksumNow;
+    if (ping.checksum != checksumNow) {
+      throw new Error("Invalid ping checksum")
+    }
   },
 
   addToPendingPings: function addToPendingPings(file, stream) {
@@ -788,18 +796,16 @@ TelemetryPing.prototype = {
       stream.close();
       let ping = JSON.parse(string);
       this._pingLoadsCompleted++;
-
-      if (this.verifyPingChecksum(ping)) {
-        this._pendingPings.push(ping);
-      }
-
+      // This will throw if checksum is invalid.
+      this.ensurePingChecksum(ping);
+      this._pendingPings.push(ping);
       if (this._doLoadSaveNotifications &&
           this._pingLoadsCompleted == this._pingsLoaded) {
         Services.obs.notifyObservers(null, "telemetry-test-load-complete", null);
       }
       success = true;
     } catch (e) {
-      // An error reading the file, or an error parsing the contents.
+      // An error reading the file, or an error parsing/checksumming the contents.
       stream.close();           // close is idempotent.
       file.remove(true);
     }
@@ -969,9 +975,6 @@ TelemetryPing.prototype = {
       this._hasXulWindowVisibleObserver = false;
     }
     Services.obs.removeObserver(this, "profile-before-change");
-#ifndef MOZ_PER_WINDOW_PRIVATE_BROWSING
-    Services.obs.removeObserver(this, "private-browsing");
-#endif
     Services.obs.removeObserver(this, "quit-application-granted");
   },
 
@@ -1039,16 +1042,6 @@ TelemetryPing.prototype = {
         this.gatherMemory();
       }
       break;
-#ifndef MOZ_PER_WINDOW_PRIVATE_BROWSING
-    case "private-browsing":
-      Telemetry.canRecord = aData == "exit";
-      if (aData == "enter") {
-        this.detachObservers()
-      } else {
-        this.attachObservers()
-      }
-      break;
-#endif
     case "xul-window-visible":
       Services.obs.removeObserver(this, "xul-window-visible");
       this._hasXulWindowVisibleObserver = false;   

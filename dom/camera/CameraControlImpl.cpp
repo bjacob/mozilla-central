@@ -10,6 +10,7 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::idl;
 
 CameraControlImpl::CameraControlImpl(uint32_t aCameraId, nsIThread* aCameraThread, uint64_t aWindowId)
   : mCameraId(aCameraId)
@@ -420,7 +421,7 @@ GetPreviewStreamResult::Run()
 
   nsCOMPtr<nsICameraPreviewStreamCallback> onSuccess = mOnSuccessCb.get();
   if (onSuccess && nsDOMCameraManager::IsWindowStillActive(mWindowId)) {
-    nsCOMPtr<nsIDOMMediaStream> stream = new DOMCameraPreview(mCameraControl, mWidth, mHeight, mFramesPerSecond);
+    nsCOMPtr<nsIDOMMediaStream> stream = new DOMCameraPreview(mCameraControl, mWidth, mHeight, mWindowId, mFramesPerSecond);
     onSuccess->HandleEvent(stream);
   }
   return NS_OK;

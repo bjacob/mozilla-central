@@ -294,6 +294,7 @@ DIST_FILES += \
   update.locale \
   removed-files \
   recommended-addons.json \
+  distribution \
   $(NULL)
 
 ifdef MOZ_ENABLE_SZIP
@@ -712,6 +713,14 @@ CHECKSUM_ALGORITHM_PARAM = -d sha512 -d md5 -d sha1
 # This variable defines where the checksum file will be located
 CHECKSUM_FILE = "$(DIST)/$(PKG_PATH)/$(CHECKSUMS_FILE_BASENAME).checksums"
 CHECKSUM_FILES = $(CHECKSUM_FILE)
+
+ifeq (WINNT,$(OS_TARGET))
+UPLOAD_EXTRA_FILES += host/bin/mar.exe
+UPLOAD_EXTRA_FILES += host/bin/mbsdiff.exe
+else
+UPLOAD_EXTRA_FILES += host/bin/mar
+UPLOAD_EXTRA_FILES += host/bin/mbsdiff
+endif
 
 UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(DIST)/$(PACKAGE)) \

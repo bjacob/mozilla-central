@@ -14,6 +14,7 @@
 #include "imgINotificationObserver.h"
 #include "gfxContext.h"
 #include "mozilla/dom/SVGImageElementBinding.h"
+#include "nsContentUtils.h"
 
 DOMCI_NODE_DATA(SVGImageElement, mozilla::dom::SVGImageElement)
 
@@ -165,9 +166,7 @@ SVGImageElement::GetHref(nsIDOMSVGAnimatedString * *aHref)
 already_AddRefed<nsIDOMSVGAnimatedString>
 SVGImageElement::Href()
 {
-  nsCOMPtr<nsIDOMSVGAnimatedString> href;
-  mStringAttributes[HREF].ToDOMAnimatedString(getter_AddRefs(href), this);
-  return href.forget();;
+  return mStringAttributes[HREF].ToDOMAnimatedString(this);
 }
 
 //----------------------------------------------------------------------

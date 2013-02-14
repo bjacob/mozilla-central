@@ -7,7 +7,6 @@ Replace localized parts of a packaged directory with data from a langpack
 directory.
 '''
 
-import sys
 import os
 import mozpack.path
 from mozpack.packager.formats import (
@@ -111,9 +110,15 @@ def repack(source, l10n, non_resources=[]):
                   l10n_paths[mozpack.path.basedir(e.path, bases)][e.name])
                  for e in entries if isinstance(e, ManifestEntryWithRelPath))
 
-    for path in NON_CHROME:
-        for p, f in l10n_finder.find(path):
-            paths[p] = p
+    for pattern in NON_CHROME:
+        for base in bases:
+            path = mozpack.path.join(base, pattern)
+            left = set(p for p, f in finder.find(path))
+            right = set(p for p, f in l10n_finder.find(path))
+            for p in right:
+                paths[p] = p
+            for p in left - right:
+                paths[p] = None
 
     # Create a new package, with non localized bits coming from the original
     # package, and localized bits coming from the langpack.
@@ -123,19 +128,23 @@ def repack(source, l10n, non_resources=[]):
             # Remove localized manifest entries.
             for e in [e for e in f if e.localized]:
                 f.remove(e)
-        base = mozpack.path.basedir(p, paths.keys())
-        if base:
-            # If the path is one that needs a locale replacement, use the
-            # corresponding file from the langpack.
-            subpath = mozpack.path.relpath(p, base)
-            path = mozpack.path.normpath(mozpack.path.join(paths[base],
-                                                           subpath))
+        # If the path is one that needs a locale replacement, use the
+        # corresponding file from the langpack.
+        path = None
+        if p in paths:
+            path = paths[p]
+            if not path:
+                continue
+        else:
+            base = mozpack.path.basedir(p, paths.keys())
+            if base:
+                subpath = mozpack.path.relpath(p, base)
+                path = mozpack.path.normpath(mozpack.path.join(paths[base],
+                                                               subpath))
+        if path:
             files = [f for p, f in l10n_finder.find(path)]
-            if len(files) == 0 and base in NON_CHROME:
-                path = path.replace(locale, l10n_locale)
-                files = [f for p, f in l10n_finder.find(path)]
-            if len(files) == 0:
-                if not base in NON_CHROME:
+            if not len(files):
+                if base not in NON_CHROME:
                     errors.error("Missing file: %s" % os.path.join(l10n, path))
             else:
                 packager.add(path, files[0])
@@ -163,17 +172,18 @@ def repack(source, l10n, non_resources=[]):
     packager.close()
 
     # Add any remaining non chrome files.
-    for base in NON_CHROME:
-        for p, f in l10n_finder.find(base):
-            if not formatter.contains(p):
-                formatter.add(p, f)
+    for pattern in NON_CHROME:
+        for base in bases:
+            for p, f in l10n_finder.find(mozpack.path.join(base, pattern)):
+                if not formatter.contains(p):
+                    formatter.add(p, f)
 
     # Transplant jar preloading information.
     for path, log in finder.jarlogs.iteritems():
         assert isinstance(copier[path], Jarrer)
         copier[path].preload([l.replace(locale, l10n_locale) for l in log])
 
-    copier.copy(source)
+    copier.copy(source, skip_if_older=False)
     generate_precomplete(source)
 
 

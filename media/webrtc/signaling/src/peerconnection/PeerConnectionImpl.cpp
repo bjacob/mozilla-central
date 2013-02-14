@@ -174,10 +174,17 @@ public:
         mObserver->OnSetRemoteDescriptionError(mCode);
         break;
 
+      case ADDICECANDIDATE:
+        mObserver->OnAddIceCandidateSuccess(mCode);
+        break;
+
+      case ADDICECANDIDATEERROR:
+        mObserver->OnAddIceCandidateError(mCode);
+        break;
+
       case REMOTESTREAMADD:
         {
           nsDOMMediaStream* stream = nullptr;
-          uint32_t hint;
 
           if (!mRemoteStream) {
             CSFLogErrorS(logTag, __FUNCTION__ << " GetRemoteStream returned NULL");
@@ -188,21 +195,19 @@ public:
           if (!stream) {
             CSFLogErrorS(logTag, __FUNCTION__ << " GetMediaStream returned NULL");
           } else {
-            hint = stream->GetHintContents();
-            if (hint == nsDOMMediaStream::HINT_CONTENTS_AUDIO) {
-              mObserver->OnAddStream(stream, "audio");
-            } else if (hint == nsDOMMediaStream::HINT_CONTENTS_VIDEO) {
-              mObserver->OnAddStream(stream, "video");
-            } else {
-              CSFLogErrorS(logTag, __FUNCTION__ << "Audio & Video not supported");
-              MOZ_ASSERT(PR_FALSE);
-            }
+            // We provide a type field because it is in the IDL
+            // and we want code that looks at it not to crash.
+            // We use "video" so that if an app looks for
+            // that string it has some chance of working.
+            // TODO(ekr@rtfm.com): Bug 834847
+            // The correct way for content JS to know stream type
+            // is via get{Audio,Video}Tracks. See Bug 834835.
+            mObserver->OnAddStream(stream, "video");
           }
           break;
         }
 
       case UPDATELOCALDESC:
-      case UPDATEREMOTEDESC:
         /* No action necessary */
         break;
 
@@ -243,9 +248,20 @@ PeerConnectionImpl::PeerConnectionImpl()
 
 PeerConnectionImpl::~PeerConnectionImpl()
 {
+  // This aborts if not on main thread (in Debug builds)
   PC_AUTO_ENTER_API_CALL_NO_CHECK();
-  PeerConnectionCtx::GetInstance()->mPeerConnections.erase(mHandle);
+  if (PeerConnectionCtx::isActive()) {
+    PeerConnectionCtx::GetInstance()->mPeerConnections.erase(mHandle);
+  } else {
+    CSFLogErrorS(logTag, "PeerConnectionCtx is already gone. Ignoring...");
+  }
+
   CloseInt(false);
+
+#ifdef MOZILLA_INTERNAL_API
+  // Deregister as an NSS Shutdown Object
+  shutdown(calledFromObject);
+#endif
 
   // Since this and Initialize() occur on MainThread, they can't both be
   // running at once
@@ -278,14 +294,19 @@ PeerConnectionImpl::MakeMediaStream(uint32_t aHint, nsIDOMMediaStream** aRetval)
 }
 
 nsresult
-PeerConnectionImpl::CreateRemoteSourceStreamInfo(uint32_t aHint, nsRefPtr<RemoteSourceStreamInfo>* aInfo)
+PeerConnectionImpl::CreateRemoteSourceStreamInfo(nsRefPtr<RemoteSourceStreamInfo>*
+                                                 aInfo)
 {
   MOZ_ASSERT(aInfo);
   PC_AUTO_ENTER_API_CALL_NO_CHECK();
 
   nsIDOMMediaStream* stream;
 
-  nsresult res = MakeMediaStream(aHint, &stream);
+  // We need to pass a dummy hint here because FakeMediaStream currently
+  // needs to actually propagate a hint for local streams.
+  // TODO(ekr@rtfm.com): Clean up when we have explicit track lists.
+  // See bug 834835.
+  nsresult res = MakeMediaStream(0, &stream);
   if (NS_FAILED(res)) {
     return res;
   }
@@ -348,6 +369,8 @@ PeerConnectionImpl::ConvertRTCConfiguration(const JS::Value& aSrc,
   }
   for (uint32_t i = 0; i < len; i++) {
     nsresult rv;
+    // XXXbz once this moves to WebIDL, remove the RTCIceServer hack
+    // in DummyBinding.webidl.
     RTCIceServer server;
     {
       JS::Value v;
@@ -430,6 +453,8 @@ PeerConnectionImpl::Initialize(IPeerConnectionObserver* aObserver,
                                nsIThread* aThread,
                                JSContext* aCx)
 {
+  nsresult res;
+
 #ifdef MOZILLA_INTERNAL_API
   MOZ_ASSERT(NS_IsMainThread());
 #endif
@@ -439,7 +464,11 @@ PeerConnectionImpl::Initialize(IPeerConnectionObserver* aObserver,
 
   mPCObserver = do_GetWeakReference(aObserver);
 
-  nsresult res;
+  // Find the STS thread
+
+  mSTSThread = do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &res);
+  MOZ_ASSERT(mSTSThread);
+
 #ifdef MOZILLA_INTERNAL_API
   // This code interferes with the C++ unit test startup code.
   nsCOMPtr<nsISupports> nssDummy = do_GetService("@mozilla.org/psm;1", &res);
@@ -527,10 +556,6 @@ PeerConnectionImpl::Initialize(IPeerConnectionObserver* aObserver,
 
   mFingerprint = "sha-1 " + mIdentity->FormatFingerprint(fingerprint,
                                                          fingerprint_length);
-
-  // Find the STS thread
-  mSTSThread = do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &res);
-
   if (NS_FAILED(res)) {
     CSFLogErrorS(logTag, __FUNCTION__ << ": do_GetService failed: " <<
         static_cast<uint32_t>(res));
@@ -599,8 +624,14 @@ PeerConnectionImpl::ConnectDataConnection(uint16_t aLocalport,
   PC_AUTO_ENTER_API_CALL_NO_CHECK();
 
 #ifdef MOZILLA_INTERNAL_API
+  if (mDataConnection) {
+    CSFLogError(logTag,"%s DataConnection already connected",__FUNCTION__);
+    // Ignore the request to connect when already connected.  This entire
+    // implementation is temporary.  Ignore aNumstreams as it's merely advisory
+    // and we increase the number of streams dynamically as needed.
+    return NS_OK;
+  }
   mDataConnection = new mozilla::DataChannelConnection(this);
-  NS_ENSURE_TRUE(mDataConnection,NS_ERROR_FAILURE);
   if (!mDataConnection->Init(aLocalport, aNumstreams, true)) {
     CSFLogError(logTag,"%s DataConnection Init Failed",__FUNCTION__);
     return NS_ERROR_FAILURE;
@@ -1007,7 +1038,7 @@ PeerConnectionImpl::GetFingerprint(char** fingerprint)
 NS_IMETHODIMP
 PeerConnectionImpl::GetLocalDescription(char** aSDP)
 {
-  PC_AUTO_ENTER_API_CALL(true);
+  PC_AUTO_ENTER_API_CALL_NO_CHECK();
   MOZ_ASSERT(aSDP);
 
   char* tmp = new char[mLocalSDP.size() + 1];
@@ -1021,7 +1052,7 @@ PeerConnectionImpl::GetLocalDescription(char** aSDP)
 NS_IMETHODIMP
 PeerConnectionImpl::GetRemoteDescription(char** aSDP)
 {
-  PC_AUTO_ENTER_API_CALL(true);
+  PC_AUTO_ENTER_API_CALL_NO_CHECK();
   MOZ_ASSERT(aSDP);
 
   char* tmp = new char[mRemoteSDP.size() + 1];
@@ -1130,6 +1161,20 @@ PeerConnectionImpl::ShutdownMedia(bool aIsSynchronous)
                 aIsSynchronous ? NS_DISPATCH_SYNC : NS_DISPATCH_NORMAL);
 }
 
+#ifdef MOZILLA_INTERNAL_API
+// If NSS is shutting down, then we need to get rid of the DTLS
+// identity right now; otherwise, we'll cause wreckage when we do
+// finally deallocate it in our destructor.
+void
+PeerConnectionImpl::virtualDestroyNSSReference()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  CSFLogDebugS(logTag, __FUNCTION__ << ": "
+               << "NSS shutting down; freeing our DtlsIdentity.");
+  mIdentity = nullptr;
+}
+#endif
+
 void
 PeerConnectionImpl::onCallEvent(ccapi_call_event_e aCallEvent,
                                 CSF::CC_CallPtr aCall, CSF::CC_CallInfoPtr aInfo)
@@ -1154,7 +1199,7 @@ PeerConnectionImpl::onCallEvent(ccapi_call_event_e aCallEvent,
       break;
 
     case SETREMOTEDESC:
-    case UPDATEREMOTEDESC:
+    case ADDICECANDIDATE:
       mRemoteSDP = aInfo->getSDP();
       break;
 
@@ -1228,22 +1273,21 @@ PeerConnectionImpl::GetHandle()
 void
 PeerConnectionImpl::IceGatheringCompleted(NrIceCtx *aCtx)
 {
+  (void) aCtx;
   // Do an async call here to unwind the stack. refptr keeps the PC alive.
   nsRefPtr<PeerConnectionImpl> pc(this);
   RUN_ON_THREAD(mThread,
                 WrapRunnable(pc,
-                             &PeerConnectionImpl::IceGatheringCompleted_m,
-                             aCtx),
+                             &PeerConnectionImpl::IceGatheringCompleted_m),
                 NS_DISPATCH_NORMAL);
 }
 
 nsresult
-PeerConnectionImpl::IceGatheringCompleted_m(NrIceCtx *aCtx)
+PeerConnectionImpl::IceGatheringCompleted_m()
 {
   PC_AUTO_ENTER_API_CALL(false);
-  MOZ_ASSERT(aCtx);
 
-  CSFLogDebugS(logTag, __FUNCTION__ << ": ctx: " << static_cast<void*>(aCtx));
+  CSFLogDebugS(logTag, __FUNCTION__);
 
   mIceState = kIceWaiting;
 
@@ -1265,22 +1309,21 @@ PeerConnectionImpl::IceGatheringCompleted_m(NrIceCtx *aCtx)
 void
 PeerConnectionImpl::IceCompleted(NrIceCtx *aCtx)
 {
+  (void) aCtx;
   // Do an async call here to unwind the stack. refptr keeps the PC alive.
   nsRefPtr<PeerConnectionImpl> pc(this);
   RUN_ON_THREAD(mThread,
                 WrapRunnable(pc,
-                             &PeerConnectionImpl::IceCompleted_m,
-                             aCtx),
+                             &PeerConnectionImpl::IceCompleted_m),
                 NS_DISPATCH_NORMAL);
 }
 
 nsresult
-PeerConnectionImpl::IceCompleted_m(NrIceCtx *aCtx)
+PeerConnectionImpl::IceCompleted_m()
 {
   PC_AUTO_ENTER_API_CALL(false);
-  MOZ_ASSERT(aCtx);
 
-  CSFLogDebugS(logTag, __FUNCTION__ << ": ctx: " << static_cast<void*>(aCtx));
+  CSFLogDebugS(logTag, __FUNCTION__);
 
   mIceState = kIceConnected;
 

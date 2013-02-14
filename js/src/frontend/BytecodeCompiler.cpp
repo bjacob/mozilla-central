@@ -49,9 +49,10 @@ SetSourceMap(JSContext *cx, TokenStream &tokenStream, ScriptSource *ss, Unrooted
 UnrootedScript
 frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr callerFrame,
                         const CompileOptions &options,
-                        StableCharPtr chars, size_t length,
+                        const jschar *chars, size_t length,
                         JSString *source_ /* = NULL */,
-                        unsigned staticLevel /* = 0 */)
+                        unsigned staticLevel /* = 0 */,
+                        SourceCompressionToken *extraSct /* = NULL */)
 {
     RootedString source(cx, source_);
 
@@ -81,11 +82,12 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
     ScriptSource *ss = cx->new_<ScriptSource>();
     if (!ss)
         return UnrootedScript(NULL);
-    ScriptSourceHolder ssh(cx->runtime, ss);
-    SourceCompressionToken sct(cx);
+    ScriptSourceHolder ssh(ss);
+    SourceCompressionToken mysct(cx);
+    SourceCompressionToken *sct = (extraSct) ? extraSct : &mysct;
     switch (options.sourcePolicy) {
       case CompileOptions::SAVE_SOURCE:
-        if (!ss->setSourceCopy(cx, chars, length, false, &sct))
+        if (!ss->setSourceCopy(cx, chars, length, false, sct))
             return UnrootedScript(NULL);
         break;
       case CompileOptions::LAZY_SOURCE:
@@ -98,7 +100,7 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
     Parser parser(cx, options, chars, length, /* foldConstants = */ true);
     if (!parser.init())
         return UnrootedScript(NULL);
-    parser.sct = &sct;
+    parser.sct = sct;
 
     GlobalSharedContext globalsc(cx, scopeChain, StrictModeFromContext(cx));
 
@@ -138,7 +140,7 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
              * Save eval program source in script->atoms[0] for the
              * eval cache (see EvalCacheLookup in jsobj.cpp).
              */
-            JSAtom *atom = AtomizeString(cx, source);
+            JSAtom *atom = AtomizeString<CanGC>(cx, source);
             jsatomid _;
             if (!atom || !bce.makeAtomIndex(atom, &_))
                 return UnrootedScript(NULL);
@@ -158,13 +160,6 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
         }
     }
 
-    ParseNode *pn;
-#if JS_HAS_XML_SUPPORT
-    pn = NULL;
-    bool onlyXML;
-    onlyXML = true;
-#endif
-
     TokenStream &tokenStream = parser.tokenStream;
     bool canHaveDirectives = true;
     for (;;) {
@@ -176,7 +171,7 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
             return UnrootedScript(NULL);
         }
 
-        pn = parser.statement();
+        ParseNode *pn = parser.statement();
         if (!pn)
             return UnrootedScript(NULL);
 
@@ -193,28 +188,11 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
         if (!EmitTree(cx, &bce, pn))
             return UnrootedScript(NULL);
 
-#if JS_HAS_XML_SUPPORT
-        if (!pn->isKind(PNK_SEMI) || !pn->pn_kid || !pn->pn_kid->isXMLItem())
-            onlyXML = false;
-#endif
         parser.freeTree(pn);
     }
 
     if (!SetSourceMap(cx, tokenStream, ss, script))
         return UnrootedScript(NULL);
-
-#if JS_HAS_XML_SUPPORT
-    /*
-     * Prevent XML data theft via <script src="http://victim.com/foo.xml">.
-     * For background, see:
-     *
-     * https://bugzilla.mozilla.org/show_bug.cgi?id=336551
-     */
-    if (pn && onlyXML && !callerFrame) {
-        parser.reportError(NULL, JSMSG_XML_WHOLE_PROGRAM);
-        return UnrootedScript(NULL);
-    }
-#endif
 
     // It's an error to use |arguments| in a function that has a rest parameter.
     if (callerFrame && callerFrame.isFunctionFrame() && callerFrame.fun()->hasRest()) {
@@ -239,7 +217,7 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
 
     bce.tellDebuggerAboutCompiledScript(cx);
 
-    if (!sct.complete())
+    if (sct == &mysct && !sct->complete())
         return UnrootedScript(NULL);
 
     return script;
@@ -249,14 +227,14 @@ frontend::CompileScript(JSContext *cx, HandleObject scopeChain, AbstractFramePtr
 // handler attribute in an HTML <INPUT> tag, or in a Function() constructor.
 bool
 frontend::CompileFunctionBody(JSContext *cx, HandleFunction fun, CompileOptions options,
-                              const AutoNameVector &formals, StableCharPtr chars, size_t length)
+                              const AutoNameVector &formals, const jschar *chars, size_t length)
 {
     if (!CheckLength(cx, length))
         return false;
     ScriptSource *ss = cx->new_<ScriptSource>();
     if (!ss)
         return false;
-    ScriptSourceHolder ssh(cx->runtime, ss);
+    ScriptSourceHolder ssh(ss);
     SourceCompressionToken sct(cx);
     JS_ASSERT(options.sourcePolicy != CompileOptions::LAZY_SOURCE);
     if (options.sourcePolicy == CompileOptions::SAVE_SOURCE) {

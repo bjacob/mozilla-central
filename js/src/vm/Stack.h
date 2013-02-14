@@ -238,6 +238,11 @@ class AbstractFramePtr
         JS_ASSERT((uintptr_t(fp) & 1) == 0);
     }
 
+    explicit AbstractFramePtr(JSAbstractFramePtr frame)
+        : ptr_(uintptr_t(frame.raw()))
+    {
+    }
+
     bool isStackFrame() const {
         return ptr_ & 0x1;
     }
@@ -274,6 +279,7 @@ class AbstractFramePtr
 
     inline UnrootedScript script() const;
     inline JSFunction *fun() const;
+    inline JSFunction *maybeFun() const;
     inline JSFunction &callee() const;
     inline Value calleev() const;
     inline Value &thisValue() const;
@@ -297,6 +303,7 @@ class AbstractFramePtr
     inline Value &unaliasedVar(unsigned i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING);
     inline Value &unaliasedLocal(unsigned i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING);
     inline Value &unaliasedFormal(unsigned i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING);
+    inline Value &unaliasedActual(unsigned i, MaybeCheckAliasing checkAliasing = CHECK_ALIASING);
 
     inline bool prevUpToDate() const;
     inline void setPrevUpToDate() const;
@@ -305,6 +312,9 @@ class AbstractFramePtr
     inline void *maybeHookData() const;
     inline void setHookData(void *data) const;
     inline void setReturnValue(const Value &rval) const;
+
+    inline void popBlock(JSContext *cx) const;
+    inline void popWith(JSContext *cx) const;
 };
 
 class NullFramePtr : public AbstractFramePtr
@@ -427,6 +437,7 @@ class StackFrame
     Value *base() const { return slots() + script()->nfixed; }
     Value *formals() const { return (Value *)this - fun()->nargs; }
     Value *actuals() const { return formals() - (flags_ & OVERFLOW_ARGS ? 2 + u.nactual : 0); }
+    unsigned nactual() const { return u.nactual; }
 
   private:
     friend class FrameRegs;
@@ -693,9 +704,8 @@ class StackFrame
     /*
      * With
      *
-     * Entering/leaving a with (or E4X filter) block pushes/pops an object 
-     * on the scope chain. Pushing uses pushOnScopeChain, popping should use
-     * popWith.
+     * Entering/leaving a |with| block pushes/pops an object on the scope chain.
+     * Pushing uses pushOnScopeChain, popping should use popWith.
      */
 
     void popWith(JSContext *cx);
@@ -761,7 +771,7 @@ class StackFrame
      * All function frames have an associated interpreted JSFunction. The
      * function returned by fun() and maybeFun() is not necessarily the
      * original canonical function which the frame's script was compiled
-     * against. To get this function, use maybeScriptFunction().
+     * against.
      */
 
     JSFunction* fun() const {
@@ -771,15 +781,6 @@ class StackFrame
 
     JSFunction* maybeFun() const {
         return isFunctionFrame() ? fun() : NULL;
-    }
-
-    JSFunction* maybeScriptFunction() const {
-        if (!isFunctionFrame())
-            return NULL;
-        const StackFrame *fp = this;
-        while (fp->isEvalFrame())
-            fp = fp->prev();
-        return fp->script()->function();
     }
 
     /*
@@ -1222,8 +1223,8 @@ InitialFrameFlagsAreLowered(InitialFrameFlags initial)
     return !!(initial & INITIAL_LOWERED);
 }
 
-inline StackFrame *          Valueify(JSStackFrame *fp) { return (StackFrame *)fp; }
-static inline JSStackFrame * Jsvalify(StackFrame *fp)   { return (JSStackFrame *)fp; }
+inline AbstractFramePtr Valueify(JSAbstractFramePtr frame) { return AbstractFramePtr(frame); }
+static inline JSAbstractFramePtr Jsvalify(AbstractFramePtr frame)   { return JSAbstractFramePtr(frame.raw()); }
 
 /*****************************************************************************/
 
@@ -1640,14 +1641,6 @@ class ContextStack
     inline bool hasfp() const { return seg_ && seg_->maybeRegs(); }
 
     /*
-     * Return the spindex value for 'vp' which can be used to call
-     * DecompileValueGenerator. (The spindex is either the negative offset of
-     * 'vp' from 'sp', if 'vp' points to a value in the innermost scripted
-     * stack frame, otherwise it is JSDVG_SEARCH_STACK.)
-     */
-    ptrdiff_t spIndexOf(const Value *vp);
-
-    /*
      * Return the most recent script activation's registers with the same
      * caveat as hasfp regarding JS_SaveFrameChain.
      */
@@ -1682,8 +1675,8 @@ class ContextStack
                          InitialFrameFlags initial, InvokeFrameGuard *ifg);
 
     /* Called by Execute for execution of eval or global code. */
-    bool pushExecuteFrame(JSContext *cx, JSScript *script, const Value &thisv,
-                          JSObject &scopeChain, ExecuteType type,
+    bool pushExecuteFrame(JSContext *cx, HandleScript script, const Value &thisv,
+                          HandleObject scopeChain, ExecuteType type,
                           AbstractFramePtr evalInFrame, ExecuteFrameGuard *efg);
 
     /* Allocate actual argument space for the bailed frame */
@@ -1879,6 +1872,7 @@ class StackIter
     };
 
     friend class ContextStack;
+    friend class ::JSBrokenFrameIterator;
   private:
     Data data_;
 #ifdef JS_ION

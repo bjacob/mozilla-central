@@ -19,8 +19,9 @@
 #include "methodjit/MachineRegs.h"
 #include "CodeGenIncludes.h"
 #include "jsobjinlines.h"
-#include "jsscopeinlines.h"
 #include "jstypedarrayinlines.h"
+
+#include "vm/Shape-inl.h"
 
 using mozilla::DebugOnly;
 
@@ -1364,7 +1365,7 @@ static const JSC::MacroAssembler::RegisterID JSParamReg_Argc  = JSC::MIPSRegiste
          * span is not empty is handled.
          */
         gc::FreeSpan *list = const_cast<gc::FreeSpan *>
-                             (cx->compartment->arenas.getFreeList(allocKind));
+                             (cx->zone()->allocator.arenas.getFreeList(allocKind));
         loadPtr(&list->first, result);
 
         Jump jump = branchPtr(Assembler::BelowOrEqual, AbsoluteAddress(&list->last), result);
@@ -1411,6 +1412,8 @@ static const JSC::MacroAssembler::RegisterID JSParamReg_Argc  = JSC::MIPSRegiste
                     Address(result, elementsOffset + ObjectElements::offsetOfInitializedLength()));
             store32(Imm32(templateObject->getArrayLength()),
                     Address(result, elementsOffset + ObjectElements::offsetOfLength()));
+            store32(Imm32(templateObject->shouldConvertDoubleElements() ? 1 : 0),
+                    Address(result, elementsOffset + ObjectElements::offsetOfConvertDoubleElements()));
         } else {
             /*
              * Fixed slots of non-array objects are required to be initialized;

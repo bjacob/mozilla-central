@@ -907,7 +907,6 @@ static short vcmCreateRemoteStream_m(
   cc_mcapid_t mcap_id,
   const char *peerconnection,
   int *pc_stream_id) {
-  uint32_t hints = 0;
   nsresult res;
 
   *pc_stream_id = -1;
@@ -916,15 +915,8 @@ static short vcmCreateRemoteStream_m(
   sipcc::PeerConnectionWrapper pc(peerconnection);
   ENSURE_PC(pc, VCM_ERROR);
 
-  if (CC_IS_AUDIO(mcap_id)) {
-    hints |= nsDOMMediaStream::HINT_CONTENTS_AUDIO;
-  }
-  if (CC_IS_VIDEO(mcap_id)) {
-    hints |= nsDOMMediaStream::HINT_CONTENTS_VIDEO;
-  }
-
   nsRefPtr<sipcc::RemoteSourceStreamInfo> info;
-  res = pc.impl()->CreateRemoteSourceStreamInfo(hints, &info);
+  res = pc.impl()->CreateRemoteSourceStreamInfo(&info);
   if (NS_FAILED(res)) {
     return VCM_ERROR;
   }
@@ -934,22 +926,8 @@ static short vcmCreateRemoteStream_m(
     return VCM_ERROR;
   }
 
-  if (CC_IS_AUDIO(mcap_id)) {
-    mozilla::AudioSegment *segment = new mozilla::AudioSegment();
-    segment->Init(1); // 1 Channel
-    // TODO(ekr@rtfm.com): Clean up Track IDs
-    info->GetMediaStream()->GetStream()->AsSourceStream()->AddTrack(1, 16000, 0, segment);
-
-    // We aren't going to add any more tracks
-    info->GetMediaStream()->GetStream()->AsSourceStream()->
-        AdvanceKnownTracksTime(mozilla::STREAM_TIME_MAX);
-  }
-  if (CC_IS_VIDEO(mcap_id)) {
-    // AddTrack takes ownership of segment
-  }
-
-  CSFLogDebug( logTag, "%s: created remote stream with index %d hints=%d",
-    __FUNCTION__, *pc_stream_id, hints);
+  CSFLogDebug( logTag, "%s: created remote stream with index %d",
+    __FUNCTION__, *pc_stream_id);
 
   return 0;
 }
@@ -1012,9 +990,14 @@ static short vcmGetDtlsIdentity_m(const char *peerconnection,
   unsigned char digest[TransportLayerDtls::kMaxDigestLength];
   size_t digest_len;
 
-  nsresult res = pc.impl()->GetIdentity()->ComputeFingerprint("sha-256", digest,
-                                                               sizeof(digest),
-                                                               &digest_len);
+  mozilla::RefPtr<DtlsIdentity> id = pc.impl()->GetIdentity();
+
+  if (!id) {
+    return VCM_ERROR;
+  }
+
+  nsresult res = id->ComputeFingerprint("sha-256", digest, sizeof(digest),
+                                        &digest_len);
   if (!NS_SUCCEEDED(res)) {
     CSFLogError( logTag, "%s: Could not compute identity fingerprint", __FUNCTION__);
     return VCM_ERROR;
@@ -1325,11 +1308,17 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
 
   if (CC_IS_AUDIO(mcap_id)) {
     std::vector<mozilla::AudioCodecConfig *> configs;
+
     // Instantiate an appropriate conduit
+    mozilla::RefPtr<mozilla::AudioSessionConduit> tx_conduit =
+      pc.impl()->media()->GetConduit(level, false);
+
     mozilla::RefPtr<mozilla::AudioSessionConduit> conduit =
-                    mozilla::AudioSessionConduit::Create();
+                    mozilla::AudioSessionConduit::Create(tx_conduit);
     if(!conduit)
       return VCM_ERROR;
+
+    pc.impl()->media()->AddConduit(level, true, conduit);
 
     mozilla::AudioCodecConfig *config_raw;
 
@@ -1356,6 +1345,7 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
         pc.impl()->GetMainThread().get(),
         pc.impl()->GetSTSThread(),
         stream->GetMediaStream()->GetStream(),
+        pc_track_id,
         conduit, rtp_flow, rtcp_flow);
 
     nsresult res = pipeline->Init();
@@ -1367,7 +1357,7 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
     CSFLogDebug(logTag, "Created audio pipeline %p, conduit=%p, pc_stream=%d pc_track=%d",
                 pipeline.get(), conduit.get(), pc_stream_id, pc_track_id);
 
-    stream->StorePipeline(pc_track_id, pipeline);
+    stream->StorePipeline(pc_track_id, false, pipeline);
   } else if (CC_IS_VIDEO(mcap_id)) {
 
     std::vector<mozilla::VideoCodecConfig *> configs;
@@ -1399,6 +1389,7 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
             pc.impl()->GetMainThread().get(),
             pc.impl()->GetSTSThread(),
             stream->GetMediaStream()->GetStream(),
+            pc_track_id,
             conduit, rtp_flow, rtcp_flow);
 
     nsresult res = pipeline->Init();
@@ -1410,7 +1401,7 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
     CSFLogDebug(logTag, "Created video pipeline %p, conduit=%p, pc_stream=%d pc_track=%d",
                 pipeline.get(), conduit.get(), pc_stream_id, pc_track_id);
 
-    stream->StorePipeline(pc_track_id, pipeline);
+    stream->StorePipeline(pc_track_id, true, pipeline);
   } else {
     CSFLogError(logTag, "%s: mcap_id unrecognized", __FUNCTION__);
     return VCM_ERROR;
@@ -1973,11 +1964,16 @@ static int vcmTxStartICE_m(cc_mcapid_t mcap_id,
     mozilla::ScopedDeletePtr<mozilla::AudioCodecConfig> config(config_raw);
 
     // Instantiate an appropriate conduit
+    mozilla::RefPtr<mozilla::AudioSessionConduit> rx_conduit =
+      pc.impl()->media()->GetConduit(level, true);
+
     mozilla::RefPtr<mozilla::AudioSessionConduit> conduit =
-      mozilla::AudioSessionConduit::Create();
+      mozilla::AudioSessionConduit::Create(rx_conduit);
 
     if (!conduit || conduit->ConfigureSendMediaCodec(config))
       return VCM_ERROR;
+
+    pc.impl()->media()->AddConduit(level, false, conduit);
 
     mozilla::RefPtr<mozilla::MediaPipeline> pipeline =
         new mozilla::MediaPipelineTransmit(
@@ -1985,6 +1981,7 @@ static int vcmTxStartICE_m(cc_mcapid_t mcap_id,
             pc.impl()->GetMainThread().get(),
             pc.impl()->GetSTSThread(),
             stream->GetMediaStream()->GetStream(),
+            pc_track_id,
             conduit, rtp_flow, rtcp_flow);
 
     nsresult res = pipeline->Init();
@@ -2025,6 +2022,7 @@ static int vcmTxStartICE_m(cc_mcapid_t mcap_id,
             pc.impl()->GetMainThread().get(),
             pc.impl()->GetSTSThread(),
             stream->GetMediaStream()->GetStream(),
+            pc_track_id,
             conduit, rtp_flow, rtcp_flow);
 
     nsresult res = pipeline->Init();
@@ -2647,7 +2645,11 @@ vcmCreateTransportFlow(sipcc::PeerConnectionImpl *pc, int level, bool rtcp,
     // TODO(ekr@rtfm.com): implement the actpass logic above.
     dtls->SetRole(pc->GetRole() == sipcc::PeerConnectionImpl::kRoleOfferer ?
                   TransportLayerDtls::SERVER : TransportLayerDtls::CLIENT);
-    dtls->SetIdentity(pc->GetIdentity());
+    mozilla::RefPtr<DtlsIdentity> pcid = pc->GetIdentity();
+    if (!pcid) {
+      return nullptr;
+    }
+    dtls->SetIdentity(pcid);
 
     unsigned char remote_digest[TransportLayerDtls::kMaxDigestLength];
     size_t digest_len;

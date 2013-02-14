@@ -238,6 +238,16 @@ EnsureCompartmentPrivate(JSCompartment *c)
 }
 
 bool
+IsXBLScope(JSCompartment *compartment)
+{
+    // We always eagerly create compartment privates for XBL scopes.
+    CompartmentPrivate *priv = GetCompartmentPrivate(compartment);
+    if (!priv || !priv->scope)
+        return false;
+    return priv->scope->IsXBLScope();
+}
+
+bool
 IsUniversalXPConnectEnabled(JSCompartment *compartment)
 {
     CompartmentPrivate *priv = GetCompartmentPrivate(compartment);
@@ -830,6 +840,8 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, JSBool is
             // Find dying scopes.
             XPCWrappedNativeScope::StartFinalizationPhaseOfGC(fop, self);
 
+            XPCStringConvert::ClearCache();
+
             self->mDoingFinalization = true;
             break;
         }
@@ -1211,6 +1223,8 @@ XPCJSRuntime::~XPCJSRuntime()
     MOZ_ASSERT(!mReleaseRunnable);
 
     js::SetGCSliceCallback(mJSRuntime, mPrevGCSliceCallback);
+
+    xpc_DelocalizeRuntime(mJSRuntime);
 
     if (mWatchdogWakeup) {
         // If the watchdog thread is running, tell it to terminate waking it
@@ -1644,13 +1658,6 @@ ReportCompartmentStats(const JS::CompartmentStats &cStats,
                      "heap that holds references to executable code pools "
                      "used by IonMonkey.");
 
-#if JS_HAS_XML_SUPPORT
-    CREPORT_GC_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("gc-heap/xml"),
-                     cStats.gcHeapXML,
-                     "Memory on the garbage-collected JavaScript "
-                     "heap that holds E4X XML objects.");
-#endif
-
     CREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("objects-extra/slots"),
                   cStats.objectsExtra.slots,
                   "Memory allocated for the non-fixed object "
@@ -1711,8 +1718,7 @@ ReportCompartmentStats(const JS::CompartmentStats &cStats,
 
     CREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("script-data"),
                   cStats.scriptData,
-                  "Memory allocated for JSScript bytecode and various "
-                  "variable-length tables.");
+                  "Memory allocated for various variable-length tables in JSScript.");
 
     CREPORT_BYTES(cJSPathPrefix + NS_LITERAL_CSTRING("jaeger-data"),
                   cStats.jaegerData,
@@ -1931,6 +1937,11 @@ ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats &rtStats,
     RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/script-filenames"),
                   nsIMemoryReporter::KIND_HEAP, rtStats.runtime.scriptFilenames,
                   "Memory used for the table holding script filenames.");
+
+    RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/script-data"),
+                  nsIMemoryReporter::KIND_HEAP, rtStats.runtime.scriptData,
+                  "Memory used for the table holding script data shared in "
+                  "the runtime.");
 
     RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/script-sources"),
                   nsIMemoryReporter::KIND_HEAP, rtStats.runtime.scriptSources,
@@ -2345,6 +2356,7 @@ CompartmentNameCallback(JSRuntime *rt, JSCompartment *comp,
 }
 
 bool XPCJSRuntime::gExperimentalBindingsEnabled;
+bool XPCJSRuntime::gXBLScopesEnabled;
 
 static bool
 PreserveWrapper(JSContext *cx, JSObject *obj)
@@ -2524,6 +2536,9 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     Preferences::AddBoolVarCache(&gExperimentalBindingsEnabled,
                                  "dom.experimental_bindings",
                                  false);
+    Preferences::AddBoolVarCache(&gXBLScopesEnabled,
+                                 "dom.xbl_scopes",
+                                 false);
 
 
     // these jsids filled in later when we have a JSContext to work with.
@@ -2588,6 +2603,12 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     // JS_CompileFunction*). In practice, this means content scripts and event
     // handlers.
     JS_SetSourceHook(mJSRuntime, SourceHook);
+
+    // Set up locale information and callbacks for the newly-created runtime so
+    // that the various toLocaleString() methods, localeCompare(), and other
+    // internationalization APIs work as desired.
+    if (!xpc_LocalizeRuntime(mJSRuntime))
+        NS_RUNTIMEABORT("xpc_LocalizeRuntime failed.");
 
     NS_RegisterMemoryReporter(new NS_MEMORY_REPORTER_NAME(XPConnectJSGCHeap));
     NS_RegisterMemoryReporter(new NS_MEMORY_REPORTER_NAME(XPConnectJSSystemCompartmentCount));

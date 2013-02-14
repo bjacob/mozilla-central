@@ -207,7 +207,7 @@ class Handle : public js::HandleBase<T>
 
     /* Create a handle for a NULL pointer. */
     Handle(NullPtr) {
-        typedef typename js::tl::StaticAssert<js::tl::IsPointerType<T>::result>::result _;
+        typedef typename js::tl::StaticAssert<mozilla::IsPointer<T>::value>::result _;
         ptr = reinterpret_cast<const T *>(&NullPtr::constNullValue);
     }
 
@@ -610,6 +610,13 @@ class Rooted : public RootedBase<T>
 #endif
     }
 
+    void init(PerThreadData *ptArg) {
+#if defined(JSGC_ROOT_ANALYSIS) || defined(JSGC_USE_EXACT_ROOTING)
+        PerThreadDataFriendFields *pt = PerThreadDataFriendFields::get(ptArg);
+        commonInit(pt->thingGCRooters);
+#endif
+    }
+
   public:
     Rooted(JSContext *cx
            MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
@@ -634,6 +641,31 @@ class Rooted : public RootedBase<T>
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
         init(cx);
+    }
+
+    Rooted(PerThreadData *pt
+           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+      : ptr(RootMethods<T>::initial())
+    {
+        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+        init(pt);
+    }
+
+    Rooted(PerThreadData *pt, T initial
+           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+      : ptr(initial)
+    {
+        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+        init(pt);
+    }
+
+    template <typename S>
+    Rooted(PerThreadData *pt, const Unrooted<S> &initial
+           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+      : ptr(static_cast<S>(initial))
+    {
+        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+        init(pt);
     }
 
     ~Rooted() {
@@ -861,6 +893,10 @@ class FakeMutableHandle : public js::MutableHandleBase<T>
         ptr = t;
     }
 
+    FakeMutableHandle(FakeRooted<T> *root) {
+        ptr = root->address();
+    }
+
     void set(T v) {
         JS_ASSERT(!js::RootMethods<T>::poisoned(v));
         *ptr = v;
@@ -887,19 +923,19 @@ class FakeMutableHandle : public js::MutableHandleBase<T>
  * operate on either rooted or unrooted data.
  *
  * The toHandle() and toMutableHandle() functions are for calling functions
- * which require handle types and are only called in the ALLOW_GC case. These
+ * which require handle types and are only called in the CanGC case. These
  * allow the calling code to type check.
  */
 enum AllowGC {
-    DONT_ALLOW_GC = 0,
-    ALLOW_GC = 1
+    NoGC = 0,
+    CanGC = 1
 };
 template <typename T, AllowGC allowGC>
 class MaybeRooted
 {
 };
 
-template <typename T> class MaybeRooted<T, ALLOW_GC>
+template <typename T> class MaybeRooted<T, CanGC>
 {
   public:
     typedef Handle<T> HandleType;
@@ -915,7 +951,7 @@ template <typename T> class MaybeRooted<T, ALLOW_GC>
     }
 };
 
-template <typename T> class MaybeRooted<T, DONT_ALLOW_GC>
+template <typename T> class MaybeRooted<T, NoGC>
 {
   public:
     typedef T HandleType;

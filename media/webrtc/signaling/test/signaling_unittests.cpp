@@ -32,7 +32,7 @@ using namespace std;
 
 #include "mtransport_test_utils.h"
 MtransportTestUtils *test_utils;
-
+nsCOMPtr<nsIThread> gThread;
 
 
 static int kDefaultTimeout = 5000;
@@ -120,6 +120,18 @@ enum offerAnswerFlags
   ANSWER_AV = ANSWER_AUDIO | ANSWER_VIDEO
 };
 
+static bool SetupGlobalThread() {
+  if (!gThread) {
+    nsIThread *thread;
+
+    nsresult rv = NS_NewThread(&thread);
+    if (NS_FAILED(rv))
+      return false;
+
+    gThread = thread;
+  }
+  return true;
+}
 
 class TestObserver : public IPeerConnectionObserver,
                      public nsSupportsWeakReference
@@ -144,7 +156,7 @@ public:
   };
 
   TestObserver(sipcc::PeerConnectionImpl *peerConnection) :
-    state(stateNoResponse),
+    state(stateNoResponse), addIceSuccessCount(0),
     onAddStreamCalled(false),
     pc(peerConnection) {
   }
@@ -160,6 +172,7 @@ public:
   char *lastString;
   uint32_t lastStatusCode;
   uint32_t lastStateType;
+  int addIceSuccessCount;
   bool onAddStreamCalled;
 
 private:
@@ -354,6 +367,24 @@ TestObserver::FoundIceCandidate(const char* strCandidate)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+TestObserver::OnAddIceCandidateSuccess(uint32_t code)
+{
+  lastStatusCode = code;
+  state = stateSuccess;
+  addIceSuccessCount++;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+TestObserver::OnAddIceCandidateError(uint32_t code)
+{
+  lastStatusCode = code;
+  state = stateError;
+  cout << "onAddIceCandidateError = " << code << endl;
+  return NS_OK;
+}
+
 class ParsedSDP {
  public:
   //Line number with the corresponding SDP line.
@@ -467,7 +498,7 @@ class ParsedSDP {
 
     //generate our final sdp in string format
     std::string sdp;
-    for(int i=0; i < sdp_lines.size(); i++)
+    for (size_t i = 0; i < sdp_lines.size(); i++)
     {
       sdp += sdp_lines[i];
     }
@@ -497,9 +528,6 @@ class SignalingAgent {
 
   void Init_m(nsCOMPtr<nsIThread> thread)
   {
-    size_t found = 2;
-    ASSERT_TRUE(found > 0);
-
     pc = sipcc::PeerConnectionImpl::CreatePeerConnection();
     ASSERT_TRUE(pc);
 
@@ -522,6 +550,42 @@ class SignalingAgent {
                      kDefaultTimeout);
     ASSERT_TRUE_WAIT(ice_state() == sipcc::PeerConnectionImpl::kIceWaiting, 5000);
     cout << "Init Complete" << endl;
+  }
+
+  bool InitAllowFail_m(nsCOMPtr<nsIThread> thread)
+  {
+    pc = sipcc::PeerConnectionImpl::CreatePeerConnection();
+    if (!pc)
+      return false;
+
+    pObserver = new TestObserver(pc);
+    if (!pObserver)
+      return false;
+
+    sipcc::RTCConfiguration cfg;
+    cfg.addServer("23.21.150.121", 3478);
+    if (NS_FAILED(pc->Initialize(pObserver, nullptr, cfg, thread)))
+      return false;
+
+    return true;
+  }
+
+  bool InitAllowFail(nsCOMPtr<nsIThread> thread)
+  {
+    bool rv;
+
+    thread->Dispatch(
+        WrapRunnableRet(this, &SignalingAgent::InitAllowFail_m, thread, &rv),
+        NS_DISPATCH_SYNC);
+    if (!rv)
+      return false;
+
+    EXPECT_TRUE_WAIT(sipcc_state() == sipcc::PeerConnectionImpl::kStarted,
+                     kDefaultTimeout);
+    EXPECT_TRUE_WAIT(ice_state() == sipcc::PeerConnectionImpl::kIceWaiting, 5000);
+    cout << "Init Complete" << endl;
+
+    return true;
   }
 
   uint32_t sipcc_state()
@@ -699,18 +763,24 @@ void CreateAnswer(sipcc::MediaConstraints& constraints, std::string offer,
   }
 
   void DoTrickleIce(ParsedSDP &sdp) {
+    int expectAddIce = 0;
+    pObserver->addIceSuccessCount = 0;
     for (std::multimap<int, std::string>::iterator it = sdp.ice_candidates_.begin();
          it != sdp.ice_candidates_.end(); ++it) {
       if ((*it).first != 0) {
         std::cerr << "Adding trickle ICE candidate " << (*it).second << std::endl;
-
         ASSERT_TRUE(NS_SUCCEEDED(pc->AddIceCandidate((*it).second.c_str(), "", (*it).first)));
+        expectAddIce++;
       }
     }
+    ASSERT_TRUE_WAIT(pObserver->addIceSuccessCount == expectAddIce,
+                     kDefaultTimeout);
   }
 
 
   void DoTrickleIceChrome(ParsedSDP &sdp) {
+    int expectAddIce = 0;
+    pObserver->addIceSuccessCount = 0;
     for (std::multimap<int, std::string>::iterator it = sdp.ice_candidates_.begin();
          it != sdp.ice_candidates_.end(); ++it) {
       if ((*it).first != 0) {
@@ -718,8 +788,11 @@ void CreateAnswer(sipcc::MediaConstraints& constraints, std::string offer,
         std::cerr << "Adding trickle ICE candidate " << candidate << std::endl;
 
         ASSERT_TRUE(NS_SUCCEEDED(pc->AddIceCandidate(candidate.c_str(), "", (*it).first)));
+        expectAddIce++;
       }
     }
+    ASSERT_TRUE_WAIT(pObserver->addIceSuccessCount == expectAddIce,
+                     kDefaultTimeout);
   }
 
 
@@ -729,8 +802,16 @@ void CreateAnswer(sipcc::MediaConstraints& constraints, std::string offer,
     return state == sipcc::PeerConnectionImpl::kIceConnected;
   }
 
-  void AddIceCandidate(const char* candidate, const char* mid, unsigned short level) {
+  void AddIceCandidate(const char* candidate, const char* mid, unsigned short level,
+                       bool expectSuccess) {
+    pObserver->state = TestObserver::stateNoResponse;
     pc->AddIceCandidate(candidate, mid, level);
+    ASSERT_TRUE_WAIT(pObserver->state != TestObserver::stateNoResponse,
+                     kDefaultTimeout);
+    ASSERT_TRUE(pObserver->state ==
+                expectSuccess ? TestObserver::stateSuccess :
+                                TestObserver::stateError
+               );
   }
 
   int GetPacketsReceived(int stream) {
@@ -760,7 +841,7 @@ void CreateAnswer(sipcc::MediaConstraints& constraints, std::string offer,
   void CloseReceiveStreams() {
     std::vector<nsDOMMediaStream *> streams =
                             pObserver->GetStreams();
-    for(int i=0; i < streams.size(); i++) {
+    for (size_t i = 0; i < streams.size(); i++) {
       streams[i]->GetStream()->AsSourceStream()->StopStream();
     }
   }
@@ -892,15 +973,39 @@ class SignalingEnvironment : public ::testing::Environment {
   }
 };
 
+class SignalingAgentTest : public ::testing::Test {
+ public:
+  static void SetUpTestCase() {
+    ASSERT_TRUE(SetupGlobalThread());
+  }
+
+  void TearDown() {
+    // Delete all the agents.
+    for (size_t i=0; i < agents_.size(); i++) {
+      delete agents_[i];
+    }
+  }
+
+  bool CreateAgent() {
+    ScopedDeletePtr<SignalingAgent> agent(new SignalingAgent());
+
+    if (!agent->InitAllowFail(gThread))
+      return false;
+
+    agents_.push_back(agent.forget());
+
+    return true;
+  }
+
+ private:
+  std::vector<SignalingAgent *> agents_;
+};
+
+
 class SignalingTest : public ::testing::Test {
 public:
   static void SetUpTestCase() {
-    nsIThread *thread;
-
-    nsresult rv = NS_NewThread(&thread);
-    ASSERT_TRUE(NS_SUCCEEDED(rv));
-
-    gThread = thread;
+    ASSERT_TRUE(SetupGlobalThread());
   }
 
   void SetUp() {
@@ -1016,16 +1121,18 @@ public:
                                const char * candidate, const char * mid,
                                unsigned short level, uint32_t sdpCheck) {
     a1_.CreateOffer(constraints, OFFER_AV, sdpCheck);
-    a1_.AddIceCandidate(candidate, mid, level);
+    a1_.AddIceCandidate(candidate, mid, level, true);
+  }
+
+  void AddIceCandidateEarly(const char * candidate, const char * mid,
+                            unsigned short level) {
+    a1_.AddIceCandidate(candidate, mid, level, false);
   }
 
  protected:
-  static nsCOMPtr<nsIThread> gThread;
   SignalingAgent a1_;  // Canonically "caller"
   SignalingAgent a2_;  // Canonically "callee"
 };
-
-nsCOMPtr<nsIThread> SignalingTest::gThread;
 
 
 TEST_F(SignalingTest, JustInit)
@@ -1342,9 +1449,16 @@ TEST_F(SignalingTest, CreateOfferAddCandidate)
                           SHOULD_SENDRECV_AV);
 }
 
+TEST_F(SignalingTest, AddIceCandidateEarly)
+{
+  sipcc::MediaConstraints constraints;
+  AddIceCandidateEarly(strSampleCandidate.c_str(),
+                       strSampleMid.c_str(), nSamplelevel);
+}
+
 // XXX adam@nostrum.com -- This test seems questionable; we need to think
 // through what actually needs to be tested here.
-TEST_F(SignalingTest, OfferAnswerReNegotiateOfferAnswerDontReceiveVideoNoVideoStream)
+TEST_F(SignalingTest, DISABLED_OfferAnswerReNegotiateOfferAnswerDontReceiveVideoNoVideoStream)
 {
   sipcc::MediaConstraints aconstraints;
   aconstraints.setBooleanConstraint("OfferToReceiveAudio", true, false);
@@ -1691,7 +1805,8 @@ TEST_F(SignalingTest, FullChromeHandshake)
   ASSERT_NE(answer.find("111 opus/"), std::string::npos);
 }
 
-TEST_F(SignalingTest, OfferAllDynamicTypes)
+// Disabled pending resolution of bug 818640.
+TEST_F(SignalingTest, DISABLED_OfferAllDynamicTypes)
 {
   sipcc::MediaConstraints constraints;
   std::string offer;
@@ -1802,6 +1917,18 @@ TEST_F(SignalingTest, ipAddrAnyOffer)
     ASSERT_TRUE(a2_.pObserver->state == TestObserver::stateSuccess);
     std::string answer = a2_.answer();
     ASSERT_NE(answer.find("a=sendrecv"), std::string::npos);
+}
+
+TEST_F(SignalingAgentTest, CreateUntilFailThenWait) {
+  int i;
+
+  for (i=0; ; i++) {
+    if (!CreateAgent())
+      break;
+    std::cerr << "Created agent " << i << std::endl;
+  }
+  std::cerr << "Failed after creating " << i << " PCs " << std::endl;
+  PR_Sleep(10000);  // Wait to see if we crash
 }
 
 } // End namespace test.

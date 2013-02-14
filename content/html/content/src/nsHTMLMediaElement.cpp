@@ -1069,6 +1069,21 @@ nsresult nsHTMLMediaElement::LoadResource()
     mChannel = nullptr;
   }
 
+  int16_t shouldLoad = nsIContentPolicy::ACCEPT;
+  nsresult rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_MEDIA,
+                                          mLoadingSrc,
+                                          NodePrincipal(),
+                                          static_cast<Element*>(this),
+                                          EmptyCString(), // mime type
+                                          nullptr, // extra
+                                          &shouldLoad,
+                                          nsContentUtils::GetContentPolicy(),
+                                          nsContentUtils::GetSecurityManager());
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (NS_CP_REJECTED(shouldLoad)) {
+    return NS_ERROR_FAILURE;
+  }
+
   // Set the media element's CORS mode only when loading a resource
   mCORSMode = AttrValueToCORSMode(GetParsedAttr(nsGkAtoms::crossorigin));
 
@@ -1083,21 +1098,6 @@ nsresult nsHTMLMediaElement::LoadResource()
     mMimeType = other->mMimeType;
     if (NS_SUCCEEDED(rv))
       return rv;
-  }
-
-  int16_t shouldLoad = nsIContentPolicy::ACCEPT;
-  nsresult rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_MEDIA,
-                                          mLoadingSrc,
-                                          NodePrincipal(),
-                                          static_cast<Element*>(this),
-                                          EmptyCString(), // mime type
-                                          nullptr, // extra
-                                          &shouldLoad,
-                                          nsContentUtils::GetContentPolicy(),
-                                          nsContentUtils::GetSecurityManager());
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (NS_CP_REJECTED(shouldLoad)) {
-    return NS_ERROR_FAILURE;
   }
 
   if (IsMediaStreamURI(mLoadingSrc)) {
@@ -2048,6 +2048,23 @@ void nsHTMLMediaElement::DoneCreatingElement()
      mMuted = true;
 }
 
+bool nsHTMLMediaElement::IsHTMLFocusable(bool aWithMouse,
+                                         bool *aIsFocusable,
+                                         int32_t *aTabIndex)
+{
+  if (nsGenericHTMLElement::IsHTMLFocusable(aWithMouse, aIsFocusable, aTabIndex)) {
+    return true;
+  }
+
+  *aIsFocusable = true;
+  return false;
+}
+
+int32_t nsHTMLMediaElement::TabIndexDefault()
+{
+  return 0;
+}
+
 nsresult nsHTMLMediaElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                                      nsIAtom* aPrefix, const nsAString& aValue,
                                      bool aNotify)
@@ -2171,10 +2188,11 @@ nsHTMLMediaElement::CanPlayType(const nsAString& aType, nsAString& aResult)
 already_AddRefed<MediaDecoder>
 nsHTMLMediaElement::CreateDecoder(const nsACString& aType)
 {
+  // If you change this list to add support for new decoders for codecs that
+  // can be used by <audio>, please consider updating MediaDecodeTask::CreateDecoder
+  // as well.
 
 #ifdef MOZ_GSTREAMER
-  // When enabled, use GStreamer for H.264, but not for codecs handled by our
-  // bundled decoders, unless the "media.prefer-gstreamer" pref is set.
   if (DecoderTraits::IsGStreamerSupportedType(aType)) {
     nsRefPtr<GStreamerDecoder> decoder = new GStreamerDecoder();
     if (decoder->Init(this)) {
@@ -2449,13 +2467,13 @@ public:
     } else {
       event = NS_NewRunnableMethod(this, &StreamListener::DoNotifyUnblocked);
     }
-    aGraph->DispatchToMainThreadAfterStreamStateUpdate(event);
+    aGraph->DispatchToMainThreadAfterStreamStateUpdate(event.forget());
   }
   virtual void NotifyFinished(MediaStreamGraph* aGraph)
   {
     nsCOMPtr<nsIRunnable> event =
       NS_NewRunnableMethod(this, &StreamListener::DoNotifyFinished);
-    aGraph->DispatchToMainThreadAfterStreamStateUpdate(event);
+    aGraph->DispatchToMainThreadAfterStreamStateUpdate(event.forget());
   }
   virtual void NotifyHasCurrentData(MediaStreamGraph* aGraph,
                                     bool aHasCurrentData)
@@ -2470,7 +2488,7 @@ public:
     if (aHasCurrentData) {
       nsCOMPtr<nsIRunnable> event =
         NS_NewRunnableMethod(this, &StreamListener::DoNotifyHaveCurrentData);
-      aGraph->DispatchToMainThreadAfterStreamStateUpdate(event);
+      aGraph->DispatchToMainThreadAfterStreamStateUpdate(event.forget());
     }
   }
   virtual void NotifyOutput(MediaStreamGraph* aGraph)
@@ -2481,7 +2499,7 @@ public:
     mPendingNotifyOutput = true;
     nsCOMPtr<nsIRunnable> event =
       NS_NewRunnableMethod(this, &StreamListener::DoNotifyOutput);
-    aGraph->DispatchToMainThreadAfterStreamStateUpdate(event);
+    aGraph->DispatchToMainThreadAfterStreamStateUpdate(event.forget());
   }
 
 private:
@@ -3612,6 +3630,13 @@ void nsHTMLMediaElement::UpdateAudioChannelPlayingState()
         return;
       }
       mAudioChannelAgent->Init(mAudioChannelType, this);
+
+      nsCOMPtr<nsIDOMDocument> domDoc = do_QueryInterface(OwnerDoc());
+      if (domDoc) {
+        bool hidden = false;
+        domDoc->GetHidden(&hidden);
+        mAudioChannelAgent->SetVisibilityState(!hidden);
+      }
     }
 
     if (mPlayingThroughTheAudioChannel) {

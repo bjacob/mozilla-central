@@ -49,6 +49,8 @@ class MacroAssemblerARM : public Assembler
     void convertUInt32ToDouble(const Register &src, const FloatRegister &dest);
     void convertDoubleToFloat(const FloatRegister &src, const FloatRegister &dest);
     void branchTruncateDouble(const FloatRegister &src, const Register &dest, Label *fail);
+    void convertDoubleToInt32(const FloatRegister &src, const Register &dest, Label *fail,
+                              bool negativeZeroCheck = true);
 
     void negateDouble(FloatRegister reg);
 
@@ -576,6 +578,8 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     }
 
     void branchTestValue(Condition cond, const ValueOperand &value, const Value &v, Label *label);
+    void branchTestValue(Condition cond, const Address &valaddr, const ValueOperand &value,
+                         Label *label);
 
     // unboxing code
     void unboxInt32(const ValueOperand &operand, const Register &dest);
@@ -711,6 +715,9 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         ma_ldr(Operand(address.base, address.offset), ScratchRegister);
         branchTest32(cond, ScratchRegister, imm, label);
     }
+    void branchTestBool(Condition cond, const Register &lhs, const Register &rhs, Label *label) {
+        branchTest32(cond, lhs, rhs, label);
+    }
     void branchTestPtr(Condition cond, const Register &lhs, const Register &rhs, Label *label) {
         branchTest32(cond, lhs, rhs, label);
     }
@@ -775,7 +782,13 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void moveValue(const Value &val, const ValueOperand &dest);
 
     void storeValue(ValueOperand val, Operand dst);
-    void storeValue(ValueOperand val, Register base, Register index, int32_t shift = defaultShift);
+    void storeValue(ValueOperand val, const BaseIndex &dest);
+    void storeValue(JSValueType type, Register reg, BaseIndex dest) {
+        // Harder cases not handled yet.
+        JS_ASSERT(dest.offset == 0);
+        ma_alu(dest.base, lsl(dest.index, dest.scale), ScratchRegister, op_add);
+        storeValue(type, reg, Address(ScratchRegister, 0));
+    }
     void storeValue(ValueOperand val, const Address &dest) {
         storeValue(val, Operand(dest));
     }
@@ -783,17 +796,6 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         ma_mov(ImmTag(JSVAL_TYPE_TO_TAG(type)), secondScratchReg_);
         ma_str(secondScratchReg_, Address(dest.base, dest.offset + 4));
         ma_str(reg, dest);
-    }
-    void storeValue(JSValueType type, Register reg, BaseIndex dest) {
-        // Harder cases not handled yet.
-        JS_ASSERT(dest.offset == 0);
-        ma_alu(dest.base, lsl(dest.index, dest.scale), ScratchRegister, op_add);
-        storeValue(type, reg, Address(ScratchRegister, 0));
-    }
-    void storeValue(ValueOperand val, const BaseIndex &dest) {
-        // Harder cases not handled yet.
-        JS_ASSERT(dest.offset == 0);
-        storeValue(val, dest.base, dest.index);
     }
     void storeValue(const Value &val, Address dest) {
         jsval_layout jv = JSVAL_TO_IMPL(val);
@@ -816,10 +818,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void loadValue(Operand dest, ValueOperand val) {
         loadValue(dest.toAddress(), val);
     }
-    void loadValue(Register base, Register index, ValueOperand val, Imm32 of);
-    void loadValue(const BaseIndex &addr, ValueOperand val) {
-        loadValue(addr.base, addr.index, val, Imm32(addr.offset));
-    }
+    void loadValue(const BaseIndex &addr, ValueOperand val);
     void tagValue(JSValueType type, Register payload, ValueOperand dest);
 
     void pushValue(ValueOperand val);
@@ -927,6 +926,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void add32(Imm32 imm, Register dest);
     void add32(Imm32 imm, const Address &dest);
     void sub32(Imm32 imm, Register dest);
+    void xor32(Imm32 imm, Register dest);
 
     void and32(Imm32 imm, Register dest);
     void and32(Imm32 imm, const Address &dest);
@@ -1034,6 +1034,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
 
     void subPtr(Imm32 imm, const Register dest);
     void subPtr(const Address &addr, const Register dest);
+    void subPtr(const Register &src, const Register &dest);
     void addPtr(Imm32 imm, const Register dest);
     void addPtr(Imm32 imm, const Address &dest);
     void addPtr(ImmWord imm, const Register dest) {
@@ -1057,6 +1058,13 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     }
     void lshiftPtr(Imm32 imm, Register dest) {
         ma_lsl(imm, dest, dest);
+    }
+
+    void
+    emitSet(Assembler::Condition cond, const Register &dest)
+    {
+        ma_mov(Imm32(0), dest);
+        ma_mov(Imm32(1), dest, NoSetCond, cond);
     }
 
     // Setup a call to C/C++ code, given the number of general arguments it

@@ -54,6 +54,7 @@ const kMozSettingsChangedObserverTopic   = "mozsettings-changed";
 const kSysMsgListenerReadyObserverTopic  = "system-message-listener-ready";
 const kSysClockChangeObserverTopic       = "system-clock-change";
 const kTimeNitzAutomaticUpdateEnabled    = "time.nitz.automatic-update.enabled";
+const kTimeNitzAvailable                 = "time.nitz.available";
 const kCellBroadcastSearchList           = "ril.cellbroadcast.searchlist";
 
 const DOM_SMS_DELIVERY_RECEIVED          = "received";
@@ -117,9 +118,9 @@ XPCOMUtils.defineLazyServiceGetter(this, "gSmsService",
                                    "@mozilla.org/sms/smsservice;1",
                                    "nsISmsService");
 
-XPCOMUtils.defineLazyServiceGetter(this, "gSmsDatabaseService",
-                                   "@mozilla.org/sms/rilsmsdatabaseservice;1",
-                                   "nsIRilSmsDatabaseService");
+XPCOMUtils.defineLazyServiceGetter(this, "gMobileMessageDatabaseService",
+                                   "@mozilla.org/mobilemessage/rilmobilemessagedatabaseservice;1",
+                                   "nsIRilMobileMessageDatabaseService");
 
 XPCOMUtils.defineLazyServiceGetter(this, "ppmm",
                                    "@mozilla.org/parentprocessmessagemanager;1",
@@ -213,8 +214,9 @@ function RadioInterfaceLayer() {
 
   this.rilContext = {
     radioState:     RIL.GECKO_RADIOSTATE_UNAVAILABLE,
-    cardState:      RIL.GECKO_CARDSTATE_UNAVAILABLE,
-    icc:            null,
+    cardState:      RIL.GECKO_CARDSTATE_UNKNOWN,
+    iccInfo:        null,
+    imsi:           null,
 
     // These objects implement the nsIDOMMozMobileConnectionInfo interface,
     // although the actual implementation lives in the content process. So are
@@ -224,6 +226,7 @@ function RadioInterfaceLayer() {
                      emergencyCallsOnly: false,
                      roaming: false,
                      network: null,
+                     lastKnownMcc: 0,
                      cell: null,
                      type: null,
                      signalStrength: null,
@@ -232,11 +235,16 @@ function RadioInterfaceLayer() {
                      emergencyCallsOnly: false,
                      roaming: false,
                      network: null,
+                     lastKnownMcc: 0,
                      cell: null,
                      type: null,
                      signalStrength: null,
                      relSignalStrength: null},
   };
+
+  try {
+    this.rilContext.voice.lastKnownMcc = Services.prefs.getIntPref("ril.lastKnownMcc");
+  } catch (e) {}
 
   this.voicemailInfo = {
     number: null,
@@ -288,6 +296,9 @@ function RadioInterfaceLayer() {
   // we need to adjust the system clock time and time zone by NITZ.
   lock.get(kTimeNitzAutomaticUpdateEnabled, this);
 
+  // Set "time.nitz.available" to false when starting up.
+  this.setNitzAvailable(false);
+
   // Read the Cell Broadcast Search List setting, string of integers or integer
   // ranges separated by comma, to set listening channels.
   lock.get(kCellBroadcastSearchList, this);
@@ -327,7 +338,7 @@ function RadioInterfaceLayer() {
   this.worker.postMessage({rilMessageType: "setDebugEnabled",
                            enabled: debugPref});
 
-  gSystemWorkerManager.registerRilWorker(this.worker);
+  gSystemWorkerManager.registerRilWorker(0, this.worker);
 }
 RadioInterfaceLayer.prototype = {
 
@@ -603,6 +614,9 @@ RadioInterfaceLayer.prototype = {
       case "iccinfochange":
         this.handleICCInfoChange(message);
         break;
+      case "iccimsi":
+        this.rilContext.imsi = message.imsi;
+        break;
       case "iccGetCardLock":
       case "iccSetCardLock":
       case "iccUnlockCardLock":
@@ -779,22 +793,18 @@ RadioInterfaceLayer.prototype = {
       this.updateVoiceConnection(voiceMessage);
     }
 
-    let dataInfoChanged = false;
     if (dataMessage) {
       dataMessage.batch = true;
       this.updateDataConnection(dataMessage);
     }
 
+    if (operatorMessage) {
+      operatorMessage.batch = true;
+      this.handleOperatorChange(operatorMessage);
+    }
+
     let voice = this.rilContext.voice;
     let data = this.rilContext.data;
-    if (operatorMessage) {
-      if (this.networkChanged(operatorMessage, voice.network)) {
-        voice.network = operatorMessage;
-      }
-      if (this.networkChanged(operatorMessage, data.network)) {
-        data.network = operatorMessage;
-      }
-    }
 
     this.checkRoamingBetweenOperators(voice);
     this.checkRoamingBetweenOperators(data);
@@ -819,19 +829,19 @@ RadioInterfaceLayer.prototype = {
     *                      roaming state will be changed (maybe, if needed).
     */
   checkRoamingBetweenOperators: function checkRoamingBetweenOperators(registration) {
-    let icc = this.rilContext.icc;
-    if (!icc || !registration.connected) {
+    let iccInfo = this.rilContext.iccInfo;
+    if (!iccInfo || !registration.connected) {
       return;
     }
 
-    let spn = icc.spn && icc.spn.toLowerCase();
+    let spn = iccInfo.spn && iccInfo.spn.toLowerCase();
     let operator = registration.network;
     let longName = operator.longName && operator.longName.toLowerCase();
     let shortName = operator.shortName && operator.shortName.toLowerCase();
 
     let equalsLongName = longName && (spn == longName);
     let equalsShortName = shortName && (spn == shortName);
-    let equalsMcc = icc.mcc == operator.mcc;
+    let equalsMcc = iccInfo.mcc == operator.mcc;
 
     registration.roaming = registration.roaming &&
                            !(equalsMcc && (equalsLongName || equalsShortName));
@@ -1004,13 +1014,29 @@ RadioInterfaceLayer.prototype = {
     let data = this.rilContext.data;
 
     if (this.networkChanged(message, voice.network)) {
+      // Update lastKnownMcc.
+      if (message.mcc) {
+        voice.lastKnownMcc = message.mcc;
+        // Update pref if mcc is changed.
+        // !voice.network is in case voice.network is still null.
+        if (!voice.network || voice.network.mcc != message.mcc) {
+          try {
+            Services.prefs.setIntPref("ril.lastKnownMcc", message.mcc);
+          } catch (e) {}
+        }
+      }
+
       voice.network = message;
-      this._sendTargetMessage("mobileconnection", "RIL:VoiceInfoChanged", voice);
+      if (!message.batch) {
+        this._sendTargetMessage("mobileconnection", "RIL:VoiceInfoChanged", voice);
+      }
     }
 
     if (this.networkChanged(message, data.network)) {
       data.network = message;
-      this._sendTargetMessage("mobileconnection", "RIL:DataInfoChanged", data);
+      if (!message.batch) {
+        this._sendTargetMessage("mobileconnection", "RIL:DataInfoChanged", data);
+      }
     }
   },
 
@@ -1233,8 +1259,12 @@ RadioInterfaceLayer.prototype = {
         call.isActive = false;
         if (this._activeCall &&
             this._activeCall.callIndex == call.callIndex) {
-          // Previously active call is not active now. Disable audio.
+          // Previously active call is not active now.
           this._activeCall = null;
+        }
+
+        if (!this._activeCall) {
+          // No active call. Disable the audio.
           gAudioManager.phoneState = nsIAudioManager.PHONE_STATE_NORMAL;
           debug("No active call, put audio system into PHONE_STATE_NORMAL: "
                 + gAudioManager.phoneState);
@@ -1379,7 +1409,7 @@ RadioInterfaceLayer.prototype = {
       bearer: WAP.WDP_BEARER_GSM_SMS_GSM_MSISDN,
       sourceAddress: message.sender,
       sourcePort: message.header.originatorPort,
-      destinationAddress: this.rilContext.icc.msisdn,
+      destinationAddress: this.rilContext.iccInfo.msisdn,
       destinationPort: message.header.destinationPort,
     };
     WAP.WapPushManager.receiveWdpPDU(message.fullData, message.fullData.length,
@@ -1456,12 +1486,12 @@ RadioInterfaceLayer.prototype = {
     }.bind(this);
 
     if (message.messageClass != RIL.GECKO_SMS_MESSAGE_CLASSES[RIL.PDU_DCS_MSG_CLASS_0]) {
-      message.id = gSmsDatabaseService.saveReceivedMessage(
-          message.sender || null,
-          message.fullBody || null,
-          message.messageClass,
-          message.timestamp,
-          notifyReceived);
+      message.id = gMobileMessageDatabaseService.saveReceivedMessage(
+        message.sender || null,
+        message.fullBody || null,
+        message.messageClass,
+        message.timestamp,
+        notifyReceived);
     } else {
       message.id = -1;
       let sms = gSmsService.createSmsMessage(message.id,
@@ -1500,10 +1530,10 @@ RadioInterfaceLayer.prototype = {
       return;
     }
 
-    gSmsDatabaseService.setMessageDelivery(options.sms.id,
-                                           DOM_SMS_DELIVERY_SENT,
-                                           options.sms.deliveryStatus,
-                                           function notifyResult(rv, sms) {
+    gMobileMessageDatabaseService.setMessageDelivery(options.sms.id,
+                                                     DOM_SMS_DELIVERY_SENT,
+                                                     options.sms.deliveryStatus,
+                                                     function notifyResult(rv, sms) {
       //TODO bug 832140 handle !Components.isSuccessCode(rv)
       gSystemMessenger.broadcastMessage("sms-sent",
                                         {id: options.sms.id,
@@ -1538,10 +1568,10 @@ RadioInterfaceLayer.prototype = {
     }
     delete this._sentSmsEnvelopes[message.envelopeId];
 
-    gSmsDatabaseService.setMessageDelivery(options.sms.id,
-                                           options.sms.delivery,
-                                           message.deliveryStatus,
-                                           function notifyResult(rv, sms) {
+    gMobileMessageDatabaseService.setMessageDelivery(options.sms.id,
+                                                     options.sms.delivery,
+                                                     message.deliveryStatus,
+                                                     function notifyResult(rv, sms) {
       //TODO bug 832140 handle !Components.isSuccessCode(rv)
       let topic = (message.deliveryStatus == RIL.GECKO_SMS_DELIVERY_STATUS_SUCCESS)
                   ? kSmsDeliverySuccessObserverTopic
@@ -1566,10 +1596,10 @@ RadioInterfaceLayer.prototype = {
         break;
     }
 
-    gSmsDatabaseService.setMessageDelivery(options.sms.id,
-                                           DOM_SMS_DELIVERY_ERROR,
-                                           RIL.GECKO_SMS_DELIVERY_STATUS_ERROR,
-                                           function notifyResult(rv, sms) {
+    gMobileMessageDatabaseService.setMessageDelivery(options.sms.id,
+                                                     DOM_SMS_DELIVERY_ERROR,
+                                                     RIL.GECKO_SMS_DELIVERY_STATUS_ERROR,
+                                                     function notifyResult(rv, sms) {
       //TODO bug 832140 handle !Components.isSuccessCode(rv)
       options.request.notifySendMessageFailed(error);
       Services.obs.notifyObservers(sms, kSmsFailedObserverTopic, null);
@@ -1598,6 +1628,14 @@ RadioInterfaceLayer.prototype = {
   handleDataCallList: function handleDataCallList(message) {
     this._deliverDataCallCallback("receiveDataCallList",
                                   [message.datacalls, message.datacalls.length]);
+  },
+
+  /**
+   * Set the setting value of "time.nitz.available".
+   */
+  setNitzAvailable: function setNitzAvailable(value) {
+    gSettingsService.createLock().set(kTimeNitzAvailable, value, null,
+                                      "fromInternalSetting");
   },
 
   /**
@@ -1630,6 +1668,9 @@ RadioInterfaceLayer.prototype = {
    * Handle the NITZ message.
    */
   handleNitzTime: function handleNitzTime(message) {
+    // Got the NITZ info received from the ril_worker.
+    this.setNitzAvailable(true);
+
     // Cache the latest NITZ message whenever receiving it.
     this._lastNitzMessage = message;
 
@@ -1649,17 +1690,17 @@ RadioInterfaceLayer.prototype = {
   },
 
   handleICCInfoChange: function handleICCInfoChange(message) {
-    let oldIcc = this.rilContext.icc;
-    this.rilContext.icc = message;
+    let oldIccInfo = this.rilContext.iccInfo;
+    this.rilContext.iccInfo = message;
 
-    let iccInfoChanged = !oldIcc ||
-                         oldIcc.iccid != message.iccid ||
-                         oldIcc.mcc != message.mcc ||
-                         oldIcc.mnc != message.mnc ||
-                         oldIcc.spn != message.spn ||
-                         oldIcc.isDisplayNetworkNameRequired != message.isDisplayNetworkNameRequired ||
-                         oldIcc.isDisplaySpnRequired != message.isDisplaySpnRequired ||
-                         oldIcc.msisdn != message.msisdn;
+    let iccInfoChanged = !oldIccInfo ||
+                          oldIccInfo.iccid != message.iccid ||
+                          oldIccInfo.mcc != message.mcc ||
+                          oldIccInfo.mnc != message.mnc ||
+                          oldIccInfo.spn != message.spn ||
+                          oldIccInfo.isDisplayNetworkNameRequired != message.isDisplayNetworkNameRequired ||
+                          oldIccInfo.isDisplaySpnRequired != message.isDisplaySpnRequired ||
+                          oldIccInfo.msisdn != message.msisdn;
     if (!iccInfoChanged) {
       return;
     }
@@ -1668,7 +1709,7 @@ RadioInterfaceLayer.prototype = {
     this._sendTargetMessage("mobileconnection", "RIL:IccInfoChanged", message);
 
     // If spn becomes available, we should check roaming again.
-    let oldSpn = oldIcc ? oldIcc.spn : null;
+    let oldSpn = oldIccInfo ? oldIccInfo.spn : null;
     if (!oldSpn && message.spn) {
       let voice = this.rilContext.voice;
       let data = this.rilContext.data;
@@ -1722,7 +1763,16 @@ RadioInterfaceLayer.prototype = {
 
   handleSetCallForward: function handleSetCallForward(message) {
     debug("handleSetCallForward: " + JSON.stringify(message));
-    this._sendRequestResults("RIL:SetCallForwardingOption", message);
+    this._sendTargetMessage("mobileconnection", "RIL:CfStateChanged", message);
+
+    let messageType;
+    if (message.isSendMMI) {
+      messageType = message.success ? "RIL:SendMMI:Return:OK" :
+                                      "RIL:SendMMI:Return:KO";
+    } else {
+      messageType = "RIL:SetCallForwardingOption";
+    }
+    this._sendRequestResults(messageType, message);
   },
 
   // nsIObserver
@@ -1737,7 +1787,7 @@ RadioInterfaceLayer.prototype = {
         break;
       case kMozSettingsChangedObserverTopic:
         let setting = JSON.parse(data);
-        this.handle(setting.key, setting.value);
+        this.handleSettingsChange(setting.key, setting.value, setting.message);
         break;
       case "xpcom-shutdown":
         ppmm.removeMessageListener("child-process-shutdown", this);
@@ -1806,6 +1856,20 @@ RadioInterfaceLayer.prototype = {
 
   // Cell Broadcast settings values.
   _cellBroadcastSearchListStr: null,
+
+  handleSettingsChange: function handleSettingsChange(aName, aResult, aMessage) {
+    // Don't allow any content processes to modify the setting
+    // "time.nitz.available" except for the chrome process.
+    let isNitzAvailable = (this._lastNitzMessage !== null);
+    if (aName === kTimeNitzAvailable && aMessage !== "fromInternalSetting" &&
+        aResult !== isNitzAvailable) {
+      debug("Content processes cannot modify 'time.nitz.available'. Restore!");
+      // Restore the setting to the current value.
+      this.setNitzAvailable(isNitzAvailable);
+    }
+
+    this.handle(aName, aResult);
+  },
 
   // nsISettingsServiceCallback
   handle: function handle(aName, aResult) {
@@ -2492,8 +2556,8 @@ RadioInterfaceLayer.prototype = {
     let deliveryStatus = options.requestStatusReport
                        ? RIL.GECKO_SMS_DELIVERY_STATUS_PENDING
                        : RIL.GECKO_SMS_DELIVERY_STATUS_NOT_APPLICABLE;
-    let id = gSmsDatabaseService.saveSendingMessage(number, message, deliveryStatus, timestamp,
-                                                    function notifyResult(rv, sms) {
+    let id = gMobileMessageDatabaseService.saveSendingMessage(number, message, deliveryStatus, timestamp,
+                                                              function notifyResult(rv, sms) {
       //TODO bug 832140 handle !Components.isSuccessCode(rv)
       Services.obs.notifyObservers(sms, kSmsSendingObserverTopic, null);
 
@@ -2711,7 +2775,7 @@ RILNetworkInterface.prototype = {
   classInfo: XPCOMUtils.generateCI({classID: RILNETWORKINTERFACE_CID,
                                     classDescription: "RILNetworkInterface",
                                     interfaces: [Ci.nsINetworkInterface,
-                                                 Ci.nsIRIODataCallback]}),
+                                                 Ci.nsIRILDataCallback]}),
   QueryInterface: XPCOMUtils.generateQI([Ci.nsINetworkInterface,
                                          Ci.nsIRILDataCallback]),
 

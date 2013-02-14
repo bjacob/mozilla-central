@@ -800,33 +800,17 @@ nsContentUtils::GetPseudoAttributeValue(const nsString& aSource, nsIAtom *aName,
 }
 
 bool
-nsContentUtils::IsJavaScriptLanguage(const nsString& aName, uint32_t *aFlags)
+nsContentUtils::IsJavaScriptLanguage(const nsString& aName)
 {
-  JSVersion version = JSVERSION_UNKNOWN;
-
-  if (aName.LowerCaseEqualsLiteral("javascript") ||
-      aName.LowerCaseEqualsLiteral("livescript") ||
-      aName.LowerCaseEqualsLiteral("mocha") ||
-      aName.LowerCaseEqualsLiteral("javascript1.0") ||
-      aName.LowerCaseEqualsLiteral("javascript1.1") ||
-      aName.LowerCaseEqualsLiteral("javascript1.2") ||
-      aName.LowerCaseEqualsLiteral("javascript1.3") ||
-      aName.LowerCaseEqualsLiteral("javascript1.4") ||
-      aName.LowerCaseEqualsLiteral("javascript1.5")) {
-    version = JSVERSION_DEFAULT;
-  } else if (aName.LowerCaseEqualsLiteral("javascript1.6")) {
-    version = JSVERSION_1_6;
-  } else if (aName.LowerCaseEqualsLiteral("javascript1.7")) {
-    version = JSVERSION_1_7;
-  } else if (aName.LowerCaseEqualsLiteral("javascript1.8")) {
-    version = JSVERSION_1_8;
-  }
-
-  if (version == JSVERSION_UNKNOWN) {
-    return false;
-  }
-  *aFlags = version;
-  return true;
+  return aName.LowerCaseEqualsLiteral("javascript") ||
+         aName.LowerCaseEqualsLiteral("livescript") ||
+         aName.LowerCaseEqualsLiteral("mocha") ||
+         aName.LowerCaseEqualsLiteral("javascript1.0") ||
+         aName.LowerCaseEqualsLiteral("javascript1.1") ||
+         aName.LowerCaseEqualsLiteral("javascript1.2") ||
+         aName.LowerCaseEqualsLiteral("javascript1.3") ||
+         aName.LowerCaseEqualsLiteral("javascript1.4") ||
+         aName.LowerCaseEqualsLiteral("javascript1.5");
 }
 
 JSVersion
@@ -1768,7 +1752,13 @@ nsContentUtils::IsCallerXBL()
 {
     JSScript *script;
     JSContext *cx = GetCurrentJSContext();
-    if (!cx || !JS_DescribeScriptedCaller(cx, &script, nullptr) || !script)
+    if (!cx)
+        return false;
+    // New Hotness.
+    if (xpc::IsXBLScope(js::GetContextCompartment(cx)))
+        return true;
+    // XBL scopes are behind a pref, so check the XBL bit as well.
+    if (!JS_DescribeScriptedCaller(cx, &script, nullptr) || !script)
         return false;
     return JS_GetScriptUserBit(script);
 }
@@ -1779,6 +1769,35 @@ nsContentUtils::IsImageSrcSetDisabled()
 {
   return Preferences::GetBool("dom.disable_image_src_set") &&
          !IsCallerChrome();
+}
+
+// static
+bool
+nsContentUtils::LookupBindingMember(JSContext* aCx, nsIContent *aContent,
+                                    JS::HandleId aId, JSPropertyDescriptor* aDesc)
+{
+  nsXBLBinding* binding = aContent->OwnerDoc()->BindingManager()
+                                  ->GetBinding(aContent);
+  if (!binding)
+    return true;
+  return binding->LookupMember(aCx, aId, aDesc);
+}
+
+// static
+bool
+nsContentUtils::IsBindingField(JSContext* aCx, nsIContent* aContent,
+                               JS::HandleId aId)
+{
+  nsXBLBinding* binding = aContent->OwnerDoc()->BindingManager()
+                                  ->GetBinding(aContent);
+  if (!binding)
+    return false;
+
+  if (!JSID_IS_STRING(aId))
+    return false;
+  nsDependentJSString name(aId);
+
+  return binding->HasField(name);
 }
 
 // static
@@ -6372,6 +6391,16 @@ nsContentUtils::FindInternalContentViewer(const char* aType,
 
 #ifdef MOZ_WEBM
   if (DecoderTraits::IsWebMType(nsDependentCString(aType))) {
+    docFactory = do_GetService("@mozilla.org/content/document-loader-factory;1");
+    if (docFactory && aLoaderType) {
+      *aLoaderType = TYPE_CONTENT;
+    }
+    return docFactory.forget();
+  }
+#endif
+
+#ifdef MOZ_DASH
+  if (DecoderTraits::IsDASHMPDType(nsDependentCString(aType))) {
     docFactory = do_GetService("@mozilla.org/content/document-loader-factory;1");
     if (docFactory && aLoaderType) {
       *aLoaderType = TYPE_CONTENT;

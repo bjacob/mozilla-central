@@ -441,7 +441,7 @@ nsAutoCompleteController::HandleKeyNavigation(uint32_t aKey, bool *_retval)
 #endif
       if (*_retval) {
         // Open the popup if there has been a previous search, or else kick off a new search
-        if (mResults.Count() > 0) {
+        if (!mResults.IsEmpty()) {
           if (mRowCount) {
             OpenPopup();
           }
@@ -587,7 +587,11 @@ nsAutoCompleteController::HandleDelete(bool *_retval)
     // Nothing left in the popup, clear any pending search timers and
     // close the popup.
     ClearSearchTimer();
-    ClosePopup();
+    uint32_t minResults;
+    input->GetMinResultsForPopup(&minResults);
+    if (minResults) {
+      ClosePopup();
+    }
   }
 
   return NS_OK;
@@ -684,8 +688,7 @@ NS_IMETHODIMP
 nsAutoCompleteController::OnSearchResult(nsIAutoCompleteSearch *aSearch, nsIAutoCompleteResult* aResult)
 {
   // look up the index of the search which is returning
-  uint32_t count = mSearches.Count();
-  for (uint32_t i = 0; i < count; ++i) {
+  for (uint32_t i = 0; i < mSearches.Length(); ++i) {
     if (mSearches[i] == aSearch) {
       ProcessResult(i, aResult);
     }
@@ -999,7 +1002,7 @@ nsAutoCompleteController::BeforeSearches()
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  mSearchesOngoing = mSearches.Count();
+  mSearchesOngoing = mSearches.Length();
   mSearchesFailed = 0;
   mFirstSearchResult = true;
 
@@ -1015,7 +1018,7 @@ nsAutoCompleteController::StartSearch(uint16_t aSearchType)
   NS_ENSURE_STATE(mInput);
   nsCOMPtr<nsIAutoCompleteInput> input = mInput;
 
-  for (int32_t i = 0; i < mSearches.Count(); ++i) {
+  for (uint32_t i = 0; i < mSearches.Length(); ++i) {
     nsCOMPtr<nsIAutoCompleteSearch> search = mSearches[i];
 
     // Filter on search type.  Not all the searches implement this interface,
@@ -1067,7 +1070,7 @@ void
 nsAutoCompleteController::AfterSearches()
 {
   mResultCache.Clear();
-  if (mSearchesFailed == mSearches.Count())
+  if (mSearchesFailed == mSearches.Length())
     PostSearchCleanup();
 }
 
@@ -1079,9 +1082,7 @@ nsAutoCompleteController::StopSearch()
 
   // Stop any ongoing asynchronous searches
   if (mSearchStatus == nsIAutoCompleteController::STATUS_SEARCHING) {
-    uint32_t count = mSearches.Count();
-
-    for (uint32_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < mSearches.Length(); ++i) {
       nsCOMPtr<nsIAutoCompleteSearch> search = mSearches[i];
       search->StopSearch();
     }
@@ -1109,7 +1110,7 @@ nsAutoCompleteController::StartSearches()
   uint32_t immediateSearchesCount = mImmediateSearchesCount;
   if (timeout == 0) {
     // All the searches should be executed immediately.
-    immediateSearchesCount = mSearches.Count();
+    immediateSearchesCount = mSearches.Length();
   }
 
   if (immediateSearchesCount > 0) {
@@ -1118,7 +1119,7 @@ nsAutoCompleteController::StartSearches()
       return rv;
     StartSearch(nsIAutoCompleteSearchDescriptor::SEARCH_TYPE_IMMEDIATE);
 
-    if (mSearches.Count() == immediateSearchesCount) {
+    if (mSearches.Length() == immediateSearchesCount) {
       // Either all searches are immediate, or the timeout is 0.  In the
       // latter case we still have to execute the delayed searches, otherwise
       // this will be a no-op.
@@ -1199,8 +1200,7 @@ nsAutoCompleteController::EnterMatch(bool aIsPopupSelection)
     if (forceComplete && value.IsEmpty()) {
       // Since nothing was selected, and forceComplete is specified, that means
       // we have to find the first default match and enter it instead
-      uint32_t count = mResults.Count();
-      for (uint32_t i = 0; i < count; ++i) {
+      for (uint32_t i = 0; i < mResults.Length(); ++i) {
         nsIAutoCompleteResult *result = mResults[i];
 
         if (result) {
@@ -1344,10 +1344,13 @@ nsAutoCompleteController::ProcessResult(int32_t aSearchIndex, nsIAutoCompleteRes
     NS_ENSURE_TRUE(popup != nullptr, NS_ERROR_FAILURE);
     popup->Invalidate();
 
+    uint32_t minResults;
+    input->GetMinResultsForPopup(&minResults);
+
     // Make sure the popup is open, if necessary, since we now have at least one
     // search result ready to display. Don't force the popup closed if we might
     // get results in the future to avoid unnecessarily canceling searches.
-    if (mRowCount) {
+    if (mRowCount || !minResults) {
       OpenPopup();
     } else if (result != nsIAutoCompleteResult::RESULT_NOMATCH_ONGOING) {
       ClosePopup();
@@ -1674,12 +1677,11 @@ nsAutoCompleteController::RowIndexToSearch(int32_t aRowIndex, int32_t *aSearchIn
   *aSearchIndex = -1;
   *aItemIndex = -1;
 
-  uint32_t count = mSearches.Count();
   uint32_t index = 0;
 
   // Move index through the results of each registered nsIAutoCompleteSearch
   // until we find the given row
-  for (uint32_t i = 0; i < count; ++i) {
+  for (uint32_t i = 0; i < mSearches.Length(); ++i) {
     nsIAutoCompleteResult *result = mResults.SafeObjectAt(i);
     if (!result)
       continue;

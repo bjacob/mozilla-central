@@ -861,6 +861,8 @@ public:
   gfxPoint GetFixedPositionAnchor() { return mAnchor; }
   Layer* GetMaskLayer() { return mMaskLayer; }
 
+  // Note that all lengths in animation data are either in CSS pixels or app
+  // units and must be converted to device pixels by the compositor.
   AnimationArray& GetAnimations() { return mAnimations; }
   InfallibleTArray<AnimData>& GetAnimationData() { return mAnimationData; }
 
@@ -1285,8 +1287,6 @@ public:
    * The residual translation components are always in the range [-0.5, 0.5).
    */
   gfxPoint GetResidualTranslation() const { return mResidualTranslation; }
-
-  static bool UseTiledThebes();
 
 protected:
   ThebesLayer(LayerManager* aManager, void* aImplData)

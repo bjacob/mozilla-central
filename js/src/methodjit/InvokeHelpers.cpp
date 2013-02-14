@@ -9,12 +9,10 @@
 
 #include "jsanalyze.h"
 #include "jscntxt.h"
-#include "jsscope.h"
 #include "jsobj.h"
 #include "jslibmath.h"
 #include "jsiter.h"
 #include "jsnum.h"
-#include "jsxml.h"
 #include "jsbool.h"
 #include "jstypes.h"
 
@@ -26,15 +24,17 @@
 #include "methodjit/BaseCompiler.h"
 #include "methodjit/ICRepatcher.h"
 #include "vm/Debugger.h"
+#include "vm/Shape.h"
 
 #include "jsinterpinlines.h"
-#include "jsscopeinlines.h"
 #include "jsscriptinlines.h"
 #include "jsobjinlines.h"
 #include "jscntxtinlines.h"
 #include "jsatominlines.h"
 
 #include "StubCalls-inl.h"
+
+#include "vm/Shape-inl.h"
 
 #include "jsautooplen.h"
 
@@ -62,7 +62,7 @@ FindExceptionHandler(JSContext *cx)
         for (TryNoteIter tni(cx, cx->regs()); !tni.done(); ++tni) {
             JSTryNote *tn = *tni;
 
-            UnwindScope(cx, tn->stackDepth);
+            UnwindScope(cx, cx->fp(), tn->stackDepth);
 
             /*
              * Set pc to the first bytecode after the the try note to point
@@ -369,7 +369,7 @@ UncachedInlineCall(VMFrame &f, InitialFrameFlags initial,
      * will be constructing a new type object for 'this'.
      */
     if (!newType) {
-        if (JITScript *jit = newscript->getJIT(regs.fp()->isConstructing(), cx->compartment->compileBarriers())) {
+        if (JITScript *jit = newscript->getJIT(regs.fp()->isConstructing(), cx->zone()->compileBarriers())) {
             if (jit->invokeEntry) {
                 *pret = jit->invokeEntry;
 
@@ -394,8 +394,7 @@ UncachedInlineCall(VMFrame &f, InitialFrameFlags initial,
 
     JS_CHECK_RECURSION(cx, return false);
 
-    RootedScript script(cx, newscript);
-    bool ok = RunScript(cx, script, cx->fp());
+    bool ok = RunScript(cx, cx->fp());
     f.cx->stack.popInlineFrame(regs);
 
     if (ok) {
@@ -559,11 +558,11 @@ js_InternalThrow(VMFrame &f)
             // Call the throw hook if necessary
             JSThrowHook handler = cx->runtime->debugHooks.throwHook;
             if (handler || !cx->compartment->getDebuggees().empty()) {
-                Value rval;
+                RootedValue rval(cx);
                 JSTrapStatus st = Debugger::onExceptionUnwind(cx, &rval);
                 if (st == JSTRAP_CONTINUE && handler) {
                     RootedScript fscript(cx, cx->fp()->script());
-                    st = handler(cx, fscript, cx->regs().pc, &rval,
+                    st = handler(cx, fscript, cx->regs().pc, rval.address(),
                                  cx->runtime->debugHooks.throwHookData);
                 }
 
@@ -600,7 +599,7 @@ js_InternalThrow(VMFrame &f)
         // prologues and epilogues. Interpret(), and Invoke() all rely on this
         // property.
         JS_ASSERT(!f.fp()->finishedInInterpreter());
-        UnwindScope(cx, 0);
+        UnwindScope(cx, cx->fp(), 0);
         f.regs.setToEndOfScript();
 
         if (cx->compartment->debugMode()) {
@@ -647,7 +646,7 @@ js_InternalThrow(VMFrame &f)
      */
     cx->jaegerRuntime().setLastUnfinished(Jaeger_Unfinished);
 
-    if (!JSScript::ensureRanAnalysis(cx, script)) {
+    if (!script->ensureRanAnalysis(cx)) {
         js_ReportOutOfMemory(cx);
         return NULL;
     }
@@ -687,7 +686,7 @@ stubs::CreateThis(VMFrame &f, JSObject *proto)
     JSContext *cx = f.cx;
     StackFrame *fp = f.fp();
     RootedObject callee(cx, &fp->callee());
-    JSObject *obj = js_CreateThisForFunctionWithProto(cx, callee, proto);
+    JSObject *obj = CreateThisForFunctionWithProto(cx, callee, proto);
     if (!obj)
         THROW();
     fp->thisValue() = ObjectValue(*obj);
@@ -792,7 +791,7 @@ js_InternalInterpret(void *returnData, void *returnType, void *returnReg, js::VM
 
     JSOp op = JSOp(*pc);
 
-    if (!JSScript::ensureRanAnalysis(cx, script)) {
+    if (!script->ensureRanAnalysis(cx)) {
         js_ReportOutOfMemory(cx);
         return js_InternalThrow(f);
     }
@@ -898,7 +897,7 @@ js_InternalInterpret(void *returnData, void *returnType, void *returnReg, js::VM
       case REJOIN_THIS_PROTOTYPE: {
         RootedObject callee(cx, &fp->callee());
         JSObject *proto = f.regs.sp[0].isObject() ? &f.regs.sp[0].toObject() : NULL;
-        JSObject *obj = js_CreateThisForFunctionWithProto(cx, callee, proto);
+        JSObject *obj = CreateThisForFunctionWithProto(cx, callee, proto);
         if (!obj)
             return js_InternalThrow(f);
         fp->thisValue() = ObjectValue(*obj);
@@ -959,7 +958,7 @@ js_InternalInterpret(void *returnData, void *returnType, void *returnReg, js::VM
       case REJOIN_FUNCTION_PROLOGUE:
         if (fp->isConstructing()) {
             RootedObject callee(cx, &fp->callee());
-            JSObject *obj = js_CreateThisForFunction(cx, callee, types::UseNewTypeAtEntry(cx, fp));
+            JSObject *obj = CreateThisForFunction(cx, callee, types::UseNewTypeAtEntry(cx, fp));
             if (!obj)
                 return js_InternalThrow(f);
             fp->functionThis() = ObjectValue(*obj);

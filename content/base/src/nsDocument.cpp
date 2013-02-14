@@ -1373,10 +1373,6 @@ nsDocument::~nsDocument()
            ("DOCUMENT %p destroyed", this));
 #endif
 
-#ifdef DEBUG
-  nsCycleCollector_DEBUG_wasFreed(static_cast<nsIDocument*>(this));
-#endif
-
   NS_ASSERTION(!mIsShowing, "Destroying a currently-showing document");
 
   mInDestructor = true;
@@ -1480,6 +1476,7 @@ NS_INTERFACE_TABLE_HEAD(nsDocument)
     NS_INTERFACE_TABLE_ENTRY(nsDocument, nsIDOMDocumentXBL)
     NS_INTERFACE_TABLE_ENTRY(nsDocument, nsIScriptObjectPrincipal)
     NS_INTERFACE_TABLE_ENTRY(nsDocument, nsIDOMEventTarget)
+    NS_INTERFACE_TABLE_ENTRY(nsDocument, mozilla::dom::EventTarget)
     NS_INTERFACE_TABLE_ENTRY(nsDocument, nsISupportsWeakReference)
     NS_INTERFACE_TABLE_ENTRY(nsDocument, nsIRadioGroupContainer)
     NS_INTERFACE_TABLE_ENTRY(nsDocument, nsIMutationObserver)
@@ -1851,6 +1848,12 @@ nsDocument::Init()
   mPlugins.Init();
 
   return NS_OK;
+}
+
+nsHTMLDocument*
+nsIDocument::AsHTMLDocument()
+{
+  return IsHTML() ? static_cast<nsHTMLDocument*>(this) : nullptr;
 }
 
 void
@@ -5895,9 +5898,8 @@ nsDocument::GetAnimationController()
   // one and only SVG documents and the like will call this
   if (mAnimationController)
     return mAnimationController;
-  // Refuse to create an Animation Controller if SMIL is disabled, and also
-  // for data documents.
-  if (!NS_SMILEnabled() || mLoadedAsData || mLoadedAsInteractiveData)
+  // Refuse to create an Animation Controller for data documents.
+  if (mLoadedAsData || mLoadedAsInteractiveData)
     return nullptr;
 
   mAnimationController = new nsSMILAnimationController(this);
@@ -6732,10 +6734,11 @@ nsDocument::FlushPendingNotifications(mozFlushType aType)
 }
 
 static bool
-Flush(nsIDocument* aDocument, void* aData)
+Copy(nsIDocument* aDocument, void* aData)
 {
-  const mozFlushType* type = static_cast<const mozFlushType*>(aData);
-  aDocument->FlushPendingNotifications(*type);
+  nsTArray<nsCOMPtr<nsIDocument> >* resources =
+    static_cast<nsTArray<nsCOMPtr<nsIDocument> >* >(aData);
+  resources->AppendElement(aDocument);
   return true;
 }
 
@@ -6744,11 +6747,15 @@ nsDocument::FlushExternalResources(mozFlushType aType)
 {
   NS_ASSERTION(aType >= Flush_Style,
     "should only need to flush for style or higher in external resources");
-
   if (GetDisplayDocument()) {
     return;
   }
-  EnumerateExternalResources(Flush, &aType);
+  nsTArray<nsCOMPtr<nsIDocument> > resources;
+  EnumerateExternalResources(Copy, &resources);
+
+  for (uint32_t i = 0; i < resources.Length(); i++) {
+    resources[i]->FlushPendingNotifications(aType);
+  }
 }
 
 void
@@ -7534,15 +7541,30 @@ nsDocument::UnblockOnload(bool aFireSync)
 
   --mOnloadBlockCount;
 
-  // If mScriptGlobalObject is null, we shouldn't be messing with the loadgroup
-  // -- it's not ours.
-  if (mOnloadBlockCount == 0 && mScriptGlobalObject) {
-    if (aFireSync && mAsyncOnloadBlockCount == 0) {
-      // Increment mOnloadBlockCount, since DoUnblockOnload will decrement it
-      ++mOnloadBlockCount;
-      DoUnblockOnload();
-    } else {
-      PostUnblockOnloadEvent();
+  if (mOnloadBlockCount == 0) {
+    if (mScriptGlobalObject) {
+      // Only manipulate the loadgroup in this case, because if mScriptGlobalObject
+      // is null, it's not ours.
+      if (aFireSync && mAsyncOnloadBlockCount == 0) {
+        // Increment mOnloadBlockCount, since DoUnblockOnload will decrement it
+        ++mOnloadBlockCount;
+        DoUnblockOnload();
+      } else {
+        PostUnblockOnloadEvent();
+      }
+    } else if (mIsBeingUsedAsImage) {
+      // To correctly unblock onload for a document that contains an SVG
+      // image, we need to know when all of the SVG document's resources are
+      // done loading, in a way comparable to |window.onload|. We fire this
+      // event to indicate that the SVG should be considered fully loaded.
+      // Because scripting is disabled on SVG-as-image documents, this event
+      // is not accessible to content authors. (See bug 837135.)
+      nsRefPtr<nsAsyncDOMEvent> e =
+        new nsAsyncDOMEvent(this,
+                            NS_LITERAL_STRING("MozSVGAsImageDocumentLoad"),
+                            false,
+                            false);
+      e->PostDOMEvent();
     }
   }
 }
@@ -10450,15 +10472,15 @@ nsDocument::DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
 }
 
 already_AddRefed<nsIDocument>
-nsIDocument::Constructor(nsISupports* aGlobal, ErrorResult& rv)
+nsIDocument::Constructor(const GlobalObject& aGlobal, ErrorResult& rv)
 {
-  nsCOMPtr<nsIScriptGlobalObject> global = do_QueryInterface(aGlobal);
+  nsCOMPtr<nsIScriptGlobalObject> global = do_QueryInterface(aGlobal.Get());
   if (!global) {
     rv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
-  nsCOMPtr<nsIScriptObjectPrincipal> prin = do_QueryInterface(aGlobal);
+  nsCOMPtr<nsIScriptObjectPrincipal> prin = do_QueryInterface(aGlobal.Get());
   if (!prin) {
     rv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;

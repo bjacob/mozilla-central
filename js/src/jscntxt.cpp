@@ -43,7 +43,6 @@
 #include "jsobj.h"
 #include "jsopcode.h"
 #include "jspubtd.h"
-#include "jsscope.h"
 #include "jsscript.h"
 #include "jsstr.h"
 #include "jsworkers.h"
@@ -61,6 +60,7 @@
 #include "js/MemoryMetrics.h"
 #include "frontend/TokenStream.h"
 #include "frontend/ParseMaps.h"
+#include "vm/Shape.h"
 #include "yarr/BumpPointerAllocator.h"
 
 #include "jsatominlines.h"
@@ -145,6 +145,10 @@ JSRuntime::sizeOfIncludingThis(JSMallocSizeOfFun mallocSizeOf, RuntimeSizes *rtS
     rtSizes->scriptFilenames = scriptFilenameTable.sizeOfExcludingThis(mallocSizeOf);
     for (ScriptFilenameTable::Range r = scriptFilenameTable.all(); !r.empty(); r.popFront())
         rtSizes->scriptFilenames += mallocSizeOf(r.front());
+
+    rtSizes->scriptData = scriptDataTable.sizeOfExcludingThis(mallocSizeOf);
+    for (ScriptDataTable::Range r = scriptDataTable.all(); !r.empty(); r.popFront())
+        rtSizes->scriptData += mallocSizeOf(r.front());
 }
 
 size_t
@@ -173,7 +177,7 @@ JSRuntime::triggerOperationCallback()
      * into a weird state where interrupt is stuck at 0 but ionStackLimit is
      * MAXADDR.
      */
-    ionStackLimit = -1;
+    mainThread.ionStackLimit = -1;
 
     /*
      * Use JS_ATOMIC_SET in the hope that it ensures the write will become
@@ -285,6 +289,7 @@ js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript scri
     key.original = fun;
 
     Table::AddPtr p = table.lookupForAdd(key);
+    SkipRoot skipHash(cx, &p); /* Prevent the hash from being poisoned. */
     if (p)
         return p->value;
 
@@ -296,6 +301,14 @@ js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript scri
 
     // Store a link back to the original for function.caller.
     clone->setExtendedSlot(0, ObjectValue(*fun));
+
+    // Recalculate the hash if script or fun have been moved.
+    if (key.script != script && key.original != fun) {
+        key.script = script;
+        key.original = fun;
+        Table::AddPtr p = table.lookupForAdd(key);
+        JS_ASSERT(!p);
+    }
 
     if (!table.relookupOrAdd(p, key, clone.get()))
         return NULL;
@@ -467,7 +480,7 @@ ReportError(JSContext *cx, const char *message, JSErrorReport *reportp,
          * the reporter triggers an over-recursion.
          */
         int stackDummy;
-        if (!JS_CHECK_STACK_SIZE(cx->runtime->nativeStackLimit, &stackDummy))
+        if (!JS_CHECK_STACK_SIZE(cx->mainThread().nativeStackLimit, &stackDummy))
             return;
 
         if (cx->errorReporter)
@@ -1159,10 +1172,8 @@ JSContext::JSContext(JSRuntime *rt)
     hasVersionOverride(false),
     throwing(false),
     exception(UndefinedValue()),
-    runOptions(0),
-    defaultLocale(NULL),
+    options_(0),
     reportGranularity(JS_DEFAULT_JITREPORT_GRANULARITY),
-    localeCallbacks(NULL),
     resolvingList(NULL),
     generatingError(false),
     enterCompartmentDepth_(0),
@@ -1206,7 +1217,6 @@ JSContext::JSContext(JSRuntime *rt)
 JSContext::~JSContext()
 {
     /* Free the stuff hanging off of cx. */
-    js_free(defaultLocale);
     if (parseMapPool_)
         js_delete(parseMapPool_);
 
@@ -1214,7 +1224,7 @@ JSContext::~JSContext()
 }
 
 bool
-JSContext::setDefaultLocale(const char *locale)
+JSRuntime::setDefaultLocale(const char *locale)
 {
     if (!locale)
         return false;
@@ -1224,14 +1234,14 @@ JSContext::setDefaultLocale(const char *locale)
 }
 
 void
-JSContext::resetDefaultLocale()
+JSRuntime::resetDefaultLocale()
 {
     js_free(defaultLocale);
     defaultLocale = NULL;
 }
 
 const char *
-JSContext::getDefaultLocale()
+JSRuntime::getDefaultLocale()
 {
     if (defaultLocale)
         return defaultLocale;
@@ -1244,7 +1254,7 @@ JSContext::getDefaultLocale()
 #endif
     // convert to a well-formed BCP 47 language tag
     if (!locale || !strcmp(locale, "C"))
-        locale = (char *) "und";
+        locale = const_cast<char*>("und");
     lang = JS_strdup(this, locale);
     if (!lang)
         return NULL;
@@ -1265,10 +1275,10 @@ JSContext::getDefaultLocale()
 void
 JSContext::wrapPendingException()
 {
-    Value v = getPendingException();
+    RootedValue value(this, getPendingException());
     clearPendingException();
-    if (compartment->wrap(this, &v))
-        setPendingException(v);
+    if (compartment->wrap(this, &value))
+        setPendingException(value);
 }
 
 
@@ -1338,12 +1348,18 @@ JSRuntime::setGCMaxMallocBytes(size_t value)
      * mean that value.
      */
     gcMaxMallocBytes = (ptrdiff_t(value) >= 0) ? value : size_t(-1) >> 1;
-    for (CompartmentsIter c(this); !c.done(); c.next())
-        c->setGCMaxMallocBytes(value);
+    for (ZonesIter zone(this); !zone.done(); zone.next())
+        zone->setGCMaxMallocBytes(value);
 }
 
 void
-JSRuntime::updateMallocCounter(JSContext *cx, size_t nbytes)
+JSRuntime::updateMallocCounter(size_t nbytes)
+{
+    updateMallocCounter(NULL, nbytes);
+}
+
+void
+JSRuntime::updateMallocCounter(JS::Zone *zone, size_t nbytes)
 {
     /* We tolerate any thread races when updating gcMallocBytes. */
     ptrdiff_t oldCount = gcMallocBytes;
@@ -1351,14 +1367,20 @@ JSRuntime::updateMallocCounter(JSContext *cx, size_t nbytes)
     gcMallocBytes = newCount;
     if (JS_UNLIKELY(newCount <= 0 && oldCount > 0))
         onTooMuchMalloc();
-    else if (cx && cx->compartment)
-        cx->compartment->updateMallocCounter(nbytes);
+    else if (zone)
+        zone->updateMallocCounter(nbytes);
 }
 
 JS_FRIEND_API(void)
 JSRuntime::onTooMuchMalloc()
 {
     TriggerGC(this, gcreason::TOO_MUCH_MALLOC);
+}
+
+JS_FRIEND_API(void *)
+JSRuntime::onOutOfMemory(void *p, size_t nbytes)
+{
+    return onOutOfMemory(p, nbytes, NULL);
 }
 
 JS_FRIEND_API(void *)
@@ -1472,7 +1494,7 @@ void
 JSContext::updateJITEnabled()
 {
 #ifdef JS_METHODJIT
-    methodJitEnabled = (runOptions & JSOPTION_METHODJIT) && !IsJITBrokenHere();
+    methodJitEnabled = (options_ & JSOPTION_METHODJIT) && !IsJITBrokenHere();
 #endif
 }
 
@@ -1493,7 +1515,7 @@ JSContext::mark(JSTracer *trc)
     /* Stack frames and slots are traced by StackSpace::mark. */
 
     /* Mark other roots-by-definition in the JSContext. */
-    if (defaultCompartmentObject_ && !hasRunOption(JSOPTION_UNROOTED_GLOBAL))
+    if (defaultCompartmentObject_ && !hasOption(JSOPTION_UNROOTED_GLOBAL))
         MarkObjectRoot(trc, &defaultCompartmentObject_, "default compartment object");
     if (isExceptionPending())
         MarkValueRoot(trc, &exception, "exception");

@@ -13,16 +13,6 @@
     'chromium_code': 1,
   },
 
-  'target_defaults': {
-    'conditions': [
-      ['moz_widget_toolkit_gonk==1', {
-        'defines' : [
-          'WEBRTC_GONK',
-       ],
-      }],
-    ],
-  },
-
   'targets': [
 
     #
@@ -55,11 +45,11 @@
         '$(DEPTH)/dist/include',
         '../../../dom/base',
         '../../../media/mtransport',
-        '../trunk/src',
-        '../trunk/src/video_engine/include',
-        '../trunk/src/voice_engine/include',
-        '../trunk/src/modules/interface',
-        '../trunk/src/peerconnection',
+        '../trunk/webrtc',
+        '../trunk/webrtc/video_engine/include',
+        '../trunk/webrtc/voice_engine/include',
+        '../trunk/webrtc/modules/interface',
+        '../trunk/webrtc/peerconnection',
         '../../../netwerk/srtp/src/include',
         '../../../netwerk/srtp/src/crypto/include',
         '../../../ipc/chromium/src',

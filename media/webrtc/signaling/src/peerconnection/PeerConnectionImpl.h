@@ -34,6 +34,7 @@
 #include "VideoUtils.h"
 #include "ImageLayers.h"
 #include "VideoSegment.h"
+#include "nsNSSShutDown.h"
 #else
 namespace mozilla {
   class DataChannel;
@@ -98,6 +99,7 @@ class PeerConnectionWrapper;
 class PeerConnectionImpl MOZ_FINAL : public IPeerConnection,
 #ifdef MOZILLA_INTERNAL_API
                                      public mozilla::DataChannelConnection::DataConnectionListener,
+                                     public nsNSSShutDownObject,
 #endif
                                      public sigslot::has_slots<>
 {
@@ -149,8 +151,7 @@ public:
     return mRole;
   }
 
-  nsresult CreateRemoteSourceStreamInfo(uint32_t aHint,
-    nsRefPtr<RemoteSourceStreamInfo>* aInfo);
+  nsresult CreateRemoteSourceStreamInfo(nsRefPtr<RemoteSourceStreamInfo>* aInfo);
 
   // Implementation of the only observer we need
   virtual void onCallEvent(
@@ -250,12 +251,16 @@ private:
     return true;
   }
 
+#ifdef MOZILLA_INTERNAL_API
+  void virtualDestroyNSSReference() MOZ_FINAL;
+#endif
+
   // Shut down media. Called on any thread.
   void ShutdownMedia(bool isSynchronous);
 
   // ICE callbacks run on the right thread.
-  nsresult IceGatheringCompleted_m(NrIceCtx *aCtx);
-  nsresult IceCompleted_m(NrIceCtx *aCtx);
+  nsresult IceGatheringCompleted_m();
+  nsresult IceCompleted_m();
 
   // The role we are adopting
   Role mRole;

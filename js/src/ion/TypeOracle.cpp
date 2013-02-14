@@ -18,11 +18,11 @@ using namespace js::types;
 using namespace js::analyze;
 
 bool
-TypeInferenceOracle::init(JSContext *cx, HandleScript script)
+TypeInferenceOracle::init(JSContext *cx, JSScript *script)
 {
     this->cx = cx;
     this->script_.init(script);
-    return JSScript::ensureRanInference(cx, script);
+    return script->ensureRanInference(cx);
 }
 
 MIRType
@@ -263,9 +263,9 @@ TypeInferenceOracle::propertyReadAccessGetter(UnrootedScript script, jsbytecode 
 }
 
 bool
-TypeInferenceOracle::inObjectIsDenseArray(HandleScript script, jsbytecode *pc)
+TypeInferenceOracle::inObjectIsDenseNativeWithoutExtraIndexedProperties(HandleScript script, jsbytecode *pc)
 {
-    // Check whether the object is a dense array and index is int32 or double.
+    // Check whether the object is a native and index is int32 or double.
     StackTypeSet *id = script->analysis()->poppedTypes(pc, 1);
     StackTypeSet *obj = script->analysis()->poppedTypes(pc, 0);
 
@@ -273,7 +273,11 @@ TypeInferenceOracle::inObjectIsDenseArray(HandleScript script, jsbytecode *pc)
     if (idType != JSVAL_TYPE_INT32 && idType != JSVAL_TYPE_DOUBLE)
         return false;
 
-    return obj->getKnownClass() == &ArrayClass;
+    Class *clasp = obj->getKnownClass();
+    if (!clasp || !clasp->isNative())
+        return false;
+
+    return !types::TypeCanHaveExtraIndexedProperties(cx, obj);
 }
 
 bool
@@ -284,37 +288,21 @@ TypeInferenceOracle::inArrayIsPacked(UnrootedScript script, jsbytecode *pc)
 }
 
 bool
-TypeInferenceOracle::elementReadIsDenseArray(RawScript script, jsbytecode *pc)
+TypeInferenceOracle::elementReadIsDenseNative(RawScript script, jsbytecode *pc)
 {
-    // Check whether the object is a dense array and index is int32 or double.
-    StackTypeSet *obj = script->analysis()->poppedTypes(pc, 1);
-    StackTypeSet *id = script->analysis()->poppedTypes(pc, 0);
-
-    JSValueType idType = id->getKnownTypeTag();
-    if (idType != JSVAL_TYPE_INT32 && idType != JSVAL_TYPE_DOUBLE)
-        return false;
-
-    if (obj->getKnownClass() != &ArrayClass)
-        return false;
-
-    return !obj->hasObjectFlags(cx, types::OBJECT_FLAG_SPARSE_INDEXES |
-                                types::OBJECT_FLAG_LENGTH_OVERFLOW);
+    return elementAccessIsDenseNative(script->analysis()->poppedTypes(pc, 1),
+                                     script->analysis()->poppedTypes(pc, 0));
 }
 
 bool
-TypeInferenceOracle::elementReadIsTypedArray(HandleScript script, jsbytecode *pc, int *arrayType)
+TypeInferenceOracle::elementReadIsTypedArray(RawScript script, jsbytecode *pc, int *arrayType)
 {
-    // Check whether the object is a typed array and index is int32 or double.
-    StackTypeSet *obj = script->analysis()->poppedTypes(pc, 1);
-    StackTypeSet *id = DropUnrooted(script)->analysis()->poppedTypes(pc, 0);
-
-    JSValueType idType = id->getKnownTypeTag();
-    if (idType != JSVAL_TYPE_INT32 && idType != JSVAL_TYPE_DOUBLE)
+    if (!elementAccessIsTypedArray(script->analysis()->poppedTypes(pc, 1),
+                                   script->analysis()->poppedTypes(pc, 0),
+                                   arrayType))
+    {
         return false;
-
-    *arrayType = obj->getTypedArrayType();
-    if (*arrayType == TypedArray::TYPE_MAX)
-        return false;
+    }
 
     JS_ASSERT(*arrayType >= 0 && *arrayType < TypedArray::TYPE_MAX);
 
@@ -359,6 +347,21 @@ TypeInferenceOracle::elementReadIsString(UnrootedScript script, jsbytecode *pc)
 }
 
 bool
+TypeInferenceOracle::elementReadShouldAlwaysLoadDoubles(UnrootedScript script, jsbytecode *pc)
+{
+    StackTypeSet *types = script->analysis()->poppedTypes(pc, 1);
+    types::StackTypeSet::DoubleConversion conversion = types->convertDoubleElements(cx);
+    return conversion == StackTypeSet::AlwaysConvertToDoubles;
+}
+
+bool
+TypeInferenceOracle::elementReadHasExtraIndexedProperty(UnrootedScript script, jsbytecode *pc)
+{
+    StackTypeSet *obj = script->analysis()->poppedTypes(pc, 1);
+    return types::TypeCanHaveExtraIndexedProperties(cx, obj);
+}
+
+bool
 TypeInferenceOracle::elementReadIsPacked(UnrootedScript script, jsbytecode *pc)
 {
     StackTypeSet *types = script->analysis()->poppedTypes(pc, 1);
@@ -386,29 +389,38 @@ TypeInferenceOracle::elementReadGeneric(UnrootedScript script, jsbytecode *pc, b
 }
 
 bool
-TypeInferenceOracle::elementWriteIsDenseArray(HandleScript script, jsbytecode *pc)
+TypeInferenceOracle::elementWriteIsDenseNative(HandleScript script, jsbytecode *pc)
 {
-    // Check whether the object is a dense array and index is int32 or double.
-    StackTypeSet *obj = script->analysis()->poppedTypes(pc, 2);
-    StackTypeSet *id = script->analysis()->poppedTypes(pc, 1);
+    return elementAccessIsDenseNative(script->analysis()->poppedTypes(pc, 2),
+                                     script->analysis()->poppedTypes(pc, 1));
+}
 
+bool
+TypeInferenceOracle::elementAccessIsDenseNative(StackTypeSet *obj, StackTypeSet *id)
+{
     JSValueType idType = id->getKnownTypeTag();
     if (idType != JSVAL_TYPE_INT32 && idType != JSVAL_TYPE_DOUBLE)
         return false;
 
-    if (obj->getKnownClass() != &ArrayClass)
+    Class *clasp = obj->getKnownClass();
+    if (!clasp || !clasp->isNative())
         return false;
 
-    return !obj->hasObjectFlags(cx, types::OBJECT_FLAG_SPARSE_INDEXES |
-                                types::OBJECT_FLAG_LENGTH_OVERFLOW);
+    return obj->convertDoubleElements(cx) != StackTypeSet::AmbiguousDoubleConversion;
 }
 
 bool
 TypeInferenceOracle::elementWriteIsTypedArray(RawScript script, jsbytecode *pc, int *arrayType)
 {
-    // Check whether the object is a dense array and index is int32 or double.
-    StackTypeSet *obj = script->analysis()->poppedTypes(pc, 2);
-    StackTypeSet *id = script->analysis()->poppedTypes(pc, 1);
+    return elementAccessIsTypedArray(script->analysis()->poppedTypes(pc, 2),
+                                     script->analysis()->poppedTypes(pc, 1),
+                                     arrayType);
+}
+
+bool
+TypeInferenceOracle::elementAccessIsTypedArray(StackTypeSet *obj, StackTypeSet *id, int *arrayType)
+{
+    // Check whether the object is a typed array and index is int32 or double.
 
     JSValueType idType = id->getKnownTypeTag();
     if (idType != JSVAL_TYPE_INT32 && idType != JSVAL_TYPE_DOUBLE)
@@ -422,7 +434,27 @@ TypeInferenceOracle::elementWriteIsTypedArray(RawScript script, jsbytecode *pc, 
 }
 
 bool
-TypeInferenceOracle::elementWriteIsPacked(UnrootedScript script, jsbytecode *pc)
+TypeInferenceOracle::elementWriteNeedsDoubleConversion(UnrootedScript script, jsbytecode *pc)
+{
+    StackTypeSet *types = script->analysis()->poppedTypes(pc, 2);
+    types::StackTypeSet::DoubleConversion conversion = types->convertDoubleElements(cx);
+    return conversion == StackTypeSet::AlwaysConvertToDoubles ||
+           conversion == StackTypeSet::MaybeConvertToDoubles;
+}
+
+bool
+TypeInferenceOracle::elementWriteHasExtraIndexedProperty(RawScript script, jsbytecode *pc)
+{
+    StackTypeSet *obj = script->analysis()->poppedTypes(pc, 2);
+
+    if (obj->hasObjectFlags(cx, types::OBJECT_FLAG_LENGTH_OVERFLOW))
+        return true;
+
+    return types::TypeCanHaveExtraIndexedProperties(cx, obj);
+}
+
+bool
+TypeInferenceOracle::elementWriteIsPacked(RawScript script, jsbytecode *pc)
 {
     StackTypeSet *types = script->analysis()->poppedTypes(pc, 2);
     return !types->hasObjectFlags(cx, types::OBJECT_FLAG_NON_PACKED);
@@ -446,6 +478,9 @@ TypeInferenceOracle::elementWrite(UnrootedScript script, jsbytecode *pc)
             return MIRType_None;
 
         if (TypeObject *object = objTypes->getTypeObject(i)) {
+            if (object->unknownProperties())
+                return MIRType_None;
+
             types::HeapTypeSet *elementTypes = object->getProperty(cx, JSID_VOID, false);
             if (!elementTypes)
                 return MIRType_None;
@@ -465,10 +500,11 @@ TypeInferenceOracle::elementWrite(UnrootedScript script, jsbytecode *pc)
 }
 
 bool
-TypeInferenceOracle::arrayPrototypeHasIndexedProperty()
+TypeInferenceOracle::arrayResultShouldHaveDoubleConversion(UnrootedScript script, jsbytecode *pc)
 {
-    RootedScript scriptRoot(cx, script());
-    return ArrayPrototypeHasIndexedProperty(cx, scriptRoot);
+    types::StackTypeSet::DoubleConversion conversion =
+        script->analysis()->pushedTypes(pc, 0)->convertDoubleElements(cx);
+    return conversion == types::StackTypeSet::AlwaysConvertToDoubles;
 }
 
 bool
@@ -529,28 +565,63 @@ TypeInferenceOracle::canInlineCall(HandleScript caller, jsbytecode *pc)
 {
     JS_ASSERT(types::IsInlinableCall(pc));
 
+    JSOp op = JSOp(*pc);
     Bytecode *code = caller->analysis()->maybeCode(pc);
-    if (code->monitoredTypes || code->monitoredTypesReturn || caller->analysis()->typeBarriers(cx, pc))
+
+    // For foo.apply(this, arguments), the caller is foo and not the js_fun_apply function.
+    // Ignore code->monitoredTypes, as we know the caller is foo
+    if (op != JSOP_FUNAPPLY && code->monitoredTypes)
         return false;
+
+    // Gets removed in Bug 796114
+    if (caller->analysis()->typeBarriers(cx, pc))
+        return false;
+
     return true;
 }
 
 bool
-TypeInferenceOracle::canEnterInlinedFunction(JSFunction *target)
+TypeInferenceOracle::canEnterInlinedFunction(RawScript caller, jsbytecode *pc, RawFunction target)
 {
     AssertCanGC();
-    RootedScript script(cx, target->nonLazyScript());
-    if (!script->hasAnalysis() || !script->analysis()->ranInference())
+    RootedScript targetScript(cx, target->nonLazyScript());
+
+    // Always permit the empty script.
+    if (targetScript->length == 1)
+        return true;
+
+    if (!targetScript->hasAnalysis() ||
+        !targetScript->analysis()->ranInference() ||
+        !targetScript->analysis()->ranSSA())
+    {
+        return false;
+    }
+
+    if (!targetScript->analysis()->ionInlineable())
         return false;
 
-    if (!script->analysis()->ionInlineable())
+    if (targetScript->needsArgsObj())
         return false;
 
-    if (script->analysis()->usesScopeChain())
+    if (!targetScript->compileAndGo)
+        return false;
+
+    if (targetScript->analysis()->usesScopeChain())
         return false;
 
     if (target->getType(cx)->unknownProperties())
         return false;
+
+    JSOp op = JSOp(*pc);
+    TypeSet *returnTypes = TypeScript::ReturnTypes(targetScript);
+    TypeSet *callReturn = getCallReturn(caller, pc);
+    if (op == JSOP_NEW) {
+        if (!returnTypes->isSubsetIgnorePrimitives(callReturn))
+            return false;
+    } else {
+        if (!returnTypes->isSubset(callReturn))
+            return false;
+    }
 
     // TI calls ObjectStateChange to trigger invalidation of the caller.
     HeapTypeSet::WatchObjectStateChange(cx, target->getType(cx));

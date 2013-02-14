@@ -5,50 +5,26 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "CodeGenerator-arm.h"
-#include "ion/shared/CodeGenerator-shared-inl.h"
-#include "ion/MIR.h"
-#include "ion/MIRGraph.h"
-#include "jsnum.h"
-#include "jsscope.h"
-#include "jsscriptinlines.h"
 
 #include "jscntxt.h"
 #include "jscompartment.h"
-#include "ion/IonFrames.h"
-#include "ion/MoveEmitter.h"
-#include "ion/IonCompartment.h"
+#include "jsnum.h"
 
-#include "jsscopeinlines.h"
+#include "CodeGenerator-arm.h"
+#include "ion/IonCompartment.h"
+#include "ion/IonFrames.h"
+#include "ion/MIR.h"
+#include "ion/MIRGraph.h"
+#include "ion/MoveEmitter.h"
+#include "ion/shared/CodeGenerator-shared-inl.h"
+#include "vm/Shape.h"
+
+#include "jsscriptinlines.h"
+
+#include "vm/Shape-inl.h"
 
 using namespace js;
 using namespace js::ion;
-
-class DeferredJumpTable : public DeferredData
-{
-    MTableSwitch *mswitch;
-    BufferOffset off;
-    MacroAssembler *masm;
-  public:
-    DeferredJumpTable(MTableSwitch *mswitch, BufferOffset off_, MacroAssembler *masm_)
-      : mswitch(mswitch), off(off_), masm(masm_)
-    { }
-
-    void copy(IonCode *code, uint8_t *ignore__) const {
-        void **jumpData = (void **)(((char*)code->raw()) + masm->actualOffset(off).getOffset());
-        int numCases =  mswitch->numCases();
-        // For every case write the pointer to the start in the table
-        for (int j = 0; j < numCases; j++) {
-            LBlock *caseblock = mswitch->getCase(numCases - 1 - j)->lir();
-            Label *caseheader = caseblock->label();
-
-            uint32_t offset = caseheader->offset();
-            *jumpData = (void *)(code->raw() + masm->actualOffset(offset));
-            jumpData++;
-        }
-    }
-};
-
 
 // shared
 CodeGeneratorARM::CodeGeneratorARM(MIRGenerator *gen, LIRGraph *graph)
@@ -125,13 +101,6 @@ CodeGeneratorARM::visitTestIAndBranch(LTestIAndBranch *test)
         masm.ma_b(ifTrue->label());
     }
     return true;
-}
-
-void
-CodeGeneratorARM::emitSet(Assembler::Condition cond, const Register &dest)
-{
-    masm.ma_mov(Imm32(0), dest);
-    masm.ma_mov(Imm32(1), dest, NoSetCond, cond);
 }
 
 bool
@@ -896,6 +865,54 @@ CodeGeneratorARM::visitMoveGroup(LMoveGroup *group)
     return true;
 }
 
+class js::ion::OutOfLineTableSwitch : public OutOfLineCodeBase<CodeGeneratorARM>
+{
+    MTableSwitch *mir_;
+    Vector<CodeLabel, 8, IonAllocPolicy> codeLabels_;
+
+    bool accept(CodeGeneratorARM *codegen) {
+        return codegen->visitOutOfLineTableSwitch(this);
+    }
+
+  public:
+    OutOfLineTableSwitch(MTableSwitch *mir)
+      : mir_(mir)
+    {}
+
+    MTableSwitch *mir() const {
+        return mir_;
+    }
+
+    bool addCodeLabel(CodeLabel label) {
+        return codeLabels_.append(label);
+    }
+    CodeLabel codeLabel(unsigned i) {
+        return codeLabels_[i];
+    }
+};
+
+bool
+CodeGeneratorARM::visitOutOfLineTableSwitch(OutOfLineTableSwitch *ool)
+{
+    MTableSwitch *mir = ool->mir();
+
+    int numCases = mir->numCases();
+    for (size_t i = 0; i < numCases; i++) {
+        LBlock *caseblock = mir->getCase(numCases - 1 - i)->lir();
+        Label *caseheader = caseblock->label();
+        uint32_t caseoffset = caseheader->offset();
+
+        // The entries of the jump table need to be absolute addresses and thus
+        // must be patched after codegen is finished.
+        CodeLabel cl = ool->codeLabel(i);
+        cl.src()->bind(caseoffset);
+        if (!masm.addCodeLabel(cl))
+            return false;
+    }
+
+    return true;
+}
+
 bool
 CodeGeneratorARM::emitTableSwitchDispatch(MTableSwitch *mir, const Register &index,
                                           const Register &base)
@@ -935,11 +952,20 @@ CodeGeneratorARM::emitTableSwitchDispatch(MTableSwitch *mir, const Register &ind
     AutoForbidPools afp(&masm);
     masm.ma_ldr(DTRAddr(pc, DtrRegImmShift(index, LSL, 2)), pc, Offset, Assembler::Unsigned);
     masm.ma_b(defaultcase);
-    DeferredJumpTable *d = new DeferredJumpTable(mir, masm.nextOffset(), &masm);
-    masm.as_jumpPool(cases);
 
-    if (!masm.addDeferredData(d, 0))
+    // To fill in the CodeLabels for the case entries, we need to first
+    // generate the case entries (we don't yet know their offsets in the
+    // instruction stream).
+    OutOfLineTableSwitch *ool = new OutOfLineTableSwitch(mir);
+    for (int32_t i = 0; i < cases; i++) {
+        CodeLabel cl;
+        masm.writeCodePointer(cl.dest());
+        if (!ool->addCodeLabel(cl))
+            return false;
+    }
+    if (!addOutOfLineCode(ool))
         return false;
+
     return true;
 }
 
@@ -995,30 +1021,6 @@ CodeGeneratorARM::visitRound(LRound *lir)
     if (!bailoutFrom(&bail, lir->snapshot()))
         return false;
     return true;
-}
-
-// Checks whether a double is representable as a 32-bit integer. If so, the
-// integer is written to the output register. Otherwise, a bailout is taken to
-// the given snapshot. This function overwrites the scratch float register.
-void
-CodeGeneratorARM::emitDoubleToInt32(const FloatRegister &src, const Register &dest, Label *fail, bool negativeZeroCheck)
-{
-    // convert the floating point value to an integer, if it did not fit,
-    //     then when we convert it *back* to  a float, it will have a
-    //     different value, which we can test.
-    masm.ma_vcvt_F64_I32(src, ScratchFloatReg);
-    // move the value into the dest register.
-    masm.ma_vxfer(ScratchFloatReg, dest);
-    masm.ma_vcvt_I32_F64(ScratchFloatReg, ScratchFloatReg);
-    masm.ma_vcmp(src, ScratchFloatReg);
-    masm.as_vmrs(pc);
-    masm.ma_b(fail, Assembler::VFP_NotEqualOrUnordered);
-    // If they're equal, test for 0.  It would be nicer to test for -0.0 explicitly, but that seems hard.
-    if (negativeZeroCheck) {
-        masm.ma_cmp(dest, Imm32(0));
-        masm.ma_b(fail, Assembler::Equal);
-        // guard for != 0.
-    }
 }
 
 void
@@ -1227,7 +1229,7 @@ CodeGeneratorARM::visitCompareD(LCompareD *comp)
 
     Assembler::DoubleCondition cond = JSOpToDoubleCondition(comp->mir()->jsop());
     masm.compareDouble(lhs, rhs);
-    emitSet(Assembler::ConditionFromDoubleCondition(cond), ToRegister(comp->output()));
+    masm.emitSet(Assembler::ConditionFromDoubleCondition(cond), ToRegister(comp->output()));
     return true;
 }
 
@@ -1261,7 +1263,7 @@ CodeGeneratorARM::visitCompareB(LCompareB *lir)
             masm.cmp32(lhs.payloadReg(), Imm32(rhs->toConstant()->toBoolean()));
         else
             masm.cmp32(lhs.payloadReg(), ToRegister(rhs));
-        emitSet(JSOpToCondition(mir->jsop()), output);
+        masm.emitSet(JSOpToCondition(mir->jsop()), output);
         masm.jump(&done);
     }
 
@@ -1313,7 +1315,7 @@ CodeGeneratorARM::visitCompareV(LCompareV *lir)
     masm.j(Assembler::NotEqual, &notEqual);
     {
         masm.cmp32(lhs.payloadReg(), rhs.payloadReg());
-        emitSet(cond, output);
+        masm.emitSet(cond, output);
         masm.jump(&done);
     }
     masm.bind(&notEqual);
@@ -1354,7 +1356,7 @@ CodeGeneratorARM::visitNotI(LNotI *ins)
 {
     // It is hard to optimize !x, so just do it the basic way for now.
     masm.ma_cmp(ToRegister(ins->input()), Imm32(0));
-    emitSet(Assembler::Equal, ToRegister(ins->output()));
+    masm.emitSet(Assembler::Equal, ToRegister(ins->output()));
     return true;
 }
 
@@ -1454,11 +1456,19 @@ CodeGeneratorARM::visitLoadElementT(LLoadElementT *load)
 {
     Register base = ToRegister(load->elements());
     if (load->mir()->type() == MIRType_Double) {
+        FloatRegister fpreg = ToFloatRegister(load->output());
         if (load->index()->isConstant()) {
             Address source(base, ToInt32(load->index()) * sizeof(Value));
-            masm.loadInt32OrDouble(source, ToFloatRegister(load->output()));
+            if (load->mir()->loadDoubles())
+                masm.loadDouble(source, fpreg);
+            else
+                masm.loadInt32OrDouble(source, fpreg);
         } else {
-            masm.loadInt32OrDouble(base, ToRegister(load->index()), ToFloatRegister(load->output()));
+            Register index = ToRegister(load->index());
+            if (load->mir()->loadDoubles())
+                masm.loadDouble(BaseIndex(base, index, TimesEight), fpreg);
+            else
+                masm.loadInt32OrDouble(base, index, fpreg);
         }
     } else {
         if (load->index()->isConstant()) {

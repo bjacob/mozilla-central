@@ -157,28 +157,34 @@ void MediaDecoder::ConnectDecodedStreamToOutputStream(OutputStreamData* aStream)
 }
 
 MediaDecoder::DecodedStreamData::DecodedStreamData(MediaDecoder* aDecoder,
-                                                       int64_t aInitialTime,
-                                                       SourceMediaStream* aStream)
+                                                   int64_t aInitialTime,
+                                                   SourceMediaStream* aStream)
   : mLastAudioPacketTime(-1),
     mLastAudioPacketEndTime(-1),
     mAudioFramesWritten(0),
     mInitialTime(aInitialTime),
     mNextVideoTime(aInitialTime),
+    mDecoder(aDecoder),
     mStreamInitialized(false),
     mHaveSentFinish(false),
     mHaveSentFinishAudio(false),
     mHaveSentFinishVideo(false),
     mStream(aStream),
-    mMainThreadListener(new DecodedStreamMainThreadListener(aDecoder)),
     mHaveBlockedForPlayState(false)
 {
-  mStream->AddMainThreadListener(mMainThreadListener);
+  mStream->AddMainThreadListener(this);
 }
 
 MediaDecoder::DecodedStreamData::~DecodedStreamData()
 {
-  mStream->RemoveMainThreadListener(mMainThreadListener);
+  mStream->RemoveMainThreadListener(this);
   mStream->Destroy();
+}
+
+void
+MediaDecoder::DecodedStreamData::NotifyMainThreadStateChanged()
+{
+  mDecoder->NotifyDecodedStreamMainThreadStateChanged();
 }
 
 void MediaDecoder::DestroyDecodedStream()
@@ -188,14 +194,18 @@ void MediaDecoder::DestroyDecodedStream()
 
   // All streams are having their SourceMediaStream disconnected, so they
   // need to be explicitly blocked again.
-  for (uint32_t i = 0; i < mOutputStreams.Length(); ++i) {
+  for (int32_t i = mOutputStreams.Length() - 1; i >= 0; --i) {
     OutputStreamData& os = mOutputStreams[i];
     // During cycle collection, nsDOMMediaStream can be destroyed and send
     // its Destroy message before this decoder is destroyed. So we have to
     // be careful not to send any messages after the Destroy().
-    if (!os.mStream->IsDestroyed()) {
-      os.mStream->ChangeExplicitBlockerCount(1);
+    if (os.mStream->IsDestroyed()) {
+      // Probably the DOM MediaStream was GCed. Clean up.
+      os.mPort->Destroy();
+      mOutputStreams.RemoveElementAt(i);
+      continue;
     }
+    os.mStream->ChangeExplicitBlockerCount(1);
     // Explicitly remove all existing ports. This is not strictly necessary but it's
     // good form.
     os.mPort->Destroy();
@@ -220,8 +230,15 @@ void MediaDecoder::RecreateDecodedStream(int64_t aStartTimeUSecs)
   // Note that the delay between removing ports in DestroyDecodedStream
   // and adding new ones won't cause a glitch since all graph operations
   // between main-thread stable states take effect atomically.
-  for (uint32_t i = 0; i < mOutputStreams.Length(); ++i) {
-    ConnectDecodedStreamToOutputStream(&mOutputStreams[i]);
+  for (int32_t i = mOutputStreams.Length() - 1; i >= 0; --i) {
+    OutputStreamData& os = mOutputStreams[i];
+    if (os.mStream->IsDestroyed()) {
+      // Probably the DOM MediaStream was GCed. Clean up.
+      // No need to destroy the port; all ports have been destroyed here.
+      mOutputStreams.RemoveElementAt(i);
+      continue;
+    }
+    ConnectDecodedStreamToOutputStream(&os);
   }
 
   mDecodedStream->mHaveBlockedForPlayState = mPlayState != PLAY_STATE_PLAYING;
@@ -244,7 +261,7 @@ void MediaDecoder::NotifyDecodedStreamMainThreadStateChanged()
 }
 
 void MediaDecoder::AddOutputStream(ProcessedMediaStream* aStream,
-                                       bool aFinishWhenEnded)
+                                   bool aFinishWhenEnded)
 {
   MOZ_ASSERT(NS_IsMainThread());
   LOG(PR_LOG_DEBUG, ("MediaDecoder::AddOutputStream this=%p aStream=%p!",
@@ -317,7 +334,7 @@ MediaDecoder::MediaDecoder() :
   mReentrantMonitor("media.decoder"),
   mPlayState(PLAY_STATE_PAUSED),
   mNextState(PLAY_STATE_PAUSED),
-  mResourceLoaded(false),
+  mCalledResourceLoaded(false),
   mIgnoreProgressData(false),
   mInfiniteStream(false),
   mTriggerPlaybackEndedWhenSourceStreamFinishes(false),
@@ -644,10 +661,19 @@ void MediaDecoder::QueueMetadata(int64_t aPublishTime,
                                  bool aHasVideo,
                                  MetadataTags* aTags)
 {
-  NS_ASSERTION(mDecoderStateMachine->OnDecodeThread(),
-               "Should be on decode thread.");
+  NS_ASSERTION(OnDecodeThread(), "Should be on decode thread.");
   GetReentrantMonitor().AssertCurrentThreadIn();
   mDecoderStateMachine->QueueMetadata(aPublishTime, aChannels, aRate, aHasAudio, aHasVideo, aTags);
+}
+
+bool
+MediaDecoder::IsDataCachedToEndOfResource()
+{
+  NS_ASSERTION(!mShuttingDown, "Don't call during shutdown!");
+  GetReentrantMonitor().AssertCurrentThreadIn();
+
+  return (mResource &&
+          mResource->IsDataCachedToEndOfResource(mDecoderPosition));
 }
 
 void MediaDecoder::MetadataLoaded(int aChannels, int aRate, bool aHasAudio, bool aHasVideo, MetadataTags* aTags)
@@ -675,7 +701,7 @@ void MediaDecoder::MetadataLoaded(int aChannels, int aRate, bool aHasAudio, bool
     mOwner->MetadataLoaded(aChannels, aRate, aHasAudio, aHasVideo, aTags);
   }
 
-  if (!mResourceLoaded) {
+  if (!mCalledResourceLoaded) {
     StartProgress();
   } else if (mOwner) {
     // Resource was loaded during metadata loading, when progress
@@ -686,10 +712,10 @@ void MediaDecoder::MetadataLoaded(int aChannels, int aRate, bool aHasAudio, bool
   // Only inform the element of FirstFrameLoaded if not doing a load() in order
   // to fulfill a seek, otherwise we'll get multiple loadedfirstframe events.
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-  bool resourceIsLoaded = !mResourceLoaded && mResource &&
-    mResource->IsDataCachedToEndOfResource(mDecoderPosition);
+  bool notifyResourceIsLoaded = !mCalledResourceLoaded &&
+                                IsDataCachedToEndOfResource();
   if (mOwner) {
-    mOwner->FirstFrameLoaded(resourceIsLoaded);
+    mOwner->FirstFrameLoaded(notifyResourceIsLoaded);
   }
 
   // This can run cache callbacks.
@@ -708,7 +734,7 @@ void MediaDecoder::MetadataLoaded(int aChannels, int aRate, bool aHasAudio, bool
     }
   }
 
-  if (resourceIsLoaded) {
+  if (notifyResourceIsLoaded) {
     ResourceLoaded();
   }
 
@@ -732,12 +758,12 @@ void MediaDecoder::ResourceLoaded()
     // If we are seeking or loading then the resource loaded notification we get
     // should be ignored, since it represents the end of the seek request.
     ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-    if (mIgnoreProgressData || mResourceLoaded || mPlayState == PLAY_STATE_LOADING)
+    if (mIgnoreProgressData || mCalledResourceLoaded || mPlayState == PLAY_STATE_LOADING)
       return;
 
     Progress(false);
 
-    mResourceLoaded = true;
+    mCalledResourceLoaded = true;
     StopProgress();
   }
 
@@ -801,12 +827,17 @@ void MediaDecoder::PlaybackEnded()
 
     for (int32_t i = mOutputStreams.Length() - 1; i >= 0; --i) {
       OutputStreamData& os = mOutputStreams[i];
+      if (os.mStream->IsDestroyed()) {
+        // Probably the DOM MediaStream was GCed. Clean up.
+        os.mPort->Destroy();
+        mOutputStreams.RemoveElementAt(i);
+        continue;
+      }
       if (os.mFinishWhenEnded) {
         // Shouldn't really be needed since mDecodedStream should already have
         // finished, but doesn't hurt.
         os.mStream->Finish();
         os.mPort->Destroy();
-        os.mPort = nullptr;
         // Not really needed but it keeps the invariant that a stream not
         // connected to mDecodedStream is explicity blocked.
         os.mStream->ChangeExplicitBlockerCount(1);
@@ -973,7 +1004,7 @@ void MediaDecoder::NotifyBytesConsumed(int64_t aBytes)
 {
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   NS_ENSURE_TRUE_VOID(mDecoderStateMachine);
-  MOZ_ASSERT(OnStateMachineThread() || mDecoderStateMachine->OnDecodeThread());
+  MOZ_ASSERT(OnStateMachineThread() || OnDecodeThread());
   if (!mIgnoreProgressData) {
     mDecoderPosition += aBytes;
     mPlaybackStatistics.AddBytes(aBytes);
@@ -1381,6 +1412,7 @@ void MediaDecoder::SetPreservesPitch(bool aPreservesPitch)
 }
 
 bool MediaDecoder::OnDecodeThread() const {
+  NS_WARN_IF_FALSE(mDecoderStateMachine, "mDecoderStateMachine is null");
   return mDecoderStateMachine ? mDecoderStateMachine->OnDecodeThread() : false;
 }
 

@@ -60,6 +60,7 @@ ChannelMediaResource::ChannelMediaResource(MediaDecoder* aDecoder,
     mSeekingForMetadata(false),
     mByteRangeDownloads(false),
     mByteRangeFirstOpen(true),
+    mIsTransportSeekable(true),
     mSeekOffsetMonitor("media.dashseekmonitor"),
     mSeekOffset(-1)
 {
@@ -308,6 +309,7 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
 
   {
     MutexAutoLock lock(mLock);
+    mIsTransportSeekable = seekable;
     mChannelStatistics->Start();
   }
 
@@ -331,6 +333,13 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
   mDecoder->Progress(false);
 
   return NS_OK;
+}
+
+bool
+ChannelMediaResource::IsTransportSeekable()
+{
+  MutexAutoLock lock(mLock);
+  return mIsTransportSeekable;
 }
 
 nsresult
@@ -548,18 +557,6 @@ ChannelMediaResource::OpenByteRange(nsIStreamListener** aStreamListener,
   NS_ENSURE_SUCCESS(rv, rv);
 
   return OpenChannel(aStreamListener);
-}
-
-void
-ChannelMediaResource::CancelByteRangeOpen()
-{
-  NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-
-  // Byte range download will be cancelled in |CacheClientSeek|. Here, we only
-  // need to notify the cache to in turn notify any waiting reads.
-  if (mByteRangeDownloads) {
-    mCacheStream.NotifyDownloadCancelled();
-  }
 }
 
 nsresult ChannelMediaResource::Open(nsIStreamListener **aStreamListener)
@@ -1313,6 +1310,7 @@ public:
     return false;
   }
   virtual bool    IsSuspended() { return false; }
+  virtual bool    IsTransportSeekable() MOZ_OVERRIDE { return true; }
 
   nsresult GetCachedRanges(nsTArray<MediaByteRange>& aRanges);
 

@@ -41,7 +41,6 @@ CPPSRCS		= \
 		nsSVGClass.cpp \
 		nsSVGDataParser.cpp \
 		nsSVGElement.cpp \
-		nsSVGElementFactory.cpp \
 		nsSVGEnum.cpp \
 		nsSVGFeatures.cpp \
 		nsSVGFilterElement.cpp \
@@ -49,7 +48,6 @@ CPPSRCS		= \
 		nsSVGInteger.cpp \
 		nsSVGIntegerPair.cpp \
 		nsSVGLength2.cpp \
-		nsSVGMarkerElement.cpp \
 		nsSVGNumber2.cpp \
 		nsSVGNumberPair.cpp \
 		nsSVGPathDataParser.cpp \
@@ -81,6 +79,7 @@ CPPSRCS		= \
 		SVGContentUtils.cpp \
 		SVGDefsElement.cpp \
 		SVGDescElement.cpp \
+		SVGElementFactory.cpp \
 		SVGEllipseElement.cpp \
 		SVGForeignObjectElement.cpp \
 		SVGFragmentIdentifier.cpp \
@@ -93,7 +92,7 @@ CPPSRCS		= \
 		SVGLengthList.cpp \
 		SVGLengthListSMILType.cpp \
 		SVGLineElement.cpp \
-		SVGLocatableElement.cpp \
+		SVGMarkerElement.cpp \
 		SVGMaskElement.cpp \
 		SVGMatrix.cpp \
 		SVGMetadataElement.cpp \
@@ -167,6 +166,7 @@ EXPORTS_mozilla/dom = \
 	SVGAnimationElement.h \
 	SVGClipPathElement.h \
 	SVGCircleElement.h \
+  SVGComponentTransferFunctionElement.h \
 	SVGDefsElement.h \
 	SVGDescElement.h \
 	SVGEllipseElement.h \
@@ -176,7 +176,7 @@ EXPORTS_mozilla/dom = \
 	SVGGraphicsElement.h \
 	SVGImageElement.h \
 	SVGLineElement.h \
-	SVGLocatableElement.h \
+	SVGMarkerElement.h \
 	SVGMaskElement.h \
 	SVGMatrix.h \
 	SVGMetadataElement.h \

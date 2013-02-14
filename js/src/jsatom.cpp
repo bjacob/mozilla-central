@@ -24,7 +24,6 @@
 #include "jsnum.h"
 #include "jsstr.h"
 #include "jsversion.h"
-#include "jsxml.h"
 
 #include "frontend/Parser.h"
 #include "gc/Marking.h"
@@ -57,7 +56,6 @@ const char * js::TypeStrings[] = {
     js_number_str,
     js_boolean_str,
     js_null_str,
-    js_xml_str,
 };
 
 #define DEFINE_PROTO_STRING(name,code,init) const char js_##name##_str[] = #name;
@@ -242,13 +240,13 @@ enum OwnCharsBehavior
  */
 JS_ALWAYS_INLINE
 static UnrootedAtom
-AtomizeAndTakeOwnership(JSContext *cx, StableCharPtr tbchars, size_t length,
+AtomizeAndTakeOwnership(JSContext *cx, const jschar *tbchars, size_t length,
                            InternBehavior ib)
 {
     JS_ASSERT(tbchars[length] == 0);
 
-    if (UnrootedAtom s = cx->runtime->staticStrings.lookup(tbchars.get(), length)) {
-        js_free((void*)tbchars.get());
+    if (UnrootedAtom s = cx->runtime->staticStrings.lookup(tbchars, length)) {
+        js_free((void*)tbchars);
         return s;
     }
 
@@ -258,21 +256,21 @@ AtomizeAndTakeOwnership(JSContext *cx, StableCharPtr tbchars, size_t length,
      * unchanged, we need to re-lookup the table position because a last-ditch
      * GC will potentially free some table entries.
      */
-    AtomHasher::Lookup lookup(tbchars.get(), length);
+    AtomHasher::Lookup lookup(tbchars, length);
     AtomSet::AddPtr p = cx->runtime->atoms.lookupForAdd(lookup);
     SkipRoot skipHash(cx, &p); /* Prevent the hash from being poisoned. */
     if (p) {
         UnrootedAtom atom = p->asPtr();
         p->setTagged(bool(ib));
-        js_free((void*)tbchars.get());
+        js_free((void*)tbchars);
         return atom;
     }
 
     AutoEnterAtomsCompartment ac(cx);
 
-    UnrootedFlatString flat = js_NewString(cx, const_cast<jschar*>(tbchars.get()), length);
+    UnrootedFlatString flat = js_NewString<CanGC>(cx, const_cast<jschar*>(tbchars), length);
     if (!flat) {
-        js_free((void*)tbchars.get());
+        js_free((void*)tbchars);
         return UnrootedAtom();
     }
 
@@ -287,9 +285,10 @@ AtomizeAndTakeOwnership(JSContext *cx, StableCharPtr tbchars, size_t length,
 }
 
 /* |tbchars| must not point into an inline or short string. */
+template <AllowGC allowGC>
 JS_ALWAYS_INLINE
 static UnrootedAtom
-AtomizeAndCopyStableChars(JSContext *cx, const jschar *tbchars, size_t length, InternBehavior ib)
+AtomizeAndCopyChars(JSContext *cx, const jschar *tbchars, size_t length, InternBehavior ib)
 {
     if (UnrootedAtom s = cx->runtime->staticStrings.lookup(tbchars, length))
          return s;
@@ -311,7 +310,7 @@ AtomizeAndCopyStableChars(JSContext *cx, const jschar *tbchars, size_t length, I
 
     AutoEnterAtomsCompartment ac(cx);
 
-    UnrootedFlatString flat = js_NewStringCopyN(cx, tbchars, length);
+    UnrootedFlatString flat = js_NewStringCopyN<allowGC>(cx, tbchars, length);
     if (!flat)
         return UnrootedAtom();
 
@@ -325,6 +324,7 @@ AtomizeAndCopyStableChars(JSContext *cx, const jschar *tbchars, size_t length, I
     return atom;
 }
 
+template <AllowGC allowGC>
 UnrootedAtom
 js::AtomizeString(JSContext *cx, JSString *str, js::InternBehavior ib /* = js::DoNotInternAtom */)
 {
@@ -344,13 +344,29 @@ js::AtomizeString(JSContext *cx, JSString *str, js::InternBehavior ib /* = js::D
         return &atom;
     }
 
-    JSStableString *stable = str->ensureStable(cx);
-    if (!stable)
+    const jschar *chars = str->getChars(cx);
+    if (!chars)
         return NULL;
 
-    JS_ASSERT(stable->length() <= JSString::MAX_LENGTH);
-    return AtomizeAndCopyStableChars(cx, stable->chars().get(), stable->length(), ib);
+    if (JSAtom *atom = AtomizeAndCopyChars<NoGC>(cx, chars, str->length(), ib))
+        return atom;
+
+    if (!allowGC)
+        return NULL;
+
+    JSLinearString *linear = str->ensureLinear(cx);
+    if (!linear)
+        return NULL;
+
+    JS_ASSERT(linear->length() <= JSString::MAX_LENGTH);
+    return AtomizeAndCopyChars<CanGC>(cx, linear->chars(), linear->length(), ib);
 }
+
+template UnrootedAtom
+js::AtomizeString<CanGC>(JSContext *cx, JSString *str, js::InternBehavior ib);
+
+template UnrootedAtom
+js::AtomizeString<NoGC>(JSContext *cx, JSString *str, js::InternBehavior ib);
 
 UnrootedAtom
 js::Atomize(JSContext *cx, const char *bytes, size_t length, InternBehavior ib)
@@ -361,7 +377,6 @@ js::Atomize(JSContext *cx, const char *bytes, size_t length, InternBehavior ib)
     if (!JSString::validateLength(cx, length))
         return NULL;
 
-    UnrootedAtom atom;
     static const unsigned ATOMIZE_BUF_MAX = 32;
     if (length < ATOMIZE_BUF_MAX) {
         /*
@@ -374,31 +389,37 @@ js::Atomize(JSContext *cx, const char *bytes, size_t length, InternBehavior ib)
         jschar inflated[ATOMIZE_BUF_MAX];
         size_t inflatedLength = ATOMIZE_BUF_MAX - 1;
         InflateStringToBuffer(cx, bytes, length, inflated, &inflatedLength);
-        atom = AtomizeAndCopyStableChars(cx, inflated, inflatedLength, ib);
-    } else {
-        jschar *tbcharsZ = InflateString(cx, bytes, &length);
-        if (!tbcharsZ)
-            return UnrootedAtom();
-        atom = AtomizeAndTakeOwnership(cx, StableCharPtr(tbcharsZ, length), length, ib);
+        return AtomizeAndCopyChars<CanGC>(cx, inflated, inflatedLength, ib);
     }
 
-    return atom;
+    jschar *tbcharsZ = InflateString(cx, bytes, &length);
+    if (!tbcharsZ)
+        return UnrootedAtom();
+    return AtomizeAndTakeOwnership(cx, tbcharsZ, length, ib);
 }
 
+template <AllowGC allowGC>
 UnrootedAtom
 js::AtomizeChars(JSContext *cx, const jschar *chars, size_t length, InternBehavior ib)
 {
-    AssertCanGC();
     CHECK_REQUEST(cx);
 
     if (!JSString::validateLength(cx, length))
         return NULL;
 
-    return AtomizeAndCopyStableChars(cx, chars, length, ib);
+    return AtomizeAndCopyChars<allowGC>(cx, chars, length, ib);
 }
 
+template UnrootedAtom
+js::AtomizeChars<CanGC>(JSContext *cx, const jschar *chars, size_t length, InternBehavior ib);
+
+template UnrootedAtom
+js::AtomizeChars<NoGC>(JSContext *cx, const jschar *chars, size_t length, InternBehavior ib);
+
+template <AllowGC allowGC>
 bool
-js::IndexToIdSlow(JSContext *cx, uint32_t index, MutableHandleId idp)
+js::IndexToIdSlow(JSContext *cx, uint32_t index,
+                  typename MaybeRooted<jsid, allowGC>::MutableHandleType idp)
 {
     JS_ASSERT(index > JSID_INT_MAX);
 
@@ -406,7 +427,7 @@ js::IndexToIdSlow(JSContext *cx, uint32_t index, MutableHandleId idp)
     RangedPtr<jschar> end(ArrayEnd(buf), buf, ArrayEnd(buf));
     RangedPtr<jschar> start = BackfillIndexInCharBuffer(index, end);
 
-    JSAtom *atom = AtomizeChars(cx, start.get(), end - start);
+    JSAtom *atom = AtomizeChars<allowGC>(cx, start.get(), end - start);
     if (!atom)
         return false;
 
@@ -414,34 +435,19 @@ js::IndexToIdSlow(JSContext *cx, uint32_t index, MutableHandleId idp)
     return true;
 }
 
+template bool
+js::IndexToIdSlow<CanGC>(JSContext *cx, uint32_t index, MutableHandleId idp);
+
+template bool
+js::IndexToIdSlow<NoGC>(JSContext *cx, uint32_t index, FakeMutableHandle<jsid> idp);
+
+template <AllowGC allowGC>
 bool
 js::InternNonIntElementId(JSContext *cx, JSObject *obj, const Value &idval,
-                          MutableHandleId idp, MutableHandleValue vp)
+                          typename MaybeRooted<jsid, allowGC>::MutableHandleType idp,
+                          typename MaybeRooted<Value, allowGC>::MutableHandleType vp)
 {
-#if JS_HAS_XML_SUPPORT
-    if (idval.isObject()) {
-        JSObject *idobj = &idval.toObject();
-
-        if (obj && obj->isXML()) {
-            idp.set(OBJECT_TO_JSID(idobj));
-            vp.set(idval);
-            return true;
-        }
-
-        if (js_GetLocalNameFromFunctionQName(idobj, idp.address(), cx)) {
-            vp.set(IdToValue(idp));
-            return true;
-        }
-
-        if (!obj && idobj->isXMLId()) {
-            idp.set(OBJECT_TO_JSID(idobj));
-            vp.set(idval);
-            return JS_TRUE;
-        }
-    }
-#endif
-
-    JSAtom *atom = ToAtom(cx, idval);
+    JSAtom *atom = ToAtom<allowGC>(cx, idval);
     if (!atom)
         return false;
 
@@ -449,6 +455,14 @@ js::InternNonIntElementId(JSContext *cx, JSObject *obj, const Value &idval,
     vp.setString(atom);
     return true;
 }
+
+template bool
+js::InternNonIntElementId<CanGC>(JSContext *cx, JSObject *obj, const Value &idval,
+                                 MutableHandleId idp, MutableHandleValue vp);
+
+template bool
+js::InternNonIntElementId<NoGC>(JSContext *cx, JSObject *obj, const Value &idval,
+                                FakeMutableHandle<jsid> idp, FakeMutableHandle<Value> vp);
 
 template<XDRMode mode>
 bool
@@ -477,7 +491,7 @@ js::XDRAtom(XDRState<mode> *xdr, MutableHandleAtom atomp)
 #if IS_LITTLE_ENDIAN
     /* Directly access the little endian chars in the XDR buffer. */
     const jschar *chars = reinterpret_cast<const jschar *>(xdr->buf.read(nchars * sizeof(jschar)));
-    atom = AtomizeChars(cx, chars, nchars);
+    atom = AtomizeChars<CanGC>(cx, chars, nchars);
 #else
     /*
      * We must copy chars to a temporary buffer to convert between little and
@@ -499,7 +513,7 @@ js::XDRAtom(XDRState<mode> *xdr, MutableHandleAtom atomp)
     }
 
     JS_ALWAYS_TRUE(xdr->codeChars(chars, nchars));
-    atom = AtomizeChars(cx, chars, nchars);
+    atom = AtomizeChars<CanGC>(cx, chars, nchars);
     if (chars != stackChars)
         js_free(chars);
 #endif /* !IS_LITTLE_ENDIAN */

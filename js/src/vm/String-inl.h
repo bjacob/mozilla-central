@@ -21,14 +21,15 @@
 
 namespace js {
 
+template <AllowGC allowGC>
 static JS_ALWAYS_INLINE JSInlineString *
 NewShortString(JSContext *cx, Latin1Chars chars)
 {
     size_t len = chars.length();
     JS_ASSERT(JSShortString::lengthFits(len));
     UnrootedInlineString str = JSInlineString::lengthFits(len)
-                               ? JSInlineString::new_<ALLOW_GC>(cx)
-                               : JSShortString::new_<ALLOW_GC>(cx);
+                               ? JSInlineString::new_<allowGC>(cx)
+                               : JSShortString::new_<allowGC>(cx);
     if (!str)
         return NULL;
 
@@ -40,6 +41,7 @@ NewShortString(JSContext *cx, Latin1Chars chars)
     return str;
 }
 
+template <AllowGC allowGC>
 static JS_ALWAYS_INLINE JSInlineString *
 NewShortString(JSContext *cx, StableTwoByteChars chars)
 {
@@ -51,8 +53,8 @@ NewShortString(JSContext *cx, StableTwoByteChars chars)
      */
     JS_ASSERT(JSShortString::lengthFits(len));
     JSInlineString *str = JSInlineString::lengthFits(len)
-                          ? JSInlineString::new_<ALLOW_GC>(cx)
-                          : JSShortString::new_<ALLOW_GC>(cx);
+                          ? JSInlineString::new_<allowGC>(cx)
+                          : JSShortString::new_<allowGC>(cx);
     if (!str)
         return NULL;
 
@@ -63,6 +65,7 @@ NewShortString(JSContext *cx, StableTwoByteChars chars)
     return str;
 }
 
+template <AllowGC allowGC>
 static JS_ALWAYS_INLINE JSInlineString *
 NewShortString(JSContext *cx, TwoByteChars chars)
 {
@@ -74,12 +77,14 @@ NewShortString(JSContext *cx, TwoByteChars chars)
      */
     JS_ASSERT(JSShortString::lengthFits(len));
     JSInlineString *str = JSInlineString::lengthFits(len)
-                          ? JSInlineString::new_<DONT_ALLOW_GC>(cx)
-                          : JSShortString::new_<DONT_ALLOW_GC>(cx);
+                          ? JSInlineString::new_<NoGC>(cx)
+                          : JSShortString::new_<NoGC>(cx);
     if (!str) {
+        if (!allowGC)
+            return NULL;
         jschar tmp[JSShortString::MAX_SHORT_LENGTH];
         PodCopy(tmp, chars.start().get(), len);
-        return NewShortString(cx, StableTwoByteChars(tmp, len));
+        return NewShortString<CanGC>(cx, StableTwoByteChars(tmp, len));
     }
 
     jschar *storage = str->init(len);
@@ -90,18 +95,18 @@ NewShortString(JSContext *cx, TwoByteChars chars)
 }
 
 static inline void
-StringWriteBarrierPost(JSCompartment *comp, JSString **strp)
+StringWriteBarrierPost(JSRuntime *rt, JSString **strp)
 {
 #ifdef JSGC_GENERATIONAL
-    comp->gcStoreBuffer.putRelocatableCell(reinterpret_cast<gc::Cell **>(strp));
+    rt->gcStoreBuffer.putRelocatableCell(reinterpret_cast<gc::Cell **>(strp));
 #endif
 }
 
 static inline void
-StringWriteBarrierPostRemove(JSCompartment *comp, JSString **strp)
+StringWriteBarrierPostRemove(JSRuntime *rt, JSString **strp)
 {
 #ifdef JSGC_GENERATIONAL
-    comp->gcStoreBuffer.removeRelocatableCell(reinterpret_cast<gc::Cell **>(strp));
+    rt->gcStoreBuffer.removeRelocatableCell(reinterpret_cast<gc::Cell **>(strp));
 #endif
 }
 
@@ -114,10 +119,10 @@ JSString::writeBarrierPre(JSString *str)
     if (!str)
         return;
 
-    JSCompartment *comp = str->compartment();
-    if (comp->needsBarrier()) {
+    JS::Zone *zone = str->zone();
+    if (zone->needsBarrier()) {
         JSString *tmp = str;
-        MarkStringUnbarriered(comp->barrierTracer(), &tmp, "write barrier");
+        MarkStringUnbarriered(zone->barrierTracer(), &tmp, "write barrier");
         JS_ASSERT(tmp == str);
     }
 #endif
@@ -129,15 +134,15 @@ JSString::writeBarrierPost(JSString *str, void *addr)
 #ifdef JSGC_GENERATIONAL
     if (!str)
         return;
-    str->compartment()->gcStoreBuffer.putCell((Cell **)addr);
+    str->runtime()->gcStoreBuffer.putCell((Cell **)addr);
 #endif
 }
 
 inline bool
-JSString::needWriteBarrierPre(JSCompartment *comp)
+JSString::needWriteBarrierPre(JS::Zone *zone)
 {
 #ifdef JSGC_INCREMENTAL
-    return comp->needsBarrier();
+    return zone->needsBarrier();
 #else
     return false;
 #endif
@@ -147,10 +152,10 @@ inline void
 JSString::readBarrier(JSString *str)
 {
 #ifdef JSGC_INCREMENTAL
-    JSCompartment *comp = str->compartment();
-    if (comp->needsBarrier()) {
+    JS::Zone *zone = str->zone();
+    if (zone->needsBarrier()) {
         JSString *tmp = str;
-        MarkStringUnbarriered(comp->barrierTracer(), &tmp, "read barrier");
+        MarkStringUnbarriered(zone->barrierTracer(), &tmp, "read barrier");
         JS_ASSERT(tmp == str);
     }
 #endif
@@ -173,16 +178,16 @@ JSRope::init(JSString *left, JSString *right, size_t length)
     d.lengthAndFlags = buildLengthAndFlags(length, ROPE_FLAGS);
     d.u1.left = left;
     d.s.u2.right = right;
-    js::StringWriteBarrierPost(compartment(), &d.u1.left);
-    js::StringWriteBarrierPost(compartment(), &d.s.u2.right);
+    js::StringWriteBarrierPost(runtime(), &d.u1.left);
+    js::StringWriteBarrierPost(runtime(), &d.s.u2.right);
 }
 
 template <js::AllowGC allowGC>
 JS_ALWAYS_INLINE JSRope *
-JSRope::newStringMaybeAllowGC(JSContext *cx,
-                              typename js::MaybeRooted<JSString*, allowGC>::HandleType left,
-                              typename js::MaybeRooted<JSString*, allowGC>::HandleType right,
-                              size_t length)
+JSRope::new_(JSContext *cx,
+             typename js::MaybeRooted<JSString*, allowGC>::HandleType left,
+             typename js::MaybeRooted<JSString*, allowGC>::HandleType right,
+             size_t length)
 {
     if (!validateLength(cx, length))
         return NULL;
@@ -207,26 +212,24 @@ JSDependentString::init(JSLinearString *base, const jschar *chars, size_t length
     d.lengthAndFlags = buildLengthAndFlags(length, DEPENDENT_FLAGS);
     d.u1.chars = chars;
     d.s.u2.base = base;
-    js::StringWriteBarrierPost(compartment(), reinterpret_cast<JSString **>(&d.s.u2.base));
+    js::StringWriteBarrierPost(runtime(), reinterpret_cast<JSString **>(&d.s.u2.base));
 }
 
 JS_ALWAYS_INLINE JSLinearString *
 JSDependentString::new_(JSContext *cx, JSLinearString *baseArg, const jschar *chars, size_t length)
 {
-    js::Rooted<JSLinearString*> base(cx, baseArg);
-
     /* Try to avoid long chains of dependent strings. */
-    while (base->isDependent())
-        base = base->asDependent().base();
+    while (baseArg->isDependent())
+        baseArg = baseArg->asDependent().base();
 
-    JS_ASSERT(base->isFlat());
+    JS_ASSERT(baseArg->isFlat());
 
     /*
      * The chars we are pointing into must be owned by something in the chain
      * of dependent or undepended strings kept alive by our base pointer.
      */
 #ifdef DEBUG
-    for (JSLinearString *b = base; ; b = b->base()) {
+    for (JSLinearString *b = baseArg; ; b = b->base()) {
         if (chars >= b->chars() && chars < b->chars() + b->length() &&
             length <= b->length() - (chars - b->chars()))
         {
@@ -241,9 +244,17 @@ JSDependentString::new_(JSContext *cx, JSLinearString *baseArg, const jschar *ch
      * is more efficient to immediately undepend here.
      */
     if (JSShortString::lengthFits(length))
-        return js::NewShortString(cx, js::TwoByteChars(chars, length));
+        return js::NewShortString<js::CanGC>(cx, js::TwoByteChars(chars, length));
 
-    JSDependentString *str = (JSDependentString *)js_NewGCString<js::ALLOW_GC>(cx);
+    JSDependentString *str = (JSDependentString *)js_NewGCString<js::NoGC>(cx);
+    if (str) {
+        str->init(baseArg, chars, length);
+        return str;
+    }
+
+    js::Rooted<JSLinearString*> base(cx, baseArg);
+
+    str = (JSDependentString *)js_NewGCString<js::CanGC>(cx);
     if (!str)
         return NULL;
     str->init(base, chars, length);
@@ -266,7 +277,7 @@ JSFlatString::toPropertyName(JSContext *cx)
 #endif
     if (isAtom())
         return asAtom().asPropertyName();
-    JSAtom *atom = js::AtomizeString(cx, this);
+    JSAtom *atom = js::AtomizeString<js::CanGC>(cx, this);
     if (!atom)
         return NULL;
     return atom->asPropertyName();
@@ -286,6 +297,7 @@ JSStableString::init(const jschar *chars, size_t length)
     d.u1.chars = chars;
 }
 
+template <js::AllowGC allowGC>
 JS_ALWAYS_INLINE JSStableString *
 JSStableString::new_(JSContext *cx, const jschar *chars, size_t length)
 {
@@ -293,7 +305,7 @@ JSStableString::new_(JSContext *cx, const jschar *chars, size_t length)
 
     if (!validateLength(cx, length))
         return NULL;
-    JSStableString *str = (JSStableString *)js_NewGCString<js::ALLOW_GC>(cx);
+    JSStableString *str = (JSStableString *)js_NewGCString<allowGC>(cx);
     if (!str)
         return NULL;
     str->init(chars, length);
@@ -352,7 +364,7 @@ JSExternalString::new_(JSContext *cx, const jschar *chars, size_t length,
     if (!str)
         return NULL;
     str->init(chars, length, fin);
-    cx->runtime->updateMallocCounter(cx, (length + 1) * sizeof(jschar));
+    cx->runtime->updateMallocCounter(cx->compartment->zone(), (length + 1) * sizeof(jschar));
     return str;
 }
 

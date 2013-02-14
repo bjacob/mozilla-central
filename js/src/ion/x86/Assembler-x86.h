@@ -144,6 +144,16 @@ class Operand
         base_(reinterpret_cast<int32_t>(address))
     { }
 
+    Address toAddress() {
+        JS_ASSERT(kind() == REG_DISP);
+        return Address(Register::FromCode(base()), disp());
+    }
+
+    BaseIndex toBaseIndex() {
+        JS_ASSERT(kind() == SCALE);
+        return BaseIndex(Register::FromCode(base()), Register::FromCode(index()), scale(), disp());
+    }
+
     Kind kind() const {
         return kind_;
     }
@@ -310,9 +320,6 @@ class Assembler : public AssemblerX86Shared
           default:
             JS_NOT_REACHED("unexpected operand kind");
         }
-    }
-    void cvttsd2s(const FloatRegister &src, const Register &dest) {
-        cvttsd2si(src, dest);
     }
 
     void cmpl(const Register src, ImmWord ptr) {

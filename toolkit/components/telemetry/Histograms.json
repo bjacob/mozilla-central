@@ -84,7 +84,7 @@
   },
   "GC_REASON_2": {
     "kind": "enumerated",
-    "n_values": "js::gcreason::NUM_TELEMETRY_REASONS",
+    "n_values": "JS::gcreason::NUM_TELEMETRY_REASONS",
     "description": "Reason (enum value) for initiating a GC"
   },
   "GC_IS_COMPARTMENTAL": {
@@ -1472,6 +1472,18 @@
     "kind": "boolean",
     "description": "Whether the user has requested not to see the Plugin Hang UI again"
   },
+  "PLUGIN_HANG_UI_RESPONSE_TIME": {
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 20,
+    "description": "Time spent in Plugin Hang UI (ms)"
+  },
+  "PLUGIN_HANG_TIME": {
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 20,
+    "description": "Value of dom.ipc.plugins.hangUITimeoutSecs plus time spent in Plugin Hang UI (ms)"
+  },
   "PLUGIN_SHUTDOWN_MS": {
     "kind": "exponential",
     "high": "5000",
@@ -2060,6 +2072,45 @@
     "n_buckets": 10,
     "description": "Firefox: Time taken by the tab closing animation in milliseconds"
   },
+  "FX_TAB_ANIM_OPEN_PREVIEW_FRAME_INTERVAL_MS": {
+    "kind": "exponential",
+    "low" : 7,
+    "high": "500",
+    "n_buckets": 50,
+    "description": "Average frame interval during tab open animation of about:newtab (preview=on), when other tabs are unaffected"
+  },
+  "FX_TAB_ANIM_OPEN_PREVIEW_FRAME_PAINT_MS": {
+    "kind": "exponential",
+    "high": "500",
+    "n_buckets": 30,
+    "description": "Average paint duration during tab open animation of about:newtab (preview=on), when other tabs are unaffected"
+  },
+  "FX_TAB_ANIM_OPEN_FRAME_INTERVAL_MS": {
+    "kind": "exponential",
+    "low" : 7,
+    "high": "500",
+    "n_buckets": 50,
+    "description": "Average frame interval during tab open animation of about:newtab (preview=off), when other tabs are unaffected"
+  },
+  "FX_TAB_ANIM_OPEN_FRAME_PAINT_MS": {
+    "kind": "exponential",
+    "high": "500",
+    "n_buckets": 30,
+    "description": "Average paint duration during tab open animation of about:newtab (preview=off), when other tabs are unaffected"
+  },
+  "FX_TAB_ANIM_ANY_FRAME_INTERVAL_MS": {
+    "kind": "exponential",
+    "low" : 7,
+    "high": "500",
+    "n_buckets": 50,
+    "description": "Average frame interval during any tab open/close animation (excluding tabstrip scroll)"
+  },
+  "FX_TAB_ANIM_ANY_FRAME_PAINT_MS": {
+    "kind": "exponential",
+    "high": "500",
+    "n_buckets": 30,
+    "description": "Average paint duration during any tab open/close animation (excluding tabstrip scroll)"
+  },
   "FX_TAB_SWITCH_UPDATE_MS": {
     "kind": "exponential",
     "high": "1000",
@@ -2142,11 +2193,23 @@
     "n_buckets": 10,
     "description": "Session restore: Time to collect all window and tab data (ms)"
   },
+  "FX_SESSION_RESTORE_COLLECT_DATA_LONGEST_OP_MS": {
+    "kind": "exponential",
+    "high": "30000",
+    "n_buckets": 10,
+    "description": "Session restore: Duration of the longest uninterruptible operation while collecting all window and tab data (ms)"
+  },
   "FX_SESSION_RESTORE_SERIALIZE_DATA_MS": {
     "kind": "exponential",
     "high": "1000",
     "n_buckets": 10,
     "description": "Session restore: Time to JSON serialize session data (ms)"
+  },
+  "FX_SESSION_RESTORE_SERIALIZE_DATA_LONGEST_OP_MS": {
+    "kind": "exponential",
+    "high": "30000",
+    "n_buckets": 10,
+    "description": "Session restore: Duration of the longest uninterruptible operation while serializing session data (ms)"
   },
   "FX_SESSION_RESTORE_READ_FILE_MS": {
     "kind": "exponential",
@@ -2211,30 +2274,6 @@
   "MULTIPART_XHR_RESPONSE": {
     "kind": "boolean",
     "description": "XMLHttpRequest response was of type multipart/x-mixed-replace."
-  },
-  "PRIVATE_BROWSING_TRANSITION_ENTER_PREPARATION_MS": {
-    "kind": "exponential",
-    "high": "3000",
-    "n_buckets": 10,
-    "description": "Time spent on private browsing enter transition, excluding session restore (ms)"
-  },
-  "PRIVATE_BROWSING_TRANSITION_ENTER_TOTAL_MS": {
-    "kind": "exponential",
-    "high": "10000",
-    "n_buckets": 50,
-    "description": "Time spent on private browsing enter transition, including session restore (ms)"
-  },
-  "PRIVATE_BROWSING_TRANSITION_EXIT_PREPARATION_MS": {
-    "kind": "exponential",
-    "high": "3000",
-    "n_buckets": 10,
-    "description": "Time spent on private browsing exit transition, excluding session restore (ms)"
-  },
-  "PRIVATE_BROWSING_TRANSITION_EXIT_TOTAL_MS": {
-    "kind": "exponential",
-    "high": "10000",
-    "n_buckets": 50,
-    "description": "Time spent on private browsing exit transition, including session restore (ms)"
   },
   "DOM_TIMERS_FIRED_PER_NATIVE_TIMEOUT": {
     "kind": "exponential",
@@ -2582,5 +2621,48 @@
     "high": "60000",
     "n_buckets": 50,
     "description": "Time spent on an initially failed cert  verification in classic mode (ms)"
+  },
+  "HEALTHREPORT_INIT_MS": {
+    "kind": "exponential",
+    "high": "20000",
+    "n_buckets": 15,
+    "description": "Time (ms) spent to initialize Firefox Health Report service."
+  },
+  "HEALTHREPORT_SHUTDOWN_DELAY_MS": {
+    "kind": "exponential",
+    "high": "20000",
+    "n_buckets": 15,
+    "description": "Time (ms) that Firefox Health Report delays application shutdown by."
+  },
+  "HEALTHREPORT_GENERATE_JSON_PAYLOAD_MS": {
+    "kind": "exponential",
+    "high": "30000",
+    "n_buckets": 20,
+    "description": "Time (ms) it takes to obtain and format a Health Report JSON payload."
+  },
+  "HEALTHREPORT_PAYLOAD_UNCOMPRESSED_BYTES": {
+    "kind": "linear",
+    "high": "2000000",
+    "n_buckets": 202,
+    "description": "Size (in bytes) of the raw Health Report payload."
+  },
+  "HEALTHREPORT_UPLOAD_MS": {
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 20,
+    "description": "Time (ms) it takes to upload the Health Report payload."
+  },
+  "HEALTHREPORT_SAVE_LAST_PAYLOAD_MS": {
+    "kind": "exponential",
+    "high": "10000",
+    "n_buckets": 10,
+    "description": "Time (ms) it takes to persist the last submitted Health Report payload to disk."
+  },
+  "POPUP_NOTIFICATION_MAINACTION_TRIGGERED_MS": {
+    "kind": "linear",
+    "low": 25,
+    "high": "80 * 25",
+    "n_buckets": "80 + 1",
+    "description": "The time (in milliseconds) after showing a PopupNotification that the mainAction was first triggered"
   }
 }

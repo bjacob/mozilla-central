@@ -435,16 +435,6 @@ fi
 AC_SUBST(CRTDLLVERSION)
 AC_SUBST(CRTEXPDLLVERSION)
 
-if test -n "$MOZ_METRO"; then
-  case "$target" in
-  *-mingw*)
-    ;;
-  *)
-    AC_MSG_ERROR([Metro builds only valid on the windows platform.]);
-    ;;
-  esac
-fi
-
 MOZ_ARG_WITH_STRING(windows-version,
 [  --with-windows-version=WINSDK_TARGETVER
                           Windows SDK version to target. Lowest version
@@ -1449,6 +1439,7 @@ if test "$GNU_CC"; then
 
     _DEFINES_CFLAGS='-include $(DEPTH)/mozilla-config.h -DMOZILLA_CLIENT'
     _USE_CPP_INCLUDE_FLAG=1
+    ASFLAGS="$ASFLAGS $_DEFINES_CFLAGS"
 
 elif test "$SOLARIS_SUNPRO_CC"; then
     DSO_CFLAGS=''
@@ -2189,6 +2180,11 @@ ia64*-hpux*)
         dnl Probably also a compiler bug, but what can you do?
         PROFILE_USE_LDFLAGS="-LTCG:PGUPDATE"
         LDFLAGS="$LDFLAGS -DYNAMICBASE"
+        if test "$_MSC_VER" -ge 1500; then
+            dnl VS2008 or later supports SSSE3
+            HAVE_TOOLCHAIN_SUPPORT_MSSSE3=1
+            AC_SUBST(HAVE_TOOLCHAIN_SUPPORT_MSSSE3)
+        fi
     fi
     AC_DEFINE(HAVE_SNPRINTF)
     AC_DEFINE(_WINDOWS)
@@ -3863,7 +3859,7 @@ MOZ_ARG_WITH_BOOL(system-nspr,
     _USE_SYSTEM_NSPR=1 )
 
 if test -n "$_USE_SYSTEM_NSPR"; then
-    AM_PATH_NSPR(4.9.4, [MOZ_NATIVE_NSPR=1], [AC_MSG_ERROR([your don't have NSPR installed or your version is too old])])
+    AM_PATH_NSPR(4.9.6, [MOZ_NATIVE_NSPR=1], [AC_MSG_ERROR([your don't have NSPR installed or your version is too old])])
 fi
 
 if test -n "$MOZ_NATIVE_NSPR"; then
@@ -5216,12 +5212,8 @@ dnl the master list above.
 if test -n "$MOZ_WEBRTC"; then
     case "$target" in
     *-android*|*-linuxandroid*)
-        if test -n "$MOZ_B2G"; then
-            MOZ_WEBRTC=1
-        else
-            dnl Make sure doesn't get matched by *-linux*
-            MOZ_WEBRTC=
-        fi
+        dnl Make sure doesn't get matched by *-linux*
+        MOZ_WEBRTC=
         ;;
     *-linux*|*-mingw*|*-darwin*)
         dnl Leave enabled
@@ -5249,20 +5241,18 @@ if test -n "$MOZ_WEBRTC"; then
     MOZ_VP8_ENCODER=1
     MOZ_VP8_ERROR_CONCEALMENT=1
 
-    if test "$MOZ_WIDGET_TOOLKIT" != "gonk"; then
-       dnl OpenSLES is only available in Android 2.3 and later; we'll change this
-       dnl hard dependency to a dynamic load with graceful runtime failure before
-       dnl we make --enable-webrtc on by default in Android (bug 815905)
-       dnl
-       if test "$OS_TARGET" = "Android"; then
-          LDFLAGS="$LDFLAGS -lOpenSLES"
-       fi
-       case "$target" in
-          *-android*|*-linuxandroid*)
-          LDFLAGS="$LDFLAGS -lOpenSLES"
-          ;;
-       esac
+    dnl OpenSLES is only available in Android 2.3 and later; we'll change this
+    dnl hard dependency to a dynamic load with graceful runtime failure before
+    dnl we make --enable-webrtc on by default in Android (bug 815905)
+    dnl
+    if test "$OS_TARGET" = "Android"; then
+       LDFLAGS="$LDFLAGS -lOpenSLES"
     fi
+    case "$target" in
+    *-android*|*-linuxandroid*)
+       LDFLAGS="$LDFLAGS -lOpenSLES"
+       ;;
+    esac
 
 dnl enable once Signaling lands
     MOZ_WEBRTC_SIGNALING=1
@@ -5733,9 +5723,7 @@ if test "$MOZ_GSTREAMER"; then
     # API version, eg 0.10, 1.0 etc
     GST_API_VERSION=0.10
     # core/base release number
-    # depend on >= 0.10.33 as that's when the playbin2 source-setup signal was
-    # introduced
-    GST_VERSION=0.10.33
+    GST_VERSION=0.10.25
     PKG_CHECK_MODULES(GSTREAMER,
                       gstreamer-$GST_API_VERSION >= $GST_VERSION
                       gstreamer-app-$GST_API_VERSION
@@ -5826,12 +5814,13 @@ fi
 
 MOZ_PATH_PROG(JAVA, java, :, [$JAVA_PATH])
 MOZ_PATH_PROG(JAVAC, javac, :, [$JAVA_PATH])
+MOZ_PATH_PROG(JAVAH, javah, :, [$JAVA_PATH])
 MOZ_PATH_PROG(JAR, jar, :, [$JAVA_PATH])
 
 if test -n "${JAVA_BIN_PATH}" -o \
   \( "$OS_TARGET" = Android -a x"$MOZ_WIDGET_TOOLKIT" != x"gonk" \); then
-  if test -z "$JAVA" -o "$JAVA" = ":" -o -z "$JAVAC" -o "$JAVAC" = ":" -o -z "$JAR" -o "$JAR" = ":"; then
-    AC_MSG_ERROR([The programs java, javac and jar were not found.  Set \$JAVA_HOME to your java sdk directory or use --with-java-bin-path={java-bin-dir}])
+  if test -z "$JAVA" -o "$JAVA" = ":" -o -z "$JAVAC" -o "$JAVAC" = ":" -o -z "$JAVAH" -o "$JAVAH" = ":" -o -z "$JAR" -o "$JAR" = ":"; then
+    AC_MSG_ERROR([The programs java, javac, javah and jar were not found.  Set \$JAVA_HOME to your java sdk directory or use --with-java-bin-path={java-bin-dir}])
   fi
 fi
 
@@ -5843,10 +5832,7 @@ dnl ========================================================
 MOZ_ANGLE_RENDERER=
 MOZ_DIRECTX_SDK_PATH=
 MOZ_DIRECTX_SDK_CPU_SUFFIX=
-MOZ_D3DX9_VERSION=
-MOZ_D3DX9_CAB=
 MOZ_D3DCOMPILER_CAB=
-MOZ_D3DX9_DLL=
 MOZ_D3DCOMPILER_DLL=
 case "$target_os" in
 *mingw*)
@@ -5904,14 +5890,12 @@ if test -n "$MOZ_ANGLE_RENDERER" -a -z "$CROSS_COMPILE"; then
   	AC_MSG_ERROR([Couldn't determine the D3DX9 version, needed for WebGL. Either reinstall the DirectX SDK (June 2010 version or newer), or reconfigure with --disable-webgl.])
   fi
 
-  MOZ_D3DX9_CAB=`find "$MOZ_DIRECTX_SDK_PATH"/Redist -name *d3dx9_${MOZ_D3DX9_VERSION}_${MOZ_DIRECTX_SDK_CPU_SUFFIX}.cab | head -n1`
   MOZ_D3DCOMPILER_CAB=`find "$MOZ_DIRECTX_SDK_PATH"/Redist -name *D3DCompiler_${MOZ_D3DX9_VERSION}_${MOZ_DIRECTX_SDK_CPU_SUFFIX}.cab | head -n1`
 
-  if test -z "$MOZ_D3DX9_CAB" -o -z "$MOZ_D3DCOMPILER_CAB"; then
+  if test -z "$MOZ_D3DCOMPILER_CAB"; then
     AC_MSG_ERROR([Couldn't find the DirectX redistributable files. Either reinstall the DirectX SDK (making sure the "DirectX Redistributable Files" option is selected), or reconfigure with --disable-webgl.])
   fi
 
-  MOZ_D3DX9_DLL=d3dx9_$MOZ_D3DX9_VERSION.dll
   MOZ_D3DCOMPILER_DLL=D3DCompiler_$MOZ_D3DX9_VERSION.dll
 fi
 
@@ -6199,7 +6183,7 @@ if test "$OS_ARCH" = "WINNT"; then
     if test -n "$MAKENSISU" -a "$MAKENSISU" != ":"; then
       AC_MSG_RESULT([yes])
       changequote(,)
-      MAKENSISU_VER=`"$MAKENSISU" -version 2>/dev/null | sed -e '/-Unicode/!s/.*//g' -e 's/^v\([0-9]\+\.[0-9]\+\)\-Unicode$/\1/g'`
+      MAKENSISU_VER=`"$MAKENSISU" -version 2>/dev/null | sed -e '/-Unicode/!s/.*//g' -e 's/^v\([0-9]\+\.[0-9]\+\).*\-Unicode$/\1/g'`
       changequote([,])
       if test ! "$MAKENSISU_VER" = ""; then
           MAKENSISU_MAJOR_VER=`echo $MAKENSISU_VER | $AWK -F\. '{ print $1 }'`
@@ -7923,7 +7907,7 @@ dnl ========================================================
 MOZ_ARG_HEADER(Static build options)
 
 # split JS out by default to avoid VS2005 PGO crash (bug 591836).
-if test "$OS_ARCH" = "WINNT" -a "$CPU_ARCH" != "x86_64" ; then
+if test "$OS_ARCH" = "WINNT"; then
   ENABLE_SHARED_JS=1
 fi
 
@@ -8364,12 +8348,6 @@ if test "$MOZ_PLACES"; then
   AC_DEFINE(MOZ_PLACES)
 fi
 
-dnl Build Apps in the Cloud (AITC) if required
-AC_SUBST(MOZ_SERVICES_AITC)
-if test -n "$MOZ_SERVICES_AITC"; then
-  AC_DEFINE(MOZ_SERVICES_AITC)
-fi
-
 dnl Build Common JS modules provided by services.
 AC_SUBST(MOZ_SERVICES_COMMON)
 if test -n "$MOZ_SERVICES_COMMON"; then
@@ -8476,6 +8454,7 @@ AC_SUBST(TOOLCHAIN_PREFIX)
 
 AC_SUBST(JAVA)
 AC_SUBST(JAVAC)
+AC_SUBST(JAVAH)
 AC_SUBST(JAR)
 
 AC_SUBST(MOZ_PROFILELOCKING)
@@ -8487,6 +8466,7 @@ AC_SUBST(MOZ_UNIVERSALCHARDET)
 AC_SUBST(ACCESSIBILITY)
 AC_SUBST(MOZ_SPELLCHECK)
 AC_SUBST(MOZ_ANDROID_OMTC)
+AC_SUBST(MOZ_ANDROID_ANR_REPORTER)
 AC_SUBST(MOZ_ONLY_TOUCH_EVENTS)
 AC_SUBST(MOZ_CRASHREPORTER)
 AC_SUBST(MOZ_CRASHREPORTER_INJECTOR)
@@ -8499,9 +8479,7 @@ AC_SUBST(MOZ_ANGLE_RENDERER)
 AC_SUBST(MOZ_DIRECTX_SDK_PATH)
 AC_SUBST(MOZ_DIRECTX_SDK_CPU_SUFFIX)
 AC_SUBST(MOZ_D3DX9_VERSION)
-AC_SUBST(MOZ_D3DX9_CAB)
 AC_SUBST(MOZ_D3DCOMPILER_CAB)
-AC_SUBST(MOZ_D3DX9_DLL)
 AC_SUBST(MOZ_D3DCOMPILER_DLL)
 AC_SUBST(MOZ_METRO)
 
@@ -8532,10 +8510,11 @@ AC_SUBST(MOZ_OS2_TOOLS)
 AC_SUBST(MOZ_POST_DSO_LIB_COMMAND)
 AC_SUBST(MOZ_POST_PROGRAM_COMMAND)
 AC_SUBST(MOZ_LINKER_EXTRACT)
-AC_SUBST(MOZ_PER_WINDOW_PRIVATE_BROWSING)
 
-if test -n "$MOZ_PER_WINDOW_PRIVATE_BROWSING" ; then
-    AC_DEFINE(MOZ_PER_WINDOW_PRIVATE_BROWSING)
+AC_SUBST(MOZ_JSDOWNLOADS)
+
+if test -n "$MOZ_JSDOWNLOADS" ; then
+    AC_DEFINE(MOZ_JSDOWNLOADS)
 fi
 
 dnl ========================================================
@@ -8659,7 +8638,7 @@ fi
 dnl If we have any service that uploads data (and requires data submission
 dnl policy alert), set MOZ_DATA_REPORTING.
 dnl We need SUBST for build system and DEFINE for xul preprocessor.
-if test -n "$MOZ_TELEMETRY_REPORTING" || test -n "$MOZ_SERVICES_HEALTHREPORT" || test -n "MOZ_CRASHREPORTER"; then
+if test -n "$MOZ_TELEMETRY_REPORTING" || test -n "$MOZ_SERVICES_HEALTHREPORT" || test -n "$MOZ_CRASHREPORTER"; then
   MOZ_DATA_REPORTING=1
   AC_DEFINE(MOZ_DATA_REPORTING)
   AC_SUBST(MOZ_DATA_REPORTING)
@@ -8999,34 +8978,20 @@ if test "${OS_TARGET}" = "WINNT"; then
    EXTRA_GYP_DEFINES="-D MSVS_VERSION=${_MSVS_VERSION} -D MSVS_OS_BITS=${OS_BITS}"
 
 elif test "${OS_TARGET}" = "Android"; then
-   if test "${MOZ_WIDGET_TOOLKIT}" != "gonk"; then
-      EXTRA_GYP_DEFINES="-D gtest_target_type=executable -D android_toolchain=${android_toolchain} -G os=android "
-   fi
+   EXTRA_GYP_DEFINES="-D gtest_target_type=executable -D android_toolchain=${android_toolchain} -G os=android "
    if test -n "$ARM_ARCH" && test "$ARM_ARCH" -lt 7; then
-      EXTRA_GYP_DEFINES="${EXTRA_GYP_DEFINES} -D armv7=0 "
+      EXTRA_GYP_DEFINES+=" -D armv7=0 "
    else
-      EXTRA_GYP_DEFINES="${EXTRA_GYP_DEFINES} -D armv7=1 "
+      EXTRA_GYP_DEFINES+=" -D armv7=1 "
    fi
 fi
 
 if test -n "$MOZ_WEBRTC"; then
    AC_MSG_RESULT("generating WebRTC Makefiles...")
 
-   if test "${MOZ_WIDGET_TOOLKIT}" = "gonk"; then
-      EXTRA_GYP_DEFINES="${EXTRA_GYP_DEFINES} -D moz_widget_toolkit_gonk=1"
-   else
-      EXTRA_GYP_DEFINES="${EXTRA_GYP_DEFINES} -D moz_widget_toolkit_gonk=0"
-   fi
-
 dnl Any --include files must also appear in -D FORCED_INCLUDE_FILE= entries
 dnl so that regeneration via dependencies works correctly
-   WEBRTC_CONFIG="-D build_with_mozilla=1 --include ${srcdir}/media/webrtc/webrtc_config.gypi -D FORCED_INCLUDE_FILE=${srcdir}/media/webrtc/webrtc_config.gypi"
-
-   if test -n HAVE_CLOCK_MONOTONIC; then
-      WEBRTC_CONFIG="${WEBRTC_CONFIG} -D moz_have_clock_monotonic=1"
-   else
-      WEBRTC_CONFIG="${WEBRTC_CONFIG} -D moz_have_clock_monotonic=0"
-   fi
+   WEBRTC_CONFIG="-D build_with_mozilla=1 -D build_with_chromium=0 --include ${srcdir}/media/webrtc/webrtc_config.gypi -D FORCED_INCLUDE_FILE=${srcdir}/media/webrtc/webrtc_config.gypi"
 
    GYP_WEBRTC_OPTIONS="--format=mozmake ${WEBRTC_CONFIG} -D target_arch=${WEBRTC_TARGET_ARCH} ${EXTRA_GYP_DEFINES} --depth=${srcdir}/media/webrtc/trunk --toplevel-dir=${srcdir} -G OBJDIR=${_objdir}"
 
@@ -9099,7 +9064,6 @@ MOZ_WIDGET_TOOLKIT=${MOZ_WIDGET_TOOLKIT} \
 UNIVERSAL_BINARY=${UNIVERSAL_BINARY} \
 MOZ_CRASHREPORTER=${MOZ_CRASHREPORTER} \
 MOZ_APP_NAME=${MOZ_APP_NAME} \
-MOZ_PER_WINDOW_PRIVATE_BROWSING=${MOZ_PER_WINDOW_PRIVATE_BROWSING} \
   $PYTHON ${_topsrcdir}/config/writemozinfo.py ./mozinfo.json.tmp
 if cmp -s ./mozinfo.json.tmp ./mozinfo.json; then
   rm ./mozinfo.json.tmp
@@ -9305,6 +9269,7 @@ export MOZILLA_CENTRAL_PATH=$_topsrcdir
 export STLPORT_CPPFLAGS
 export STLPORT_LDFLAGS
 export STLPORT_LIBS
+export JS_STANDALONE=no
 AC_OUTPUT_SUBDIRS(js/src)
 ac_configure_args="$_SUBDIR_CONFIG_ARGS"
 

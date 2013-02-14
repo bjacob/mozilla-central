@@ -4,6 +4,8 @@
 
 "use strict";
 
+#ifndef MERGED_COMPARTMENT
+
 this.EXPORTED_SYMBOLS = [
   "Measurement",
   "Provider",
@@ -11,14 +13,16 @@ this.EXPORTED_SYMBOLS = [
 
 const {utils: Cu} = Components;
 
-Cu.import("resource://gre/modules/commonjs/promise/core.js");
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
+#endif
+
+Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://services-common/log4moz.js");
 Cu.import("resource://services-common/preferences.js");
 Cu.import("resource://services-common/utils.js");
 
-
-const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 
 /**
@@ -246,7 +250,7 @@ Measurement.prototype = Object.freeze({
   },
 
   _serializeJSONSingular: function (data) {
-    let result = {};
+    let result = {"_v": this.version};
 
     for (let [field, data] of data) {
       // There could be legacy fields in storage we no longer care about.
@@ -278,7 +282,7 @@ Measurement.prototype = Object.freeze({
   },
 
   _serializeJSONDay: function (data) {
-    let result = {};
+    let result = {"_v": this.version};
 
     for (let [field, data] of data) {
       if (!this._fieldsByName.has(field)) {
@@ -387,6 +391,20 @@ this.Provider = function () {
 }
 
 Provider.prototype = Object.freeze({
+  /**
+   * Whether the provider provides only constant data.
+   *
+   * If this is true, the provider likely isn't instantiated until
+   * `collectConstantData` is called and the provider may be torn down after
+   * this function has finished.
+   *
+   * This is an optimization so provider instances aren't dead weight while the
+   * application is running.
+   *
+   * This must be set on the prototype for the optimization to be realized.
+   */
+  constantOnly: false,
+
   /**
    * Obtain a `Measurement` from its name and version.
    *
@@ -505,8 +523,26 @@ Provider.prototype = Object.freeze({
    *
    * Implementations should return a promise that resolves when all data has
    * been collected and storage operations have been finished.
+   *
+   * @return Promise<>
    */
   collectConstantData: function () {
+    return Promise.resolve();
+  },
+
+  /**
+   * Collects data approximately every day.
+   *
+   * For long-running applications, this is called approximately every day.
+   * It may or may not be called every time the application is run. It also may
+   * be called more than once per day.
+   *
+   * Implementations should return a promise that resolves when all data has
+   * been collected and storage operations have completed.
+   *
+   * @return Promise<>
+   */
+  collectDailyData: function () {
     return Promise.resolve();
   },
 

@@ -7,10 +7,10 @@
 
 #include "jscompartment.h"
 #include "jsiter.h"
-#include "jsscope.h"
 
 #include "GlobalObject.h"
 #include "ScopeObject.h"
+#include "Shape.h"
 #include "Xdr.h"
 
 #include "jsatominlines.h"
@@ -146,7 +146,7 @@ CallObject::create(JSContext *cx, HandleShape shape, HandleTypeObject type, Heap
     JS_ASSERT(CanBeFinalizedInBackground(kind, &CallClass));
     kind = gc::GetBackgroundAllocKind(kind);
 
-    JSObject *obj = JSObject::create(cx, kind, shape, type, slots);
+    JSObject *obj = JSObject::create(cx, kind, gc::DefaultHeap, shape, type, slots);
     if (!obj)
         return NULL;
     return &obj->asCall();
@@ -242,16 +242,17 @@ CallObject::createForFunction(JSContext *cx, AbstractFramePtr frame)
 }
 
 CallObject *
-CallObject::createForStrictEval(JSContext *cx, StackFrame *fp)
+CallObject::createForStrictEval(JSContext *cx, AbstractFramePtr frame)
 {
     AssertCanGC();
-    JS_ASSERT(fp->isStrictEvalFrame());
-    JS_ASSERT(cx->fp() == fp);
-    JS_ASSERT(cx->regs().pc == fp->script()->code);
+    JS_ASSERT(frame.isStrictEvalFrame());
+    JS_ASSERT_IF(frame.isStackFrame(), cx->fp() == frame.asStackFrame());
+    JS_ASSERT_IF(frame.isStackFrame(), cx->regs().pc == frame.script()->code);
 
     RootedFunction callee(cx);
-    RootedScript script(cx, fp->script());
-    return create(cx, script, fp->scopeChain(), callee);
+    RootedScript script(cx, frame.script());
+    RootedObject scopeChain(cx, frame.scopeChain());
+    return create(cx, script, scopeChain, callee);
 }
 
 JS_PUBLIC_DATA(Class) js::CallClass = {
@@ -298,7 +299,7 @@ DeclEnvObject::createTemplateObject(JSContext *cx, HandleFunction fun)
     if (!emptyDeclEnvShape)
         return NULL;
 
-    RootedObject obj(cx, JSObject::create(cx, FINALIZE_KIND, emptyDeclEnvShape, type, NULL));
+    RootedObject obj(cx, JSObject::create(cx, FINALIZE_KIND, gc::DefaultHeap, emptyDeclEnvShape, type, NULL));
     if (!obj)
         return NULL;
 
@@ -340,7 +341,7 @@ WithObject::create(JSContext *cx, HandleObject proto, HandleObject enclosing, ui
     if (!shape)
         return NULL;
 
-    RootedObject obj(cx, JSObject::create(cx, FINALIZE_KIND, shape, type, NULL));
+    RootedObject obj(cx, JSObject::create(cx, FINALIZE_KIND, gc::DefaultHeap, shape, type, NULL));
     if (!obj)
         return NULL;
 
@@ -544,12 +545,6 @@ with_Enumerate(JSContext *cx, HandleObject obj, JSIterateOp enum_op,
     return JSObject::enumerate(cx, actual, enum_op, statep, idp);
 }
 
-static JSType
-with_TypeOf(JSContext *cx, HandleObject obj)
-{
-    return JSTYPE_OBJECT;
-}
-
 static JSObject *
 with_ThisObject(JSContext *cx, HandleObject obj)
 {
@@ -604,7 +599,6 @@ Class js::WithClass = {
         with_DeleteElement,
         with_DeleteSpecial,
         with_Enumerate,
-        with_TypeOf,
         with_ThisObject,
     }
 };
@@ -627,7 +621,7 @@ ClonedBlockObject::create(JSContext *cx, Handle<StaticBlockObject *> block, Abst
 
     RootedShape shape(cx, block->lastProperty());
 
-    RootedObject obj(cx, JSObject::create(cx, FINALIZE_KIND, shape, type, slots));
+    RootedObject obj(cx, JSObject::create(cx, FINALIZE_KIND, gc::DefaultHeap, shape, type, slots));
     if (!obj)
         return NULL;
 
@@ -686,7 +680,7 @@ StaticBlockObject::create(JSContext *cx)
     if (!emptyBlockShape)
         return NULL;
 
-    JSObject *obj = JSObject::create(cx, FINALIZE_KIND, emptyBlockShape, type, NULL);
+    JSObject *obj = JSObject::create(cx, FINALIZE_KIND, gc::DefaultHeap, emptyBlockShape, type, NULL);
     if (!obj)
         return NULL;
 
@@ -1416,23 +1410,22 @@ class DebugScopeProxy : public BaseProxyHandler
 
     bool getScopePropertyNames(JSContext *cx, JSObject *proxy, AutoIdVector &props, unsigned flags)
     {
-        ScopeObject &scope = proxy->asDebugScope().scope();
+        Rooted<ScopeObject*> scope(cx, &proxy->asDebugScope().scope());
 
-        if (isMissingArgumentsBinding(scope)) {
+        if (isMissingArgumentsBinding(*scope)) {
             if (!props.append(NameToId(cx->names().arguments)))
                 return false;
         }
 
-        RootedObject rootedScope(cx, &scope);
-        if (!GetPropertyNames(cx, rootedScope, flags, &props))
+        if (!GetPropertyNames(cx, scope, flags, &props))
             return false;
 
         /*
          * Function scopes are optimized to not contain unaliased variables so
          * they must be manually appended here.
          */
-        if (scope.isCall() && !scope.asCall().isForEval()) {
-            RootedScript script(cx, scope.asCall().callee().nonLazyScript());
+        if (scope->isCall() && !scope->asCall().isForEval()) {
+            RootedScript script(cx, scope->asCall().callee().nonLazyScript());
             for (BindingIter bi(script); bi; bi++) {
                 if (!bi->aliased() && !props.append(NameToId(bi->name())))
                     return false;
@@ -1687,7 +1680,7 @@ DebugScopes::addDebugScope(JSContext *cx, ScopeObject &scope, DebugScopeObject &
         return false;
     }
 
-    HashTableWriteBarrierPost(cx->compartment, &scopes->proxiedScopes, &scope);
+    HashTableWriteBarrierPost(cx->runtime, &scopes->proxiedScopes, &scope);
     return true;
 }
 
@@ -1902,9 +1895,15 @@ DebugScopes::onCompartmentLeaveDebugMode(JSCompartment *c)
 {
     DebugScopes *scopes = c->debugScopes;
     if (scopes) {
-        scopes->proxiedScopes.clear();
-        scopes->missingScopes.clear();
-        scopes->liveScopes.clear();
+        if (c->rt->isHeapBusy()) {
+            scopes->proxiedScopes.clearWithoutCallingDestructors();
+            scopes->missingScopes.clearWithoutCallingDestructors();
+            scopes->liveScopes.clearWithoutCallingDestructors();
+        } else {
+            scopes->proxiedScopes.clear();
+            scopes->missingScopes.clear();
+            scopes->liveScopes.clear();
+        }
     }
 }
 
@@ -2125,7 +2124,7 @@ GetDebugScope(JSContext *cx, const ScopeIter &si)
 }
 
 JSObject *
-js::GetDebugScopeForFunction(JSContext *cx, JSFunction *fun)
+js::GetDebugScopeForFunction(JSContext *cx, HandleFunction fun)
 {
     assertSameCompartment(cx, fun);
     JS_ASSERT(cx->compartment->debugMode());

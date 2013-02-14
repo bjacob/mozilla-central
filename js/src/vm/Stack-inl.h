@@ -76,7 +76,7 @@ inline mjit::JITScript *
 StackFrame::jit()
 {
     AutoAssertNoGC nogc;
-    return script()->getJIT(isConstructing(), script()->compartment()->compileBarriers());
+    return script()->getJIT(isConstructing(), script()->zone()->compileBarriers());
 }
 #endif
 
@@ -202,7 +202,7 @@ StackFrame::createRestParameter(JSContext *cx)
     JS_ASSERT(fun()->hasRest());
     unsigned nformal = fun()->nargs - 1, nactual = numActualArgs();
     unsigned nrest = (nactual > nformal) ? nactual - nformal : 0;
-    return NewDenseCopiedArray(cx, nrest, actuals() + nformal);
+    return NewDenseCopiedArray(cx, nrest, actuals() + nformal, NULL);
 }
 
 inline Value &
@@ -705,6 +705,15 @@ AbstractFramePtr::unaliasedFormal(unsigned i, MaybeCheckAliasing checkAliasing)
     return asStackFrame()->unaliasedFormal(i);
 }
 
+inline Value &
+AbstractFramePtr::unaliasedActual(unsigned i, MaybeCheckAliasing checkAliasing)
+{
+    if (isStackFrame())
+        return asStackFrame()->unaliasedActual(i, checkAliasing);
+    JS_NOT_REACHED("Invalid frame");
+    return asStackFrame()->unaliasedActual(i);
+}
+
 inline JSGenerator *
 AbstractFramePtr::maybeSuspendedGenerator(JSRuntime *rt) const
 {
@@ -792,6 +801,14 @@ AbstractFramePtr::fun() const
 {
     if (isStackFrame())
         return asStackFrame()->fun();
+    JS_NOT_REACHED("Invalid frame");
+    return NULL;
+}
+inline JSFunction *
+AbstractFramePtr::maybeFun() const
+{
+    if (isStackFrame())
+        return asStackFrame()->maybeFun();
     JS_NOT_REACHED("Invalid frame");
     return NULL;
 }
@@ -920,6 +937,24 @@ AbstractFramePtr::thisValue() const
         return asStackFrame()->thisValue();
     JS_NOT_REACHED("Invalid frame");
     return asStackFrame()->thisValue();
+}
+
+inline void
+AbstractFramePtr::popBlock(JSContext *cx) const
+{
+    if (isStackFrame())
+        asStackFrame()->popBlock(cx);
+    else
+        JS_NOT_REACHED("Invalid frame");
+}
+
+inline void
+AbstractFramePtr::popWith(JSContext *cx) const
+{
+    if (isStackFrame())
+        asStackFrame()->popWith(cx);
+    else
+        JS_NOT_REACHED("Invalid frame");
 }
 
 } /* namespace js */

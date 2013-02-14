@@ -28,25 +28,20 @@
 #include "jsobj.h"
 #include "jsopcode.h"
 #include "jsproxy.h"
-#include "jsscope.h"
 #include "jsscript.h"
 
-#if JS_HAS_XML_SUPPORT
-#include "jsxml.h"
-#endif
-
 #include "builtin/ParallelArray.h"
-
 #include "ds/Sort.h"
 #include "frontend/TokenStream.h"
 #include "gc/Marking.h"
 #include "vm/GlobalObject.h"
+#include "vm/Shape.h"
 
 #include "jsinferinlines.h"
 #include "jsobjinlines.h"
 
-#include "builtin/ParallelArray-inl.h"
 #include "builtin/Iterator-inl.h"
+#include "builtin/ParallelArray-inl.h"
 #include "vm/Stack-inl.h"
 #include "vm/String-inl.h"
 
@@ -152,11 +147,8 @@ EnumerateNativeProperties(JSContext *cx, HandleObject pobj, unsigned flags, IdSe
     for (; !r.empty(); r.popFront()) {
         Shape &shape = r.front();
 
-        if (!JSID_IS_DEFAULT_XML_NAMESPACE(shape.propid()) &&
-            !Enumerate(cx, pobj, shape.propid(), shape.enumerable(), flags, ht, props))
-        {
+        if (!Enumerate(cx, pobj, shape.propid(), shape.enumerable(), flags, ht, props))
             return false;
-        }
     }
 
     ::Reverse(props->begin() + initialLength, props->end());
@@ -265,10 +257,6 @@ Snapshot(JSContext *cx, RawObject pobj_, unsigned flags, AutoIdVector *props)
         if (flags & JSITER_OWNONLY)
             break;
 
-#if JS_HAS_XML_SUPPORT
-        if (pobj->isXML())
-            break;
-#endif
     } while ((pobj = pobj->getProto()) != NULL);
 
 #ifdef JS_MORE_DETERMINISTIC
@@ -402,7 +390,7 @@ NewPropertyIteratorObject(JSContext *cx, unsigned flags)
         if (!shape)
             return NULL;
 
-        RawObject obj = JSObject::create(cx, ITERATOR_FINALIZE_KIND, shape, type, NULL);
+        RawObject obj = JSObject::create(cx, ITERATOR_FINALIZE_KIND, gc::DefaultHeap, shape, type, NULL);
         if (!obj)
             return NULL;
 
@@ -867,11 +855,9 @@ Class PropertyIteratorObject::class_ = {
     NULL,                    /* hasInstance */
     trace,
     {
-        NULL,                /* equality       */
         NULL,                /* outerObject    */
         NULL,                /* innerObject    */
         iterator_iteratorObject,
-        NULL                 /* unused  */
     }
 };
 
@@ -1118,7 +1104,7 @@ SuppressDeletedPropertyHelper(JSContext *cx, HandleObject obj, StringPredicate p
                         RootedObject obj2(cx);
                         RootedShape prop(cx);
                         RootedId id(cx);
-                        if (!ValueToId(cx, StringValue(*idp), &id))
+                        if (!ValueToId<CanGC>(cx, StringValue(*idp), &id))
                             return false;
                         if (!JSObject::lookupGeneric(cx, proto, id, &obj2, &prop))
                             return false;
@@ -1249,7 +1235,7 @@ js_IteratorMore(JSContext *cx, HandleObject iterobj, MutableHandleValue rval)
     if (ni) {
         JS_ASSERT(!ni->isKeyIter());
         RootedId id(cx);
-        if (!ValueToId(cx, StringValue(*ni->current()), &id))
+        if (!ValueToId<CanGC>(cx, StringValue(*ni->current()), &id))
             return false;
         ni->incCursor();
         RootedObject obj(cx, ni->obj);
@@ -1370,9 +1356,9 @@ MarkGeneratorFrame(JSTracer *trc, JSGenerator *gen)
 static void
 GeneratorWriteBarrierPre(JSContext *cx, JSGenerator *gen)
 {
-    JSCompartment *comp = cx->compartment;
-    if (comp->needsBarrier())
-        MarkGeneratorFrame(comp->barrierTracer(), gen);
+    JS::Zone *zone = cx->zone();
+    if (zone->needsBarrier())
+        MarkGeneratorFrame(zone->barrierTracer(), gen);
 }
 
 /*
@@ -1427,11 +1413,9 @@ Class js::GeneratorClass = {
     NULL,                    /* hasInstance */
     generator_trace,
     {
-        NULL,                /* equality       */
         NULL,                /* outerObject    */
         NULL,                /* innerObject    */
         iterator_iteratorObject,
-        NULL                 /* unused */
     }
 };
 
@@ -1582,10 +1566,7 @@ SendToGenerator(JSContext *cx, JSGeneratorOp op, HandleObject obj,
         gen->regs = cx->regs();
 
         cx->enterGenerator(gen);   /* OOM check above. */
-
-        RootedScript script(cx, fp->script());
-        ok = RunScript(cx, script, fp);
-
+        ok = RunScript(cx, fp);
         cx->leaveGenerator(gen);
     }
 

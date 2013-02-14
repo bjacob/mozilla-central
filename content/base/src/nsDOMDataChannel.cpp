@@ -26,7 +26,7 @@ extern PRLogModuleInfo* GetDataChannelLog();
 #include "nsDOMClassInfo.h"
 #include "nsDOMEventTargetHelper.h"
 
-#include "jsval.h"
+#include "js/Value.h"
 
 #include "nsError.h"
 #include "nsAutoPtr.h"
@@ -53,6 +53,14 @@ public:
     : mDataChannel(aDataChannel)
     , mBinaryType(DC_BINARY_TYPE_BLOB)
   {}
+
+  ~nsDOMDataChannel()
+  {
+    // Don't call us anymore!  Likely isn't an issue (or maybe just less of
+    // one) once we block GC until all the (appropriate) onXxxx handlers
+    // are dropped. (See WebRTC spec)
+    mDataChannel->SetListener(nullptr, nullptr);
+  }
 
   nsresult Init(nsPIDOMWindow* aDOMWindow);
 

@@ -10,6 +10,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/TypeTraits.h"
 #include "mozilla/Util.h"
 
 #include "js/TemplateLib.h"
@@ -169,6 +170,9 @@ class HashMap
     // Remove all entries. This does not shrink the table. For that consider
     // using the finish() method.
     void clear()                                      { impl.clear(); }
+
+    // Remove all entries without triggering destructors. This method is unsafe.
+    void clearWithoutCallingDestructors()             { impl.clearWithoutCallingDestructors(); }
 
     // Remove all the entries and release all internal buffers. The map must
     // be initialized again before any use.
@@ -546,20 +550,25 @@ class HashMapEntry
     Value value;
 };
 
-namespace tl {
+} // namespace js
+
+namespace mozilla {
 
 template <class T>
-struct IsPodType<detail::HashTableEntry<T> > {
-    static const bool result = IsPodType<T>::result;
+struct IsPod<js::detail::HashTableEntry<T> >
+{
+    static const bool value = IsPod<T>::value;
 };
 
 template <class K, class V>
-struct IsPodType<HashMapEntry<K, V> >
+struct IsPod<js::HashMapEntry<K, V> >
 {
-    static const bool result = IsPodType<K>::result && IsPodType<V>::result;
+    static const bool value = IsPod<K>::value && IsPod<V>::value;
 };
 
-} // namespace tl
+} // namespace mozilla
+
+namespace js {
 
 namespace detail {
 
@@ -614,6 +623,7 @@ class HashTableEntry
     bool isFree() const    { return keyHash == sFreeKey; }
     void clearLive()       { JS_ASSERT(isLive()); keyHash = sFreeKey; mem.addr()->~T(); }
     void clear()           { if (isLive()) mem.addr()->~T(); keyHash = sFreeKey; }
+    void clearNoDtor()     { keyHash = sFreeKey; }
     bool isRemoved() const { return keyHash == sRemovedKey; }
     void removeLive()      { JS_ASSERT(isLive()); keyHash = sRemovedKey; mem.addr()->~T(); }
     bool isLive() const    { return isLiveHash(keyHash); }
@@ -1244,12 +1254,26 @@ class HashTable : private AllocPolicy
   public:
     void clear()
     {
-        if (tl::IsPodType<Entry>::result) {
+        if (mozilla::IsPod<Entry>::value) {
             memset(table, 0, sizeof(*table) * capacity());
         } else {
             uint32_t tableCapacity = capacity();
             for (Entry *e = table, *end = table + tableCapacity; e < end; ++e)
                 e->clear();
+        }
+        removedCount = 0;
+        entryCount = 0;
+        mutationCount++;
+    }
+
+    void clearWithoutCallingDestructors()
+    {
+        if (mozilla::IsPod<Entry>::value) {
+            memset(table, 0, sizeof(*table) * capacity());
+        } else {
+            uint32_t tableCapacity = capacity();
+            for (Entry *e = table, *end = table + tableCapacity; e < end; ++e)
+                e->clearNoDtor();
         }
         removedCount = 0;
         entryCount = 0;

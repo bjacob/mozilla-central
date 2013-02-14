@@ -103,14 +103,18 @@ enum MaybeConstruct {
     CONSTRUCT = INITIAL_CONSTRUCT
 };
 
+/*
+ * numToSkip is the number of stack values the expression decompiler should skip
+ * before it reaches |v|. If it's -1, the decompiler will search the stack.
+ */
 extern bool
-ReportIsNotFunction(JSContext *cx, const Value &v, MaybeConstruct construct = NO_CONSTRUCT);
+ReportIsNotFunction(JSContext *cx, const Value &v, int numToSkip = -1,
+                    MaybeConstruct construct = NO_CONSTRUCT);
 
-extern bool
-ReportIsNotFunction(JSContext *cx, const Value *vp, MaybeConstruct construct = NO_CONSTRUCT);
-
+/* See ReportIsNotFunction comment for the meaning of numToSkip. */
 extern JSObject *
-ValueToCallable(JSContext *cx, const Value *vp, MaybeConstruct construct = NO_CONSTRUCT);
+ValueToCallable(JSContext *cx, const Value &vp, int numToSkip = -1,
+                MaybeConstruct construct = NO_CONSTRUCT);
 
 /*
  * InvokeKernel assumes that the given args have been pushed on the top of the
@@ -210,7 +214,7 @@ extern JS_NEVER_INLINE InterpretStatus
 Interpret(JSContext *cx, StackFrame *stopFp, InterpMode mode = JSINTERP_NORMAL);
 
 extern bool
-RunScript(JSContext *cx, HandleScript script, StackFrame *fp);
+RunScript(JSContext *cx, StackFrame *fp);
 
 extern bool
 StrictlyEqual(JSContext *cx, const Value &lval, const Value &rval, bool *equal);
@@ -273,12 +277,9 @@ class InterpreterFrames {
     const InterruptEnablerBase &enabler;
 };
 
-/*
- * Unwind block and scope chains to match the given depth. The function sets
- * fp->sp on return to stackDepth.
- */
+/* Unwind block and scope chains to match the given depth. */
 extern void
-UnwindScope(JSContext *cx, uint32_t stackDepth);
+UnwindScope(JSContext *cx, AbstractFramePtr frame, uint32_t stackDepth);
 
 /*
  * Unwind for an uncatchable exception. This means not running finalizers, etc;
@@ -356,13 +357,13 @@ JSObject *
 Lambda(JSContext *cx, HandleFunction fun, HandleObject parent);
 
 bool
-GetElement(JSContext *cx, HandleValue lref, HandleValue rref, MutableHandleValue res);
+GetElement(JSContext *cx, MutableHandleValue lref, HandleValue rref, MutableHandleValue res);
 
 bool
-GetElementMonitored(JSContext *cx, HandleValue lref, HandleValue rref, MutableHandleValue res);
+GetElementMonitored(JSContext *cx, MutableHandleValue lref, HandleValue rref, MutableHandleValue res);
 
 bool
-CallElement(JSContext *cx, HandleValue lref, HandleValue rref, MutableHandleValue res);
+CallElement(JSContext *cx, MutableHandleValue lref, HandleValue rref, MutableHandleValue res);
 
 bool
 SetObjectElement(JSContext *cx, HandleObject obj, HandleValue index, HandleValue value,

@@ -13,6 +13,7 @@
 #include "nsIProgrammingLanguage.h"
 #include "jsfriendapi.h"
 #include "jspubtd.h"
+#include "js/GCAPI.h"
 
 class nsIScriptGlobalObject;
 class nsIScriptSecurityManager;
@@ -71,8 +72,10 @@ public:
    *                 internally, though 'originPrincipals' may be passed.
    * @param aCoerceToString if the return value is not JSVAL_VOID, convert it
    *                        to a string before returning.
-   * @param aRetValue the result of executing the script.
-   **/
+   * @param aRetValue the result of executing the script.  Pass null if you
+   *                  don't care about the result.  Note that asking for a
+   *                  result will deoptimize your script somewhat in many cases.
+   */
   virtual nsresult EvaluateString(const nsAString& aScript,
                                   JSObject& aScopeObject,
                                   JS::CompileOptions& aOptions,
@@ -201,7 +204,7 @@ public:
    *
    * @return NS_OK if the method is successful
    */
-  virtual void GC(js::gcreason::Reason aReason) = 0;
+  virtual void GC(JS::gcreason::Reason aReason) = 0;
 
   /**
    * Inform the context that a script was evaluated.

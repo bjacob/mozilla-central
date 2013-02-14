@@ -397,8 +397,8 @@ DaylightSavingTA(double t, DateTimeInfo *dtInfo)
         t = MakeDate(day, TimeWithinDay(t));
     }
 
-    int64_t timeMilliseconds = static_cast<int64_t>(t);
-    int64_t offsetMilliseconds = dtInfo->getDSTOffsetMilliseconds(timeMilliseconds);
+    int64_t utcMilliseconds = static_cast<int64_t>(t);
+    int64_t offsetMilliseconds = dtInfo->getDSTOffsetMilliseconds(utcMilliseconds);
     return static_cast<double>(offsetMilliseconds);
 }
 
@@ -1187,7 +1187,7 @@ date_parse(JSContext *cx, unsigned argc, Value *vp)
         return true;
     }
 
-    UnrootedString str = ToString(cx, args[0]);
+    UnrootedString str = ToString<CanGC>(cx, args[0]);
     if (!str)
         return false;
 
@@ -2549,7 +2549,7 @@ date_toJSON(JSContext *cx, unsigned argc, Value *vp)
 
     /* Step 2. */
     RootedValue tv(cx, ObjectValue(*obj));
-    if (!ToPrimitive(cx, JSTYPE_NUMBER, tv.address()))
+    if (!ToPrimitive(cx, JSTYPE_NUMBER, &tv))
         return false;
 
     /* Step 3. */
@@ -2761,8 +2761,8 @@ ToLocaleHelper(JSContext *cx, HandleObject obj, const char *format, MutableHandl
 
     }
 
-    if (cx->localeCallbacks && cx->localeCallbacks->localeToUnicode)
-        return cx->localeCallbacks->localeToUnicode(cx, buf, rval.address());
+    if (cx->runtime->localeCallbacks && cx->runtime->localeCallbacks->localeToUnicode)
+        return cx->runtime->localeCallbacks->localeToUnicode(cx, buf, rval.address());
 
     UnrootedString str = JS_NewStringCopyZ(cx, buf);
     if (!str)
@@ -2860,7 +2860,7 @@ date_toLocaleFormat_impl(JSContext *cx, CallArgs args)
     if (args.length() == 0)
         return ToLocaleStringHelper(cx, thisObj, args.rval());
 
-    RootedString fmt(cx, ToString(cx, args[0]));
+    RootedString fmt(cx, ToString<CanGC>(cx, args[0]));
     if (!fmt)
         return false;
 
@@ -3052,7 +3052,7 @@ js_Date(JSContext *cx, unsigned argc, Value *vp)
         /* ES5 15.9.3.2. */
 
         /* Step 1. */
-        if (!ToPrimitive(cx, &args[0]))
+        if (!ToPrimitive(cx, args.handleAt(0)))
             return false;
 
         if (args[0].isString()) {

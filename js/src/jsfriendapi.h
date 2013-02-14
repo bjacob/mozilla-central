@@ -50,12 +50,6 @@ JS_NewObjectWithUniqueType(JSContext *cx, JSClass *clasp, JSObject *proto, JSObj
 extern JS_FRIEND_API(uint32_t)
 JS_ObjectCountDynamicSlots(JSHandleObject obj);
 
-extern JS_FRIEND_API(void)
-JS_ShrinkGCBuffers(JSRuntime *rt);
-
-extern JS_FRIEND_API(size_t)
-JS_GetE4XObjectsCreated(JSContext *cx);
-
 extern JS_FRIEND_API(size_t)
 JS_SetProtoCalled(JSContext *cx);
 
@@ -272,13 +266,6 @@ TraceWeakMaps(WeakMapTracer *trc);
 extern JS_FRIEND_API(bool)
 AreGCGrayBitsValid(JSRuntime *rt);
 
-/*
- * Unsets the gray bit for anything reachable from |thing|. |kind| should not be
- * JSTRACE_SHAPE. |thing| should be non-null.
- */
-extern JS_FRIEND_API(void)
-UnmarkGrayGCThingRecursively(void *thing, JSGCTraceKind kind);
-
 typedef void
 (*GCThingCallback)(void *closure, void *gcthing);
 
@@ -365,17 +352,12 @@ struct Atom {
 
 } /* namespace shadow */
 
-extern JS_FRIEND_DATA(js::Class) AnyNameClass;
-extern JS_FRIEND_DATA(js::Class) AttributeNameClass;
 extern JS_FRIEND_DATA(js::Class) CallClass;
 extern JS_FRIEND_DATA(js::Class) DeclEnvClass;
 extern JS_FRIEND_DATA(js::Class) FunctionClass;
 extern JS_FRIEND_DATA(js::Class) FunctionProxyClass;
-extern JS_FRIEND_DATA(js::Class) NamespaceClass;
 extern JS_FRIEND_DATA(js::Class) OuterWindowProxyClass;
 extern JS_FRIEND_DATA(js::Class) ObjectProxyClass;
-extern JS_FRIEND_DATA(js::Class) QNameClass;
-extern JS_FRIEND_DATA(js::Class) XMLClass;
 extern JS_FRIEND_DATA(js::Class) ObjectClass;
 
 inline js::Class *
@@ -388,6 +370,16 @@ inline JSClass *
 GetObjectJSClass(RawObject obj)
 {
     return js::Jsvalify(GetObjectClass(obj));
+}
+
+inline bool
+IsInnerObject(JSObject *obj) {
+    return !!GetObjectClass(obj)->ext.outerObject;
+}
+
+inline bool
+IsOuterObject(JSObject *obj) {
+    return !!GetObjectClass(obj)->ext.innerObject;
 }
 
 JS_FRIEND_API(bool)
@@ -569,7 +561,7 @@ IsObjectInContextCompartment(RawObject obj, const JSContext *cx);
 inline uintptr_t
 GetNativeStackLimit(const JSRuntime *rt)
 {
-    return RuntimeFriendFields::get(rt)->nativeStackLimit;
+    return PerThreadDataFriendFields::getMainThread(rt)->nativeStackLimit;
 }
 
 /*
@@ -722,9 +714,6 @@ SetActivityCallback(JSRuntime *rt, ActivityCallback cb, void *arg);
 extern JS_FRIEND_API(const JSStructuredCloneCallbacks *)
 GetContextStructuredCloneCallbacks(JSContext *cx);
 
-extern JS_FRIEND_API(JSVersion)
-VersionSetMoarXML(JSVersion version, bool enable);
-
 extern JS_FRIEND_API(bool)
 CanCallContextDebugHandler(JSContext *cx);
 
@@ -739,137 +728,11 @@ typedef Vector<JSCompartment*, 0, SystemAllocPolicy> CompartmentVector;
 extern JS_FRIEND_API(const CompartmentVector&)
 GetRuntimeCompartments(JSRuntime *rt);
 
-#define GCREASONS(D)                            \
-    /* Reasons internal to the JS engine */     \
-    D(API)                                      \
-    D(MAYBEGC)                                  \
-    D(LAST_CONTEXT)                             \
-    D(DESTROY_CONTEXT)                          \
-    D(LAST_DITCH)                               \
-    D(TOO_MUCH_MALLOC)                          \
-    D(ALLOC_TRIGGER)                            \
-    D(DEBUG_GC)                                 \
-    D(DEBUG_MODE_GC)                            \
-    D(TRANSPLANT)                               \
-    D(RESET)                                    \
-                                                \
-    /* Reasons from Firefox */                  \
-    D(DOM_WINDOW_UTILS)                         \
-    D(COMPONENT_UTILS)                          \
-    D(MEM_PRESSURE)                             \
-    D(CC_WAITING)                               \
-    D(CC_FORCED)                                \
-    D(LOAD_END)                                 \
-    D(POST_COMPARTMENT)                         \
-    D(PAGE_HIDE)                                \
-    D(NSJSCONTEXT_DESTROY)                      \
-    D(SET_NEW_DOCUMENT)                         \
-    D(SET_DOC_SHELL)                            \
-    D(DOM_UTILS)                                \
-    D(DOM_IPC)                                  \
-    D(DOM_WORKER)                               \
-    D(INTER_SLICE_GC)                           \
-    D(REFRESH_FRAME)                            \
-    D(FULL_GC_TIMER)                            \
-    D(SHUTDOWN_CC)
-
-namespace gcreason {
-
-/* GCReasons will end up looking like JSGC_MAYBEGC */
-enum Reason {
-#define MAKE_REASON(name) name,
-    GCREASONS(MAKE_REASON)
-#undef MAKE_REASON
-    NO_REASON,
-    NUM_REASONS,
-
-    /*
-     * For telemetry, we want to keep a fixed max bucket size over time so we
-     * don't have to switch histograms. 100 is conservative; as of this writing
-     * there are 26. But the cost of extra buckets seems to be low while the
-     * cost of switching histograms is high.
-     */
-    NUM_TELEMETRY_REASONS = 100
-};
-
-} /* namespace gcreason */
-
-extern JS_FRIEND_API(void)
-PrepareCompartmentForGC(JSCompartment *comp);
-
-extern JS_FRIEND_API(void)
-PrepareForFullGC(JSRuntime *rt);
-
-extern JS_FRIEND_API(void)
-PrepareForIncrementalGC(JSRuntime *rt);
-
-extern JS_FRIEND_API(bool)
-IsGCScheduled(JSRuntime *rt);
-
-extern JS_FRIEND_API(void)
-SkipCompartmentForGC(JSCompartment *comp);
-
-/*
- * When triggering a GC using one of the functions below, it is first necessary
- * to select the compartments to be collected. To do this, you can call
- * PrepareCompartmentForGC on each compartment, or you can call PrepareForFullGC
- * to select all compartments. Failing to select any compartment is an error.
- */
-
-extern JS_FRIEND_API(void)
-GCForReason(JSRuntime *rt, gcreason::Reason reason);
-
-extern JS_FRIEND_API(void)
-ShrinkingGC(JSRuntime *rt, gcreason::Reason reason);
-
-extern JS_FRIEND_API(void)
-IncrementalGC(JSRuntime *rt, gcreason::Reason reason, int64_t millis = 0);
-
-extern JS_FRIEND_API(void)
-FinishIncrementalGC(JSRuntime *rt, gcreason::Reason reason);
-
-enum GCProgress {
-    /*
-     * During non-incremental GC, the GC is bracketed by JSGC_CYCLE_BEGIN/END
-     * callbacks. During an incremental GC, the sequence of callbacks is as
-     * follows:
-     *   JSGC_CYCLE_BEGIN, JSGC_SLICE_END  (first slice)
-     *   JSGC_SLICE_BEGIN, JSGC_SLICE_END  (second slice)
-     *   ...
-     *   JSGC_SLICE_BEGIN, JSGC_CYCLE_END  (last slice)
-     */
-
-    GC_CYCLE_BEGIN,
-    GC_SLICE_BEGIN,
-    GC_SLICE_END,
-    GC_CYCLE_END
-};
-
-struct JS_FRIEND_API(GCDescription) {
-    bool isCompartment;
-
-    GCDescription(bool isCompartment)
-      : isCompartment(isCompartment) {}
-
-    jschar *formatMessage(JSRuntime *rt) const;
-    jschar *formatJSON(JSRuntime *rt, uint64_t timestamp) const;
-};
-
-typedef void
-(* GCSliceCallback)(JSRuntime *rt, GCProgress progress, const GCDescription &desc);
-
-extern JS_FRIEND_API(GCSliceCallback)
-SetGCSliceCallback(JSRuntime *rt, GCSliceCallback callback);
-
 typedef void
 (* AnalysisPurgeCallback)(JSRuntime *rt, JSFlatString *desc);
 
 extern JS_FRIEND_API(AnalysisPurgeCallback)
 SetAnalysisPurgeCallback(JSRuntime *rt, AnalysisPurgeCallback callback);
-
-/* Was the most recent GC run incrementally? */
-extern JS_FRIEND_API(bool)
-WasIncrementalGC(JSRuntime *rt);
 
 typedef JSBool
 (* DOMInstanceClassMatchesProto)(JSHandleObject protoObject, uint32_t protoID,
@@ -884,74 +747,6 @@ SetDOMCallbacks(JSRuntime *rt, const DOMCallbacks *callbacks);
 
 extern JS_FRIEND_API(const DOMCallbacks *)
 GetDOMCallbacks(JSRuntime *rt);
-
-/*
- * Signals a good place to do an incremental slice, because the browser is
- * drawing a frame.
- */
-extern JS_FRIEND_API(void)
-NotifyDidPaint(JSRuntime *rt);
-
-extern JS_FRIEND_API(bool)
-IsIncrementalGCEnabled(JSRuntime *rt);
-
-JS_FRIEND_API(bool)
-IsIncrementalGCInProgress(JSRuntime *rt);
-
-extern JS_FRIEND_API(void)
-DisableIncrementalGC(JSRuntime *rt);
-
-extern JS_FRIEND_API(bool)
-IsIncrementalBarrierNeeded(JSRuntime *rt);
-
-extern JS_FRIEND_API(bool)
-IsIncrementalBarrierNeeded(JSContext *cx);
-
-extern JS_FRIEND_API(void)
-IncrementalReferenceBarrier(void *ptr);
-
-extern JS_FRIEND_API(void)
-IncrementalValueBarrier(const Value &v);
-
-extern JS_FRIEND_API(void)
-PokeGC(JSRuntime *rt);
-
-class ObjectPtr
-{
-    JSObject *value;
-
-  public:
-    ObjectPtr() : value(NULL) {}
-
-    ObjectPtr(JSObject *obj) : value(obj) {}
-
-    /* Always call finalize before the destructor. */
-    ~ObjectPtr() { JS_ASSERT(!value); }
-
-    void finalize(JSRuntime *rt) {
-        if (IsIncrementalBarrierNeeded(rt))
-            IncrementalReferenceBarrier(value);
-        value = NULL;
-    }
-
-    void init(JSObject *obj) { value = obj; }
-
-    JSObject *get() const { return value; }
-
-    void writeBarrierPre(JSRuntime *rt) {
-        IncrementalReferenceBarrier(value);
-    }
-
-    ObjectPtr &operator=(JSObject *obj) {
-        IncrementalReferenceBarrier(value);
-        value = obj;
-        return *this;
-    }
-
-    JSObject &operator*() const { return *value; }
-    JSObject *operator->() const { return value; }
-    operator JSObject *() const { return value; }
-};
 
 extern JS_FRIEND_API(JSObject *)
 GetTestingFunctions(JSContext *cx);
@@ -1467,6 +1262,9 @@ struct JSJitInfo {
     OpType type;
     bool isInfallible;      /* Is op fallible? False in setters. */
     bool isConstant;        /* Getting a construction-time constant? */
+    bool isPure;            /* As long as no non-pure DOM things happen, will
+                               keep returning the same value for the given
+                               "this" object" */
     JSValueType returnType; /* The return type tag.  Might be JSVAL_TYPE_UNKNOWN */
 };
 
@@ -1563,7 +1361,7 @@ IdToValue(jsid id)
         return Int32Value(JSID_TO_INT(id));
     if (JS_LIKELY(JSID_IS_OBJECT(id)))
         return ObjectValue(*JSID_TO_OBJECT(id));
-    JS_ASSERT(JSID_IS_DEFAULT_XML_NAMESPACE(id) || JSID_IS_VOID(id));
+    JS_ASSERT(JSID_IS_VOID(id));
     return UndefinedValue();
 }
 
@@ -1600,7 +1398,6 @@ class JS_FRIEND_API(AutoCTypesActivityCallback) {
   private:
     JSContext *cx;
     CTypesActivityCallback callback;
-    CTypesActivityType beginType;
     CTypesActivityType endType;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 

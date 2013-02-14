@@ -133,7 +133,23 @@ TabChild::PreloadSlowThings()
         !tab->InitTabChildGlobal(DONT_LOAD_SCRIPTS)) {
         return;
     }
+    // Just load and compile these scripts, but don't run them.
     tab->TryCacheLoadAndCompileScript(BROWSER_ELEMENT_CHILD_SCRIPT);
+    // Load, compile, and run these scripts.
+    tab->RecvLoadRemoteScript(
+        NS_LITERAL_STRING("chrome://global/content/preload.js"));
+
+    nsCOMPtr<nsIDocShell> docShell = do_GetInterface(tab->mWebNav);
+    if (nsIPresShell* presShell = docShell->GetPresShell()) {
+        // Initialize and do an initial reflow of the about:blank
+        // PresShell to let it preload some things for us.
+        presShell->Initialize(0, 0);
+        nsIDocument* doc = presShell->GetDocument();
+        doc->FlushPendingNotifications(Flush_Layout);
+        // ... but after it's done, make sure it doesn't do any more
+        // work.
+        presShell->MakeZombie();
+    }
 
     sPreallocatedTab = tab;
     ClearOnShutdown(&sPreallocatedTab);
@@ -1345,8 +1361,9 @@ TabChild::RecvMouseEvent(const nsString& aType,
 {
   nsCOMPtr<nsIDOMWindowUtils> utils(GetDOMWindowUtils());
   NS_ENSURE_TRUE(utils, true);
+  bool ignored = false;
   utils->SendMouseEvent(aType, aX, aY, aButton, aClickCount, aModifiers,
-                        aIgnoreRootScrollFrame, 0, 0);
+                        aIgnoreRootScrollFrame, 0, 0, &ignored);
   return true;
 }
 
@@ -1378,6 +1395,7 @@ TabChild::DispatchSynthesizedMouseEvent(uint32_t aMsg, uint64_t aTime,
   event.refPoint = aRefPoint;
   event.time = aTime;
   event.button = nsMouseEvent::eLeftButton;
+  event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
   if (aMsg != NS_MOUSE_MOVE) {
     event.clickCount = 1;
   }
@@ -1719,28 +1737,7 @@ TabChild::RecvAsyncMessage(const nsString& aMessage,
 {
   if (mTabChildGlobal) {
     nsFrameScriptCx cx(static_cast<nsIWebBrowserChrome*>(this), this);
-
-    const SerializedStructuredCloneBuffer& buffer = aData.data();
-    const InfallibleTArray<PBlobChild*>& blobChildList = aData.blobsChild();
-
-    StructuredCloneData cloneData;
-    cloneData.mData = buffer.data;
-    cloneData.mDataLength = buffer.dataLength;
-
-    if (!blobChildList.IsEmpty()) {
-      uint32_t length = blobChildList.Length();
-      cloneData.mClosure.mBlobs.SetCapacity(length);
-      for (uint32_t i = 0; i < length; ++i) {
-        BlobChild* blobChild = static_cast<BlobChild*>(blobChildList[i]);
-        MOZ_ASSERT(blobChild);
-
-        nsCOMPtr<nsIDOMBlob> blob = blobChild->GetBlob();
-        MOZ_ASSERT(blob);
-
-        cloneData.mClosure.mBlobs.AppendElement(blob);
-      }
-    }
-
+    StructuredCloneData cloneData = UnpackClonedMessageDataForChild(aData);
     nsRefPtr<nsFrameMessageManager> mm =
       static_cast<nsFrameMessageManager*>(mTabChildGlobal->mMessageManager.get());
     mm->ReceiveMessage(static_cast<nsIDOMEventTarget*>(mTabChildGlobal),

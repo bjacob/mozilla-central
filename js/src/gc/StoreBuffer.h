@@ -12,14 +12,10 @@
 #ifndef JSGC_USE_EXACT_ROOTING
 # error "Generational GC requires exact rooting."
 #endif
-#ifdef JSGC_HAS_XML_SUPPORT
-# error "E4X must be disabled to enable generational GC."
-#endif
 
 #include "jsgc.h"
 #include "jsalloc.h"
-
-#include "gc/Marking.h"
+#include "jsobj.h"
 
 namespace js {
 namespace gc {
@@ -45,6 +41,11 @@ class Nursery
         if (!nursery.initialized())
             return;
         nursery.finish();
+    }
+
+    bool clear() {
+        disable();
+        return enable();
     }
 
     bool isInside(void *cell) const {
@@ -360,6 +361,11 @@ class StoreBuffer
     bool enable();
     void disable();
     bool isEnabled() { return enabled; }
+
+    bool clear() {
+        disable();
+        return enable();
+    }
 
     /* Get the overflowed status. */
     bool hasOverflowed() const { return overflowed; }

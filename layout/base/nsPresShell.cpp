@@ -1115,6 +1115,13 @@ PresShell::Destroy()
 }
 
 void
+PresShell::MakeZombie()
+{
+  mIsZombie = true;
+  CancelAllPendingReflows();
+}
+
+void
 nsIPresShell::SetAuthorStyleDisabled(bool aStyleDisabled)
 {
   if (aStyleDisabled != mStyleSet->GetAuthorStyleDisabled()) {
@@ -3448,6 +3455,8 @@ PresShell::DispatchSynthMouseMove(nsGUIEvent *aEvent,
   uint32_t hoverGenerationBefore = mFrameConstructor->GetHoverGeneration();
   nsEventStatus status;
   nsView* targetView = nsView::GetViewFor(aEvent->widget);
+  if (!targetView)
+    return;
   targetView->GetViewManager()->DispatchEvent(aEvent, targetView, &status);
   if (aFlushOnHoverChange &&
       hoverGenerationBefore != mFrameConstructor->GetHoverGeneration()) {
@@ -3760,6 +3769,10 @@ PresShell::FlushPendingNotifications(mozFlushType aType)
 void
 PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
 {
+  if (mIsZombie) {
+    return;
+  }
+
   /**
    * VERY IMPORTANT: If you add some sort of new flushing to this
    * method, make sure to add the relevant SetNeedLayoutFlush or
@@ -4003,6 +4016,7 @@ PresShell::DocumentStatesChanged(nsIDocument* aDocument,
       if (root->HasView()) {
         root->GetView()->SetForcedRepaint(true);
       }
+      root->SchedulePaint();
     }
   }
 }
@@ -5274,10 +5288,6 @@ public:
   ~nsAutoNotifyDidPaint()
   {
     mShell->GetPresContext()->NotifyDidPaintForSubtree(mFlags);
-    if (!(mFlags & nsIPresShell::PAINT_WILL_SEND_DID_PAINT) &&
-        nsContentUtils::XPConnect()) {
-      nsContentUtils::XPConnect()->NotifyDidPaint();
-    }
   }
 
 private:
@@ -5293,6 +5303,10 @@ PresShell::Paint(nsView*        aViewToPaint,
   SAMPLE_LABEL("Paint", "PresShell::Paint");
   NS_ASSERTION(!mIsDestroying, "painting a destroyed PresShell");
   NS_ASSERTION(aViewToPaint, "null view");
+
+  if (!mIsActive || mIsZombie) {
+    return;
+  }
 
   nsAutoNotifyDidPaint notifyDidPaint(this, aFlags);
 
@@ -5960,11 +5974,10 @@ PresShell::HandleEvent(nsIFrame        *aFrame,
             eventPoint = nsLayoutUtils::GetEventCoordinatesRelativeTo(aEvent,
                                                               touch->mRefPoint,
                                                               frame);
-            nsIFrame* target =
-                          FindFrameTargetedByInputEvent(aEvent->eventStructType,
-                                                        frame,
-                                                        eventPoint,
-                                                        flags);
+            nsIFrame* target = FindFrameTargetedByInputEvent(aEvent,
+                                                             frame,
+                                                             eventPoint,
+                                                             flags);
             if (target && !anyTarget) {
               target->GetContentForEvent(aEvent, getter_AddRefs(anyTarget));
               while (anyTarget && !anyTarget->IsElement()) {
@@ -6016,7 +6029,7 @@ PresShell::HandleEvent(nsIFrame        *aFrame,
             nsCOMPtr<nsIDOMTouch> oldTouch;
             gCaptureTouchList.Get(id, getter_AddRefs(oldTouch));
             if (oldTouch) {
-              nsCOMPtr<nsPIDOMEventTarget> targetPtr;
+              nsCOMPtr<nsIDOMEventTarget> targetPtr;
               oldTouch->GetTarget(getter_AddRefs(targetPtr));
               domtouch->SetTarget(targetPtr);
               gCaptureTouchList.Put(id, touch);
@@ -6032,7 +6045,7 @@ PresShell::HandleEvent(nsIFrame        *aFrame,
         flags |= INPUT_IGNORE_ROOT_SCROLL_FRAME;
       }
       nsIFrame* target =
-        FindFrameTargetedByInputEvent(aEvent->eventStructType, frame, eventPoint, flags);
+        FindFrameTargetedByInputEvent(aEvent, frame, eventPoint, flags);
       if (target) {
         frame = target;
       }
@@ -6096,7 +6109,7 @@ PresShell::HandleEvent(nsIFrame        *aFrame,
             break;
           }
   
-          nsCOMPtr<nsPIDOMEventTarget> targetPtr;
+          nsCOMPtr<nsIDOMEventTarget> targetPtr;
           oldTouch->GetTarget(getter_AddRefs(targetPtr));
           nsCOMPtr<nsIContent> content = do_QueryInterface(targetPtr);
           if (!content) {
@@ -6466,7 +6479,7 @@ PresShell::HandleEventInternal(nsEvent* aEvent, nsEventStatus* aStatus)
           if (!oldTouch) {
             continue;
           }
-          nsCOMPtr<nsPIDOMEventTarget> targetPtr;
+          nsCOMPtr<nsIDOMEventTarget> targetPtr;
           oldTouch->GetTarget(getter_AddRefs(targetPtr));
 
           mCurrentEventContent = do_QueryInterface(targetPtr);
@@ -6504,7 +6517,7 @@ PresShell::HandleEventInternal(nsEvent* aEvent, nsEventStatus* aStatus)
             haveChanged = true;
           }
 
-          nsCOMPtr<nsPIDOMEventTarget> targetPtr;
+          nsCOMPtr<nsIDOMEventTarget> targetPtr;
           oldTouch->GetTarget(getter_AddRefs(targetPtr));
           if (!targetPtr) {
             touches.RemoveElementAt(i);
@@ -6657,7 +6670,7 @@ PresShell::DispatchTouchEvent(nsEvent *aEvent,
       continue;
     }
 
-    nsCOMPtr<nsPIDOMEventTarget> targetPtr;
+    nsCOMPtr<nsIDOMEventTarget> targetPtr;
     touch->GetTarget(getter_AddRefs(targetPtr));
     nsCOMPtr<nsIContent> content = do_QueryInterface(targetPtr);
     if (!content) {
@@ -7129,7 +7142,7 @@ PresShell::ShouldIgnoreInvalidation()
 }
 
 void
-PresShell::WillPaint(bool aWillSendDidPaint)
+PresShell::WillPaint()
 {
   nsRootPresContext* rootPresContext = mPresContext->GetRootPresContext();
   if (!rootPresContext) {
@@ -7157,7 +7170,7 @@ PresShell::WillPaint(bool aWillSendDidPaint)
 }
 
 void
-PresShell::WillPaintWindow(bool aWillSendDidPaint)
+PresShell::WillPaintWindow()
 {
   nsRootPresContext* rootPresContext = mPresContext->GetRootPresContext();
   if (rootPresContext != mPresContext) {
@@ -7482,6 +7495,10 @@ PresShell::ScheduleReflowOffTimer()
 bool
 PresShell::DoReflow(nsIFrame* target, bool aInterruptible)
 {
+  if (mIsZombie) {
+    return true;
+  }
+
   target->SchedulePaint();
   nsIFrame *parent = nsLayoutUtils::GetCrossDocParentFrame(target);
   while (parent) {
@@ -9006,7 +9023,8 @@ void ColorToString(nscolor aColor, nsAutoString &aString)
 
 nsIFrame* nsIPresShell::GetAbsoluteContainingBlock(nsIFrame *aFrame)
 {
-  return FrameConstructor()->GetAbsoluteContainingBlock(aFrame);
+  return FrameConstructor()->GetAbsoluteContainingBlock(aFrame,
+      nsCSSFrameConstructor::ABS_POS);
 }
 
 #ifdef ACCESSIBILITY
@@ -9136,10 +9154,12 @@ PresShell::SetIsActive(bool aIsActive)
   if (TabChild* tab = GetTabChildFrom(this)) {
     if (aIsActive) {
       tab->MakeVisible();
-      if (nsIFrame* root = mFrameConstructor->GetRootFrame()) {
-        FrameLayerBuilder::InvalidateAllLayersForFrame(
-          nsLayoutUtils::GetDisplayRootFrame(root));
-        root->SchedulePaint();
+      if (!mIsZombie) {
+        if (nsIFrame* root = mFrameConstructor->GetRootFrame()) {
+          FrameLayerBuilder::InvalidateAllLayersForFrame(
+            nsLayoutUtils::GetDisplayRootFrame(root));
+          root->SchedulePaint();
+        }
       }
     } else {
       tab->MakeHidden();

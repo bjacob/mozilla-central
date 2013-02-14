@@ -28,12 +28,10 @@
                 label="&openLinkCmd.label;"
                 accesskey="&openLinkCmd.accesskey;"
                 oncommand="gContextMenu.openLink();"/>
-#ifdef MOZ_PER_WINDOW_PRIVATE_BROWSING
       <menuitem id="context-openlinkprivate"
                 label="&openLinkInPrivateWindowCmd.label;"
                 accesskey="&openLinkInPrivateWindowCmd.accesskey;"
                 oncommand="gContextMenu.openLinkInPrivateWindow();"/>
-#endif
       <menuseparator id="context-sep-open"/>
       <menuitem id="context-bookmarklink"
                 label="&bookmarkThisLinkCmd.label;"
@@ -184,7 +182,7 @@
       <menuitem id="context-reload"
                 label="&reloadCmd.label;"
                 accesskey="&reloadCmd.accesskey;"
-                command="Browser:ReloadOrDuplicate"
+                oncommand="gContextMenu.reload(event);"
                 onclick="checkForMiddleClick(this, event);"/>
       <menuitem id="context-stop"
                 label="&stopCmd.label;"
@@ -237,8 +235,7 @@
                 accesskey="&keywordfield.accesskey;"
                 oncommand="AddKeywordForSearchField();"/>
       <menuitem id="context-searchselect"
-                oncommand="BrowserSearch.loadSearch(getBrowserSelection(), true,
-                                                    'application/x-moz-contextsearch');"/>
+                oncommand="BrowserSearch.loadSearchFromContext(getBrowserSelection());"/>
       <menuseparator id="frame-sep"/>
       <menu id="frame" label="&thisFrameMenu.label;" accesskey="&thisFrameMenu.accesskey;">
         <menupopup>

@@ -132,6 +132,11 @@ struct DataBlobs<Parent>
   {
     return aData.blobsParent();
   }
+
+  static const InfallibleTArray<ProtocolType*>& Blobs(const ClonedMessageData& aData)
+  {
+    return aData.blobsParent();
+  }
 };
 
 template<>
@@ -140,6 +145,11 @@ struct DataBlobs<Child>
   typedef BlobTraits<Child>::ProtocolType ProtocolType;
 
   static InfallibleTArray<ProtocolType*>& Blobs(ClonedMessageData& aData)
+  {
+    return aData.blobsChild();
+  }
+
+  static const InfallibleTArray<ProtocolType*>& Blobs(const ClonedMessageData& aData)
   {
     return aData.blobsChild();
   }
@@ -185,6 +195,42 @@ MessageManagerCallback::BuildClonedMessageDataForChild(ContentChild* aChild,
                                                        ClonedMessageData& aClonedData)
 {
   return BuildClonedMessageData<Child>(aChild, aData, aClonedData);
+}
+
+template<ActorFlavorEnum Flavor>
+static StructuredCloneData
+UnpackClonedMessageData(const ClonedMessageData& aData)
+{
+  const SerializedStructuredCloneBuffer& buffer = aData.data();
+  typedef typename BlobTraits<Flavor>::ProtocolType ProtocolType;
+  const InfallibleTArray<ProtocolType*>& blobs = DataBlobs<Flavor>::Blobs(aData);
+  StructuredCloneData cloneData;
+  cloneData.mData = buffer.data;
+  cloneData.mDataLength = buffer.dataLength;
+  if (!blobs.IsEmpty()) {
+    uint32_t length = blobs.Length();
+    cloneData.mClosure.mBlobs.SetCapacity(length);
+    for (uint32_t i = 0; i < length; ++i) {
+      Blob<Flavor>* blob = static_cast<Blob<Flavor>*>(blobs[i]);
+      MOZ_ASSERT(blob);
+      nsCOMPtr<nsIDOMBlob> domBlob = blob->GetBlob();
+      MOZ_ASSERT(domBlob);
+      cloneData.mClosure.mBlobs.AppendElement(domBlob);
+    }
+  }
+  return cloneData;
+}
+
+StructuredCloneData
+mozilla::dom::ipc::UnpackClonedMessageDataForParent(const ClonedMessageData& aData)
+{
+  return UnpackClonedMessageData<Parent>(aData);
+}
+
+StructuredCloneData
+mozilla::dom::ipc::UnpackClonedMessageDataForChild(const ClonedMessageData& aData)
+{
+  return UnpackClonedMessageData<Child>(aData);
 }
 
 // nsIMessageListenerManager
@@ -1083,14 +1129,9 @@ nsFrameScriptExecutor::InitTabChildGlobalInternal(nsISupports* aScope)
 
   nsContentUtils::GetSecurityManager()->GetSystemPrincipal(getter_AddRefs(mPrincipal));
 
-  bool allowXML = Preferences::GetBool("javascript.options.xml.chrome");
-  JS_SetOptions(cx, JS_GetOptions(cx) |
-                    JSOPTION_PRIVATE_IS_NSISUPPORTS |
-                    (allowXML ? JSOPTION_ALLOW_XML : 0));
+  JS_SetOptions(cx, JS_GetOptions(cx) | JSOPTION_PRIVATE_IS_NSISUPPORTS);
   JS_SetVersion(cx, JSVERSION_LATEST);
   JS_SetErrorReporter(cx, ContentScriptErrorReporter);
-
-  xpc_LocalizeContext(cx);
 
   JSAutoRequest ar(cx);
   nsIXPConnect* xpc = nsContentUtils::XPConnect();

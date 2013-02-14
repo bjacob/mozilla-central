@@ -160,7 +160,7 @@ ArgumentsObject::create(JSContext *cx, HandleScript script, HandleFunction calle
     data->deletedBits = reinterpret_cast<size_t *>(dstEnd);
     ClearAllBitArrayElements(data->deletedBits, numDeletedWords);
 
-    RawObject obj = JSObject::create(cx, FINALIZE_KIND, shape, type, NULL);
+    RawObject obj = JSObject::create(cx, FINALIZE_KIND, gc::DefaultHeap, shape, type, NULL);
     if (!obj) {
         js_free(data);
         return NULL;
@@ -349,7 +349,7 @@ args_enumerate(JSContext *cx, HandleObject obj)
 
         RootedObject pobj(cx);
         RootedShape prop(cx);
-        if (!baseops::LookupProperty(cx, argsobj, id, &pobj, &prop))
+        if (!baseops::LookupProperty<CanGC>(cx, argsobj, id, &pobj, &prop))
             return false;
     }
     return true;
@@ -467,22 +467,22 @@ strictargs_enumerate(JSContext *cx, HandleObject obj)
 
     // length
     id = NameToId(cx->names().length);
-    if (!baseops::LookupProperty(cx, argsobj, id, &pobj, &prop))
+    if (!baseops::LookupProperty<CanGC>(cx, argsobj, id, &pobj, &prop))
         return false;
 
     // callee
     id = NameToId(cx->names().callee);
-    if (!baseops::LookupProperty(cx, argsobj, id, &pobj, &prop))
+    if (!baseops::LookupProperty<CanGC>(cx, argsobj, id, &pobj, &prop))
         return false;
 
     // caller
     id = NameToId(cx->names().caller);
-    if (!baseops::LookupProperty(cx, argsobj, id, &pobj, &prop))
+    if (!baseops::LookupProperty<CanGC>(cx, argsobj, id, &pobj, &prop))
         return false;
 
     for (uint32_t i = 0, argc = argsobj->initialLength(); i < argc; i++) {
         id = INT_TO_JSID(i);
-        if (!baseops::LookupProperty(cx, argsobj, id, &pobj, &prop))
+        if (!baseops::LookupProperty<CanGC>(cx, argsobj, id, &pobj, &prop))
             return false;
     }
 
@@ -530,11 +530,9 @@ Class js::NormalArgumentsObjectClass = {
     NULL,                    /* hasInstance */
     ArgumentsObject::trace,
     {
-        NULL,       /* equality    */
         NULL,       /* outerObject */
         NULL,       /* innerObject */
         NULL,       /* iteratorObject  */
-        NULL,       /* unused      */
         false,      /* isWrappedNative */
     }
 };
@@ -563,11 +561,9 @@ Class js::StrictArgumentsObjectClass = {
     NULL,                    /* hasInstance */
     ArgumentsObject::trace,
     {
-        NULL,       /* equality    */
         NULL,       /* outerObject */
         NULL,       /* innerObject */
         NULL,       /* iteratorObject  */
-        NULL,       /* unused      */
         false,      /* isWrappedNative */
     }
 };

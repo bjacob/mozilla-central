@@ -123,7 +123,7 @@ public class PromptService implements OnClickListener, OnCancelListener, OnItemC
             } else if (mType.equals("date")) {
                 try {
                     DateTimePicker input = new DateTimePicker(GeckoApp.mAppContext, "yyyy-MM-dd", mValue,
-                                                              DateTimePicker.pickersState.DATE);
+                                                              DateTimePicker.PickersState.DATE);
                     input.toggleCalendar(true);
                     mView = (View)input;
                 } catch (UnsupportedOperationException ex) {
@@ -145,7 +145,7 @@ public class PromptService implements OnClickListener, OnCancelListener, OnItemC
                 }
             } else if (mType.equals("week")) {
                 DateTimePicker input = new DateTimePicker(GeckoApp.mAppContext, "yyyy-'W'ww", mValue,
-                                                          DateTimePicker.pickersState.WEEK);
+                                                          DateTimePicker.PickersState.WEEK);
                 mView = (View)input;
             } else if (mType.equals("time")) {
                 TimePicker input = new TimePicker(GeckoApp.mAppContext);
@@ -162,12 +162,12 @@ public class PromptService implements OnClickListener, OnCancelListener, OnItemC
                 mView = (View)input;
             } else if (mType.equals("datetime-local") || mType.equals("datetime")) {
                 DateTimePicker input = new DateTimePicker(GeckoApp.mAppContext, "yyyy-MM-dd kk:mm", mValue,
-                                                          DateTimePicker.pickersState.DATETIME);
+                                                          DateTimePicker.PickersState.DATETIME);
                 input.toggleCalendar(true);
                 mView = (View)input;
             } else if (mType.equals("month")) {
                 DateTimePicker input = new DateTimePicker(GeckoApp.mAppContext, "yyyy-MM", mValue,
-                                                          DateTimePicker.pickersState.MONTH);
+                                                          DateTimePicker.PickersState.MONTH);
                 mView = (View)input;
             } else if (mType.equals("textbox") || mType.equals("password")) {
                 EditText input = new EditText(GeckoApp.mAppContext);
@@ -340,7 +340,9 @@ public class PromptService implements OnClickListener, OnCancelListener, OnItemC
             }
         } else if (length == 1) {
             try {
-                builder.setView(applyInputStyle(mInputs[0].getView()));
+                ScrollView view = new ScrollView(GeckoApp.mAppContext);
+                view.addView(mInputs[0].getView());
+                builder.setView(applyInputStyle(view));
             } catch(UnsupportedOperationException ex) {
                 // We cannot display these input widgets with this sdk version,
                 // do not display any dialog and finish the prompt now.
@@ -348,22 +350,22 @@ public class PromptService implements OnClickListener, OnCancelListener, OnItemC
                 return;
             }
         } else if (length > 1) {
-            LinearLayout linearLayout = new LinearLayout(GeckoApp.mAppContext);
-            linearLayout.setOrientation(LinearLayout.VERTICAL);
             try {
+                LinearLayout linearLayout = new LinearLayout(GeckoApp.mAppContext);
+                linearLayout.setOrientation(LinearLayout.VERTICAL);
                 for (int i = 0; i < length; i++) {
                     View content = mInputs[i].getView();
                     linearLayout.addView(content);
                 }
+                ScrollView view = new ScrollView(GeckoApp.mAppContext);
+                view.addView(linearLayout);
+                builder.setView(applyInputStyle(view));
             } catch(UnsupportedOperationException ex) {
                 // We cannot display these input widgets with this sdk version,
                 // do not display any dialog and finish the prompt now.
                 finishDialog("{\"button\": -1}");
                 return;
             }
-            ScrollView view = new ScrollView(GeckoApp.mAppContext);
-            view.addView(linearLayout);
-            builder.setView(applyInputStyle(view));
         }
 
         length = mButtons == null ? 0 : mButtons.length;

@@ -3,7 +3,9 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MediaEngine.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/Services.h"
+#include "mozilla/unused.h"
 #include "nsIMediaManager.h"
 
 #include "nsHashKeys.h"
@@ -14,9 +16,14 @@
 
 #include "nsPIDOMWindow.h"
 #include "nsIDOMNavigatorUserMedia.h"
+#include "nsXULAppAPI.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/StaticPtr.h"
 #include "prlog.h"
+
+#ifdef MOZ_WEBRTC
+#include "mtransport/runnable_utils.h"
+#endif
 
 namespace mozilla {
 
@@ -49,10 +56,20 @@ class GetUserMediaNotificationEvent: public nsRunnable
         obs->NotifyObservers(nullptr,
             "recording-device-events",
             NS_LITERAL_STRING("starting").get());
+        // Forward recording events to parent process.
+        // The events are gathered in chrome process and used for recording indicator
+        if (XRE_GetProcessType() != GeckoProcessType_Default) {
+          unused << mozilla::dom::ContentChild::GetSingleton()->SendRecordingDeviceEvents(NS_LITERAL_STRING("starting"));
+        }
       } else {
         obs->NotifyObservers(nullptr,
             "recording-device-events",
             NS_LITERAL_STRING("shutdown").get());
+        // Forward recording events to parent process.
+        // The events are gathered in chrome process and used for recording indicator
+        if (XRE_GetProcessType() != GeckoProcessType_Default) {
+          unused << mozilla::dom::ContentChild::GetSingleton()->SendRecordingDeviceEvents(NS_LITERAL_STRING("shutdown"));
+        }
       }
       return NS_OK;
     }
@@ -114,6 +131,23 @@ public:
   // implement in .cpp to avoid circular dependency with MediaOperationRunnable
   // Can be invoked from EITHER MainThread or MSG thread
   void Invalidate();
+
+  void
+  AudioConfig(bool aEchoOn, uint32_t aEcho,
+              bool aAgcOn, uint32_t aAGC,
+              bool aNoiseOn, uint32_t aNoise)
+  {
+    if (mAudioSource) {
+#ifdef MOZ_WEBRTC
+      // Right now these configs are only of use if webrtc is available
+      RUN_ON_THREAD(mMediaThread,
+                    WrapRunnable(nsRefPtr<MediaEngineSource>(mAudioSource), // threadsafe
+                                 &MediaEngineSource::Config,
+                                 aEchoOn, aEcho, aAgcOn, aAGC, aNoiseOn, aNoise),
+                    NS_DISPATCH_NORMAL);
+#endif
+    }
+  }
 
   void
   Remove()
@@ -326,10 +360,13 @@ public:
 
       NS_ASSERTION(NS_IsMainThread(), "Only create MediaManager on main thread");
       nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-      obs->AddObserver(sSingleton, "xpcom-shutdown", false);
-      obs->AddObserver(sSingleton, "getUserMedia:response:allow", false);
-      obs->AddObserver(sSingleton, "getUserMedia:response:deny", false);
-      obs->AddObserver(sSingleton, "getUserMedia:revoke", false);
+      if (obs) {
+        obs->AddObserver(sSingleton, "xpcom-shutdown", false);
+        obs->AddObserver(sSingleton, "getUserMedia:response:allow", false);
+        obs->AddObserver(sSingleton, "getUserMedia:response:deny", false);
+        obs->AddObserver(sSingleton, "getUserMedia:revoke", false);
+      }
+      // else MediaManager won't work properly and will leak (see bug 837874)
     }
     return sSingleton;
   }

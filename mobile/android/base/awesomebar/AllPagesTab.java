@@ -460,7 +460,7 @@ public class AllPagesTab extends AwesomeBarTab implements GeckoEventListener {
                         // first suggestion item) and the search matches a URL
                         // pattern, go to that URL. Otherwise, do a search for
                         // the term.
-                        if (v != viewHolder.userEnteredView && !StringUtils.isSearchQuery(suggestion)) {
+                        if (v != viewHolder.userEnteredView && !StringUtils.isSearchQuery(suggestion, false)) {
                             listener.onUrlOpen(suggestion, null);
                         } else {
                             listener.onSearch(engine.name, suggestion);
@@ -804,9 +804,10 @@ public class AllPagesTab extends AwesomeBarTab implements GeckoEventListener {
                     continue;
 
                 Bitmap favicon = BitmapFactory.decodeByteArray(b, 0, b.length);
-                if (favicon == null)
+                if (favicon == null || favicon.getWidth() <= 0 || favicon.getHeight() <= 0)
                     continue;
 
+                favicon = Favicons.getInstance().scaleImage(favicon);
                 Favicons.getInstance().putFaviconInMemCache(url, favicon);
             } while (c.moveToNext());
         } finally {

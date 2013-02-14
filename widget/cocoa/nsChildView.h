@@ -184,6 +184,10 @@ typedef NSInteger NSEventGestureAxis;
 - (NSEventPhase)momentumPhase;
 @end
 
+@protocol EventRedirection
+  - (NSView*)targetView;
+@end
+
 @interface ChildView : NSView<
 #ifdef ACCESSIBILITY
                               mozAccessible,
@@ -268,6 +272,8 @@ typedef NSInteger NSEventGestureAxis;
 // class initialization
 + (void)initialize;
 
++ (void)registerViewForDraggedTypes:(NSView*)aView;
+
 // these are sent to the first responder when the window key status changes
 - (void)viewsWindowDidBecomeKey;
 - (void)viewsWindowDidResignKey;
@@ -278,6 +284,8 @@ typedef NSInteger NSEventGestureAxis;
 - (void)sendFocusEvent:(uint32_t)eventType;
 
 - (void)handleMouseMoved:(NSEvent*)aEvent;
+
+- (void)updateWindowDraggableStateOnMouseMove:(NSEvent*)theEvent;
 
 - (void)drawRect:(NSRect)aRect inTitlebarContext:(CGContextRef)aContext;
 
@@ -392,6 +400,7 @@ public:
   NS_IMETHOD              SetFocus(bool aRaise);
   NS_IMETHOD              GetBounds(nsIntRect &aRect);
   NS_IMETHOD              GetClientBounds(nsIntRect &aRect);
+  NS_IMETHOD              GetScreenBounds(nsIntRect &aRect);
 
   // Returns the "backing scale factor" of the view's window, which is the
   // ratio of pixels in the window's backing store to Cocoa points. Prior to

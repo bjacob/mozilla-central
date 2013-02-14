@@ -80,6 +80,8 @@ MarkExactStackRoots(JSTracer *trc)
     for (unsigned i = 0; i < THING_ROOT_LIMIT; i++) {
         for (ContextIter cx(trc->runtime); !cx.done(); cx.next())
             MarkExactStackRootList(trc, cx->thingGCRooters[i], ThingRootKind(i));
+
+        MarkExactStackRootList(trc, trc->runtime->mainThread->thingGCRooters[i], ThingRootKind(i));
     }
 }
 #endif /* JSGC_USE_EXACT_ROOTING */
@@ -152,7 +154,7 @@ IsAddressableGCThing(JSRuntime *rt, uintptr_t w,
     if (!aheader->allocated())
         return CGCT_FREEARENA;
 
-    if (skipUncollectedCompartments && !aheader->compartment->isCollecting())
+    if (skipUncollectedCompartments && !aheader->zone->isCollecting())
         return CGCT_OTHERCOMPARTMENT;
 
     AllocKind thingKind = aheader->getAllocKind();
@@ -423,19 +425,6 @@ AutoGCRooter::trace(JSTracer *trc)
         return;
       }
 
-#if JS_HAS_XML_SUPPORT
-      case NAMESPACES: {
-        JSXMLArray<JSObject> &array = static_cast<AutoNamespaceArray *>(this)->array;
-        MarkObjectRange(trc, array.length, array.vector, "JSXMLArray.vector");
-        js_XMLArrayCursorTrace(trc, array.cursors);
-        return;
-      }
-
-      case XML:
-        js_TraceXML(trc, static_cast<AutoXMLRooter *>(this)->xml);
-        return;
-#endif
-
       case OBJECT:
         if (static_cast<AutoObjectRooter *>(this)->obj)
             MarkObjectRoot(trc, &static_cast<AutoObjectRooter *>(this)->obj,
@@ -507,8 +496,30 @@ AutoGCRooter::trace(JSTracer *trc)
         for (AutoObjectObjectHashMap::Enum e(map); !e.empty(); e.popFront()) {
             mozilla::DebugOnly<RawObject> key = e.front().key;
             MarkObjectRoot(trc, (RawObject *) &e.front().key, "AutoObjectObjectHashMap key");
-            JS_ASSERT(key == e.front().key);
+            JS_ASSERT(key == e.front().key);  // Needs rewriting for moving GC, see bug 726687.
             MarkObjectRoot(trc, &e.front().value, "AutoObjectObjectHashMap value");
+        }
+        return;
+      }
+
+      case OBJU32HASHMAP: {
+        AutoObjectUnsigned32HashMap *self = static_cast<AutoObjectUnsigned32HashMap *>(this);
+        AutoObjectUnsigned32HashMap::HashMapImpl &map = self->map;
+        for (AutoObjectUnsigned32HashMap::Enum e(map); !e.empty(); e.popFront()) {
+            mozilla::DebugOnly<RawObject> key = e.front().key;
+            MarkObjectRoot(trc, (RawObject *) &e.front().key, "AutoObjectUnsignedHashMap key");
+            JS_ASSERT(key == e.front().key);  // Needs rewriting for moving GC, see bug 726687.
+        }
+        return;
+      }
+
+      case OBJHASHSET: {
+        AutoObjectHashSet *self = static_cast<AutoObjectHashSet *>(this);
+        AutoObjectHashSet::HashSetImpl &set = self->set;
+        for (AutoObjectHashSet::Enum e(set); !e.empty(); e.popFront()) {
+            mozilla::DebugOnly<RawObject> obj = e.front();
+            MarkObjectRoot(trc, (RawObject *) &e.front(), "AutoObjectHashSet value");
+            JS_ASSERT(obj == e.front());  // Needs rewriting for moving GC, see bug 726687.
         }
         return;
       }
@@ -646,11 +657,12 @@ RegExpStatics::AutoRooter::trace(JSTracer *trc)
     if (statics->matchesInput)
         MarkStringRoot(trc, reinterpret_cast<JSString**>(&statics->matchesInput),
                        "RegExpStatics::AutoRooter matchesInput");
+    if (statics->lazySource)
+        MarkStringRoot(trc, reinterpret_cast<JSString**>(&statics->lazySource),
+                       "RegExpStatics::AutoRooter lazySource");
     if (statics->pendingInput)
         MarkStringRoot(trc, reinterpret_cast<JSString**>(&statics->pendingInput),
                        "RegExpStatics::AutoRooter pendingInput");
-    if (statics->regexp.initialized())
-        statics->regexp->trace(trc);
 }
 
 void
@@ -669,7 +681,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
 
     if (IS_GC_MARKING_TRACER(trc)) {
         for (CompartmentsIter c(rt); !c.done(); c.next()) {
-            if (!c->isCollecting())
+            if (!c->zone()->isCollecting())
                 c->markCrossCompartmentWrappers(trc);
         }
         Debugger::markCrossCompartmentDebuggerObjectReferents(trc);
@@ -689,8 +701,12 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
     for (RootRange r = rt->gcRootsHash.all(); !r.empty(); r.popFront()) {
         const RootEntry &entry = r.front();
         const char *name = entry.value.name ? entry.value.name : "root";
-        if (entry.value.type == JS_GC_ROOT_GCTHING_PTR)
-            MarkGCThingRoot(trc, reinterpret_cast<void **>(entry.key), name);
+        if (entry.value.type == JS_GC_ROOT_STRING_PTR)
+            MarkStringRoot(trc, reinterpret_cast<JSString **>(entry.key), name);
+        else if (entry.value.type == JS_GC_ROOT_OBJECT_PTR)
+            MarkObjectRoot(trc, reinterpret_cast<JSObject **>(entry.key), name);
+        else if (entry.value.type == JS_GC_ROOT_SCRIPT_PTR)
+            MarkScriptRoot(trc, reinterpret_cast<JSScript **>(entry.key), name);
         else
             MarkValueRoot(trc, reinterpret_cast<Value *>(entry.key), name);
     }
@@ -710,7 +726,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
             MarkScriptRoot(trc, &vec[i].script, "scriptAndCountsVector");
     }
 
-    if (!IS_GC_MARKING_TRACER(trc) || rt->atomsCompartment->isCollecting()) {
+    if (!IS_GC_MARKING_TRACER(trc) || rt->atomsCompartment->zone()->isCollecting()) {
         MarkAtoms(trc);
 #ifdef JS_ION
         /* Any Ion wrappers survive until the runtime is being torn down. */
@@ -724,15 +740,22 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
     for (ContextIter acx(rt); !acx.done(); acx.next())
         acx->mark(trc);
 
+    if (IS_GC_MARKING_TRACER(trc)) {
+        for (ZonesIter zone(rt); !zone.done(); zone.next()) {
+            if (!zone->isCollecting())
+                continue;
+
+            if (zone->isPreservingCode()) {
+                gcstats::AutoPhase ap(rt->gcStats, gcstats::PHASE_MARK_TYPES);
+                zone->markTypes(trc);
+            }
+        }
+    }
+
     /* We can't use GCCompartmentsIter if we're called from TraceRuntime. */
     for (CompartmentsIter c(rt); !c.done(); c.next()) {
-        if (IS_GC_MARKING_TRACER(trc) && !c->isCollecting())
+        if (IS_GC_MARKING_TRACER(trc) && !c->zone()->isCollecting())
             continue;
-
-        if (IS_GC_MARKING_TRACER(trc) && c->isPreservingCode()) {
-            gcstats::AutoPhase ap(rt->gcStats, gcstats::PHASE_MARK_TYPES);
-            c->markTypes(trc);
-        }
 
         /* During a GC, these are treated as weak pointers. */
         if (!IS_GC_MARKING_TRACER(trc)) {

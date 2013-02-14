@@ -28,6 +28,10 @@ pref("general.useragent.compatMode.firefox", false);
 // overrides by default, don't initialize UserAgentOverrides.jsm.
 pref("general.useragent.site_specific_overrides", true);
 
+// This pref controls whether or not to enable UA overrides in the
+// product code that end users use (as opposed to testing code).
+pref("general.useragent.enable_overrides", false);
+
 pref("general.config.obscure_value", 13); // for MCD .cfg files
 
 pref("general.warnOnAboutConfig", true);
@@ -151,7 +155,7 @@ pref("media.cache_size", 512000);
 pref("media.volume_scale", "1.0");
 
 #ifdef MOZ_WMF
-pref("media.windows-media-foundation.enabled", false);
+pref("media.windows-media-foundation.enabled", true);
 #endif
 #ifdef MOZ_RAW
 pref("media.raw.enabled", true);
@@ -178,6 +182,15 @@ pref("media.gstreamer.enabled", true);
 pref("media.navigator.enabled", true);
 pref("media.peerconnection.enabled", false);
 pref("media.navigator.permission.disabled", false);
+// These values (aec, agc, and noice) are from media/webrtc/trunk/webrtc/common_types.h
+// kXxxUnchanged = 0, kXxxDefault = 1, and higher values are specific to each 
+// setting (for Xxx = Ec, Agc, or Ns).  Defaults are all set to kXxxDefault here.
+pref("media.peerconnection.aec_enabled", true);
+pref("media.peerconnection.aec", 1);
+pref("media.peerconnection.agc_enabled", false);
+pref("media.peerconnection.agc", 1);
+pref("media.peerconnection.noise_enabled", false);
+pref("media.peerconnection.noise", 1);
 #else
 #ifdef ANDROID
 pref("media.navigator.enabled", true);
@@ -252,7 +265,7 @@ pref("gfx.font_rendering.opentype_svg.enabled", false);
 #ifdef XP_WIN
 // comma separated list of backends to use in order of preference
 // e.g., pref("gfx.canvas.azure.backends", "direct2d,skia,cairo");
-pref("gfx.canvas.azure.backends", "direct2d,cairo");
+pref("gfx.canvas.azure.backends", "direct2d,skia,cairo");
 pref("gfx.content.azure.backends", "direct2d");
 pref("gfx.content.azure.enabled", true);
 #else
@@ -341,6 +354,9 @@ pref("browser.frames.enabled", true);
 
 // Number of characters to consider emphasizing for rich autocomplete results
 pref("toolkit.autocomplete.richBoundaryCutoff", 200);
+
+// Variable controlling logging for osfile.
+pref("toolkit.osfile.log", false);
 
 pref("toolkit.scrollbox.smoothScroll", true);
 pref("toolkit.scrollbox.scrollIncrement", 20);
@@ -693,8 +709,14 @@ pref("dom.min_background_timeout_value", 1000);
 // changed)
 pref("dom.experimental_bindings", true);
 
+// Run content XBL in a separate scope.
+pref("dom.xbl_scopes", false);
+
 // Don't use new input types
 pref("dom.experimental_forms", false);
+
+// Don't enable <input type=range> yet:
+pref("dom.experimental_forms_range", false);
 
 // Allocation Threshold for Workers
 pref("dom.workers.mem.gc_allocation_threshold_mb", 30);
@@ -712,6 +734,9 @@ pref("privacy.popups.disable_from_plugins", 2);
 
 // "do not track" HTTP header, disabled by default
 pref("privacy.donottrackheader.enabled",    false);
+//   0 = tracking is acceptable
+//   1 = tracking is unacceptable
+pref("privacy.donottrackheader.value",      1);
 
 pref("dom.event.contextmenu.enabled",       true);
 pref("dom.event.clipboardevents.enabled",   true);
@@ -728,8 +753,6 @@ pref("javascript.options.ion.parallel_compilation", true);
 pref("javascript.options.pccounts.content", false);
 pref("javascript.options.pccounts.chrome",  false);
 pref("javascript.options.methodjit_always", false);
-pref("javascript.options.xml.content", false);
-pref("javascript.options.xml.chrome", false);
 pref("javascript.options.jit_hardening", true);
 pref("javascript.options.typeinference", true);
 // This preference limits the memory usage of javascript.
@@ -945,6 +968,7 @@ pref("network.http.spdy.chunk-size", 4096);
 pref("network.http.spdy.timeout", 180);
 pref("network.http.spdy.coalesce-hostnames", true);
 pref("network.http.spdy.use-alternate-protocol", true);
+pref("network.http.spdy.persistent-settings", false);
 pref("network.http.spdy.ping-threshold", 58);
 pref("network.http.spdy.ping-timeout", 8);
 pref("network.http.spdy.send-buffer-size", 131072);
@@ -1385,6 +1409,7 @@ pref("security.checkloaduri", true);
 pref("security.xpconnect.plugin.unrestricted", true);
 // security-sensitive dialogs should delay button enabling. In milliseconds.
 pref("security.dialog_enable_delay", 2000);
+pref("security.notification_enable_delay", 500);
 
 pref("security.csp.enable", true);
 pref("security.csp.debug", false);
@@ -1763,7 +1788,7 @@ pref("dom.ipc.plugins.processLaunchTimeoutSecs", 45);
 #ifdef XP_WIN
 // How long a plugin is allowed to process a synchronous IPC message 
 // before we display the plugin hang UI
-pref("dom.ipc.plugins.hangUITimeoutSecs", 5);
+pref("dom.ipc.plugins.hangUITimeoutSecs", 11);
 // Minimum time that the plugin hang UI will be displayed
 pref("dom.ipc.plugins.hangUIMinDisplaySecs", 10);
 #endif
@@ -1793,8 +1818,6 @@ pref("dom.ipc.plugins.flash.subprocess.crashreporter.enabled", true);
 
 pref("dom.ipc.processCount", 1);
 
-pref("svg.smil.enabled", true);
-
 // Enable the use of display-lists for SVG hit-testing and painting.
 pref("svg.display-lists.hit-testing.enabled", true);
 pref("svg.display-lists.painting.enabled", true);
@@ -1805,6 +1828,9 @@ pref("svg.paint-order.enabled", false);
 #else
 pref("svg.paint-order.enabled", true);
 #endif
+
+// Is support for the new SVG text implementation enabled?
+pref("svg.text.css-frames.enabled", false);
 
 pref("font.minimum-size.ar", 0);
 pref("font.minimum-size.x-armn", 0);
@@ -1963,6 +1989,10 @@ pref("ui.mouse.radius.topmm", 12);
 pref("ui.mouse.radius.rightmm", 8);
 pref("ui.mouse.radius.bottommm", 4);
 pref("ui.mouse.radius.visitedWeight", 120);
+
+// When true, the ui.mouse.radius.* prefs will only affect simulated mouse events generated by touch input.
+// When false, the prefs will be used for all mouse events.
+pref("ui.mouse.radius.inputSource.touchOnly", true);
 
 #ifdef XP_WIN
 
@@ -3760,6 +3790,17 @@ pref("toolkit.zoomManager.zoomValues", ".3,.5,.67,.8,.9,1,1.1,1.2,1.33,1.5,1.7,2
  */
 pref("browser.zoom.reflowOnZoom", false);
 
+/**
+ * Controls whether or not the reflow-on-zoom behavior happens on page load.
+ * This can be enabled in conjunction with the above preference (reflowOnZoom),
+ * but has no effect if browser.zoom.reflowOnZoom is disabled.
+ *
+ * Note that this should be turned off only in cases where debugging of the
+ * reflow-on-zoom feature is necessary, and enabling the feature during
+ * a page load inhbits this debugging.
+ */
+pref("browser.zoom.reflowZoom.reflowTextOnPageLoad", true);
+
 // Image-related prefs
 // The maximum size, in bytes, of the decoded images we cache
 pref("image.cache.size", 5242880);
@@ -3849,7 +3890,13 @@ pref("layers.acceleration.disabled", false);
 #endif
 
 // Whether to force acceleration on, ignoring blacklists.
+#ifdef ANDROID
+// bug 838603 -- on Android, accidentally blacklisting OpenGL layers
+// means a startup crash for everyone.
+pref("layers.acceleration.force-enabled", true);
+#else
 pref("layers.acceleration.force-enabled", false);
+#endif
 
 pref("layers.acceleration.draw-fps", false);
 
