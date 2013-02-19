@@ -710,7 +710,7 @@ pref("dom.min_background_timeout_value", 1000);
 pref("dom.experimental_bindings", true);
 
 // Run content XBL in a separate scope.
-pref("dom.xbl_scopes", false);
+pref("dom.xbl_scopes", true);
 
 // Don't use new input types
 pref("dom.experimental_forms", false);
@@ -1683,7 +1683,11 @@ pref("layout.css.supports-rule.enabled", true);
 #endif
 
 // Is support for CSS Flexbox enabled?
+#ifdef RELEASE_BUILD
+pref("layout.css.flexbox.enabled", false);
+#else
 pref("layout.css.flexbox.enabled", true);
+#endif
 
 // Are sets of prefixed properties supported?
 pref("layout.css.prefixes.border-image", true);
@@ -1815,6 +1819,7 @@ pref("dom.ipc.plugins.java.enabled", false);
 #endif
 
 pref("dom.ipc.plugins.flash.subprocess.crashreporter.enabled", true);
+pref("dom.ipc.plugins.reportCrashURL", true);
 
 pref("dom.ipc.processCount", 1);
 
@@ -2391,9 +2396,6 @@ pref("print.print_extra_margin", 90); // twips (90 twips is an eigth of an inch)
 
 // Whether to extend the native dialog with information on printing frames.
 pref("print.extend_native_print_dialog", true);
-
-// Locate Java by scanning the Sun JRE installation directory with a minimum version
-pref("plugin.scan.SunJRE", "1.6");
 
 // Locate plugins by scanning the Adobe Acrobat installation directory with a minimum version
 pref("plugin.scan.Acrobat", "5.0");
@@ -4111,3 +4113,9 @@ pref("ui.touch_activation.delay_ms", 100);
 // nsMemoryInfoDumper can watch a fifo in the temp directory and take various
 // actions when the fifo is written to.  Disable this in general.
 pref("memory_info_dumper.watch_fifo", false);
+
+#ifdef MOZ_CAPTIVEDETECT
+pref("captivedetect.maxWaitingTime", 5000);
+pref("captivedetect.pollingTime", 3000);
+pref("captivedetect.maxRetryCount", 5);
+#endif

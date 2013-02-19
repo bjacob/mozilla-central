@@ -80,17 +80,12 @@
 #include "nsIContentViewerEdit.h"
 #include "nsIDocShell.h"
 #include "nsIDocShellLoadInfo.h"
-#include "nsIDocShellTreeItem.h"
-#include "nsIDocShellTreeNode.h"
-#include "nsIEditorDocShell.h"
 #include "nsIDocCharset.h"
 #include "nsIDocument.h"
 #include "nsIHTMLDocument.h"
 #include "nsIDOMHTMLDocument.h"
 #include "nsIDOMHTMLElement.h"
-#ifndef MOZ_DISABLE_DOMCRYPTO
-#include "nsIDOMCrypto.h"
-#endif
+#include "Crypto.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMElement.h"
 #include "nsIDOMEvent.h"
@@ -423,10 +418,6 @@ nsGlobalWindow::DOMMinTimeoutValue() const {
 static NS_DEFINE_CID(kXULControllersCID, NS_XULCONTROLLERS_CID);
 
 static const char sJSStackContractID[] = "@mozilla.org/js/xpc/ContextStack;1";
-#ifndef MOZ_DISABLE_DOMCRYPTO
-static const char kCryptoContractID[] = NS_CRYPTO_CONTRACTID;
-static const char kPkcs11ContractID[] = NS_PKCS11_CONTRACTID;
-#endif
 static const char sPopStatePrefStr[] = "browser.history.allowPopState";
 
 #define NETWORK_UPLOAD_EVENT_NAME     NS_LITERAL_STRING("moznetworkupload")
@@ -1462,7 +1453,6 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsGlobalWindow)
   NS_INTERFACE_MAP_ENTRY(nsIDOMWindowPerformance)
   NS_INTERFACE_MAP_ENTRY(nsITouchEventReceiver)
   NS_INTERFACE_MAP_ENTRY(nsIInlineEventHandlers)
-  NS_INTERFACE_MAP_ENTRY(nsIWindowCrypto)
   NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(Window)
   OUTER_WINDOW_ONLY
     NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
@@ -1765,8 +1755,7 @@ nsGlobalWindow::SetInitialPrincipalToSubject()
   // it for a content docshell.
   if (newWindowPrincipal == systemPrincipal) {
     int32_t itemType;
-    nsCOMPtr<nsIDocShellTreeItem> item = do_QueryInterface(GetDocShell());
-    nsresult rv = item->GetItemType(&itemType);
+    nsresult rv = GetDocShell()->GetItemType(&itemType);
     if (NS_FAILED(rv) || itemType != nsIDocShellTreeItem::typeChrome) {
       newWindowPrincipal = nullptr;
     }
@@ -2028,12 +2017,15 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
   NS_ENSURE_TRUE(scx, NS_ERROR_NOT_INITIALIZED);
 
   JSContext *cx = scx->GetNativeContext();
-#ifndef MOZ_DISABLE_DOMCRYPTO
+
+#ifndef MOZ_DISABLE_CRYPTOLEGACY
   // clear smartcard events, our document has gone away.
   if (mCrypto) {
-    mCrypto->SetEnableSmartCardEvents(false);
+    nsresult rv = mCrypto->SetEnableSmartCardEvents(false);
+    NS_ENSURE_SUCCESS(rv, rv);
   }
 #endif
+
   if (!mDocument) {
     // First document load.
 
@@ -2378,10 +2370,9 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
     // situation when we're creating a temporary non-chrome-about-blank
     // document in a chrome docshell, don't notify just yet. Instead wait
     // until we have a real chrome doc.
-    nsCOMPtr<nsIDocShellTreeItem> treeItem(do_QueryInterface(mDocShell));
     int32_t itemType = nsIDocShellTreeItem::typeContent;
-    if (treeItem) {
-      treeItem->GetItemType(&itemType);
+    if (mDocShell) {
+      mDocShell->GetItemType(&itemType);
     }
 
     if (itemType != nsIDocShellTreeItem::typeChrome ||
@@ -2910,13 +2901,12 @@ nsGlobalWindow::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
     mIsDocumentLoaded = true;
 
     nsCOMPtr<nsIContent> content(do_QueryInterface(GetFrameElementInternal()));
-    nsCOMPtr<nsIDocShellTreeItem> treeItem =
-      do_QueryInterface(GetDocShell());
+    nsIDocShell* docShell = GetDocShell();
 
     int32_t itemType = nsIDocShellTreeItem::typeChrome;
 
-    if (treeItem) {
-      treeItem->GetItemType(&itemType);
+    if (docShell) {
+      docShell->GetItemType(&itemType);
     }
 
     if (content && GetParentInternal() &&
@@ -3351,8 +3341,7 @@ nsGlobalWindow::GetContent(nsIDOMWindow** aContent)
       baseWin->GetVisibility(&visible);
 
       if (!visible) {
-        nsCOMPtr<nsIDocShellTreeItem> treeItem(do_QueryInterface(mDocShell));
-        treeItem->GetSameTypeRootTreeItem(getter_AddRefs(primaryContent));
+        mDocShell->GetSameTypeRootTreeItem(getter_AddRefs(primaryContent));
       }
     }
   }
@@ -3586,19 +3575,17 @@ nsGlobalWindow::GetApplicationCache(nsIDOMOfflineResourceList **aApplicationCach
 NS_IMETHODIMP
 nsGlobalWindow::GetCrypto(nsIDOMCrypto** aCrypto)
 {
-#ifdef MOZ_DISABLE_DOMCRYPTO
-  return NS_ERROR_NOT_IMPLEMENTED;
-#else
   FORWARD_TO_OUTER(GetCrypto, (aCrypto), NS_ERROR_NOT_INITIALIZED);
 
   if (!mCrypto) {
-    mCrypto = do_CreateInstance(kCryptoContractID);
-  }
-
-  NS_IF_ADDREF(*aCrypto = mCrypto);
-
-  return NS_OK;
+#ifndef MOZ_DISABLE_CRYPTOLEGACY
+    mCrypto = do_CreateInstance(NS_CRYPTO_CONTRACTID);
+#else
+    mCrypto = new Crypto();
 #endif
+  }
+  NS_IF_ADDREF(*aCrypto = mCrypto);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -3667,12 +3654,11 @@ nsGlobalWindow::GetOpener(nsIDOMWindow** aOpener)
   // We don't want to reveal the opener if the opener is a mail window,
   // because opener can be used to spoof the contents of a message (bug 105050).
   // So, we look in the opener's root docshell to see if it's a mail window.
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem =
-    do_QueryInterface(openerPwin->GetDocShell());
+  nsCOMPtr<nsIDocShell> openerDocShell = openerPwin->GetDocShell();
 
-  if (docShellAsItem) {
+  if (openerDocShell) {
     nsCOMPtr<nsIDocShellTreeItem> openerRootItem;
-    docShellAsItem->GetRootTreeItem(getter_AddRefs(openerRootItem));
+    openerDocShell->GetRootTreeItem(getter_AddRefs(openerRootItem));
     nsCOMPtr<nsIDocShell> openerRootDocShell(do_QueryInterface(openerRootItem));
     if (openerRootDocShell) {
       uint32_t appType;
@@ -3779,9 +3765,8 @@ nsGlobalWindow::GetName(nsAString& aName)
   FORWARD_TO_OUTER(GetName, (aName), NS_ERROR_NOT_INITIALIZED);
 
   nsXPIDLString name;
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem(do_QueryInterface(mDocShell));
-  if (docShellAsItem)
-    docShellAsItem->GetName(getter_Copies(name));
+  if (mDocShell)
+    mDocShell->GetName(getter_Copies(name));
 
   aName.Assign(name);
   return NS_OK;
@@ -3793,9 +3778,8 @@ nsGlobalWindow::SetName(const nsAString& aName)
   FORWARD_TO_OUTER(SetName, (aName), NS_ERROR_NOT_INITIALIZED);
 
   nsresult result = NS_OK;
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem(do_QueryInterface(mDocShell));
-  if (docShellAsItem)
-    result = docShellAsItem->SetName(PromiseFlatString(aName).get());
+  if (mDocShell)
+    result = mDocShell->SetName(PromiseFlatString(aName).get());
   return result;
 }
 
@@ -4411,14 +4395,13 @@ nsGlobalWindow::CheckSecurityWidthAndHeight(int32_t* aWidth, int32_t* aHeight)
 nsresult
 nsGlobalWindow::SetDocShellWidthAndHeight(int32_t aInnerWidth, int32_t aInnerHeight)
 {
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem(do_QueryInterface(mDocShell));
-  NS_ENSURE_TRUE(docShellAsItem, NS_ERROR_FAILURE);
+  NS_ENSURE_TRUE(mDocShell, NS_ERROR_FAILURE);
 
   nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
-  docShellAsItem->GetTreeOwner(getter_AddRefs(treeOwner));
+  mDocShell->GetTreeOwner(getter_AddRefs(treeOwner));
   NS_ENSURE_TRUE(treeOwner, NS_ERROR_FAILURE);
 
-  NS_ENSURE_SUCCESS(treeOwner->SizeShellTo(docShellAsItem, aInnerWidth, aInnerHeight),
+  NS_ENSURE_SUCCESS(treeOwner->SizeShellTo(mDocShell, aInnerWidth, aInnerHeight),
                     NS_ERROR_FAILURE);
 
   return NS_OK;
@@ -4694,17 +4677,13 @@ nsGlobalWindow::WindowExists(const nsAString& aName,
     caller = GetCallerDocShellTreeItem();
   }
 
-  nsCOMPtr<nsIDocShellTreeItem> docShell = do_QueryInterface(mDocShell);
-  NS_ASSERTION(docShell,
-               "Docshell doesn't implement nsIDocShellTreeItem?");
-
   if (!caller) {
-    caller = docShell;
+    caller = mDocShell;
   }
 
   nsCOMPtr<nsIDocShellTreeItem> namedItem;
-  docShell->FindItemWithName(PromiseFlatString(aName).get(), nullptr, caller,
-                             getter_AddRefs(namedItem));
+  mDocShell->FindItemWithName(PromiseFlatString(aName).get(), nullptr, caller,
+                              getter_AddRefs(namedItem));
   return namedItem != nullptr;
 }
 
@@ -4760,19 +4739,18 @@ nsGlobalWindow::SetFullScreenInternal(bool aFullScreen, bool aRequireTrust)
   // SetFullScreen needs to be called on the root window, so get that
   // via the DocShell tree, and if we are not already the root,
   // call SetFullScreen on that window instead.
-  nsCOMPtr<nsIDocShellTreeItem> treeItem = do_QueryInterface(mDocShell);
   nsCOMPtr<nsIDocShellTreeItem> rootItem;
-  treeItem->GetRootTreeItem(getter_AddRefs(rootItem));
+  mDocShell->GetRootTreeItem(getter_AddRefs(rootItem));
   nsCOMPtr<nsPIDOMWindow> window = do_GetInterface(rootItem);
   if (!window)
     return NS_ERROR_FAILURE;
-  if (rootItem != treeItem)
+  if (rootItem != mDocShell)
     return window->SetFullScreenInternal(aFullScreen, aRequireTrust);
 
   // make sure we don't try to set full screen on a non-chrome window,
   // which might happen in embedding world
   int32_t itemType;
-  treeItem->GetItemType(&itemType);
+  mDocShell->GetItemType(&itemType);
   if (itemType != nsIDocShellTreeItem::typeChrome)
     return NS_ERROR_FAILURE;
 
@@ -4838,11 +4816,10 @@ nsGlobalWindow::GetFullScreen(bool* aFullScreen)
 
   // Get the fullscreen value of the root window, to always have the value
   // accurate, even when called from content.
-  nsCOMPtr<nsIDocShellTreeItem> treeItem = do_QueryInterface(mDocShell);
-  if (treeItem) {
+  if (mDocShell) {
     nsCOMPtr<nsIDocShellTreeItem> rootItem;
-    treeItem->GetRootTreeItem(getter_AddRefs(rootItem));
-    if (rootItem != treeItem) {
+    mDocShell->GetRootTreeItem(getter_AddRefs(rootItem));
+    if (rootItem != mDocShell) {
       nsCOMPtr<nsIDOMWindow> window = do_GetInterface(rootItem);
       if (window)
         return window->GetFullScreen(aFullScreen);
@@ -5337,10 +5314,8 @@ nsGlobalWindow::Focus()
   nsCOMPtr<nsIDOMWindow> activeWindow;
   fm->GetActiveWindow(getter_AddRefs(activeWindow));
 
-  nsCOMPtr<nsIDocShellTreeItem> treeItem = do_QueryInterface(mDocShell);
-  NS_ASSERTION(treeItem, "What happened?");
   nsCOMPtr<nsIDocShellTreeItem> rootItem;
-  treeItem->GetRootTreeItem(getter_AddRefs(rootItem));
+  mDocShell->GetRootTreeItem(getter_AddRefs(rootItem));
   nsCOMPtr<nsIDOMWindow> rootWin = do_GetInterface(rootItem);
   bool isActive = (rootWin == activeWindow);
 
@@ -5368,7 +5343,7 @@ nsGlobalWindow::Focus()
   // XXXbz should we really be checking for IsInitialDocument() instead?
   bool lookForPresShell = true;
   int32_t itemType = nsIDocShellTreeItem::typeContent;
-  treeItem->GetItemType(&itemType);
+  mDocShell->GetItemType(&itemType);
   if (itemType == nsIDocShellTreeItem::typeChrome &&
       GetPrivateRoot() == static_cast<nsIDOMWindow*>(this) &&
       mDocument) {
@@ -5385,7 +5360,7 @@ nsGlobalWindow::Focus()
   }
 
   nsCOMPtr<nsIDocShellTreeItem> parentDsti;
-  treeItem->GetParent(getter_AddRefs(parentDsti));
+  mDocShell->GetParent(getter_AddRefs(parentDsti));
 
   // set the parent's current focus to the frame containing this window.
   nsCOMPtr<nsIDOMWindow> parent(do_GetInterface(parentDsti));
@@ -5802,8 +5777,7 @@ nsGlobalWindow::SizeToContent()
 
   nsIntSize newDevSize(CSSToDevIntPixels(cssSize));
 
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem = do_QueryInterface(mDocShell);
-  NS_ENSURE_SUCCESS(treeOwner->SizeShellTo(docShellAsItem,
+  NS_ENSURE_SUCCESS(treeOwner->SizeShellTo(mDocShell,
                                            newDevSize.width, newDevSize.height),
                     NS_ERROR_FAILURE);
 
@@ -6099,12 +6073,8 @@ nsGlobalWindow::RevisePopupAbuseLevel(PopupControlState aControl)
 
   NS_ASSERTION(mDocShell, "Must have docshell");
   
-  nsCOMPtr<nsIDocShellTreeItem> item(do_QueryInterface(mDocShell));
-
-  NS_ASSERTION(item, "Docshell doesn't implement nsIDocShellTreeItem?");
-
   int32_t type = nsIDocShellTreeItem::typeChrome;
-  item->GetItemType(&type);
+  mDocShell->GetItemType(&type);
   if (type != nsIDocShellTreeItem::typeContent)
     return openAllowed;
 
@@ -6959,11 +6929,10 @@ nsGlobalWindow::ReallyCloseWindow()
     // but if we're a browser window we could be in some nasty
     // self-destroying cascade that we should mostly ignore
 
-    nsCOMPtr<nsIDocShellTreeItem> docItem(do_QueryInterface(mDocShell));
-    if (docItem) {
+    if (mDocShell) {
       nsCOMPtr<nsIBrowserDOMWindow> bwin;
       nsCOMPtr<nsIDocShellTreeItem> rootItem;
-      docItem->GetRootTreeItem(getter_AddRefs(rootItem));
+      mDocShell->GetRootTreeItem(getter_AddRefs(rootItem));
       nsCOMPtr<nsIDOMWindow> rootWin(do_GetInterface(rootItem));
       nsCOMPtr<nsIDOMChromeWindow> chromeWin(do_QueryInterface(rootWin));
       if (chromeWin)
@@ -8190,14 +8159,14 @@ nsGlobalWindow::SetKeyboardIndicators(UIStateChangeType aShowAccelerators,
     mShowFocusRings = aShowFocusRings == UIStateChangeType_Set;
 
   // propagate the indicators to child windows
-  nsCOMPtr<nsIDocShellTreeNode> node = do_QueryInterface(GetDocShell());
-  if (node) {
+  nsCOMPtr<nsIDocShell> docShell = GetDocShell();
+  if (docShell) {
     int32_t childCount = 0;
-    node->GetChildCount(&childCount);
+    docShell->GetChildCount(&childCount);
 
     for (int32_t i = 0; i < childCount; ++i) {
       nsCOMPtr<nsIDocShellTreeItem> childShell;
-      node->GetChildAt(i, getter_AddRefs(childShell));
+      docShell->GetChildAt(i, getter_AddRefs(childShell));
       nsCOMPtr<nsPIDOMWindow> childWindow = do_GetInterface(childShell);
       if (childWindow) {
         childWindow->SetKeyboardIndicators(aShowAccelerators, aShowFocusRings);
@@ -8481,13 +8450,10 @@ nsGlobalWindow::UpdateCanvasFocus(bool aFocusChanged, nsIContent* aNewContent)
   if (!docShell)
     return;
 
-  nsCOMPtr<nsIEditorDocShell> editorDocShell = do_QueryInterface(docShell);
-  if (editorDocShell) {
-    bool editable;
-    editorDocShell->GetEditable(&editable);
-    if (editable)
-      return;
-  }
+  bool editable;
+  docShell->GetEditable(&editable);
+  if (editable)
+    return;
 
   nsCOMPtr<nsIPresShell> presShell = docShell->GetPresShell();
   if (!presShell || !mDocument)
@@ -9495,15 +9461,14 @@ nsGlobalWindow::FireDelayedDOMEvents()
     ScheduleActiveTimerCallback();
   }
 
-  nsCOMPtr<nsIDocShellTreeNode> node =
-    do_QueryInterface(GetDocShell());
-  if (node) {
+  nsCOMPtr<nsIDocShell> docShell = GetDocShell();
+  if (docShell) {
     int32_t childCount = 0;
-    node->GetChildCount(&childCount);
+    docShell->GetChildCount(&childCount);
 
     for (int32_t i = 0; i < childCount; ++i) {
       nsCOMPtr<nsIDocShellTreeItem> childShell;
-      node->GetChildAt(i, getter_AddRefs(childShell));
+      docShell->GetChildAt(i, getter_AddRefs(childShell));
       NS_ASSERTION(childShell, "null child shell");
 
       nsCOMPtr<nsPIDOMWindow> pWin = do_GetInterface(childShell);
@@ -10532,18 +10497,16 @@ nsGlobalWindow::GetTreeOwner(nsIDocShellTreeOwner **aTreeOwner)
 {
   FORWARD_TO_OUTER(GetTreeOwner, (aTreeOwner), NS_ERROR_NOT_INITIALIZED);
 
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem(do_QueryInterface(mDocShell));
-
   // If there's no docShellAsItem, this window must have been closed,
   // in that case there is no tree owner.
 
-  if (!docShellAsItem) {
+  if (!mDocShell) {
     *aTreeOwner = nullptr;
 
     return NS_OK;
   }
 
-  return docShellAsItem->GetTreeOwner(aTreeOwner);
+  return mDocShell->GetTreeOwner(aTreeOwner);
 }
 
 nsresult
@@ -10551,14 +10514,13 @@ nsGlobalWindow::GetTreeOwner(nsIBaseWindow **aTreeOwner)
 {
   FORWARD_TO_OUTER(GetTreeOwner, (aTreeOwner), NS_ERROR_NOT_INITIALIZED);
 
-  nsCOMPtr<nsIDocShellTreeItem> docShellAsItem(do_QueryInterface(mDocShell));
   nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
 
-  // If there's no docShellAsItem, this window must have been closed,
+  // If there's no mDocShell, this window must have been closed,
   // in that case there is no tree owner.
 
-  if (docShellAsItem) {
-    docShellAsItem->GetTreeOwner(getter_AddRefs(treeOwner));
+  if (mDocShell) {
+    mDocShell->GetTreeOwner(getter_AddRefs(treeOwner));
   }
 
   if (!treeOwner) {
@@ -10818,14 +10780,14 @@ nsGlobalWindow::SuspendTimeouts(uint32_t aIncrease,
   }
 
   // Suspend our children as well.
-  nsCOMPtr<nsIDocShellTreeNode> node(do_QueryInterface(GetDocShell()));
-  if (node) {
+  nsCOMPtr<nsIDocShell> docShell = GetDocShell();
+  if (docShell) {
     int32_t childCount = 0;
-    node->GetChildCount(&childCount);
+    docShell->GetChildCount(&childCount);
 
     for (int32_t i = 0; i < childCount; ++i) {
       nsCOMPtr<nsIDocShellTreeItem> childShell;
-      node->GetChildAt(i, getter_AddRefs(childShell));
+      docShell->GetChildAt(i, getter_AddRefs(childShell));
       NS_ASSERTION(childShell, "null child shell");
 
       nsCOMPtr<nsPIDOMWindow> pWin = do_GetInterface(childShell);
@@ -10922,15 +10884,14 @@ nsGlobalWindow::ResumeTimeouts(bool aThawChildren)
   }
 
   // Resume our children as well.
-  nsCOMPtr<nsIDocShellTreeNode> node =
-    do_QueryInterface(GetDocShell());
-  if (node) {
+  nsCOMPtr<nsIDocShell> docShell = GetDocShell();
+  if (docShell) {
     int32_t childCount = 0;
-    node->GetChildCount(&childCount);
+    docShell->GetChildCount(&childCount);
 
     for (int32_t i = 0; i < childCount; ++i) {
       nsCOMPtr<nsIDocShellTreeItem> childShell;
-      node->GetChildAt(i, getter_AddRefs(childShell));
+      docShell->GetChildAt(i, getter_AddRefs(childShell));
       NS_ASSERTION(childShell, "null child shell");
 
       nsCOMPtr<nsPIDOMWindow> pWin = do_GetInterface(childShell);
