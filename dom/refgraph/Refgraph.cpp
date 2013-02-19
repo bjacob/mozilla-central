@@ -233,7 +233,6 @@ bool Refgraph::HandleLine_c(const char* start, const char* end)
 
 bool Refgraph::HandleLine_v(const char* start, const char* end)
 {
-  return true;
   const char* pos = start;
   uint64_t address;
   bool success = ParseNumber(pos, end, &address, &pos);
@@ -265,7 +264,6 @@ bool Refgraph::HandleLine_v(const char* start, const char* end)
 
 bool Refgraph::HandleLine_e(const char* start, const char* end)
 {
-  return true;
   const char* pos = start;
   uint64_t address;
   bool success = ParseNumber(pos, end, &address, &pos);

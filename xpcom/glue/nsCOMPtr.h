@@ -430,7 +430,6 @@ nsCOMPtr_base
       NS_COM_GLUE void NS_FASTCALL   assign_from_helper( const nsCOMPtr_helper&, const nsIID& );
       NS_COM_GLUE void** NS_FASTCALL begin_assignment();
 
-      void SetTraversedByCC(const char* name) { mMarker.SetTraversedByCC(name); }
     protected:
       NS_MAY_ALIAS_PTR(nsISupports) mRawPtr;
       refgraph::StrongRefMarker mMarker;
@@ -497,7 +496,6 @@ class nsCOMPtr MOZ_FINAL
 #endif
 
     public:
-      void SetTraversedByCC(const char* name) { mMarker.SetTraversedByCC(name); }
       typedef T element_type;
       
 #ifndef NSCAP_FEATURE_USE_BASE
@@ -850,7 +848,6 @@ class nsCOMPtr<nsISupports>
     : protected nsCOMPtr_base
   {
     public:
-      void SetTraversedByCC(const char* name) { mMarker.SetTraversedByCC(name); }
       typedef nsISupports element_type;
 
         // Constructors
@@ -1157,7 +1154,6 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             const char* aName,
                             uint32_t aFlags = 0)
 {
-  aField.SetTraversedByCC(aName);
   CycleCollectionNoteChild(aCallback, aField.get(), aName, aFlags);
 }
 

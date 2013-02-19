@@ -86,11 +86,6 @@ public:
   void SetHereditary() {
     mMarker2 |= hereditaryFlag;
   }
-
-  void SetTraversedByCC(const char *name) {
-    mMarker2 |= traversedByCCFlag;
-    mRefName = name;
-  }
 };
 
 template <typename T>

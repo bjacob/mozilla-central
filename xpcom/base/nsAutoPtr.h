@@ -875,7 +875,6 @@ class nsRefPtr
       refgraph::StrongRefMarker mMarker;
 
     public:
-      void SetTraversedByCC(const char* name) { mMarker.SetTraversedByCC(name); }
       typedef T element_type;
 
      ~nsRefPtr()
@@ -1101,7 +1100,6 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
                             const char* aName,
                             uint32_t aFlags = 0)
 {
-  aField.SetTraversedByCC(aName);
   CycleCollectionNoteChild(aCallback, aField.get(), aName, aFlags);
 }
 
