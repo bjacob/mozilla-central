@@ -113,7 +113,7 @@ bool Refgraph::HandleLine_s(const char* start, const char* end)
   if (!mCurrentBlock) {
     return false;
   }
-  mCurrentBlock->refs.push_back(ref_info_t());
+  mCurrentBlock->refs.push_back(ref_t());
   mCurrentRef = &mCurrentBlock->refs.back();
   bool success = ParseNumber(pos, end, &mCurrentRef->target, &pos) &&
                  ParseNumber(pos, end, &mCurrentRef->offset, &pos);
@@ -279,7 +279,7 @@ bool Refgraph::HandleLine_e(const char* start, const char* end)
   if (!mCurrentBlock) {
     return false;
   }
-  for (ref_infos_vector_t::iterator it1 = mCurrentBlock->refs.begin();
+  for (refs_vector_t::iterator it1 = mCurrentBlock->refs.begin();
       it1 != mCurrentBlock->refs.end();
       ++it1)
   {
@@ -288,7 +288,7 @@ bool Refgraph::HandleLine_e(const char* start, const char* end)
       it1->flags |= traversedByCCFlag;
       it1->refname.assign(pos, end - pos);
     }
-    for (ref_infos_vector_t::iterator it2 = targetBlock1.refs.begin();
+    for (refs_vector_t::iterator it2 = targetBlock1.refs.begin();
         it2 != targetBlock1.refs.end();
         ++it2)
     {
@@ -428,7 +428,7 @@ void Refgraph::ResolveHereditaryStrongRefs()
        bi != mBlocks.end();
        ++bi)
   {
-    for (ref_infos_vector_t::iterator ri = bi->refs.begin();
+    for (refs_vector_t::iterator ri = bi->refs.begin();
          ri != bi->refs.end();
          ++ri)
     {
@@ -439,7 +439,7 @@ void Refgraph::ResolveHereditaryStrongRefs()
             weakref_it != hereditary_block.weakrefs.end();
             ++weakref_it)
         {
-          ref_info_t r;
+          ref_t r;
           r.target = *weakref_it;
           r.flags = ri->flags;
           r.reftypename.assign("(inherited)");
@@ -462,7 +462,7 @@ void Refgraph::RecurseCycles(
   cycle_index++;
   stack.push_back(v_index);
 
-  for (ref_infos_vector_t::const_iterator ri = v.refs.begin();
+  for (refs_vector_t::const_iterator ri = v.refs.begin();
        ri != v.refs.end();
        ++ri)
   {
@@ -553,7 +553,7 @@ void Refgraph::ComputeCycles()
     const index_vector_t& cycle_vertices = mCycles[c].vertices;
     for (size_t v = 0; v < cycle_vertices.size(); v++) {
       const block_t& b = mBlocks[cycle_vertices[v]];
-      for (ref_infos_vector_t::const_iterator ri = b.refs.begin();
+      for (refs_vector_t::const_iterator ri = b.refs.begin();
           ri != b.refs.end();
           ++ri)
       {
@@ -633,7 +633,7 @@ void Refgraph::ResolveBackRefs()
        b < mBlocks.size();
        ++b)
   {
-    for (ref_infos_vector_t::iterator ri = mBlocks[b].refs.begin();
+    for (refs_vector_t::iterator ri = mBlocks[b].refs.begin();
          ri != mBlocks[b].refs.end();
          ++ri)
     {
@@ -773,7 +773,7 @@ void RefgraphCycle::GetName(nsString& retval) const {
   retval = NS_ConvertASCIItoUTF16(nsDependentCString(mParent->mCycles[mIndex].name.c_str()));
 }
 
-RefgraphEdge::RefgraphEdge(Refgraph* parent, ref_infos_vector_t::const_iterator ref)
+RefgraphEdge::RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref)
   : mParent(parent)
   , mRef(ref)
 {

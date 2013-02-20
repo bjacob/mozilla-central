@@ -67,36 +67,23 @@ typedef std::basic_string<char,
                           >
         string_t;
 
-struct ref_info_t
+struct ref_t
 {
+  uint32_t target;
   uint8_t flags;
   uint64_t offset;
-  string_t type;
+  string_t refname;
+  string_t reftypename;
 
-  ref_info_t()
-    : flags(0)
+  ref_t()
+    : target(0)
+    , flags(0)
     , offset(0)
   {}
 };
 
-typedef std::vector<ref_info_t, stl_allocator_bypassing_instrumentation<ref_info_t> >
-        ref_infos_vector_t;
-
-struct edge_t
-{
-  uint32_t target;
-  uint8_t flags;
-  string_t ccname;
-  ref_infos_vector_t ref_infos;
-
-  edge_t()
-    : target(0)
-    , flags(0)
-  {}
-};
-
-typedef std::vector<edge_t, stl_allocator_bypassing_instrumentation<edge_t> >
-        edges_vector_t;
+typedef std::vector<ref_t, stl_allocator_bypassing_instrumentation<ref_t> >
+        refs_vector_t;
 
 typedef std::vector<uint32_t, stl_allocator_bypassing_instrumentation<uint32_t> >
         index_vector_t;
@@ -132,7 +119,7 @@ struct block_t {
   uint64_t size;
 
   string_t type;
-  edges_vector_t edges;
+  refs_vector_t refs;
   index_vector_t weakrefs;
   index_vector_t backrefs;
   index_vector_t backweakrefs;
@@ -179,11 +166,11 @@ class RefgraphEdge
   friend class Refgraph;
 
   nsRefPtr<Refgraph> mParent;
-  edges_vector_t::const_iterator mRef;
+  refs_vector_t::const_iterator mRef;
 
 public:
 
-  RefgraphEdge(Refgraph* parent, edges_vector_t::const_iterator ref);
+  RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref);
 
   nsISupports* GetParentObject() const;
 
@@ -275,7 +262,7 @@ class Refgraph {
   // parser state
 
   block_t* mCurrentBlock;
-  ref_info_t* mCurrentRef;
+  ref_t* mCurrentRef;
   enum ParserState {
     ParserDefaultState,
     ParserInRefgraphDump,
