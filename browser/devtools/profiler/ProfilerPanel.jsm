@@ -9,11 +9,13 @@ const Cu = Components.utils;
 Cu.import("resource:///modules/devtools/gDevTools.jsm");
 Cu.import("resource:///modules/devtools/ProfilerController.jsm");
 Cu.import("resource:///modules/devtools/ProfilerHelpers.jsm");
-Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
 Cu.import("resource:///modules/devtools/EventEmitter.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 this.EXPORTED_SYMBOLS = ["ProfilerPanel"];
+
+XPCOMUtils.defineLazyModuleGetter(this, "Promise",
+    "resource://gre/modules/commonjs/sdk/core/promise.js");
 
 XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
   "resource://gre/modules/devtools/dbg-server.jsm");
@@ -69,6 +71,8 @@ function ProfileUI(uid, panel) {
     }
 
     let label = doc.querySelector("li#profile-" + this.uid + " > h1");
+    let name = label.textContent.replace(/\s\*$/, "");
+
     switch (event.data.status) {
       case "loaded":
         if (this.panel._runningUid !== null) {
@@ -87,9 +91,10 @@ function ProfileUI(uid, panel) {
         // so that it could update the UI. Also, once started, we add a
         // star to the profile name to indicate which profile is currently
         // running.
-        this.panel.startProfiling(function onStart() {
+        this.panel.startProfiling(name, function onStart() {
+          label.textContent = name + " *";
           this.panel.broadcast(this.uid, {task: "onStarted"});
-          label.textContent = label.textContent + " *";
+          this.emit("started");
         }.bind(this));
 
         break;
@@ -97,9 +102,10 @@ function ProfileUI(uid, panel) {
         // Stop profiling and, once stopped, notify the underlying page so
         // that it could update the UI and remove a star from the profile
         // name.
-        this.panel.stopProfiling(function onStop() {
+        this.panel.stopProfiling(name, function onStop() {
+          label.textContent = name;
           this.panel.broadcast(this.uid, {task: "onStopped"});
-          label.textContent = label.textContent.replace(/\s\*$/, "");
+          this.emit("stopped");
         }.bind(this));
         break;
       case "disabled":
@@ -205,7 +211,6 @@ function ProfilerPanel(frame, toolbox) {
   this.window = frame.window;
   this.document = frame.document;
   this.target = toolbox.target;
-  this.controller = new ProfilerController(this.target);
 
   this.profiles = new Map();
   this._uid = 0;
@@ -256,23 +261,39 @@ ProfilerPanel.prototype = {
    * @return Promise
    */
   open: function PP_open() {
-    let deferred = Promise.defer();
+    let promise;
+    // Local profiling needs to make the target remote.
+    if (!this.target.isRemote) {
+      promise = this.target.makeRemote();
+    } else {
+      promise = Promise.resolve(this.target);
+    }
 
-    this.controller.connect(function onConnect() {
-      let create = this.document.getElementById("profiler-create");
-      create.addEventListener("click", this.createProfile.bind(this), false);
-      create.removeAttribute("disabled");
+    return promise
+      .then(function(target) {
+        let deferred = Promise.defer();
+        this.controller = new ProfilerController(this.target);
 
-      let profile = this.createProfile();
-      this.switchToProfile(profile, function () {
-        this.isReady = true;
-        this.emit("ready");
+        this.controller.connect(function onConnect() {
+          let create = this.document.getElementById("profiler-create");
+          create.addEventListener("click", this.createProfile.bind(this), false);
+          create.removeAttribute("disabled");
 
-        deferred.resolve(this);
+          let profile = this.createProfile();
+          this.switchToProfile(profile, function () {
+            this.isReady = true;
+            this.emit("ready");
+
+            deferred.resolve(this);
+          }.bind(this))
+        }.bind(this));
+
+        return deferred.promise;
       }.bind(this))
-    }.bind(this));
-
-    return deferred.promise;
+      .then(null, function onError(reason) {
+        Cu.reportError("ProfilerPanel open failed. " +
+                       reason.error + ": " + reason.message);
+      });
   },
 
   /**
@@ -355,8 +376,8 @@ ProfilerPanel.prototype = {
    *   A function to call once we get the message
    *   that profiling had been successfuly started.
    */
-  startProfiling: function PP_startProfiling(onStart) {
-    this.controller.start(function (err) {
+  startProfiling: function PP_startProfiling(name, onStart) {
+    this.controller.start(name, function (err) {
       if (err) {
         Cu.reportError("ProfilerController.start: " + err.message);
         return;
@@ -375,7 +396,7 @@ ProfilerPanel.prototype = {
    *   A function to call once we get the message
    *   that profiling had been successfuly stopped.
    */
-  stopProfiling: function PP_stopProfiling(onStop) {
+  stopProfiling: function PP_stopProfiling(name, onStop) {
     this.controller.isActive(function (err, isActive) {
       if (err) {
         Cu.reportError("ProfilerController.isActive: " + err.message);
@@ -386,18 +407,19 @@ ProfilerPanel.prototype = {
         return;
       }
 
-      this.controller.stop(function (err, data) {
+      this.controller.stop(name, function (err, data) {
         if (err) {
           Cu.reportError("ProfilerController.stop: " + err.message);
           return;
         }
 
+        this.activeProfile.data = data;
         this.activeProfile.parse(data, function onParsed() {
           this.emit("parsed");
         }.bind(this));
 
         onStop();
-        this.emit("stopped");
+        this.emit("stopped", data);
       }.bind(this));
     }.bind(this));
   },
@@ -470,8 +492,10 @@ ProfilerPanel.prototype = {
       panelWin = dbg.panelWin;
 
       let view = dbg.panelWin.DebuggerView;
-      if (view.Source && view.Sources.selectedValue === data.uri) {
-        return void view.editor.setCaretPosition(data.line - 1);
+      if (view.Sources.selectedValue === data.uri) {
+        view.editor.setCaretPosition(data.line - 1);
+        onOpen();
+        return;
       }
 
       panelWin.addEventListener("Debugger:SourceShown", onSourceShown, false);

@@ -17,7 +17,8 @@ class DOMWheelEvent : public nsDOMMouseEvent,
                       public nsIDOMWheelEvent
 {
 public:
-  DOMWheelEvent(nsPresContext* aPresContext,
+  DOMWheelEvent(mozilla::dom::EventTarget* aOwner,
+                nsPresContext* aPresContext,
                 widget::WheelEvent* aWheelEvent);
   virtual ~DOMWheelEvent();
 
@@ -30,7 +31,7 @@ public:
   NS_FORWARD_TO_NSDOMMOUSEEVENT
 
   virtual nsresult InitFromCtor(const nsAString& aType,
-                                JSContext* aCx, jsval* aVal);
+                                JSContext* aCx, JS::Value* aVal);
 };
 
 } // namespace dom

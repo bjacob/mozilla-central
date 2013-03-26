@@ -8,6 +8,7 @@
 #define DateTime_h___
 
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/StandardInteger.h"
 
 #include <math.h>
@@ -36,12 +37,16 @@ const double msPerDay = msPerHour * HoursPerDay;
 const unsigned SecondsPerHour = 60 * 60;
 const unsigned SecondsPerDay = SecondsPerHour * 24;
 
+const double StartOfTime = -8.64e15;
+const double EndOfTime = 8.64e15;
+const double MaxTimeMagnitude = 8.64e15;
+
 /* ES5 15.9.1.14. */
 inline double
 TimeClip(double time)
 {
     /* Steps 1-2. */
-    if (!MOZ_DOUBLE_IS_FINITE(time) || fabs(time) > 8.64e15)
+    if (!MOZ_DOUBLE_IS_FINITE(time) || mozilla::Abs(time) > MaxTimeMagnitude)
         return js_NaN;
 
     /* Step 3. */
@@ -138,6 +143,12 @@ class DateTimeInfo
 
     int64_t oldOffsetMilliseconds;
     int64_t oldRangeStartSeconds, oldRangeEndSeconds; // UTC-based
+
+    /*
+     * Cached offset in seconds from the current UTC time to the current
+     * local standard time (i.e. not including any offset due to DST).
+     */
+    int32_t utcToLocalStandardOffsetSeconds;
 
     static const int64_t MaxUnixTimeT = 2145859200; /* time_t 12/31/2037 */
 

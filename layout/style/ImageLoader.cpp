@@ -43,10 +43,27 @@ ImageLoader::SetAnimationModeEnumerator(nsISupports* aKey, FrameSet* aValue,
   return PL_DHASH_NEXT;
 }
 
+static PLDHashOperator
+ClearImageHashSet(nsPtrHashKey<ImageLoader::Image>* aKey, void* aClosure)
+{
+  nsIDocument* doc = static_cast<nsIDocument*>(aClosure);
+  ImageLoader::Image* image = aKey->GetKey();
+
+  imgIRequest* request = image->mRequests.GetWeak(doc);
+  if (request) {
+    request->CancelAndForgetObserver(NS_BINDING_ABORTED);
+  }
+
+  image->mRequests.Remove(doc);
+
+  return PL_DHASH_REMOVE;
+}
+
 void
 ImageLoader::DropDocumentReference()
 {
-  ClearAll();
+  ClearFrames();
+  mImages.EnumerateEntries(&ClearImageHashSet, mDocument);
   mDocument = nullptr;
 }
 
@@ -221,28 +238,11 @@ ImageLoader::SetAnimationMode(uint16_t aMode)
   mRequestToFrameMap.EnumerateRead(SetAnimationModeEnumerator, &aMode);
 }
 
-static PLDHashOperator
-ClearImageHashSet(nsPtrHashKey<ImageLoader::Image>* aKey, void* aClosure)
-{
-  nsIDocument* doc = static_cast<nsIDocument*>(aClosure);
-  ImageLoader::Image* image = aKey->GetKey();
-
-  imgIRequest* request = image->mRequests.GetWeak(doc);
-  if (request) {
-    request->CancelAndForgetObserver(NS_BINDING_ABORTED);
-  }
-
-  image->mRequests.Remove(doc);
-
-  return PL_DHASH_REMOVE;
-}
-
 void
-ImageLoader::ClearAll()
+ImageLoader::ClearFrames()
 {
   mRequestToFrameMap.Clear();
   mFrameToRequestMap.Clear();
-  mImages.EnumerateEntries(&ClearImageHashSet, mDocument);
 }
 
 void
@@ -342,7 +342,14 @@ ImageLoader::DoRedraw(FrameSet* aFrameSet)
     nsIFrame* frame = aFrameSet->ElementAt(i);
 
     if (frame->StyleVisibility()->IsVisible()) {
-      FrameLayerBuilder::IterateRetainedDataFor(frame, InvalidateImagesCallback);
+      if (frame->IsFrameOfType(nsIFrame::eTablePart)) {
+        // Tables don't necessarily build border/background display items
+        // for the individual table part frames, so IterateRetainedDataFor
+        // might not find the right display item.
+        frame->InvalidateFrame();
+      } else {
+        FrameLayerBuilder::IterateRetainedDataFor(frame, InvalidateImagesCallback);
+      }
     }
   }
 }

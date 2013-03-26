@@ -50,9 +50,9 @@ public:
   nsTableCellFrame(nsStyleContext* aContext);
   ~nsTableCellFrame();
 
-  NS_IMETHOD Init(nsIContent*      aContent,
-                  nsIFrame*        aParent,
-                  nsIFrame*        aPrevInFlow);
+  virtual void Init(nsIContent*      aContent,
+                    nsIFrame*        aParent,
+                    nsIFrame*        aPrevInFlow) MOZ_OVERRIDE;
 
 #ifdef ACCESSIBILITY
   virtual mozilla::a11y::AccType AccessibleType() MOZ_OVERRIDE;
@@ -210,6 +210,11 @@ public:
                             nsPoint              aPt);
 
   virtual bool UpdateOverflow();
+
+  virtual bool IsFrameOfType(uint32_t aFlags) const
+  {
+    return nsContainerFrame::IsFrameOfType(aFlags & ~(nsIFrame::eTablePart));
+  }
   
   virtual void InvalidateFrame(uint32_t aDisplayItemKey = 0) MOZ_OVERRIDE;
   virtual void InvalidateFrameWithRect(const nsRect& aRect, uint32_t aDisplayItemKey = 0) MOZ_OVERRIDE;

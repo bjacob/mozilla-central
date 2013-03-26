@@ -12,21 +12,19 @@
 
 #include "nsError.h"
 #include "nsDOMString.h"
-#include "nsIDOMElement.h"
 #include "nsIDOMCSSPrimitiveValue.h"
 #include "nsStyleContext.h"
 #include "nsIScrollableFrame.h"
 #include "nsContentUtils.h"
-#include "prprf.h"
+#include "nsIContent.h"
 
 #include "nsCSSProps.h"
-#include "nsCSSKeywords.h"
 #include "nsDOMCSSRect.h"
+#include "nsDOMCSSRGBColor.h"
 #include "nsDOMCSSValueList.h"
 #include "nsFlexContainerFrame.h"
 #include "nsGkAtoms.h"
 #include "nsHTMLReflowState.h"
-#include "nsThemeConstants.h"
 #include "nsStyleUtil.h"
 #include "nsStyleStructInlines.h"
 #include "nsROCSSPrimitiveValue.h"
@@ -38,14 +36,12 @@
 #include "nsStyleSet.h"
 #include "imgIRequest.h"
 #include "nsLayoutUtils.h"
-#include "nsFrameManager.h"
-#include "prlog.h"
 #include "nsCSSKeywords.h"
 #include "nsStyleCoord.h"
 #include "nsDisplayList.h"
 #include "nsDOMCSSDeclaration.h"
+#include "nsStyleTransformMatrix.h"
 #include "mozilla/dom/Element.h"
-#include "CSSCalc.h"
 #include "nsWrapperCacheInlines.h"
 #include <algorithm>
 
@@ -642,7 +638,7 @@ nsComputedDOMStyle::DoGetClear()
 }
 
 CSSValue*
-nsComputedDOMStyle::DoGetCssFloat()
+nsComputedDOMStyle::DoGetFloat()
 {
   nsROCSSPrimitiveValue* val = GetROCSSPrimitiveValue();
   val->SetIdent(nsCSSProps::ValueToKeywordEnum(StyleDisplay()->mFloats,
@@ -4770,7 +4766,7 @@ nsComputedDOMStyle::GetQueryablePropertyMap(uint32_t* aLength)
     COMPUTED_STYLE_MAP_ENTRY(flex_grow,                     FlexGrow),
     COMPUTED_STYLE_MAP_ENTRY(flex_shrink,                   FlexShrink),
 #endif // MOZ_FLEXBOX
-    COMPUTED_STYLE_MAP_ENTRY(float,                         CssFloat),
+    COMPUTED_STYLE_MAP_ENTRY(float,                         Float),
     //// COMPUTED_STYLE_MAP_ENTRY(font,                     Font),
     COMPUTED_STYLE_MAP_ENTRY(font_family,                   FontFamily),
     COMPUTED_STYLE_MAP_ENTRY(font_size,                     FontSize),

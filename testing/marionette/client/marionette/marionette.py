@@ -62,6 +62,9 @@ class HTMLElement(object):
     def release(self, touch_id, x=None, y=None):
         return self.marionette._send_message('release', 'ok', element=self.id, touchId=touch_id, x=x, y=y)
 
+    def cancel_touch(self, touch_id):
+        return self.marionette._send_message('cancelTouch', 'ok', element=self.id, touchId=touch_id)
+
     @property
     def text(self):
         return self.marionette._send_message('getElementText', 'value', element=self.id)
@@ -104,6 +107,54 @@ class HTMLElement(object):
     def location(self):
         return self.marionette._send_message('getElementPosition', 'value', element=self.id)
 
+class Actions(object):
+    def __init__(self, marionette):
+        self.action_chain = []
+        self.marionette = marionette
+
+    def press(self, element, x=None, y=None):
+        element=element.id
+        self.action_chain.append(['press', element, x, y])
+        return self
+
+    def release(self):
+        self.action_chain.append(['release'])
+        return self
+
+    def move(self, element):
+        element=element.id
+        self.action_chain.append(['move', element])
+        return self
+
+    def move_by_offset(self, x, y):
+        self.action_chain.append(['moveByOffset', x, y])
+        return self
+
+    def wait(self, time=None):
+        self.action_chain.append(['wait', time])
+        return self
+
+    def cancel(self):
+        self.action_chain.append(['cancel'])
+        return self
+
+    def perform(self):
+        return self.marionette._send_message('actionChain', 'ok', value=self.action_chain)
+
+class MultiActions(object):
+    def __init__(self, marionette):
+        self.multi_actions = []
+        self.max_length = 0
+        self.marionette = marionette
+
+    def add(self, action):
+        self.multi_actions.append(action.action_chain)
+        if len(action.action_chain) > self.max_length:
+          self.max_length = len(action.action_chain)
+        return self
+
+    def perform(self):
+        return self.marionette._send_message('multiAction', 'ok', value=self.multi_actions, max_length=self.max_length)
 
 class Marionette(object):
 
@@ -115,7 +166,7 @@ class Marionette(object):
 
     def __init__(self, host='localhost', port=2828, bin=None, profile=None,
                  emulator=None, sdcard=None, emulatorBinary=None,
-                 emulatorImg=None, emulator_res='480x800', gecko_path=None,
+                 emulatorImg=None, emulator_res=None, gecko_path=None,
                  connectToRunningEmulator=False, homedir=None, baseurl=None,
                  noWindow=False, logcat_dir=None, busybox=None):
         self.host = host

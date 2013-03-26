@@ -34,6 +34,7 @@
 #include "nsIFormControlFrame.h"
 #include "nsITextControlFrame.h"
 #include "nsIFrame.h"
+#include "nsRangeFrame.h"
 #include "nsEventStates.h"
 #include "nsIServiceManager.h"
 #include "nsError.h"
@@ -266,49 +267,38 @@ nsHTMLInputElement::nsFilePickerShownCallback::Done(int16_t aResult)
   nsCOMArray<nsIDOMFile> newFiles;
   if (mMulti) {
     nsCOMPtr<nsISimpleEnumerator> iter;
-    nsresult rv = mFilePicker->GetFiles(getter_AddRefs(iter));
+    nsresult rv = mFilePicker->GetDomfiles(getter_AddRefs(iter));
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsISupports> tmp;
     bool prefSaved = false;
     bool loop = true;
+
     while (NS_SUCCEEDED(iter->HasMoreElements(&loop)) && loop) {
       iter->GetNext(getter_AddRefs(tmp));
-      nsCOMPtr<nsIFile> localFile = do_QueryInterface(tmp);
-      if (!localFile) {
-        continue;
-      }
-      nsString path;
-      localFile->GetPath(path);
-      if (path.IsEmpty()) {
-        continue;
-      }
-      nsCOMPtr<nsIDOMFile> domFile =
-        do_QueryObject(new nsDOMFileFile(localFile));
+      nsCOMPtr<nsIDOMFile> domFile = do_QueryInterface(tmp);
+      MOZ_ASSERT(domFile);
+
       newFiles.AppendObject(domFile);
+
       if (!prefSaved) {
         // Store the last used directory using the content pref service
         nsHTMLInputElement::gUploadLastDir->StoreLastUsedDirectory(
-          mInput->OwnerDoc(), localFile);
+          mInput->OwnerDoc(), domFile);
         prefSaved = true;
       }
     }
   }
   else {
-    nsCOMPtr<nsIFile> localFile;
-    nsresult rv = mFilePicker->GetFile(getter_AddRefs(localFile));
+    nsCOMPtr<nsIDOMFile> domFile;
+    nsresult rv = mFilePicker->GetDomfile(getter_AddRefs(domFile));
     NS_ENSURE_SUCCESS(rv, rv);
-    if (localFile) {
-      nsString path;
-      rv = localFile->GetPath(path);
-      if (!path.IsEmpty()) {
-        nsCOMPtr<nsIDOMFile> domFile=
-          do_QueryObject(new nsDOMFileFile(localFile));
-        newFiles.AppendObject(domFile);
-        // Store the last used directory using the content pref service
-        nsHTMLInputElement::gUploadLastDir->StoreLastUsedDirectory(
-          mInput->OwnerDoc(), localFile);
-      }
+    if (domFile) {
+      newFiles.AppendObject(domFile);
+
+      // Store the last used directory using the content pref service
+      nsHTMLInputElement::gUploadLastDir->StoreLastUsedDirectory(
+        mInput->OwnerDoc(), domFile);
     }
   }
 
@@ -501,16 +491,27 @@ UploadLastDir::FetchLastUsedDirectory(nsIDocument* aDoc, nsIFile** aFile)
 }
 
 nsresult
-UploadLastDir::StoreLastUsedDirectory(nsIDocument* aDoc, nsIFile* aFile)
+UploadLastDir::StoreLastUsedDirectory(nsIDocument* aDoc, nsIDOMFile* aDomFile)
 {
   NS_PRECONDITION(aDoc, "aDoc is null");
-  NS_PRECONDITION(aFile, "aFile is null");
+  NS_PRECONDITION(aDomFile, "aDomFile is null");
+
+  nsString path;
+  nsresult rv = aDomFile->GetMozFullPathInternal(path);
+  if (NS_FAILED(rv) || path.IsEmpty()) {
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIFile> localFile;
+  rv = NS_NewNativeLocalFile(NS_ConvertUTF16toUTF8(path), true,
+                             getter_AddRefs(localFile));
+  NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIURI> docURI = aDoc->GetDocumentURI();
   NS_PRECONDITION(docURI, "docURI is null");
 
   nsCOMPtr<nsIFile> parentFile;
-  aFile->GetParent(getter_AddRefs(parentFile));
+  localFile->GetParent(getter_AddRefs(parentFile));
   if (!parentFile) {
     return NS_OK;
   }
@@ -583,6 +584,7 @@ nsHTMLInputElement::nsHTMLInputElement(already_AddRefed<nsINodeInfo> aNodeInfo,
   , mCanShowValidUI(true)
   , mCanShowInvalidUI(true)
   , mHasRange(false)
+  , mIsDraggingRange(false)
 {
   // We are in a type=text so we now we currenty need a nsTextEditorState.
   mInputData.mState = new nsTextEditorState(this);
@@ -962,7 +964,7 @@ NS_IMPL_ENUM_ATTR_DEFAULT_MISSING_INVALID_VALUES(nsHTMLInputElement, FormMethod,
                                                  "", kFormDefaultMethod->tag)
 NS_IMPL_BOOL_ATTR(nsHTMLInputElement, FormNoValidate, formnovalidate)
 NS_IMPL_STRING_ATTR(nsHTMLInputElement, FormTarget, formtarget)
-NS_IMPL_ENUM_ATTR_DEFAULT_VALUE(nsHTMLInputElement, Inputmode, inputmode,
+NS_IMPL_ENUM_ATTR_DEFAULT_VALUE(nsHTMLInputElement, InputMode, inputmode,
                                 kInputDefaultInputmode->tag)
 NS_IMPL_BOOL_ATTR(nsHTMLInputElement, Multiple, multiple)
 NS_IMPL_NON_NEGATIVE_INT_ATTR(nsHTMLInputElement, MaxLength, maxlength)
@@ -1145,8 +1147,8 @@ nsHTMLInputElement::ConvertStringToNumber(nsAString& aValue,
           return false;
         }
 
-        jsval rval;
-        jsval fullYear[3];
+        JS::Value rval;
+        JS::Value fullYear[3];
         fullYear[0].setInt32(year);
         fullYear[1].setInt32(month - 1);
         fullYear[2].setInt32(day);
@@ -1155,7 +1157,7 @@ nsHTMLInputElement::ConvertStringToNumber(nsAString& aValue,
           return false;
         }
 
-        jsval timestamp;
+        JS::Value timestamp;
         if (!JS::Call(ctx, date, "getTime", 0, nullptr, &timestamp)) {
           JS_ClearPendingException(ctx);
           return false;
@@ -1216,7 +1218,7 @@ nsHTMLInputElement::SetValue(const nsAString& aValue)
     }
   }
   else {
-    if (IsSingleLineTextControl(false)) {
+    if (MayFireChangeOnBlur()) {
       // If the value has been set by a script, we basically want to keep the
       // current change event state. If the element is ready to fire a change
       // event, we should keep it that way. Otherwise, we should make sure the
@@ -1310,7 +1312,7 @@ nsHTMLInputElement::ConvertNumberToString(double aValue,
           return false;
         }
 
-        jsval year, month, day;
+        JS::Value year, month, day;
         if (!JS::Call(ctx, date, "getUTCFullYear", 0, nullptr, &year) ||
             !JS::Call(ctx, date, "getUTCMonth", 0, nullptr, &month) ||
             !JS::Call(ctx, date, "getUTCDate", 0, nullptr, &day)) {
@@ -1367,7 +1369,7 @@ nsHTMLInputElement::ConvertNumberToString(double aValue,
 }
 
 NS_IMETHODIMP
-nsHTMLInputElement::GetValueAsDate(JSContext* aCtx, jsval* aDate)
+nsHTMLInputElement::GetValueAsDate(JSContext* aCtx, JS::Value* aDate)
 {
   if (mType != NS_FORM_INPUT_DATE && mType != NS_FORM_INPUT_TIME) {
     aDate->setNull();
@@ -1392,8 +1394,8 @@ nsHTMLInputElement::GetValueAsDate(JSContext* aCtx, jsval* aDate)
         return NS_OK;
       }
 
-      jsval rval;
-      jsval fullYear[3];
+      JS::Value rval;
+      JS::Value fullYear[3];
       fullYear[0].setInt32(year);
       fullYear[1].setInt32(month - 1);
       fullYear[2].setInt32(day);
@@ -1433,7 +1435,7 @@ nsHTMLInputElement::GetValueAsDate(JSContext* aCtx, jsval* aDate)
 }
 
 NS_IMETHODIMP
-nsHTMLInputElement::SetValueAsDate(JSContext* aCtx, const jsval& aDate)
+nsHTMLInputElement::SetValueAsDate(JSContext* aCtx, const JS::Value& aDate)
 {
   if (mType != NS_FORM_INPUT_DATE && mType != NS_FORM_INPUT_TIME) {
     return NS_ERROR_DOM_INVALID_STATE_ERR;
@@ -1451,7 +1453,7 @@ nsHTMLInputElement::SetValueAsDate(JSContext* aCtx, const jsval& aDate)
   }
 
   JSObject& date = aDate.toObject();
-  jsval timestamp;
+  JS::Value timestamp;
   if (!JS::Call(aCtx, &date, "getTime", 0, nullptr, &timestamp) ||
       !timestamp.isNumber() || MOZ_DOUBLE_IS_NaN(timestamp.toNumber())) {
     JS_ClearPendingException(aCtx);
@@ -1880,6 +1882,9 @@ nsHTMLInputElement::GetDisplayFileName(nsAString& aValue) const
   for (int32_t i = 0; i < mFiles.Count(); ++i) {
     nsString str;
     mFiles[i]->GetMozFullPathInternal(str);
+    if (str.IsEmpty()) {
+      mFiles[i]->GetName(str);
+    }
     if (i == 0) {
       aValue.Append(str);
     }
@@ -1946,7 +1951,7 @@ nsHTMLInputElement::FireChangeEventIfNeeded()
   nsString value;
   GetValueInternal(value);
 
-  if (!IsSingleLineTextControl(false) || mFocusedValue.Equals(value)) {
+  if (!MayFireChangeOnBlur() || mFocusedValue.Equals(value)) {
     return;
   }
 
@@ -2551,6 +2556,76 @@ nsHTMLInputElement::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
   return nsGenericHTMLFormElement::PreHandleEvent(aVisitor);
 }
 
+void
+nsHTMLInputElement::StartRangeThumbDrag(nsGUIEvent* aEvent)
+{
+  mIsDraggingRange = true;
+  mRangeThumbDragStartValue = GetValueAsDouble();
+  nsIPresShell::SetCapturingContent(this, CAPTURE_IGNOREALLOWED |
+                                          CAPTURE_RETARGETTOELEMENT);
+  nsRangeFrame* rangeFrame = do_QueryFrame(GetPrimaryFrame());
+  SetValueOfRangeForUserEvent(rangeFrame->GetValueAtEventPoint(aEvent));
+}
+
+void
+nsHTMLInputElement::FinishRangeThumbDrag(nsGUIEvent* aEvent)
+{
+  MOZ_ASSERT(mIsDraggingRange);
+  
+  if (nsIPresShell::GetCapturingContent() == this) {
+    nsIPresShell::SetCapturingContent(nullptr, 0); // cancel capture
+  }
+  if (aEvent) {
+    nsRangeFrame* rangeFrame = do_QueryFrame(GetPrimaryFrame());
+    SetValueOfRangeForUserEvent(rangeFrame->GetValueAtEventPoint(aEvent));
+  }
+  mIsDraggingRange = false;
+  FireChangeEventIfNeeded();
+}
+
+void
+nsHTMLInputElement::CancelRangeThumbDrag(bool aIsForUserEvent)
+{
+  MOZ_ASSERT(mIsDraggingRange);
+
+  if (nsIPresShell::GetCapturingContent() == this) {
+    nsIPresShell::SetCapturingContent(nullptr, 0); // cancel capture
+  }
+  if (aIsForUserEvent) {
+    SetValueOfRangeForUserEvent(mRangeThumbDragStartValue);
+  } else {
+    // Don't dispatch an 'input' event - at least not using
+    // DispatchTrustedEvent.
+    // TODO: decide what we should do here - bug 851782.
+    nsAutoString val;
+    ConvertNumberToString(mRangeThumbDragStartValue, val);
+    SetValueInternal(val, true, true);
+    nsRangeFrame* frame = do_QueryFrame(GetPrimaryFrame());
+    if (frame) {
+      frame->UpdateThumbPositionForValueChange();
+    }
+  }
+  mIsDraggingRange = false;
+}
+
+void
+nsHTMLInputElement::SetValueOfRangeForUserEvent(double aValue)
+{
+  MOZ_ASSERT(MOZ_DOUBLE_IS_FINITE(aValue));
+
+  nsAutoString val;
+  ConvertNumberToString(aValue, val);
+  SetValueInternal(val, true, true);
+  nsRangeFrame* frame = do_QueryFrame(GetPrimaryFrame());
+  if (frame) {
+    frame->UpdateThumbPositionForValueChange();
+  }
+  nsContentUtils::DispatchTrustedEvent(OwnerDoc(),
+                                       static_cast<nsIDOMHTMLInputElement*>(this),
+                                       NS_LITERAL_STRING("input"), true,
+                                       false);
+}
+
 static bool
 SelectTextFieldOnFocus()
 {
@@ -2569,6 +2644,17 @@ SelectTextFieldOnFocus()
   return gSelectTextFieldOnFocus == 1;
 }
 
+static bool
+IsLTR(Element* aElement)
+{
+  nsIFrame *frame = aElement->GetPrimaryFrame();
+  if (frame) {
+    return frame->StyleVisibility()->mDirection == NS_STYLE_DIRECTION_LTR;
+  }
+  // at least for HTML, directionality is exclusively LTR or RTL
+  return aElement->GetDirectionality() == eDir_LTR;
+}
+
 nsresult
 nsHTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
 {
@@ -2579,8 +2665,13 @@ nsHTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
   if (aVisitor.mEvent->message == NS_FOCUS_CONTENT ||
       aVisitor.mEvent->message == NS_BLUR_CONTENT) {
     if (aVisitor.mEvent->message == NS_FOCUS_CONTENT && 
-        IsSingleLineTextControl(false)) {
+        MayFireChangeOnBlur()) {
       GetValueInternal(mFocusedValue);
+    }
+
+    if (mIsDraggingRange &&
+        aVisitor.mEvent->message == NS_BLUR_CONTENT) {
+      FinishRangeThumbDrag();
     }
 
     UpdateValidityUIBits(aVisitor.mEvent->message == NS_FOCUS_CONTENT);
@@ -2835,6 +2926,65 @@ nsHTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
             NS_ENSURE_SUCCESS(rv, rv);
           }
 
+          if (aVisitor.mEvent->message == NS_KEY_PRESS &&
+              mType == NS_FORM_INPUT_RANGE && !keyEvent->IsAlt() &&
+              !keyEvent->IsControl() && !keyEvent->IsMeta() &&
+              (keyEvent->keyCode == NS_VK_LEFT ||
+               keyEvent->keyCode == NS_VK_RIGHT ||
+               keyEvent->keyCode == NS_VK_UP ||
+               keyEvent->keyCode == NS_VK_DOWN ||
+               keyEvent->keyCode == NS_VK_PAGE_UP ||
+               keyEvent->keyCode == NS_VK_PAGE_DOWN ||
+               keyEvent->keyCode == NS_VK_HOME ||
+               keyEvent->keyCode == NS_VK_END)) {
+            double minimum = GetMinimum();
+            double maximum = GetMaximum();
+            MOZ_ASSERT(MOZ_DOUBLE_IS_FINITE(minimum) &&
+                       MOZ_DOUBLE_IS_FINITE(maximum));
+            if (minimum < maximum) { // else the value is locked to the minimum
+              double value = GetValueAsDouble();
+              double step = GetStep();
+              if (step == kStepAny) {
+                step = GetDefaultStep();
+              }
+              MOZ_ASSERT(MOZ_DOUBLE_IS_FINITE(value) &&
+                         MOZ_DOUBLE_IS_FINITE(step));
+              double newValue;
+              switch (keyEvent->keyCode) {
+                case  NS_VK_LEFT:
+                  newValue = value + (IsLTR(this) ? -step : step);
+                  break;
+                case  NS_VK_RIGHT:
+                  newValue = value + (IsLTR(this) ? step : -step);
+                  break;
+                case  NS_VK_UP:
+                  // Even for horizontal range, "up" means "increase"
+                  newValue = value + step;
+                  break;
+                case  NS_VK_DOWN:
+                  // Even for horizontal range, "down" means "decrease"
+                  newValue = value - step;
+                  break;
+                case  NS_VK_HOME:
+                  newValue = minimum;
+                  break;
+                case  NS_VK_END:
+                  newValue = maximum;
+                  break;
+                case  NS_VK_PAGE_UP:
+                  // For PgUp/PgDn we jump 10% of the total range, unless step
+                  // requires us to jump more.
+                  newValue = value + std::max(step, 0.1 * (maximum - minimum));
+                  break;
+                case  NS_VK_PAGE_DOWN:
+                  newValue = value - std::max(step, 0.1 * (maximum - minimum));
+                  break;
+              }
+              SetValueOfRangeForUserEvent(newValue);
+              aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
+            }
+          }
+
         } break; // NS_KEY_PRESS || NS_KEY_UP
 
         case NS_MOUSE_BUTTON_DOWN:
@@ -2923,7 +3073,107 @@ nsHTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
     }
   } // if
 
+  if (NS_SUCCEEDED(rv) && mType == NS_FORM_INPUT_RANGE) {
+    PostHandleEventForRangeThumb(aVisitor);
+  }
+
   return rv;
+}
+
+void
+nsHTMLInputElement::PostHandleEventForRangeThumb(nsEventChainPostVisitor& aVisitor)
+{
+  MOZ_ASSERT(mType == NS_FORM_INPUT_RANGE);
+
+  if (nsEventStatus_eConsumeNoDefault == aVisitor.mEventStatus ||
+      !(aVisitor.mEvent->eventStructType == NS_MOUSE_EVENT ||
+        aVisitor.mEvent->eventStructType == NS_TOUCH_EVENT ||
+        aVisitor.mEvent->eventStructType == NS_KEY_EVENT)) {
+    return;
+  }
+
+  nsRangeFrame* rangeFrame = do_QueryFrame(GetPrimaryFrame());
+  if (!rangeFrame && mIsDraggingRange) {
+    CancelRangeThumbDrag();
+    return;
+  }
+
+  switch (aVisitor.mEvent->message)
+  {
+    case NS_MOUSE_BUTTON_DOWN:
+    case NS_TOUCH_START: {
+      if (mIsDraggingRange) {
+        break;
+      }
+      if (nsIPresShell::GetCapturingContent()) {
+        break; // don't start drag if someone else is already capturing
+      }
+      nsInputEvent* inputEvent = static_cast<nsInputEvent*>(aVisitor.mEvent);
+      if (inputEvent->IsShift() || inputEvent->IsControl() ||
+          inputEvent->IsAlt() || inputEvent->IsMeta() ||
+          inputEvent->IsAltGraph() || inputEvent->IsFn() ||
+          inputEvent->IsOS()) {
+        break; // ignore
+      }
+      if (aVisitor.mEvent->message == NS_MOUSE_BUTTON_DOWN) {
+        nsMouseEvent* mouseEvent = static_cast<nsMouseEvent*>(aVisitor.mEvent);
+        if (mouseEvent->buttons == nsMouseEvent::eLeftButtonFlag) {
+          StartRangeThumbDrag(inputEvent);
+        } else if (mIsDraggingRange) {
+          CancelRangeThumbDrag();
+        }
+      } else {
+        nsTouchEvent* touchEvent = static_cast<nsTouchEvent*>(aVisitor.mEvent);
+        if (touchEvent->touches.Length() == 1) {
+          StartRangeThumbDrag(inputEvent);
+        } else if (mIsDraggingRange) {
+          CancelRangeThumbDrag();
+        }
+      }
+      aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+    } break;
+
+    case NS_MOUSE_MOVE:
+    case NS_TOUCH_MOVE:
+      if (!mIsDraggingRange) {
+        break;
+      }
+      if (nsIPresShell::GetCapturingContent() != this) {
+        // Someone else grabbed capture.
+        CancelRangeThumbDrag();
+        break;
+      }
+      SetValueOfRangeForUserEvent(rangeFrame->GetValueAtEventPoint(
+                                    static_cast<nsInputEvent*>(aVisitor.mEvent)));
+      aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+      break;
+
+    case NS_MOUSE_BUTTON_UP:
+    case NS_TOUCH_END:
+      if (!mIsDraggingRange) {
+        break;
+      }
+      // We don't check to see whether we are the capturing content here and
+      // call CancelRangeThumbDrag() if that is the case. We just finish off
+      // the drag and set our final value (unless someone has called
+      // preventDefault() and prevents us getting here).
+      FinishRangeThumbDrag(static_cast<nsInputEvent*>(aVisitor.mEvent));
+      aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+      break;
+
+    case NS_KEY_PRESS:
+      if (mIsDraggingRange &&
+          static_cast<nsKeyEvent*>(aVisitor.mEvent)->keyCode == NS_VK_ESCAPE) {
+        CancelRangeThumbDrag();
+      }
+      break;
+
+    case NS_TOUCH_CANCEL:
+      if (mIsDraggingRange) {
+        CancelRangeThumbDrag();
+      }
+      break;
+  }
 }
 
 void
@@ -3018,6 +3268,10 @@ nsHTMLInputElement::UnbindFromTree(bool aDeep, bool aNullParent)
 void
 nsHTMLInputElement::HandleTypeChange(uint8_t aNewType)
 {
+  if (mType == NS_FORM_INPUT_RANGE && mIsDraggingRange) {
+    CancelRangeThumbDrag(false);
+  }
+
   ValueModeType aOldValueMode = GetValueMode();
   uint8_t oldType = mType;
   nsAutoString aOldValue;
@@ -3070,12 +3324,11 @@ nsHTMLInputElement::HandleTypeChange(uint8_t aNewType)
   }
 
   // Updating mFocusedValue in consequence:
-  // If the new type is a single line text control but the previous wasn't, we
-  // should set mFocusedValue to the current value.
-  // Otherwise, if the new type isn't a text control but the previous was, we
-  // should clear out mFocusedValue.
-  if (IsSingleLineTextControl(mType, false) &&
-      !IsSingleLineTextControl(oldType, false)) {
+  // If the new type fires a change event on blur, but the previous type
+  // doesn't, we should set mFocusedValue to the current value.
+  // Otherwise, if the new type doesn't fire a change event on blur, but the
+  // previous type does, we should clear out mFocusedValue.
+  if (MayFireChangeOnBlur(mType) && !MayFireChangeOnBlur(oldType)) {
     GetValueInternal(mFocusedValue);
   } else if (!IsSingleLineTextControl(mType, false) &&
              IsSingleLineTextControl(oldType, false)) {
@@ -3411,11 +3664,6 @@ nsHTMLInputElement::ParseAttribute(int32_t aNamespaceID,
              !Preferences::GetBool("dom.experimental_forms", false)) ||
             (newType == NS_FORM_INPUT_RANGE &&
              !Preferences::GetBool("dom.experimental_forms_range", false))) {
-          newType = kInputDefaultType->value;
-          aResult.SetTo(newType, &aValue);
-        }
-        if (newType == NS_FORM_INPUT_FILE &&
-            Preferences::GetBool("dom.disable_input_file", false)) {
           newType = kInputDefaultType->value;
           aResult.SetTo(newType, &aValue);
         }
@@ -3836,7 +4084,8 @@ FireEventForAccessibility(nsIDOMHTMLInputElement* aTarget,
                           const nsAString& aEventType)
 {
   nsCOMPtr<nsIDOMEvent> event;
-  if (NS_SUCCEEDED(nsEventDispatcher::CreateEvent(aPresContext, nullptr,
+  nsCOMPtr<mozilla::dom::Element> element = do_QueryInterface(aTarget);
+  if (NS_SUCCEEDED(nsEventDispatcher::CreateEvent(element, aPresContext, nullptr,
                                                   NS_LITERAL_STRING("Events"),
                                                   getter_AddRefs(event)))) {
     event->InitEvent(aEventType, true, true);
@@ -3977,7 +4226,7 @@ nsHTMLInputElement::SubmitNamesValues(nsFormSubmission* aFormSubmission)
                                        "Submit", defaultValue);
     value = defaultValue;
   }
-      
+
   //
   // Submit file if its input type=file and this encoding method accepts files
   //
@@ -3987,13 +4236,13 @@ nsHTMLInputElement::SubmitNamesValues(nsFormSubmission* aFormSubmission)
     const nsCOMArray<nsIDOMFile>& files = GetFiles();
 
     for (int32_t i = 0; i < files.Count(); ++i) {
-      aFormSubmission->AddNameFilePair(name, files[i]);
+      aFormSubmission->AddNameFilePair(name, files[i], NullString());
     }
 
     if (files.Count() == 0) {
       // If no file was selected, pretend we had an empty file with an
       // empty filename.
-      aFormSubmission->AddNameFilePair(name, nullptr);
+      aFormSubmission->AddNameFilePair(name, nullptr, NullString());
 
     }
 
@@ -4353,7 +4602,8 @@ nsHTMLInputElement::IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t
     return true;
   }
 
-  if (IsSingleLineTextControl(false)) {
+  if (IsSingleLineTextControl(false) ||
+      mType == NS_FORM_INPUT_RANGE) {
     *aIsFocusable = true;
     return false;
   }
@@ -5305,6 +5555,20 @@ NS_IMETHODIMP_(int32_t)
 nsHTMLInputElement::GetRows()
 {
   return DEFAULT_ROWS;
+}
+
+NS_IMETHODIMP_(void)
+nsHTMLInputElement::GetDefaultValueFromContent(nsAString& aValue)
+{
+  nsTextEditorState *state = GetEditorState();
+  if (state) {
+    GetDefaultValue(aValue);
+    // This is called by the frame to show the value.
+    // We have to sanitize it when needed.
+    if (!mParserCreating) {
+      SanitizeValue(aValue);
+    }
+  }
 }
 
 NS_IMETHODIMP_(bool)

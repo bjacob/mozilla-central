@@ -9,7 +9,7 @@
 
 package org.mozilla.gecko;
 
-import org.mozilla.gecko.util.GeckoBackgroundThread;
+import org.mozilla.gecko.util.ThreadUtils;
 
 import android.app.Activity;
 import android.content.Context;
@@ -30,7 +30,6 @@ import java.util.zip.ZipFile;
 
 import org.json.JSONArray;
 import org.json.JSONException;
-import org.json.JSONObject;
 
 public final class Distribution {
     private static final String LOGTAG = "GeckoDistribution";
@@ -41,33 +40,54 @@ public final class Distribution {
 
     /**
      * Initializes distribution if it hasn't already been initalized.
+     *
+     * @param packagePath specifies where to look for the distribution directory.
      */
-    public static void init(final Context context) {
+    public static void init(final Context context, final String packagePath) {
         // Read/write preferences and files on the background thread.
-        GeckoBackgroundThread.getHandler().post(new Runnable() {
+        ThreadUtils.postToBackgroundThread(new Runnable() {
+            @Override
             public void run() {
                 // Bail if we've already initialized the distribution.
                 SharedPreferences settings = context.getSharedPreferences(GeckoApp.PREFS_NAME, Activity.MODE_PRIVATE);
                 String keyName = context.getPackageName() + ".distribution_state";
                 int state = settings.getInt(keyName, STATE_UNKNOWN);
-                if (state == STATE_NONE)
+                if (state == STATE_NONE) {
                     return;
+                }
+
+                // This pref stores the path to the distribution directory. If it is null, Gecko
+                // looks for distribution files in /data/data/org.mozilla.xxx/distribution.
+                String pathKeyName = context.getPackageName() + ".distribution_path";
+                String distPath = null;
 
                 // Send a message to Gecko if we've set a distribution.
                 if (state == STATE_SET) {
-                    GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Distribution:Set", null));
+                    distPath = settings.getString(pathKeyName, null);
+                    GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Distribution:Set", distPath));
                     return;
                 }
 
                 boolean distributionSet = false;
                 try {
-                    distributionSet = copyFiles(context);
+                    // First, try copying distribution files out of the APK.
+                    distributionSet = copyFiles(context, packagePath);
                 } catch (IOException e) {
                     Log.e(LOGTAG, "Error copying distribution files", e);
                 }
 
+                if (!distributionSet) {
+                    // If there aren't any distribution files in the APK, look in the /system directory.
+                    File distDir = new File("/system/" + context.getPackageName() + "/distribution");
+                    if (distDir.exists()) {
+                        distributionSet = true;
+                        distPath = distDir.getPath();
+                        settings.edit().putString(pathKeyName, distPath).commit();
+                    }
+                }
+
                 if (distributionSet) {
-                    GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Distribution:Set", null));
+                    GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Distribution:Set", distPath));
                     settings.edit().putInt(keyName, STATE_SET).commit();
                 } else {
                     settings.edit().putInt(keyName, STATE_NONE).commit();
@@ -80,8 +100,8 @@ public final class Distribution {
      * Copies the /distribution folder out of the APK and into the app's data directory.
      * Returns true if distribution files were found and copied.
      */
-    private static boolean copyFiles(Context context) throws IOException {
-        File applicationPackage = new File(context.getPackageResourcePath());
+    private static boolean copyFiles(Context context, String packagePath) throws IOException {
+        File applicationPackage = new File(packagePath);
         ZipFile zip = new ZipFile(applicationPackage);
 
         boolean distributionSet = false;

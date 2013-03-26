@@ -32,10 +32,26 @@ if (this.Components) {
        let id = data.id;
        let result;
        let exn;
+       let durationMs;
        try {
          let method = data.fun;
          LOG("Calling method", method);
+         let start;
+         let options;
+         if (data.args) {
+           options = data.args[data.args.length - 1];
+         }
+         // If |outExecutionDuration| option was supplied, start measuring the
+         // duration of the operation.
+         if (typeof options === "object" && "outExecutionDuration" in options) {
+           start = Date.now();
+         }
          result = Agent[method].apply(Agent, data.args);
+         if (start) {
+           // Only record duration if the method succeeds.
+           durationMs = Date.now() - start;
+           LOG("Method took", durationMs, "MS");
+         }
          LOG("Method", method, "succeeded");
        } catch (ex) {
          exn = ex;
@@ -49,9 +65,10 @@ if (this.Components) {
          LOG("Sending positive reply", result, "id is", id);
          if (result instanceof Transfer) {
            // Take advantage of zero-copy transfers
-           self.postMessage({ok: result.data, id: id}, result.transfers);
+           self.postMessage({ok: result.data, id: id, durationMs: durationMs},
+             result.transfers);
          } else {
-           self.postMessage({ok: result, id:id});
+           self.postMessage({ok: result, id:id, durationMs: durationMs});
          }
        } else if (exn == StopIteration) {
          // StopIteration cannot be serialized automatically
@@ -114,6 +131,13 @@ if (this.Components) {
          let id = this._idgen++;
          this._map.set(id, {resource:resource, info:info});
          return id;
+       },
+       /**
+        * Return a list of all open resources i.e. the ones still present in
+        * ResourceTracker's _map.
+        */
+       listOpenedResources: function listOpenedResources() {
+         return [resource.info.path for ([id, resource] of this._map)];
        }
      };
 
@@ -193,6 +217,16 @@ if (this.Components) {
        GET_DEBUG: function GET_DEBUG () {
          return exports.OS.Shared.DEBUG;
        },
+       // Report file descriptors leaks.
+       System_shutdown: function System_shutdown () {
+         // Return information about both opened files and opened
+         // directory iterators.
+         return {
+           openedFiles: OpenedFiles.listOpenedResources(),
+           openedDirectoryIterators:
+             OpenedDirectoryIterators.listOpenedResources()
+         };
+       },
        // Functions of OS.File
        stat: function stat(path) {
          return exports.OS.File.Info.toMsg(
@@ -222,8 +256,13 @@ if (this.Components) {
          return File.remove(Type.path.fromMsg(path));
        },
        open: function open(path, mode, options) {
-         let file = File.open(Type.path.fromMsg(path), mode, options);
-         return OpenedFiles.add(file);
+         let filePath = Type.path.fromMsg(path);
+         let file = File.open(filePath, mode, options);
+         return OpenedFiles.add(file, {
+           // Adding path information to keep track of opened files
+           // to report leaks when debugging.
+           path: filePath
+         });
        },
        read: function read(path, bytes) {
          let data = File.read(Type.path.fromMsg(path), bytes);
@@ -242,8 +281,13 @@ if (this.Components) {
                                 );
        },
        new_DirectoryIterator: function new_DirectoryIterator(path, options) {
-         let iterator = new File.DirectoryIterator(Type.path.fromMsg(path), options);
-         return OpenedDirectoryIterators.add(iterator);
+         let directoryPath = Type.path.fromMsg(path);
+         let iterator = new File.DirectoryIterator(directoryPath, options);
+         return OpenedDirectoryIterators.add(iterator, {
+           // Adding path information to keep track of opened directory
+           // iterators to report leaks when debugging.
+           path: directoryPath
+         });
        },
        // Methods of OS.File
        File_prototype_close: function close(fd) {
@@ -329,6 +373,12 @@ if (this.Components) {
              this.close();
              OpenedDirectoryIterators.remove(dir);
            }, true);// ignore error to support double-closing |DirectoryIterator|
+       },
+       DirectoryIterator_prototype_exists: function exists(dir) {
+         return withDir(dir,
+           function do_exists() {
+             return this.exists();
+           });
        }
      };
   } catch(ex) {

@@ -3,6 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/EncodingUtils.h"
+
+#include "mozilla/Util.h" // ArrayLength
 #include "nsUConvPropertySearch.h"
 
 namespace mozilla {
@@ -66,6 +68,16 @@ EncodingUtils::FindEncodingForLabel(const nsACString& aLabel,
   ToLowerCase(label);
   return NS_SUCCEEDED(nsUConvPropertySearch::SearchPropertyValue(
       labelsEncodings, ArrayLength(labelsEncodings), label, aOutEncoding));
+}
+
+bool
+EncodingUtils::IsAsciiCompatible(const nsACString& aPreferredName)
+{
+  return !(aPreferredName.LowerCaseEqualsLiteral("utf-16") ||
+           aPreferredName.LowerCaseEqualsLiteral("utf-16be") ||
+           aPreferredName.LowerCaseEqualsLiteral("utf-16le") ||
+           aPreferredName.LowerCaseEqualsLiteral("utf-7") ||
+           aPreferredName.LowerCaseEqualsLiteral("x-imap4-modified-utf7"));
 }
 
 } // namespace dom

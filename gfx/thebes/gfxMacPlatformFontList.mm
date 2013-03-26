@@ -197,8 +197,13 @@ static const ScriptRange sComplexScripts[] = {
     { 0x0D80, 0x0DFF, { TRUETYPE_TAG('s','i','n','h'), 0, 0 } },
     { 0x0E80, 0x0EFF, { TRUETYPE_TAG('l','a','o',' '), 0, 0 } },
     { 0x0F00, 0x0FFF, { TRUETYPE_TAG('t','i','b','t'), 0, 0 } },
+    { 0x1000, 0x109f, { TRUETYPE_TAG('m','y','m','r'),
+                        TRUETYPE_TAG('m','y','m','2'), 0 } },
+    { 0x1780, 0x17ff, { TRUETYPE_TAG('k','h','m','r'), 0, 0 } },
+    // Khmer Symbols (19e0..19ff) don't seem to need any special shaping
+    { 0xaa60, 0xaa7f, { TRUETYPE_TAG('m','y','m','r'),
+                        TRUETYPE_TAG('m','y','m','2'), 0 } },
     // Thai seems to be "renderable" without AAT morphing tables
-    // xxx - Khmer?
 };
 
 static void
@@ -263,20 +268,12 @@ MacOSFontEntry::ReadCMAP()
                                     unicodeFont, symbolFont);
     }
   
-    if (NS_SUCCEEDED(rv)) {
-#ifdef MOZ_GRAPHITE
-        // TODO: when we remove the MOZ_GRAPHITE conditional,
-        // we can merge this into the preceding if().
-        // Hence not (temporarily) indenting the code below
-        // by an extra level, only to undo that next time we
-        // touch it.
-        //
+    if (NS_SUCCEEDED(rv) && !HasGraphiteTables()) {
         // We assume a Graphite font knows what it's doing,
         // and provides whatever shaping is needed for the
         // characters it supports, so only check/clear the
         // complex-script ranges for non-Graphite fonts
-        if (!HasGraphiteTables()) {
-#endif
+
         // for layout support, check for the presence of mort/morx and/or
         // opentype layout tables
         bool hasAATLayout = HasFontTable(TRUETYPE_TAG('m','o','r','x')) ||
@@ -311,9 +308,6 @@ MacOSFontEntry::ReadCMAP()
                 charmap->ClearRange(sr.rangeStart, sr.rangeEnd);
             }
         }
-#ifdef MOZ_GRAPHITE
-        }
-#endif
     }
 
     mHasCmapTable = NS_SUCCEEDED(rv);

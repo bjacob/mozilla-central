@@ -1,3 +1,4 @@
+
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=4 sw=4 et tw=99:
  *
@@ -84,7 +85,7 @@ IonRuntime::generateEnterJIT(JSContext *cx)
     JS_ASSERT(OsrFrameReg == reg_frame);
 
     MacroAssembler masm(cx);
-    AutoFlushCache afc("GenerateEnterJIT", cx->compartment->ionCompartment());
+    AutoFlushCache afc("GenerateEnterJIT", cx->runtime->ionRuntime());
     Assembler *aasm = &masm;
 
     // Save non-volatile registers. These must be saved by the trampoline,
@@ -195,14 +196,13 @@ IonRuntime::generateEnterJIT(JSContext *cx)
     GenerateReturn(masm, JS_TRUE);
 
     Linker linker(masm);
-    return linker.newCode(cx);
+    return linker.newCode(cx, JSC::OTHER_CODE);
 }
 
 IonCode *
 IonRuntime::generateInvalidator(JSContext *cx)
 {
     // See large comment in x86's IonRuntime::generateInvalidator.
-    AutoIonContextAlloc aica(cx);
     MacroAssembler masm(cx);
     //masm.as_bkpt();
     // At this point, one of two things has happened.
@@ -242,7 +242,7 @@ IonRuntime::generateInvalidator(JSContext *cx)
     masm.ma_add(sp, r1, sp);
     masm.generateBailoutTail(r1);
     Linker linker(masm);
-    IonCode *code = linker.newCode(cx);
+    IonCode *code = linker.newCode(cx, JSC::OTHER_CODE);
     IonSpew(IonSpew_Invalidate, "   invalidation thunk created at %p", (void *) code->raw());
     return code;
 }
@@ -339,7 +339,7 @@ IonRuntime::generateArgumentsRectifier(JSContext *cx)
 
     masm.ret();
     Linker linker(masm);
-    return linker.newCode(cx);
+    return linker.newCode(cx, JSC::OTHER_CODE);
 }
 
 static void
@@ -437,7 +437,7 @@ GenerateBailoutThunk(MacroAssembler &masm, uint32_t frameClass)
 IonCode *
 IonRuntime::generateBailoutTable(JSContext *cx, uint32_t frameClass)
 {
-    MacroAssembler masm;
+    MacroAssembler masm(cx);
 
     Label bailout;
     for (size_t i = 0; i < BAILOUT_TABLE_SIZE; i++)
@@ -447,17 +447,17 @@ IonRuntime::generateBailoutTable(JSContext *cx, uint32_t frameClass)
     GenerateBailoutThunk(masm, frameClass);
 
     Linker linker(masm);
-    return linker.newCode(cx);
+    return linker.newCode(cx, JSC::OTHER_CODE);
 }
 
 IonCode *
 IonRuntime::generateBailoutHandler(JSContext *cx)
 {
-    MacroAssembler masm;
+    MacroAssembler masm(cx);
     GenerateBailoutThunk(masm, NO_FRAME_SIZE_CLASS_ID);
 
     Linker linker(masm);
-    return linker.newCode(cx);
+    return linker.newCode(cx, JSC::OTHER_CODE);
 }
 
 IonCode *
@@ -472,7 +472,7 @@ IonRuntime::generateVMWrapper(JSContext *cx, const VMFunction &f)
         return p->value;
 
     // Generate a separated code for the wrapper.
-    MacroAssembler masm;
+    MacroAssembler masm(cx);
     GeneralRegisterSet regs = GeneralRegisterSet(Register::Codes::WrapperMask);
 
     // Wrapper register set is a superset of Volatile register set.
@@ -596,7 +596,7 @@ IonRuntime::generateVMWrapper(JSContext *cx, const VMFunction &f)
     masm.handleException();
 
     Linker linker(masm);
-    IonCode *wrapper = linker.newCode(cx);
+    IonCode *wrapper = linker.newCode(cx, JSC::OTHER_CODE);
     if (!wrapper)
         return NULL;
 
@@ -611,7 +611,7 @@ IonRuntime::generateVMWrapper(JSContext *cx, const VMFunction &f)
 IonCode *
 IonRuntime::generatePreBarrier(JSContext *cx, MIRType type)
 {
-    MacroAssembler masm;
+    MacroAssembler masm(cx);
 
     RegisterSet save = RegisterSet(GeneralRegisterSet(Registers::VolatileMask),
                                    FloatRegisterSet(FloatRegisters::VolatileMask));
@@ -634,6 +634,6 @@ IonRuntime::generatePreBarrier(JSContext *cx, MIRType type)
     masm.ret();
 
     Linker linker(masm);
-    return linker.newCode(cx);
+    return linker.newCode(cx, JSC::OTHER_CODE);
 }
 

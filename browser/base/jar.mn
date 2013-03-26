@@ -79,10 +79,10 @@ browser.jar:
         content/browser/sync/aboutSyncTabs.js         (content/sync/aboutSyncTabs.js)
         content/browser/sync/aboutSyncTabs.css        (content/sync/aboutSyncTabs.css)
         content/browser/sync/aboutSyncTabs-bindings.xml  (content/sync/aboutSyncTabs-bindings.xml)
-        content/browser/sync/setup.xul                (content/sync/setup.xul)
+*       content/browser/sync/setup.xul                (content/sync/setup.xul)
         content/browser/sync/addDevice.js             (content/sync/addDevice.js)
         content/browser/sync/addDevice.xul            (content/sync/addDevice.xul)
-        content/browser/sync/setup.js                 (content/sync/setup.js)
+*       content/browser/sync/setup.js                 (content/sync/setup.js)
         content/browser/sync/genericChange.xul        (content/sync/genericChange.xul)
         content/browser/sync/genericChange.js         (content/sync/genericChange.js)
         content/browser/sync/key.xhtml                (content/sync/key.xhtml)
@@ -122,7 +122,6 @@ browser.jar:
 #ifdef XP_WIN
         content/browser/win6BrowserOverlay.xul        (content/win6BrowserOverlay.xul)
 #endif
-        content/browser/social-icon.png               (content/social-icon.png)
         content/browser/socialchat.xml                (content/socialchat.xml)
 # the following files are browser-specific overrides
 *       content/browser/license.html                  (/toolkit/content/license.html)

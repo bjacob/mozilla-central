@@ -28,6 +28,10 @@
 #include "nsIFile.h"
 #include "nsStringGlue.h"
 
+// Easy access to a five second startup delay used to get
+// a debugger attached in the metro environment. 
+// #define DEBUG_delay_start_metro
+
 #ifdef XP_WIN
 // we want a wmain entry point
 #include "nsWindowsWMain.cpp"
@@ -187,6 +191,10 @@ static int do_main(int argc, char* argv[], nsIFile *xreDirectory)
       argv[1] = argv[0];
       argv++;
       argc--;
+    } else if (IsArg(argv[1], "BackgroundSessionClosed")) {
+      // This command line flag is used for indirect shutdowns, the OS
+      // relaunches Metro Firefox with this command line arg.
+      mainFlags = XRE_MAIN_FLAG_USE_METRO;
     } else {
       // This command-line flag is used to test the metro browser in a desktop
       // environment.
@@ -312,7 +320,8 @@ static int do_main(int argc, char* argv[], nsIFile *xreDirectory)
         }
         ptr++;
       }
-      newArgc--;
+      if (ptr == newArgv[newArgc-1])
+        newArgc--;
       int result = XRE_main(newArgc, newArgv, appData, mainFlags);
       XRE_FreeAppData(appData);
       return result;
@@ -466,6 +475,9 @@ InitXPCOMGlue(const char *argv0, nsIFile **xreDirectory)
 
 int main(int argc, char* argv[])
 {
+#ifdef DEBUG_delay_start_metro
+  Sleep(5000);
+#endif
   PRTime start = _PR_Now();
 
 #ifdef XP_MACOSX

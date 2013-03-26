@@ -28,6 +28,8 @@ Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/TelemetryStopwatch.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
+                                  "resource://gre/modules/UpdateChannel.jsm");
 
 // Oldest year to allow in date preferences. This module was implemented in
 // 2012 and no dates older than that should be encountered.
@@ -38,11 +40,19 @@ const DAYS_IN_PAYLOAD = 180;
 const DEFAULT_DATABASE_NAME = "healthreport.sqlite";
 
 const TELEMETRY_INIT = "HEALTHREPORT_INIT_MS";
+const TELEMETRY_INIT_FIRSTRUN = "HEALTHREPORT_INIT_FIRSTRUN_MS";
+const TELEMETRY_DB_OPEN = "HEALTHREPORT_DB_OPEN_MS";
+const TELEMETRY_DB_OPEN_FIRSTRUN = "HEALTHREPORT_DB_OPEN_FIRSTRUN_MS";
 const TELEMETRY_GENERATE_PAYLOAD = "HEALTHREPORT_GENERATE_JSON_PAYLOAD_MS";
-const TELEMETRY_PAYLOAD_SIZE = "HEALTHREPORT_PAYLOAD_UNCOMPRESSED_BYTES";
+const TELEMETRY_JSON_PAYLOAD_SERIALIZE = "HEALTHREPORT_JSON_PAYLOAD_SERIALIZE_MS";
+const TELEMETRY_PAYLOAD_SIZE_UNCOMPRESSED = "HEALTHREPORT_PAYLOAD_UNCOMPRESSED_BYTES";
+const TELEMETRY_PAYLOAD_SIZE_COMPRESSED = "HEALTHREPORT_PAYLOAD_COMPRESSED_BYTES";
 const TELEMETRY_SAVE_LAST_PAYLOAD = "HEALTHREPORT_SAVE_LAST_PAYLOAD_MS";
 const TELEMETRY_UPLOAD = "HEALTHREPORT_UPLOAD_MS";
 const TELEMETRY_SHUTDOWN_DELAY = "HEALTHREPORT_SHUTDOWN_DELAY_MS";
+const TELEMETRY_COLLECT_CONSTANT = "HEALTHREPORT_COLLECT_CONSTANT_DATA_MS";
+const TELEMETRY_COLLECT_DAILY = "HEALTHREPORT_COLLECT_DAILY_MS";
+const TELEMETRY_SHUTDOWN = "HEALTHREPORT_SHUTDOWN_MS";
 
 /**
  * This is the abstract base class of `HealthReporter`. It exists so that
@@ -71,8 +81,8 @@ function AbstractHealthReporter(branch, policy, sessionRecorder) {
 
   this._storage = null;
   this._storageInProgress = false;
-  this._collector = null;
-  this._collectorInProgress = false;
+  this._providerManager = null;
+  this._providerManagerInProgress = false;
   this._initialized = false;
   this._initializeHadError = false;
   this._initializedDeferred = Promise.defer();
@@ -81,12 +91,16 @@ function AbstractHealthReporter(branch, policy, sessionRecorder) {
   this._shutdownComplete = false;
   this._shutdownCompleteCallback = null;
 
-  this._constantOnlyProviders = {};
-  this._constantOnlyProvidersRegistered = false;
+  this._errors = [];
+
   this._lastDailyDate = null;
 
   // Yes, this will probably run concurrently with remaining constructor work.
-  TelemetryStopwatch.start(TELEMETRY_INIT, this);
+  let hasFirstRun = this._prefs.get("service.firstRun", false);
+  this._initHistogram = hasFirstRun ? TELEMETRY_INIT : TELEMETRY_INIT_FIRSTRUN;
+  this._dbOpenHistogram = hasFirstRun ? TELEMETRY_DB_OPEN : TELEMETRY_DB_OPEN_FIRSTRUN;
+
+  TelemetryStopwatch.start(this._initHistogram, this);
 
   this._ensureDirectoryExists(this._stateDir)
       .then(this._onStateDirCreated.bind(this),
@@ -112,9 +126,12 @@ AbstractHealthReporter.prototype = Object.freeze({
   //----------------------------------------------------
 
   _onInitError: function (error) {
-    TelemetryStopwatch.cancel(TELEMETRY_INIT, this);
-    this._log.error("Error during initialization: " +
-                    CommonUtils.exceptionStr(error));
+    TelemetryStopwatch.cancel(this._initHistogram, this);
+    TelemetryStopwatch.cancel(this._dbOpenHistogram, this);
+    delete this._initHistogram;
+    delete this._dbOpenHistogram;
+
+    this._recordError("Error during initialization", error);
     this._initializeHadError = true;
     this._initiateShutdown();
     this._initializedDeferred.reject(error);
@@ -130,12 +147,15 @@ AbstractHealthReporter.prototype = Object.freeze({
     Services.obs.addObserver(this, "profile-before-change", false);
 
     this._storageInProgress = true;
+    TelemetryStopwatch.start(this._dbOpenHistogram, this);
     Metrics.Storage(this._dbName).then(this._onStorageCreated.bind(this),
                                        this._onInitError.bind(this));
   },
 
   // Called when storage has been opened.
   _onStorageCreated: function (storage) {
+    TelemetryStopwatch.finish(this._dbOpenHistogram, this);
+    delete this._dbOpenHistogram;
     this._log.info("Storage initialized.");
     this._storage = storage;
     this._storageInProgress = false;
@@ -145,32 +165,35 @@ AbstractHealthReporter.prototype = Object.freeze({
       return;
     }
 
-    Task.spawn(this._initializeCollector.bind(this))
-        .then(this._onCollectorInitialized.bind(this),
+    Task.spawn(this._initializeProviderManager.bind(this))
+        .then(this._onProviderManagerInitialized.bind(this),
               this._onInitError.bind(this));
   },
 
-  _initializeCollector: function () {
+  _initializeProviderManager: function () {
     if (this._collector) {
-      throw new Error("Collector has already been initialized.");
+      throw new Error("Provider manager has already been initialized.");
     }
 
-    this._log.info("Initializing collector.");
-    this._collector = new Metrics.Collector(this._storage);
-    this._collectorInProgress = true;
+    this._log.info("Initializing provider manager.");
+    this._providerManager = new Metrics.ProviderManager(this._storage);
+    this._providerManager.onProviderError = this._recordError.bind(this);
+    this._providerManager.onProviderInit = this._initProvider.bind(this);
+    this._providerManagerInProgress = true;
 
     let catString = this._prefs.get("service.providerCategories") || "";
     if (catString.length) {
       for (let category of catString.split(",")) {
-        yield this.registerProvidersFromCategoryManager(category);
+        yield this._providerManager.registerProvidersFromCategoryManager(category);
       }
     }
   },
 
-  _onCollectorInitialized: function () {
-    TelemetryStopwatch.finish(TELEMETRY_INIT, this);
-    this._log.debug("Collector initialized.");
-    this._collectorInProgress = false;
+  _onProviderManagerInitialized: function () {
+    TelemetryStopwatch.finish(this._initHistogram, this);
+    delete this._initHistogram;
+    this._log.debug("Provider manager initialized.");
+    this._providerManagerInProgress = false;
 
     if (this._shutdownRequested) {
       this._initiateShutdown();
@@ -180,6 +203,35 @@ AbstractHealthReporter.prototype = Object.freeze({
     this._log.info("HealthReporter started.");
     this._initialized = true;
     Services.obs.addObserver(this, "idle-daily", false);
+
+    // If upload is not enabled, ensure daily collection works. If upload
+    // is enabled, this will be performed as part of upload.
+    //
+    // This is important because it ensures about:healthreport contains
+    // longitudinal data even if upload is disabled. Having about:healthreport
+    // provide useful info even if upload is disabled was a core launch
+    // requirement.
+    //
+    // We do not catch changes to the backing pref. So, if the session lasts
+    // many days, we may fail to collect. However, most sessions are short and
+    // this code will likely be refactored as part of splitting up policy to
+    // serve Android. So, meh.
+    if (!this._policy.healthReportUploadEnabled) {
+      this._log.info("Upload not enabled. Scheduling daily collection.");
+      // Since the timer manager is a singleton and there could be multiple
+      // HealthReporter instances, we need to encode a unique identifier in
+      // the timer ID.
+      try {
+        let timerName = this._branch.replace(".", "-", "g") + "lastDailyCollection";
+        let tm = Cc["@mozilla.org/updates/timer-manager;1"]
+                   .getService(Ci.nsIUpdateTimerManager);
+        tm.registerTimer(timerName, this.collectMeasurements.bind(this),
+                         24 * 60 * 60);
+      } catch (ex) {
+        this._log.error("Error registering collection timer: " +
+                        CommonUtils.exceptionStr(ex));
+      }
+    }
 
     // Clean up caches and reduce memory usage.
     this._storage.compact();
@@ -217,23 +269,30 @@ AbstractHealthReporter.prototype = Object.freeze({
     this._initialized = false;
     this._shutdownRequested = true;
 
-    if (this._collectorInProgress) {
-      this._log.warn("Collector is in progress of initializing. Waiting to finish.");
-      return;
-    }
+    if (this._initializeHadError) {
+      this._log.warn("Initialization had error. Shutting down immediately.");
+    } else {
+      if (this._providerManagerInProcess) {
+        this._log.warn("Provider manager is in progress of initializing. " +
+                       "Waiting to finish.");
+        return;
+      }
 
-    // If storage is in the process of initializing, we need to wait for it
-    // to finish before continuing. The initialization process will call us
-    // again once storage has initialized.
-    if (this._storageInProgress) {
-      this._log.warn("Storage is in progress of initializing. Waiting to finish.");
-      return;
+      // If storage is in the process of initializing, we need to wait for it
+      // to finish before continuing. The initialization process will call us
+      // again once storage has initialized.
+      if (this._storageInProgress) {
+        this._log.warn("Storage is in progress of initializing. Waiting to finish.");
+        return;
+      }
     }
 
     this._log.warn("Initiating main shutdown procedure.");
 
     // Everything from here must only be performed once or else race conditions
     // could occur.
+
+    TelemetryStopwatch.start(TELEMETRY_SHUTDOWN, this);
     this._shutdownInitiated = true;
 
     // We may not have registered the observer yet. If not, this will
@@ -242,21 +301,20 @@ AbstractHealthReporter.prototype = Object.freeze({
       Services.obs.removeObserver(this, "idle-daily");
     } catch (ex) { }
 
-    // If we have collectors, we need to shut down providers.
-    if (this._collector) {
-      let onShutdown = this._onCollectorShutdown.bind(this);
-      Task.spawn(this._shutdownCollector.bind(this))
+    if (this._providerManager) {
+      let onShutdown = this._onProviderManagerShutdown.bind(this);
+      Task.spawn(this._shutdownProviderManager.bind(this))
           .then(onShutdown, onShutdown);
       return;
     }
 
-    this._log.warn("Don't have collector. Proceeding to storage shutdown.");
+    this._log.warn("Don't have provider manager. Proceeding to storage shutdown.");
     this._shutdownStorage();
   },
 
-  _shutdownCollector: function () {
-    this._log.info("Shutting down collector.");
-    for (let provider of this._collector.providers) {
+  _shutdownProviderManager: function () {
+    this._log.info("Shutting down provider manager.");
+    for (let provider of this._providerManager.providers) {
       try {
         yield provider.shutdown();
       } catch (ex) {
@@ -266,9 +324,9 @@ AbstractHealthReporter.prototype = Object.freeze({
     }
   },
 
-  _onCollectorShutdown: function () {
-    this._log.info("Collector shut down.");
-    this._collector = null;
+  _onProviderManagerShutdown: function () {
+    this._log.info("Provider manager shut down.");
+    this._providerManager = null;
     this._shutdownStorage();
   },
 
@@ -297,6 +355,7 @@ AbstractHealthReporter.prototype = Object.freeze({
   _onShutdownComplete: function () {
     this._log.warn("Shutdown complete.");
     this._shutdownComplete = true;
+    TelemetryStopwatch.finish(TELEMETRY_SHUTDOWN, this);
 
     if (this._shutdownCompleteCallback) {
       this._shutdownCompleteCallback();
@@ -337,7 +396,7 @@ AbstractHealthReporter.prototype = Object.freeze({
     }
 
     if (this._initialized) {
-      return Promise.resolve(this);
+      return CommonUtils.laterTickResolvingPromise(this);
     }
 
     return this._initializedDeferred.promise;
@@ -365,191 +424,91 @@ AbstractHealthReporter.prototype = Object.freeze({
    * Obtain a provider from its name.
    *
    * This will only return providers that are currently initialized. If
-   * a provider is lazy initialized (like constant-only providers) this
+   * a provider is lazy initialized (like pull-only providers) this
    * will likely not return anything.
    */
   getProvider: function (name) {
-    return this._collector.getProvider(name);
+    return this._providerManager.getProvider(name);
   },
 
-  /**
-   * Register a `Metrics.Provider` with this instance.
-   *
-   * This needs to be called or no data will be collected. See also
-   * `registerProvidersFromCategoryManager`.
-   *
-   * @param provider
-   *        (Metrics.Provider) The provider to register for collection.
-   */
-  registerProvider: function (provider) {
-    return this._collector.registerProvider(provider);
-  },
-
-  /**
-   * Registers a provider from its constructor function.
-   *
-   * If the provider is constant-only, it will be stashed away and
-   * initialized later. Null will be returned.
-   *
-   * If it is not constant-only, it will be initialized immediately and a
-   * promise will be returned. The promise will be resolved when the
-   * provider has finished initializing.
-   */
-  registerProviderFromType: function (type) {
-    let proto = type.prototype;
-    if (proto.constantOnly) {
-      this._log.info("Provider is constant-only. Deferring initialization: " +
-                     proto.name);
-      this._constantOnlyProviders[proto.name] = type;
-
-      return null;
-    }
-
-    let provider = this.initProviderFromType(type);
-    return this.registerProvider(provider);
-  },
-
-  /**
-   * Registers providers from a category manager category.
-   *
-   * This examines the specified category entries and registers found
-   * providers.
-   *
-   * Category entries are essentially JS modules and the name of the symbol
-   * within that module that is a `Metrics.Provider` instance.
-   *
-   * The category entry name is the name of the JS type for the provider. The
-   * value is the resource:// URI to import which makes this type available.
-   *
-   * Example entry:
-   *
-   *   FooProvider resource://gre/modules/foo.jsm
-   *
-   * One can register entries in the application's .manifest file. e.g.
-   *
-   *   category healthreport-js-provider FooProvider resource://gre/modules/foo.jsm
-   *
-   * Then to load them:
-   *
-   *   let reporter = getHealthReporter("healthreport.");
-   *   reporter.registerProvidersFromCategoryManager("healthreport-js-provider");
-   *
-   * @param category
-   *        (string) Name of category to query and load from.
-   */
-  registerProvidersFromCategoryManager: function (category) {
-    this._log.info("Registering providers from category: " + category);
-    let cm = Cc["@mozilla.org/categorymanager;1"]
-               .getService(Ci.nsICategoryManager);
-
-    let promises = [];
-    let enumerator = cm.enumerateCategory(category);
-    while (enumerator.hasMoreElements()) {
-      let entry = enumerator.getNext()
-                            .QueryInterface(Ci.nsISupportsCString)
-                            .toString();
-
-      let uri = cm.getCategoryEntry(category, entry);
-      this._log.info("Attempting to load provider from category manager: " +
-                     entry + " from " + uri);
-
-      try {
-        let ns = {};
-        Cu.import(uri, ns);
-
-        let promise = this.registerProviderFromType(ns[entry]);
-        if (promise) {
-          promises.push(promise);
-        }
-      } catch (ex) {
-        this._log.warn("Error registering provider from category manager: " +
-                       entry + "; " + CommonUtils.exceptionStr(ex));
-        continue;
-      }
-    }
-
-    return Task.spawn(function wait() {
-      for (let promise of promises) {
-        yield promise;
-      }
-    });
-  },
-
-  initProviderFromType: function (providerType) {
-    let provider = new providerType();
-    provider.initPreferences(this._branch + "provider.");
+  _initProvider: function (provider) {
     provider.healthReporter = this;
-
-    return provider;
   },
 
   /**
-   * Ensure that constant-only providers are registered.
+   * Record an exception for reporting in the payload.
+   *
+   * A side effect is the exception is logged.
+   *
+   * Note that callers need to be extra sensitive about ensuring personal
+   * or otherwise private details do not leak into this. All of the user data
+   * on the stack in FHR code should be limited to data we were collecting with
+   * the intent to submit. So, it is covered under the user's consent to use
+   * the feature.
+   *
+   * @param message
+   *        (string) Human readable message describing error.
+   * @param ex
+   *        (Error) The error that should be captured.
    */
-  ensureConstantOnlyProvidersRegistered: function () {
-    if (this._constantOnlyProvidersRegistered) {
-      return Promise.resolve();
+  _recordError: function (message, ex) {
+    let recordMessage = message;
+    let logMessage = message;
+
+    if (ex) {
+      recordMessage += ": " + CommonUtils.exceptionStr(ex);
+      logMessage += ": " + CommonUtils.exceptionStr(ex);
     }
 
-    let onFinished = function () {
-      this._constantOnlyProvidersRegistered = true;
+    // Scrub out potentially identifying information from strings that could
+    // make the payload.
+    let appData = Services.dirsvc.get("UAppData", Ci.nsIFile);
+    let profile = Services.dirsvc.get("ProfD", Ci.nsIFile);
 
-      return Promise.resolve();
-    }.bind(this);
+    let appDataURI = Services.io.newFileURI(appData);
+    let profileURI = Services.io.newFileURI(profile);
 
-    return Task.spawn(function registerConstantProviders() {
-      for each (let providerType in this._constantOnlyProviders) {
-        try {
-          let provider = this.initProviderFromType(providerType);
-          yield this.registerProvider(provider);
-        } catch (ex) {
-          this._log.warn("Error registering constant-only provider: " +
-                         CommonUtils.exceptionStr(ex));
-        }
-      }
-    }.bind(this)).then(onFinished, onFinished);
-  },
+    // Order of operation is important here. We do the URI before the path version
+    // because the path may be a subset of the URI. We also have to check for the case
+    // where UAppData is underneath the profile directory (or vice-versa) so we
+    // don't substitute incomplete strings.
 
-  ensureConstantOnlyProvidersUnregistered: function () {
-    if (!this._constantOnlyProvidersRegistered) {
-      return Promise.resolve();
+    function replace(uri, path, thing) {
+      // Try is because .spec can throw on invalid URI.
+      try {
+        recordMessage = recordMessage.replace(uri.spec, '<' + thing + 'URI>', 'g');
+      } catch (ex) { }
+
+      recordMessage = recordMessage.replace(path, '<' + thing + 'Path>', 'g');
     }
 
-    let onFinished = function () {
-      this._constantOnlyProvidersRegistered = false;
+    if (appData.path.contains(profile.path)) {
+      replace(appDataURI, appData.path, 'AppData');
+      replace(profileURI, profile.path, 'Profile');
+    } else {
+      replace(profileURI, profile.path, 'Profile');
+      replace(appDataURI, appData.path, 'AppData');
+    }
 
-      return Promise.resolve();
-    }.bind(this);
-
-    return Task.spawn(function unregisterConstantProviders() {
-      for (let provider of this._collector.providers) {
-        if (!provider.constantOnly) {
-          continue;
-        }
-
-        this._log.info("Shutting down constant-only provider: " +
-                       provider.name);
-
-        try {
-          yield provider.shutdown();
-        } catch (ex) {
-          this._log.warn("Error when shutting down provider: " +
-                         CommonUtils.exceptionStr(ex));
-        } finally {
-          this._collector.unregisterProvider(provider.name);
-        }
-      }
-    }.bind(this)).then(onFinished, onFinished);
+    this._log.warn(logMessage);
+    this._errors.push(recordMessage);
   },
 
   /**
    * Collect all measurements for all registered providers.
    */
   collectMeasurements: function () {
+    if (!this._initialized) {
+      return Promise.reject(new Error("Not initialized."));
+    }
+
     return Task.spawn(function doCollection() {
       try {
-        yield this._collector.collectConstantData();
+        TelemetryStopwatch.start(TELEMETRY_COLLECT_CONSTANT, this);
+        yield this._providerManager.collectConstantData();
+        TelemetryStopwatch.finish(TELEMETRY_COLLECT_CONSTANT, this);
       } catch (ex) {
+        TelemetryStopwatch.cancel(TELEMETRY_COLLECT_CONSTANT, this);
         this._log.warn("Error collecting constant data: " +
                        CommonUtils.exceptionStr(ex));
       }
@@ -564,9 +523,12 @@ AbstractHealthReporter.prototype = Object.freeze({
           Date.now() - this._lastDailyDate > MILLISECONDS_PER_DAY) {
 
         try {
+          TelemetryStopwatch.start(TELEMETRY_COLLECT_DAILY, this);
           this._lastDailyDate = new Date();
-          yield this._collector.collectDailyData();
+          yield this._providerManager.collectDailyData();
+          TelemetryStopwatch.finish(TELEMETRY_COLLECT_DAILY, this);
         } catch (ex) {
+          TelemetryStopwatch.cancel(TELEMETRY_COLLECT_DAILY, this);
           this._log.warn("Error collecting daily data from providers: " +
                          CommonUtils.exceptionStr(ex));
         }
@@ -589,8 +551,12 @@ AbstractHealthReporter.prototype = Object.freeze({
    * @return Promise<Object | string>
    */
   collectAndObtainJSONPayload: function (asObject=false) {
+    if (!this._initialized) {
+      return Promise.reject(new Error("Not initialized."));
+    }
+
     return Task.spawn(function collectAndObtain() {
-      yield this.ensureConstantOnlyProvidersRegistered();
+      yield this._providerManager.ensurePullOnlyProvidersRegistered();
 
       let payload;
       let error;
@@ -600,10 +566,10 @@ AbstractHealthReporter.prototype = Object.freeze({
         payload = yield this.getJSONPayload(asObject);
       } catch (ex) {
         error = ex;
-        this._log.warn("Error collecting and/or retrieving JSON payload: " +
-                       CommonUtils.exceptionStr(ex));
+        this._collectException("Error collecting and/or retrieving JSON payload",
+                               ex);
       } finally {
-        yield this.ensureConstantOnlyProvidersUnregistered();
+        yield this._providerManager.ensurePullOnlyProvidersUnregistered();
 
         if (error) {
           throw error;
@@ -654,17 +620,13 @@ AbstractHealthReporter.prototype = Object.freeze({
     this._log.info("Producing JSON payload for " + pingDateString);
 
     let o = {
-      version: 1,
+      version: 2,
       thisPingDate: pingDateString,
+      geckoAppInfo: this.obtainAppInfo(this._log),
       data: {last: {}, days: {}},
     };
 
     let outputDataDays = o.data.days;
-
-    // We need to be careful that data in errors does not leak potentially
-    // private information.
-    // FUTURE ask Privacy if we can put exception stacks in here.
-    let errors = [];
 
     // Guard here in case we don't track this (e.g., on Android).
     let lastPingDate = this.lastPingDate;
@@ -672,85 +634,120 @@ AbstractHealthReporter.prototype = Object.freeze({
       o.lastPingDate = this._formatDate(lastPingDate);
     }
 
-    for (let provider of this._collector.providers) {
-      let providerName = provider.name;
+    // We can still generate a payload even if we're not initialized.
+    // This is to facilitate error upload on init failure.
+    if (this._initialized) {
+      for (let provider of this._providerManager.providers) {
+        let providerName = provider.name;
 
-      let providerEntry = {
-        measurements: {},
-      };
+        let providerEntry = {
+          measurements: {},
+        };
 
-      for (let [measurementKey, measurement] of provider.measurements) {
-        let name = providerName + "." + measurement.name;
+        // Measurement name to recorded version.
+        let lastVersions = {};
+        // Day string to mapping of measurement name to recorded version.
+        let dayVersions = {};
 
-        let serializer;
-        try {
-          // The measurement is responsible for returning a serializer which
-          // is aware of the measurement version.
-          serializer = measurement.serializer(measurement.SERIALIZE_JSON);
-        } catch (ex) {
-          this._log.warn("Error obtaining serializer for measurement: " + name +
-                         ": " + CommonUtils.exceptionStr(ex));
-          errors.push("Could not obtain serializer: " + name);
-          continue;
-        }
+        for (let [measurementKey, measurement] of provider.measurements) {
+          let name = providerName + "." + measurement.name;
+          let version = measurement.version;
 
-        let data;
-        try {
-          data = yield measurement.getValues();
-        } catch (ex) {
-          this._log.warn("Error obtaining data for measurement: " +
-                         name + ": " + CommonUtils.exceptionStr(ex));
-          errors.push("Could not obtain data: " + name);
-          continue;
-        }
-
-        if (data.singular.size) {
+          let serializer;
           try {
-            o.data.last[name] = serializer.singular(data.singular);
+            // The measurement is responsible for returning a serializer which
+            // is aware of the measurement version.
+            serializer = measurement.serializer(measurement.SERIALIZE_JSON);
           } catch (ex) {
-            this._log.warn("Error serializing data: " + CommonUtils.exceptionStr(ex));
-            errors.push("Error serializing singular: " + name);
+            this._recordError("Error obtaining serializer for measurement: " +
+                              name, ex);
             continue;
           }
-        }
 
-        let dataDays = data.days;
-        for (let i = 0; i < DAYS_IN_PAYLOAD; i++) {
-          let date = new Date(now.getTime() - i * MILLISECONDS_PER_DAY);
-          if (!dataDays.hasDay(date)) {
-            continue;
-          }
-          let dateFormatted = this._formatDate(date);
-
+          let data;
           try {
-            let serialized = serializer.daily(dataDays.getDay(date));
-            if (!serialized) {
+            data = yield measurement.getValues();
+          } catch (ex) {
+            this._recordError("Error obtaining data for measurement: " + name,
+                              ex);
+            continue;
+          }
+
+          if (data.singular.size) {
+            try {
+              let serialized = serializer.singular(data.singular);
+              if (serialized) {
+                // Only replace the existing data if there is no data or if our
+                // version is newer than the old one.
+                if (!(name in o.data.last) || version > lastVersions[name]) {
+                  o.data.last[name] = serialized;
+                  lastVersions[name] = version;
+                }
+              }
+            } catch (ex) {
+              this._recordError("Error serializing singular data: " + name,
+                                ex);
               continue;
             }
+          }
 
-            if (!(dateFormatted in outputDataDays)) {
-              outputDataDays[dateFormatted] = {};
+          let dataDays = data.days;
+          for (let i = 0; i < DAYS_IN_PAYLOAD; i++) {
+            let date = new Date(now.getTime() - i * MILLISECONDS_PER_DAY);
+            if (!dataDays.hasDay(date)) {
+              continue;
             }
+            let dateFormatted = this._formatDate(date);
 
-            outputDataDays[dateFormatted][name] = serialized;
-          } catch (ex) {
-            this._log.warn("Error populating data for day: " +
-                           CommonUtils.exceptionStr(ex));
-            errors.push("Could not serialize day: " + name +
-                        " ( " + dateFormatted + ")");
-            continue;
+            try {
+              let serialized = serializer.daily(dataDays.getDay(date));
+              if (!serialized) {
+                continue;
+              }
+
+              if (!(dateFormatted in outputDataDays)) {
+                outputDataDays[dateFormatted] = {};
+              }
+
+              // This needs to be separate because dayVersions is provider
+              // specific and gets blown away in a loop while outputDataDays
+              // is persistent.
+              if (!(dateFormatted in dayVersions)) {
+                dayVersions[dateFormatted] = {};
+              }
+
+              if (!(name in outputDataDays[dateFormatted]) ||
+                  version > dayVersions[dateFormatted][name]) {
+                outputDataDays[dateFormatted][name] = serialized;
+                dayVersions[dateFormatted][name] = version;
+              }
+            } catch (ex) {
+              this._recordError("Error populating data for day: " + name, ex);
+              continue;
+            }
           }
         }
       }
+    } else {
+      o.notInitialized = 1;
+      this._log.warn("Not initialized. Sending report with only error info.");
     }
 
-    if (errors.length) {
-      o.errors = errors;
+    if (this._errors.length) {
+      o.errors = this._errors.slice(0, 20);
     }
 
-    this._storage.compact();
+    if (this._initialized) {
+      this._storage.compact();
+    }
 
-    throw new Task.Result(asObject ? o : JSON.stringify(o));
+    if (!asObject) {
+      TelemetryStopwatch.start(TELEMETRY_JSON_PAYLOAD_SERIALIZE, this);
+      o = JSON.stringify(o);
+      TelemetryStopwatch.finish(TELEMETRY_JSON_PAYLOAD_SERIALIZE, this);
+    }
+
+    throw new Task.Result(o);
   },
 
   get _stateDir() {
@@ -820,7 +817,7 @@ AbstractHealthReporter.prototype = Object.freeze({
         let decoder = new TextDecoder();
         let json = JSON.parse(decoder.decode(buffer));
 
-        return Promise.resolve(json);
+        return CommonUtils.laterTickResolvingPromise(json);
       },
       function onError(error) {
         return Promise.reject(error);
@@ -830,6 +827,52 @@ AbstractHealthReporter.prototype = Object.freeze({
 
   _now: function _now() {
     return new Date();
+  },
+
+  // These are stolen from AppInfoProvider.
+  appInfoVersion: 1,
+  appInfoFields: {
+    // From nsIXULAppInfo.
+    vendor: "vendor",
+    name: "name",
+    id: "ID",
+    version: "version",
+    appBuildID: "appBuildID",
+    platformVersion: "platformVersion",
+    platformBuildID: "platformBuildID",
+
+    // From nsIXULRuntime.
+    os: "OS",
+    xpcomabi: "XPCOMABI",
+  },
+
+  /**
+   * Statically return a bundle of app info data, a subset of that produced by
+   * AppInfoProvider._populateConstants. This allows us to more usefully handle
+   * payloads that, due to error, contain no data.
+   *
+   * Returns a very sparse object if Services.appinfo is unavailable.
+   */
+  obtainAppInfo: function () {
+    let out = {"_v": this.appInfoVersion};
+    try {
+      let ai = Services.appinfo;
+      for (let [k, v] in Iterator(this.appInfoFields)) {
+        out[k] = ai[v];
+      }
+    } catch (ex) {
+      this._log.warn("Could not obtain Services.appinfo: " +
+                     CommonUtils.exceptionStr(ex));
+    }
+
+    try {
+      out["updateChannel"] = UpdateChannel.get();
+    } catch (ex) {
+      this._log.warn("Could not obtain update channel: " +
+                     CommonUtils.exceptionStr(ex));
+    }
+
+    return out;
   },
 });
 
@@ -1009,8 +1052,12 @@ HealthReporter.prototype = Object.freeze({
    * The passed argument is a `DataSubmissionRequest` from policy.jsm.
    */
   requestDataUpload: function (request) {
+    if (!this._initialized) {
+      return Promise.reject(new Error("Not initialized."));
+    }
+
     return Task.spawn(function doUpload() {
-      yield this.ensureConstantOnlyProvidersRegistered();
+      yield this._providerManager.ensurePullOnlyProvidersRegistered();
       try {
         yield this.collectMeasurements();
         try {
@@ -1019,7 +1066,7 @@ HealthReporter.prototype = Object.freeze({
           this._onSubmitDataRequestFailure(ex);
         }
       } finally {
-        yield this.ensureConstantOnlyProvidersUnregistered();
+        yield this._providerManager.ensurePullOnlyProvidersUnregistered();
       }
     }.bind(this));
   },
@@ -1040,10 +1087,48 @@ HealthReporter.prototype = Object.freeze({
     return this._policy.deleteRemoteData(reason);
   },
 
+  /**
+   * Override default handler to incur an upload describing the error.
+   */
+  _onInitError: function (error) {
+    // Need to capture this before we call the parent else it's always
+    // set.
+    let inShutdown = this._shutdownRequested;
+
+    let result;
+    try {
+      result = AbstractHealthReporter.prototype._onInitError.call(this, error);
+    } catch (ex) {
+      this._log.error("Error when calling _onInitError: " +
+                      CommonUtils.exceptionStr(ex));
+    }
+
+    // This bypasses a lot of the checks in policy, such as respect for
+    // backoff. We should arguably not do this. However, reporting
+    // startup errors is important. And, they should not occur with much
+    // frequency in the wild. So, it shouldn't be too big of a deal.
+    if (!inShutdown &&
+        this._policy.ensureNotifyResponse(new Date()) &&
+        this._policy.healthReportUploadEnabled) {
+      // We don't care about what happens to this request. It's best
+      // effort.
+      let request = {
+        onNoDataAvailable: function () {},
+        onSubmissionSuccess: function () {},
+        onSubmissionFailureSoft: function () {},
+        onSubmissionFailureHard: function () {},
+      };
+
+      this._uploadData(request);
+    }
+
+    return result;
+  },
+
   _onBagheeraResult: function (request, isDelete, result) {
     this._log.debug("Received Bagheera result.");
 
-    let promise = Promise.resolve(null);
+    let promise = CommonUtils.laterTickResolvingPromise(null);
 
     if (!result.transportSuccess) {
       request.onSubmissionFailureSoft("Network transport error.");
@@ -1066,6 +1151,16 @@ HealthReporter.prototype = Object.freeze({
 
     request.onSubmissionSuccess(now);
 
+#ifdef PRERELEASE_BUILD
+    // Intended to be temporary until we a) assess the impact b) bug 846133
+    // deploys more robust storage for state.
+    try {
+      Services.prefs.savePrefFile(null);
+    } catch (ex) {
+      this._log.warn("Error forcing prefs save: " + CommonUtils.exceptionStr(ex));
+    }
+#endif
+
     return promise;
   },
 
@@ -1079,7 +1174,6 @@ HealthReporter.prototype = Object.freeze({
     return date.toISOString().substr(0, 10);
   },
 
-
   _uploadData: function (request) {
     let id = CommonUtils.generateUUID();
 
@@ -1090,7 +1184,7 @@ HealthReporter.prototype = Object.freeze({
     return Task.spawn(function doUpload() {
       let payload = yield this.getJSONPayload();
 
-      let histogram = Services.telemetry.getHistogramById(TELEMETRY_PAYLOAD_SIZE);
+      let histogram = Services.telemetry.getHistogramById(TELEMETRY_PAYLOAD_SIZE_UNCOMPRESSED);
       histogram.add(payload.length);
 
       TelemetryStopwatch.start(TELEMETRY_SAVE_LAST_PAYLOAD, this);
@@ -1105,8 +1199,12 @@ HealthReporter.prototype = Object.freeze({
       TelemetryStopwatch.start(TELEMETRY_UPLOAD, this);
       let result;
       try {
+        let options = {
+          deleteID: this.lastSubmitID,
+          telemetryCompressed: TELEMETRY_PAYLOAD_SIZE_COMPRESSED,
+        };
         result = yield client.uploadJSON(this.serverNamespace, id, payload,
-                                         this.lastSubmitID);
+                                         options);
         TelemetryStopwatch.finish(TELEMETRY_UPLOAD, this);
       } catch (ex) {
         TelemetryStopwatch.cancel(TELEMETRY_UPLOAD, this);

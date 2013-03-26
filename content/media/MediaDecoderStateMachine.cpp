@@ -15,7 +15,7 @@
 #include "MediaDecoderReader.h"
 #include "mozilla/mozalloc.h"
 #include "VideoUtils.h"
-#include "nsTimeRanges.h"
+#include "mozilla/dom/TimeRanges.h"
 #include "nsDeque.h"
 #include "AudioSegment.h"
 #include "VideoSegment.h"
@@ -986,7 +986,6 @@ void MediaDecoderStateMachine::AudioLoop()
   bool setPlaybackRate;
   bool preservesPitch;
   bool setPreservesPitch;
-  int32_t minWriteFrames = -1;
   AudioChannelType audioChannelType;
 
   {
@@ -1010,11 +1009,15 @@ void MediaDecoderStateMachine::AudioLoop()
     nsAutoPtr<AudioStream> audioStream(AudioStream::AllocateStream());
     audioStream->Init(channels, rate, audioChannelType);
     audioStream->SetVolume(volume);
-    audioStream->SetPreservesPitch(preservesPitch);
+    if (audioStream->SetPreservesPitch(preservesPitch) != NS_OK) {
+      NS_WARNING("Setting the pitch preservation failed at AudioLoop start.");
+    }
     if (playbackRate != 1.0) {
       NS_ASSERTION(playbackRate != 0,
                    "Don't set the playbackRate to 0 on an AudioStream.");
-      audioStream->SetPlaybackRate(playbackRate);
+      if (audioStream->SetPlaybackRate(playbackRate) != NS_OK) {
+        NS_WARNING("Setting the playback rate failed at AudioLoop start.");
+      }
     }
 
     {
@@ -1076,13 +1079,14 @@ void MediaDecoderStateMachine::AudioLoop()
     if (setPlaybackRate) {
       NS_ASSERTION(playbackRate != 0,
                    "Don't set the playbackRate to 0 in the AudioStreams");
-      mAudioStream->SetPlaybackRate(playbackRate);
+      if (mAudioStream->SetPlaybackRate(playbackRate) != NS_OK) {
+        NS_WARNING("Setting the playback rate failed in AudioLoop.");
+      }
     }
     if (setPreservesPitch) {
-      mAudioStream->SetPreservesPitch(preservesPitch);
-    }
-    if (minWriteFrames == -1) {
-      minWriteFrames = mAudioStream->GetMinWriteSize();
+      if (mAudioStream->SetPreservesPitch(preservesPitch) != NS_OK) {
+        NS_WARNING("Setting the pitch preservation failed in AudioLoop.");
+      }
     }
     NS_ASSERTION(mReader->AudioQueue().GetSize() > 0,
                  "Should have data to play");
@@ -1141,23 +1145,6 @@ void MediaDecoderStateMachine::AudioLoop()
       // before the audio thread terminates.
       bool seeking = false;
       {
-        int64_t unplayedFrames = audioDuration % minWriteFrames;
-        if (minWriteFrames > 1 && unplayedFrames > 0) {
-          // Sound is written by libsydneyaudio to the hardware in blocks of
-          // frames of size minWriteFrames. So if the number of frames we've
-          // written isn't an exact multiple of minWriteFrames, we'll have
-          // left over audio data which hasn't yet been written to the hardware,
-          // and so that audio will not start playing. Write silence to ensure
-          // the last block gets pushed to hardware, so that playback starts.
-          int64_t framesToWrite = minWriteFrames - unplayedFrames;
-          if (framesToWrite < UINT32_MAX / channels) {
-            // Write silence manually rather than using PlaySilence(), so that
-            // the AudioAPI doesn't get a copy of the audio frames.
-            ReentrantMonitorAutoExit exit(mDecoder->GetReentrantMonitor());
-            WriteSilence(mAudioStream, framesToWrite);
-          }
-        }
-
         int64_t oldPosition = -1;
         int64_t position = GetMediaTime();
         while (oldPosition != position &&
@@ -1514,7 +1501,7 @@ void MediaDecoderStateMachine::NotifyDataArrived(const char* aBuffer,
   // faster than played, mEndTime won't reflect the end of playable data
   // since we haven't played the frame at the end of buffered data. So update
   // mEndTime here as new data is downloaded to prevent such a lag.
-  nsTimeRanges buffered;
+  TimeRanges buffered;
   if (mDecoder->IsInfinite() &&
       NS_SUCCEEDED(mDecoder->GetBuffered(&buffered)))
   {
@@ -1560,7 +1547,7 @@ void MediaDecoderStateMachine::Seek(double aTime)
   NS_ASSERTION(mEndTime != -1, "Should know end time by now");
   mSeekTime = std::min(mSeekTime, mEndTime);
   mSeekTime = std::max(mStartTime, mSeekTime);
-  mBasePosition = mSeekTime;
+  mBasePosition = mSeekTime - mStartTime;
   LOG(PR_LOG_DEBUG, ("%p Changed state to SEEKING (to %f)", mDecoder.get(), aTime));
   mState = DECODER_STATE_SEEKING;
   if (mDecoder->GetDecodedStream()) {
@@ -1760,7 +1747,7 @@ int64_t MediaDecoderStateMachine::GetUndecodedData() const
   mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
   NS_ASSERTION(mState > DECODER_STATE_DECODING_METADATA,
                "Must have loaded metadata for GetBuffered() to work");
-  nsTimeRanges buffered;
+  TimeRanges buffered;
   
   nsresult res = mDecoder->GetBuffered(&buffered);
   NS_ENSURE_SUCCESS(res, 0);
@@ -2587,7 +2574,7 @@ void MediaDecoderStateMachine::StartBuffering()
     stats.mDownloadRate/1024, stats.mDownloadRateReliable ? "" : " (unreliable)"));
 }
 
-nsresult MediaDecoderStateMachine::GetBuffered(nsTimeRanges* aBuffered) {
+nsresult MediaDecoderStateMachine::GetBuffered(TimeRanges* aBuffered) {
   MediaResource* resource = mDecoder->GetResource();
   NS_ENSURE_TRUE(resource, NS_ERROR_FAILURE);
   resource->Pin();
@@ -2758,6 +2745,12 @@ void MediaDecoderStateMachine::SetPlaybackRate(double aPlaybackRate)
       "PlaybackRate == 0 should be handled before this function.");
   ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
 
+  // We don't currently support more than two channels when changing playback
+  // rate.
+  if (mAudioStream && mAudioStream->GetChannels() > 2) {
+    return;
+  }
+
   if (mPlaybackRate == aPlaybackRate) {
     return;
   }
@@ -2766,11 +2759,11 @@ void MediaDecoderStateMachine::SetPlaybackRate(double aPlaybackRate)
   if (!HasAudio()) {
     // mBasePosition is a position in the video stream, not an absolute time.
     if (mState == DECODER_STATE_SEEKING) {
-      mBasePosition = mSeekTime;
+      mBasePosition = mSeekTime - mStartTime;
     } else {
       mBasePosition = GetVideoStreamPosition();
     }
-    mPlayDuration = mBasePosition - mStartTime;
+    mPlayDuration = mBasePosition;
     mResetPlayStartTime = true;
     mPlayStartTime = TimeStamp::Now();
   }

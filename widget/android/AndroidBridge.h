@@ -17,7 +17,6 @@
 #include "nsIObserver.h"
 #include "nsThreadUtils.h"
 
-#include "AndroidLayerViewWrapper.h"
 #include "AndroidJavaWrappers.h"
 
 #include "nsIMutableArray.h"
@@ -26,7 +25,7 @@
 #include "gfxRect.h"
 
 #include "nsIAndroidBridge.h"
-#include "nsISmsRequest.h"
+#include "nsIMobileMessageCallback.h"
 
 #include "mozilla/Likely.h"
 #include "mozilla/StaticPtr.h"
@@ -55,6 +54,8 @@ namespace base {
 class Thread;
 } // end namespace base
 
+typedef void* EGLSurface;
+
 namespace mozilla {
 
 namespace hal {
@@ -63,10 +64,10 @@ class NetworkInformation;
 } // namespace hal
 
 namespace dom {
-namespace sms {
+namespace mobilemessage {
 struct SmsFilterData;
 struct SmsSegmentInfoData;
-} // namespace sms
+} // namespace mobilemessage
 } // namespace dom
 
 namespace layers {
@@ -102,10 +103,9 @@ class AndroidBridge
 {
 public:
     enum {
-        NOTIFY_IME_RESETINPUTSTATE = 0,
-        NOTIFY_IME_REPLY_EVENT = 1,
-        NOTIFY_IME_CANCELCOMPOSITION = 2,
-        NOTIFY_IME_FOCUSCHANGE = 3
+        // Values for NotifyIME, in addition to values from the Gecko
+        // NotificationToIME enum; use negative values here to prevent conflict
+        NOTIFY_IME_REPLY_EVENT = -1,
     };
 
     enum {
@@ -151,9 +151,9 @@ public:
     bool SetMainThread(void *thr);
 
     /* These are all implemented in Java */
-    static void NotifyIME(int aType, int aState);
+    static void NotifyIME(int aType);
 
-    static void NotifyIMEEnabled(int aState, const nsAString& aTypeHint,
+    static void NotifyIMEContext(int aState, const nsAString& aTypeHint,
                                  const nsAString& aModeHint, const nsAString& aActionHint);
 
     static void NotifyIMEChange(const PRUnichar *aText, uint32_t aTextLen, int aStart, int aEnd, int aNewEnd);
@@ -164,7 +164,7 @@ public:
 
     bool ProgressiveUpdateCallback(bool aHasPendingNewThebesContent, const gfx::Rect& aDisplayPort, float aDisplayResolution, bool aDrawingCritical, gfx::Rect& aViewport, float& aScaleX, float& aScaleY);
 
-    void AcknowledgeEventSync();
+    void AcknowledgeEvent();
 
     void EnableLocation(bool aEnable);
     void EnableLocationHighAccuracy(bool aEnable);
@@ -179,9 +179,6 @@ public:
 
     void SetLayerClient(JNIEnv* env, jobject jobj);
     AndroidGeckoLayerClient &GetLayerClient() { return *mLayerClient; }
-
-    void SetSurfaceView(jobject jobj);
-    AndroidGeckoSurfaceView& SurfaceView() { return mSurfaceView; }
 
     bool GetHandlersForURL(const char *aURL, 
                              nsIMutableArray* handlersArray = nullptr,
@@ -224,7 +221,7 @@ public:
                                            int64_t aProgressMax,
                                            const nsAString& aAlertText);
 
-    void AlertsProgressListener_OnCancel(const nsAString& aAlertName);
+    void CloseNotification(const nsAString& aAlertName);
 
     int GetDPI();
 
@@ -257,12 +254,9 @@ public:
 
     bool GetShowPasswordSetting();
 
-    /* See GLHelpers.java as to why this is needed */
-    void *CallEglCreateWindowSurface(void *dpy, void *config, AndroidGeckoSurfaceView& surfaceView);
-
     // Switch Java to composite with the Gecko Compositor thread
-    void RegisterCompositor(JNIEnv* env = NULL, bool resetting = false);
-    EGLSurface ProvideEGLSurface(bool waitUntilValid);
+    void RegisterCompositor(JNIEnv* env = NULL);
+    EGLSurface ProvideEGLSurface();
 
     bool GetStaticStringField(const char *classID, const char *field, nsAString &result, JNIEnv* env = nullptr);
 
@@ -302,8 +296,6 @@ public:
     void *AcquireNativeWindowFromSurfaceTexture(JNIEnv* aEnv, jobject aSurface);
     void ReleaseNativeWindowForSurfaceTexture(void *window);
 
-    bool SetNativeWindowFormat(void *window, int width, int height, int format);
-
     bool LockWindow(void *window, unsigned char **bits, int *width, int *height, int *format, int *stride);
     bool UnlockWindow(void *window);
     
@@ -311,6 +303,7 @@ public:
 
     void CheckURIVisited(const nsAString& uri);
     void MarkURIVisited(const nsAString& uri);
+    void SetURITitle(const nsAString& uri, const nsAString& title);
 
     bool InitCamera(const nsCString& contentType, uint32_t camera, uint32_t *width, uint32_t *height, uint32_t *fps);
 
@@ -320,14 +313,17 @@ public:
     void DisableBatteryNotifications();
     void GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo);
 
-    nsresult GetSegmentInfoForText(const nsAString& aText, dom::sms::SmsSegmentInfoData* aData);
-    void SendMessage(const nsAString& aNumber, const nsAString& aText, nsISmsRequest* aRequest);
-    void GetMessage(int32_t aMessageId, nsISmsRequest* aRequest);
-    void DeleteMessage(int32_t aMessageId, nsISmsRequest* aRequest);
-    void CreateMessageList(const dom::sms::SmsFilterData& aFilter, bool aReverse, nsISmsRequest* aRequest);
-    void GetNextMessageInList(int32_t aListId, nsISmsRequest* aRequest);
+    nsresult GetSegmentInfoForText(const nsAString& aText,
+                                   dom::mobilemessage::SmsSegmentInfoData* aData);
+    void SendMessage(const nsAString& aNumber, const nsAString& aText,
+                     nsIMobileMessageCallback* aRequest);
+    void GetMessage(int32_t aMessageId, nsIMobileMessageCallback* aRequest);
+    void DeleteMessage(int32_t aMessageId, nsIMobileMessageCallback* aRequest);
+    void CreateMessageList(const dom::mobilemessage::SmsFilterData& aFilter,
+                           bool aReverse, nsIMobileMessageCallback* aRequest);
+    void GetNextMessageInList(int32_t aListId, nsIMobileMessageCallback* aRequest);
     void ClearMessageList(int32_t aListId);
-    already_AddRefed<nsISmsRequest> DequeueSmsRequest(uint32_t aRequestId);
+    already_AddRefed<nsIMobileMessageCallback> DequeueSmsRequest(uint32_t aRequestId);
 
     bool IsTablet();
 
@@ -338,7 +334,8 @@ public:
     void SetFirstPaintViewport(const nsIntPoint& aOffset, float aZoom, const nsIntRect& aPageRect, const gfx::Rect& aCssPageRect);
     void SetPageRect(const gfx::Rect& aCssPageRect);
     void SyncViewportInfo(const nsIntRect& aDisplayPort, float aDisplayResolution, bool aLayersUpdated,
-                          nsIntPoint& aScrollOffset, float& aScaleX, float& aScaleY);
+                          nsIntPoint& aScrollOffset, float& aScaleX, float& aScaleY,
+                          gfx::Margin& aFixedLayerMargins);
 
     void AddPluginView(jobject view, const gfxRect& rect, bool isFullScreen);
     void RemovePluginView(jobject view, bool isFullScreen);
@@ -372,7 +369,7 @@ public:
                             nsACString & aResult);
 protected:
     static AndroidBridge *sBridge;
-    static StaticAutoPtr<nsTArray<nsCOMPtr<nsISmsRequest> > > sSmsRequests;
+    static StaticAutoPtr<nsTArray<nsCOMPtr<nsIMobileMessageCallback> > > sSmsRequests;
 
     // the global JavaVM
     JavaVM *mJavaVM;
@@ -380,9 +377,6 @@ protected:
     // the JNIEnv for the main thread
     JNIEnv *mJNIEnv;
     void *mThread;
-
-    // the GeckoSurfaceView
-    AndroidGeckoSurfaceView mSurfaceView;
 
     AndroidGeckoLayerClient *mLayerClient;
 
@@ -406,13 +400,13 @@ protected:
 
     int mAPIVersion;
 
-    bool QueueSmsRequest(nsISmsRequest* aRequest, uint32_t* aRequestIdOut);
+    bool QueueSmsRequest(nsIMobileMessageCallback* aRequest, uint32_t* aRequestIdOut);
 
     // other things
     jmethodID jNotifyIME;
-    jmethodID jNotifyIMEEnabled;
+    jmethodID jNotifyIMEContext;
     jmethodID jNotifyIMEChange;
-    jmethodID jAcknowledgeEventSync;
+    jmethodID jAcknowledgeEvent;
     jmethodID jEnableLocation;
     jmethodID jEnableLocationHighAccuracy;
     jmethodID jEnableSensor;
@@ -436,7 +430,7 @@ protected:
     jmethodID jUnlockProfile;
     jmethodID jKillAnyZombies;
     jmethodID jAlertsProgressListener_OnProgress;
-    jmethodID jAlertsProgressListener_OnCancel;
+    jmethodID jCloseNotification;
     jmethodID jGetDpi;
     jmethodID jSetFullScreen;
     jmethodID jShowInputMethodPicker;
@@ -465,6 +459,7 @@ protected:
     jmethodID jHandleGeckoMessage;
     jmethodID jCheckUriVisited;
     jmethodID jMarkUriVisited;
+    jmethodID jSetUriTitle;
     jmethodID jAddPluginView;
     jmethodID jRemovePluginView;
     jmethodID jCreateSurface;
@@ -505,16 +500,10 @@ protected:
     jclass jSurfaceClass;
     jfieldID jSurfacePointerField;
 
-    // stuff we need for CallEglCreateWindowSurface
-    jclass jEGLSurfaceImplClass;
-    jclass jEGLContextImplClass;
-    jclass jEGLConfigImplClass;
-    jclass jEGLDisplayImplClass;
-    jclass jEGLContextClass;
-    jclass jEGL10Class;
-
     jclass jLayerView;
-    jmethodID jRegisterCompositorMethod;
+    jmethodID jProvideEGLSurfaceMethod;
+    jfieldID jEGLSurfacePointerField;
+    jobject mGLControllerObj;
 
     // some convinient types to have around
     jclass jStringClass;

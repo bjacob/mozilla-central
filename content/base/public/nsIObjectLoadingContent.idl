@@ -20,9 +20,12 @@ interface nsIURI;
 
 /**
  * This interface represents a content node that loads objects.
+ *
+ * Please make sure to update the MozObjectLoadingContent WebIDL
+ * interface to mirror this interface when changing it.
  */
 
-[scriptable, uuid(e9102696-4bb4-4a98-a31f-be9da5a3d18e)]
+[scriptable, uuid(e2ef99fe-f7d3-422f-a7b4-834e8bdde710)]
 interface nsIObjectLoadingContent : nsISupports
 {
   /**
@@ -98,8 +101,6 @@ interface nsIObjectLoadingContent : nsISupports
    */
   [noscript] void hasNewFrame(in nsIObjectFrame aFrame);
 
-  [noscript] void disconnectFrame();
-
   /**
    * If this object is in going to be printed, this method
    * returns the nsIObjectFrame object which should be used when
@@ -108,6 +109,10 @@ interface nsIObjectLoadingContent : nsISupports
    */
   [noscript] nsIFrame getPrintFrame();
 
+  /*
+   * Notifications from pluginhost that our instance crashed or was destroyed.
+   */
+  [noscript] void pluginDestroyed();
   [noscript] void pluginCrashed(in nsIPluginTag pluginTag,
                                 in AString pluginDumpID,
                                 in AString browserDumpID,
@@ -161,6 +166,12 @@ interface nsIObjectLoadingContent : nsISupports
   readonly attribute nsIURI srcURI;
 
   readonly attribute unsigned long pluginFallbackType;
+
+  /**
+   * If this object currently owns a running plugin, regardless of whether or
+   * not one is pending spawn/despawn.
+   */
+  readonly attribute bool hasRunningPlugin;
 
   /**
    * This method will disable the play-preview plugin state.

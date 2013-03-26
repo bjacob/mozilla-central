@@ -20,15 +20,13 @@ JSObject * const UNSET_BUFFER_LINK = (JSObject*)0x2;
 inline void
 js::ArrayBufferObject::setElementsHeader(js::ObjectElements *header, uint32_t bytes)
 {
-    /*
-     * Note that |bytes| may not be a multiple of |sizeof(Value)|, so
-     * |capacity * sizeof(Value)| may underestimate the size by up to
-     * |sizeof(Value) - 1| bytes.
-     */
-    header->capacity = bytes / sizeof(js::Value);
+    header->flags = 0;
     header->initializedLength = bytes;
+
+    // NB: one or both of these fields is clobbered by GetViewList to store the
+    // 'views' link. Set them to 0 to effectively initialize 'views' to NULL.
     header->length = 0;
-    header->convertDoubleElements = 0;
+    header->capacity = 0;
 }
 
 inline uint32_t
@@ -64,6 +62,12 @@ inline bool
 ArrayBufferObject::hasData() const
 {
     return getClass() == &ArrayBufferClass;
+}
+
+inline bool
+ArrayBufferObject::isAsmJSArrayBuffer() const
+{
+    return getElementsHeader()->isAsmJSArrayBuffer();
 }
 
 static inline int32_t
@@ -205,7 +209,7 @@ InitTypedArrayDataPointer(JSObject *obj, ArrayBufferObject *buffer, size_t byteO
      */
     obj->initPrivate(buffer->dataPointer() + byteOffset);
 #ifdef JSGC_GENERATIONAL
-    if (obj->runtime()->gcNursery.isInside(buffer))
+    if (IsInsideNursery(obj->runtime(), buffer))
         obj->runtime()->gcStoreBuffer.putGeneric(TypedArrayPrivateRef(obj, buffer, byteOffset));
 #endif
 }
@@ -213,10 +217,12 @@ InitTypedArrayDataPointer(JSObject *obj, ArrayBufferObject *buffer, size_t byteO
 static NewObjectKind
 DataViewNewObjectKind(JSContext *cx, uint32_t byteLength, JSObject *proto)
 {
-    jsbytecode *pc;
-    JSScript *script = cx->stack.currentScript(&pc);
     if (!proto && byteLength >= TypedArray::SINGLETON_TYPE_BYTE_LENGTH)
         return SingletonObject;
+    jsbytecode *pc;
+    JSScript *script = cx->stack.currentScript(&pc);
+    if (!script)
+        return GenericObject;
     return types::UseNewTypeForInitializer(cx, script, pc, &DataViewClass);
 }
 

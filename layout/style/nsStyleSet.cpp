@@ -12,7 +12,6 @@
 #include "mozilla/Util.h"
 
 #include "nsStyleSet.h"
-#include "nsNetUtil.h"
 #include "nsCSSStyleSheet.h"
 #include "nsIDocumentInlines.h"
 #include "nsRuleWalker.h"
@@ -30,7 +29,7 @@
 #include "nsEventStates.h"
 #include "nsStyleSheetService.h"
 #include "mozilla/dom/Element.h"
-#include "sampler.h"
+#include "GeckoProfiler.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -767,13 +766,14 @@ nsStyleSet::GetContext(nsStyleContext* aParentContext,
 
   if (!result) {
     result = NS_NewStyleContext(aParentContext, aPseudoTag, aPseudoType,
-                                aRuleNode);
+                                aRuleNode, aFlags & eSkipFlexItemStyleFixup);
     if (!result)
       return nullptr;
     if (aVisitedRuleNode) {
       nsRefPtr<nsStyleContext> resultIfVisited =
         NS_NewStyleContext(parentIfVisited, aPseudoTag, aPseudoType,
-                           aVisitedRuleNode);
+                           aVisitedRuleNode,
+                           aFlags & eSkipFlexItemStyleFixup);
       if (!resultIfVisited) {
         return nullptr;
       }
@@ -910,7 +910,7 @@ nsStyleSet::FileRules(nsIStyleRuleProcessor::EnumFunc aCollectorFunc,
                       RuleProcessorData* aData, Element* aElement,
                       nsRuleWalker* aRuleWalker)
 {
-  SAMPLE_LABEL("nsStyleSet", "FileRules");
+  PROFILER_LABEL("nsStyleSet", "FileRules");
 
   // Cascading order:
   // [least important]
@@ -1174,6 +1174,9 @@ nsStyleSet::ResolveStyleFor(Element* aElement,
                             HasState(NS_EVENT_STATE_VISITED)) {
     flags |= eIsVisitedLink;
   }
+  if (aTreeMatchContext.mSkippingFlexItemStyleFixup) {
+    flags |= eSkipFlexItemStyleFixup;
+  }
 
   return GetContext(aParentContext, ruleNode, visitedRuleNode,
                     nullptr, nsCSSPseudoElements::ePseudo_NotPseudoElement,
@@ -1319,7 +1322,10 @@ nsStyleSet::ResolvePseudoElementStyle(Element* aParentElement,
 
   // For pseudos, |data.IsLink()| being true means that
   // our parent node is a link.
-  uint32_t flags = eNoFlags;
+  // Also: Flex containers shouldn't have pseudo-elements, so given that we're
+  // looking up pseudo-element style, make sure we're not treating our node as
+  // a flex item.
+  uint32_t flags = eSkipFlexItemStyleFixup;
   if (aType == nsCSSPseudoElements::ePseudo_before ||
       aType == nsCSSPseudoElements::ePseudo_after) {
     flags |= eDoAnimation;
@@ -1382,7 +1388,10 @@ nsStyleSet::ProbePseudoElementStyle(Element* aParentElement,
 
   // For pseudos, |data.IsLink()| being true means that
   // our parent node is a link.
-  uint32_t flags = eNoFlags;
+  // Also: Flex containers shouldn't have pseudo-elements, so given that we're
+  // looking up pseudo-element style, make sure we're not treating our node as
+  // a flex item.
+  uint32_t flags = eSkipFlexItemStyleFixup;
   if (aType == nsCSSPseudoElements::ePseudo_before ||
       aType == nsCSSPseudoElements::ePseudo_after) {
     flags |= eDoAnimation;

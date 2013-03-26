@@ -11,13 +11,6 @@ relativesrcdir  = @relativesrcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
-DIRS += \
-  chrome \
-  websocket_hybi \
-  $(NULL)
-
-MODULE = content
-
 CPP_UNIT_TESTS = \
                  TestNativeXMLHttpRequest.cpp \
                  TestGetURL.cpp \
@@ -43,8 +36,6 @@ MOCHITEST_FILES_A = \
 		test_bug166235.html \
 		test_bug199959.html \
 		test_bug218236.html \
-		file_bug218236_multipart.txt \
-		file_bug218236_multipart.txt^headers^ \
 		test_bug218277.html \
 		test_bug238409.html \
 		test_bug254337.html \
@@ -113,8 +104,6 @@ MOCHITEST_FILES_A = \
 		file_bug326337_inner.html \
 		file_bug326337_outer.html \
 		file_bug326337.xml \
-		file_bug326337_multipart.txt \
-		file_bug326337_multipart.txt^headers^ \
 		test_bug333198.html \
 		test_bug402150.html \
 		test_bug402150.html^headers^ \
@@ -212,9 +201,6 @@ MOCHITEST_FILES_A = \
 		test_bug28293.html \
 		test_bug28293.xhtml \
 		file_bug28293.sjs \
-		test_bug445225.html \
-		file_bug445225_multipart.txt \
-		file_bug445225_multipart.txt^headers^ \
 		test_title.html \
 		test_bug453521.html \
 		test_bug454325.html \
@@ -556,9 +542,6 @@ MOCHITEST_FILES_C= \
 		test_bug708620.html \
 		file_bug708620.html \
 		file_bug708620-2.html \
-		test_XHR_timeout.html \
-		test_XHR_timeout.js \
-		file_XHR_timeout.sjs \
 		test_bug717511.html \
 		file_bug717511.html \
 		file_bug717511.html^headers^ \
@@ -599,6 +582,7 @@ MOCHITEST_FILES_C= \
 		test_bug761120.html \
 		test_bug787778.html \
 		file_bug787778.sjs \
+		test_xbl_userdata.xhtml \
 		test_XHR_onuploadprogress.html \
 		test_XHR_anon.html \
 		file_XHR_anon.sjs \
@@ -613,15 +597,6 @@ MOCHITEST_FILES_C= \
     test_mixed_content_blocker_bug803225.html \
     file_mixed_content_main_bug803225.html \
     file_mixed_content_main_bug803225_websocket_wsh.py \
-    file_bug822367_1.html \
-    file_bug822367_1.js \
-    file_bug822367_2.html \
-    file_bug822367_3.html \
-    file_bug822367_4.html \
-    file_bug822367_4.js \
-    file_bug822367_4B.html \
-    file_bug822367_5.html \
-    file_bug822367_6.html \
     bug803225_test_mailto.html \
 		test_bug789856.html \
 		file_bug804395.jar \
@@ -641,6 +616,7 @@ MOCHITEST_FILES_C= \
 		file_bothCSPheaders.html^headers^ \
 		badMessageEvent2.eventsource \
 		badMessageEvent2.eventsource^headers^ \
+		test_object.html \
 		$(NULL)
 
 # OOP tests don't work on Windows (bug 763081) or native-fennec
@@ -675,6 +651,11 @@ MOCHITEST_FILES_PARTS = $(foreach s,A B C,MOCHITEST_FILES_$(s))
 # Disabled due to making the harness time out
 #		test_bug503473.html \
 #		file_bug503473-frame.sjs \
+
+# Disabled for frequent failures (bug 841505, bug 842344, etc)
+#		test_XHR_timeout.html \
+#		test_XHR_timeout.js \
+#		file_XHR_timeout.sjs \
 
 MOCHITEST_BROWSER_FILES = \
 		browser_bug593387.js \

@@ -9,6 +9,9 @@ generated_webidl_files = \
   $(NULL)
 
 webidl_files = \
+  AnimationEvent.webidl \
+  ArchiveReader.webidl \
+  ArchiveRequest.webidl \
   AudioBuffer.webidl \
   AudioBufferSourceNode.webidl \
   AudioContext.webidl \
@@ -25,19 +28,24 @@ webidl_files = \
   CDATASection.webidl \
   CFStateChangeEvent.webidl \
   CharacterData.webidl \
+  ClientRect.webidl \
   ClientRectList.webidl \
+  CommandEvent.webidl \
   Comment.webidl \
   CSS.webidl \
   CSSPrimitiveValue.webidl \
   CSSStyleDeclaration.webidl \
+  CSSStyleSheet.webidl \
   CSSValue.webidl \
   CSSValueList.webidl \
   DelayNode.webidl \
   Document.webidl \
   DocumentFragment.webidl \
   DocumentType.webidl \
+  DOMCursor.webidl \
   DOMImplementation.webidl \
   DOMParser.webidl \
+  DOMRequest.webidl \
   DOMSettableTokenList.webidl \
   DOMStringMap.webidl \
   DOMTokenList.webidl \
@@ -45,6 +53,7 @@ webidl_files = \
   DummyBinding.webidl \
   DynamicsCompressorNode.webidl \
   Element.webidl \
+  Event.webidl \
   EventHandler.webidl \
   EventListener.webidl \
   EventSource.webidl \
@@ -53,40 +62,52 @@ webidl_files = \
   FileHandle.webidl \
   FileList.webidl \
   FileReaderSync.webidl \
+  FileRequest.webidl \
   FormData.webidl \
   Function.webidl \
   GainNode.webidl \
   HTMLAnchorElement.webidl \
+  HTMLAppletElement.webidl \
   HTMLAreaElement.webidl \
+  HTMLAudioElement.webidl \
   HTMLBaseElement.webidl \
   HTMLBodyElement.webidl \
   HTMLBRElement.webidl \
   HTMLButtonElement.webidl \
   HTMLCollection.webidl \
+  HTMLDataElement.webidl \
   HTMLDataListElement.webidl \
   HTMLDirectoryElement.webidl \
   HTMLDivElement.webidl \
   HTMLDListElement.webidl \
   HTMLDocument.webidl \
   HTMLElement.webidl \
+  HTMLEmbedElement.webidl \
   HTMLFieldSetElement.webidl \
   HTMLFontElement.webidl \
+  HTMLFrameElement.webidl \
   HTMLFrameSetElement.webidl \
   HTMLHeadElement.webidl \
   HTMLHeadingElement.webidl \
   HTMLHRElement.webidl \
   HTMLHtmlElement.webidl \
+  HTMLIFrameElement.webidl \
   HTMLImageElement.webidl \
   HTMLLabelElement.webidl \
   HTMLLegendElement.webidl \
   HTMLLIElement.webidl \
   HTMLLinkElement.webidl \
   HTMLMapElement.webidl \
+  HTMLMediaElement.webidl \
+  HTMLMenuElement.webidl \
+  HTMLMenuItemElement.webidl \
   HTMLMetaElement.webidl \
   HTMLMeterElement.webidl \
   HTMLModElement.webidl \
+  HTMLObjectElement.webidl \
   HTMLOListElement.webidl \
   HTMLOptGroupElement.webidl \
+  HTMLOptionElement.webidl \
   HTMLOptionsCollection.webidl \
   HTMLOutputElement.webidl \
   HTMLParagraphElement.webidl \
@@ -104,17 +125,29 @@ webidl_files = \
   HTMLTableElement.webidl \
   HTMLTableRowElement.webidl \
   HTMLTableSectionElement.webidl \
+  HTMLTemplateElement.webidl \
+  HTMLTextAreaElement.webidl \
+  HTMLTimeElement.webidl \
   HTMLTitleElement.webidl \
   HTMLUListElement.webidl \
+  HTMLVideoElement.webidl \
+  IDBVersionChangeEvent.webidl \
   ImageData.webidl \
+  InspectorUtils.webidl \
   LinkStyle.webidl \
   LocalMediaStream.webidl \
   Location.webidl \
   MediaStream.webidl \
+  MessageEvent.webidl \
+  MouseEvent.webidl \
+  MozActivity.webidl \
+  MutationEvent.webidl \
   MutationObserver.webidl \
   Node.webidl \
   NodeFilter.webidl \
+  NodeIterator.webidl \
   NodeList.webidl \
+  Notification.webidl \
   PaintRequest.webidl \
   PaintRequestList.webidl \
   PannerNode.webidl \
@@ -122,10 +155,12 @@ webidl_files = \
   PerformanceNavigation.webidl \
   PerformanceTiming.webidl \
   ProcessingInstruction.webidl \
+  Range.webidl \
   Rect.webidl \
   RGBColor.webidl \
   RTCConfiguration.webidl \
   Screen.webidl \
+  StyleSheet.webidl \
   SVGAElement.webidl \
   SVGAltGlyphElement.webidl \
   SVGAngle.webidl \
@@ -147,13 +182,33 @@ webidl_files = \
   SVGComponentTransferFunctionElement.webidl \
   SVGDefsElement.webidl \
   SVGDescElement.webidl \
+  SVGDocument.webidl \
   SVGElement.webidl \
   SVGEllipseElement.webidl \
   SVGFilterElement.webidl \
+  SVGFilterPrimitiveStandardAttributes.webidl \
+  SVGFEBlendElement.webidl \
+  SVGFEColorMatrixElement.webidl \
+  SVGFEComponentTransferElement.webidl \
+  SVGFECompositeElement.webidl \
+  SVGFEConvolveMatrixElement.webidl \
+  SVGFEDiffuseLightingElement.webidl \
+  SVGFEDisplacementMapElement.webidl \
+  SVGFEDistantLightElement.webidl \
+  SVGFEFloodElement.webidl \
   SVGFEFuncAElement.webidl \
   SVGFEFuncBElement.webidl \
   SVGFEFuncGElement.webidl \
   SVGFEFuncRElement.webidl \
+  SVGFEGaussianBlurElement.webidl \
+  SVGFEImageElement.webidl \
+  SVGFEMergeElement.webidl \
+  SVGFEMergeNodeElement.webidl \
+  SVGFEOffsetElement.webidl \
+  SVGFEPointLightElement.webidl \
+  SVGFESpecularLightingElement.webidl \
+  SVGFESpotLightElement.webidl \
+  SVGFETileElement.webidl \
   SVGFitToViewBox.webidl \
   SVGForeignObjectElement.webidl \
   SVGGElement.webidl \
@@ -204,10 +259,16 @@ webidl_files = \
   Text.webidl \
   TextDecoder.webidl \
   TextEncoder.webidl \
+  TimeRanges.webidl \
+  TransitionEvent.webidl \
+  TreeWalker.webidl \
+  UIEvent.webidl \
   URL.webidl \
   ValidityState.webidl \
+  WebComponents.webidl \
   WebSocket.webidl \
   UndoManager.webidl \
+  URLUtils.webidl \
   USSDReceivedEvent.webidl \
   XMLHttpRequest.webidl \
   XMLHttpRequestEventTarget.webidl \
@@ -248,6 +309,7 @@ test_webidl_files := \
   TestCodeGen.webidl \
   TestDictionary.webidl \
   TestExampleGen.webidl \
+  TestJSImplGen.webidl \
   TestTypedef.webidl \
   $(NULL)
 else

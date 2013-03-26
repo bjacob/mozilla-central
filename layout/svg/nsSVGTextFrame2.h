@@ -193,9 +193,9 @@ public:
   NS_DECL_FRAMEARENA_HELPERS
 
   // nsIFrame:
-  NS_IMETHOD Init(nsIContent* aContent,
-                  nsIFrame*   aParent,
-                  nsIFrame*   aPrevInFlow);
+  virtual void Init(nsIContent* aContent,
+                    nsIFrame*   aParent,
+                    nsIFrame*   aPrevInFlow) MOZ_OVERRIDE;
 
   virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
 
@@ -394,6 +394,22 @@ private:
    * within the <text>.
    */
   void DoGlyphPositioning();
+
+  /**
+   * Converts the specified index into mPositions to an addressable
+   * character index (as can be used with the SVG DOM text methods)
+   * relative to the specified text child content element.
+   *
+   * @param aIndex The global character index.
+   * @param aContent The descendant text child content element that
+   *   the returned addressable index will be relative to; null
+   *   means the same as the <text> element.
+   * @return The addressable index, or -1 if the index cannot be
+   *   represented as an addressable index relative to aContent.
+   */
+  int32_t
+  ConvertTextElementCharIndexToAddressableIndex(int32_t aIndex,
+                                                nsIContent* aContent);
 
   /**
    * Recursive helper for ResolvePositions below.

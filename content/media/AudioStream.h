@@ -161,15 +161,11 @@ public:
   // Returns true when the audio stream is paused.
   virtual bool IsPaused() = 0;
 
-  // Returns the minimum number of audio frames which must be written before
-  // you can be sure that something will be played.
-  virtual int32_t GetMinWriteSize() = 0;
-
   int GetRate() { return mOutRate; }
   int GetChannels() { return mChannels; }
 
   // This should be called before attempting to use the time stretcher.
-  virtual void EnsureTimeStretcherInitialized();
+  virtual nsresult EnsureTimeStretcherInitialized();
   // Set playback rate as a multiple of the intrinsic playback rate. This is to
   // be called only with aPlaybackRate > 0.0.
   virtual nsresult SetPlaybackRate(double aPlaybackRate);

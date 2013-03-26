@@ -7,7 +7,8 @@ package org.mozilla.gecko;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.sync.setup.activities.SetupSyncActivity;
 import org.mozilla.gecko.sync.setup.SyncAccounts;
-import org.mozilla.gecko.util.GeckoAsyncTask;
+import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.util.UiAsyncTask;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
@@ -18,7 +19,6 @@ import android.content.Intent;
 import android.text.SpannableString;
 import android.text.style.StyleSpan;
 import android.util.AttributeSet;
-import android.util.Log;
 import android.view.View;
 import android.widget.TextView;
 
@@ -66,11 +66,12 @@ public class AboutHomePromoBox extends TextView implements View.OnClickListener 
             super(aText, aBoldText, aImage);
             // The listener will run on the background thread (see 2nd argument)
             mAccountListener = new OnAccountsUpdateListener() {
+                @Override
                 public void onAccountsUpdated(Account[] accounts) {
                     showRandomPromo();
                 }
             };
-            AccountManager.get(mContext).addOnAccountsUpdatedListener(mAccountListener, GeckoAppShell.getHandler(), false);
+            AccountManager.get(mContext).addOnAccountsUpdatedListener(mAccountListener, ThreadUtils.getBackgroundHandler(), false);
         }
         @Override
         public boolean canShow() {
@@ -125,6 +126,7 @@ public class AboutHomePromoBox extends TextView implements View.OnClickListener 
                 // if the user visits the marketplace through some other means, we'll have to wait
                 // until we are refreshed or restarted to get the correct value
                 v.postDelayed(new Runnable() {
+                    @Override
                     public void run() {
                         showRandomPromo();
                     }
@@ -149,6 +151,7 @@ public class AboutHomePromoBox extends TextView implements View.OnClickListener 
      */
     public void showRandomPromo() {
         getAvailableTypes(new GetTypesCallback() {
+            @Override
             public void onGotTypes(ArrayList<Type> types) {
                 if (types.size() == 0) {
                     hide();
@@ -191,7 +194,7 @@ public class AboutHomePromoBox extends TextView implements View.OnClickListener 
     }
 
     private void getAvailableTypes(final GetTypesCallback callback) {
-        (new GeckoAsyncTask<Void, Void, ArrayList<Type>>(GeckoApp.mAppContext, GeckoAppShell.getHandler()) {
+        (new UiAsyncTask<Void, Void, ArrayList<Type>>(ThreadUtils.getBackgroundHandler()) {
             @Override
             public ArrayList<Type> doInBackground(Void... params) {
                 // Run all of this on a background thread

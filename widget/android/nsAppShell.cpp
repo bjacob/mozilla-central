@@ -39,7 +39,7 @@
 
 #include "mozilla/dom/ScreenOrientation.h"
 
-#include "sampler.h"
+#include "GeckoProfiler.h"
 #ifdef MOZ_ANDROID_HISTORY
 #include "nsNetUtil.h"
 #include "IHistory.h"
@@ -277,14 +277,14 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
 {
     EVLOG("nsAppShell::ProcessNextNativeEvent %d", mayWait);
 
-    SAMPLE_LABEL("nsAppShell", "ProcessNextNativeEvent");
+    PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent");
     nsAutoPtr<AndroidGeckoEvent> curEvent;
     {
         MutexAutoLock lock(mCondLock);
 
         curEvent = PopNextEvent();
         if (!curEvent && mayWait) {
-            SAMPLE_LABEL("nsAppShell::ProcessNextNativeEvent", "Wait");
+            PROFILER_LABEL("nsAppShell::ProcessNextNativeEvent", "Wait");
             // hmm, should we really hardcode this 10s?
 #if defined(DEBUG_ANDROID_EVENTS)
             PRTime t0, t1;
@@ -377,6 +377,7 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
         obsServ->NotifyObservers(nullptr, "profile-change-net-teardown", context.get());
         obsServ->NotifyObservers(nullptr, "profile-change-teardown", context.get());
         obsServ->NotifyObservers(nullptr, "profile-before-change", context.get());
+        obsServ->NotifyObservers(nullptr, "profile-before-change2", context.get());
         nsCOMPtr<nsIAppStartup> appSvc = do_GetService("@mozilla.org/toolkit/app-startup;1");
         if (appSvc)
             appSvc->Quit(nsIAppStartup::eForceQuit);
@@ -559,8 +560,16 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
         break;
     }
 
+    case AndroidGeckoEvent::NOOP:
+        break;
+
     default:
         nsWindow::OnGlobalAndroidEvent(curEvent);
+        break;
+    }
+
+    if (curEvent->AckNeeded()) {
+        AndroidBridge::Bridge()->AcknowledgeEvent();
     }
 
     EVLOG("nsAppShell: -- done event %p %d", (void*)curEvent.get(), curEvent->Type());
@@ -617,28 +626,15 @@ nsAppShell::PostEvent(AndroidGeckoEvent *ae)
         MutexAutoLock lock(mQueueLock);
         EVLOG("nsAppShell::PostEvent %p %d", ae, ae->Type());
         switch (ae->Type()) {
-        case AndroidGeckoEvent::SURFACE_DESTROYED:
-            // Give priority to this event, and discard any pending
-            // SURFACE_CREATED events.
-            mEventQueue.InsertElementAt(0, ae);
-            AndroidGeckoEvent *event;
-            for (int i = mEventQueue.Length() - 1; i >= 1; i--) {
-                event = mEventQueue[i];
-                if (event->Type() == AndroidGeckoEvent::SURFACE_CREATED) {
-                    EVLOG("nsAppShell: Dropping old SURFACE_CREATED event at %p %d", event, i);
-                    mEventQueue.RemoveElementAt(i);
-                    delete event;
-                }
-            }
-            break;
-
+        case AndroidGeckoEvent::COMPOSITOR_CREATE:
         case AndroidGeckoEvent::COMPOSITOR_PAUSE:
         case AndroidGeckoEvent::COMPOSITOR_RESUME:
             // Give priority to these events, but maintain their order wrt each other.
             {
                 uint32_t i = 0;
                 while (i < mEventQueue.Length() &&
-                       (mEventQueue[i]->Type() == AndroidGeckoEvent::COMPOSITOR_PAUSE ||
+                       (mEventQueue[i]->Type() == AndroidGeckoEvent::COMPOSITOR_CREATE ||
+                        mEventQueue[i]->Type() == AndroidGeckoEvent::COMPOSITOR_PAUSE ||
                         mEventQueue[i]->Type() == AndroidGeckoEvent::COMPOSITOR_RESUME)) {
                     i++;
                 }

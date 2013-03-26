@@ -26,7 +26,7 @@ protected:
     (::NS_NewSVGAnimateElement(nsIContent **aResult,
                                already_AddRefed<nsINodeInfo> aNodeInfo));
 
-  virtual JSObject* WrapNode(JSContext *aCx, JSObject *aScope, bool *aTriedToWrap) MOZ_OVERRIDE;
+  virtual JSObject* WrapNode(JSContext *aCx, JSObject *aScope) MOZ_OVERRIDE;
 
 public:
   // interfaces:
@@ -39,7 +39,7 @@ public:
   // nsIDOMNode
   virtual nsresult Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const;
 
-  // nsISMILAnimationElement
+  // SVGAnimationElement
   virtual nsSMILAnimationFunction& AnimationFunction();
 
   virtual nsIDOMNode* AsDOMNode() { return this; }

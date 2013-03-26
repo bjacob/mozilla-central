@@ -124,10 +124,9 @@ public:
   nsresult GetSortedControls(nsTArray<nsGenericHTMLFormElement*>& aControls) const;
 
   // nsWrapperCache
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope,
-                               bool *triedToWrap)
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope)
   {
-    return HTMLCollectionBinding::Wrap(cx, scope, this, triedToWrap);
+    return HTMLCollectionBinding::Wrap(cx, scope, this);
   }
 
   nsHTMLFormElement* mForm;  // WEAK - the form owns me
@@ -1091,6 +1090,20 @@ AssertDocumentOrder(const nsTArray<nsGenericHTMLFormElement*>& aControls,
 }
 #endif
 
+void
+nsHTMLFormElement::PostPasswordEvent()
+{
+  // Don't fire another add event if we have a pending add event.
+  if (mFormPasswordEvent.get()) {
+    return;
+  }
+
+  nsRefPtr<FormPasswordEvent> event =
+    new FormPasswordEvent(this, NS_LITERAL_STRING("DOMFormHasPassword"));
+  mFormPasswordEvent = event;
+  event->PostDOMEvent();
+}
+
 nsresult
 nsHTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
                               bool aUpdateValidity, bool aNotify)
@@ -1158,12 +1171,14 @@ nsHTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
   // If it is a password control, and the password manager has not yet been
   // initialized, initialize the password manager
   //
-  if (!gPasswordManagerInitialized && type == NS_FORM_INPUT_PASSWORD) {
-    // Initialize the password manager category
-    gPasswordManagerInitialized = true;
-    NS_CreateServicesFromCategory(NS_PASSWORDMANAGER_CATEGORY,
-                                  nullptr,
-                                  NS_PASSWORDMANAGER_CATEGORY);
+  if (type == NS_FORM_INPUT_PASSWORD) {
+    if (!gPasswordManagerInitialized) {
+      gPasswordManagerInitialized = true;
+      NS_CreateServicesFromCategory(NS_PASSWORDMANAGER_CATEGORY,
+                                    nullptr,
+                                    NS_PASSWORDMANAGER_CATEGORY);
+    }
+    PostPasswordEvent();
   }
  
   // Default submit element handling
@@ -2192,8 +2207,6 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsFormControlList)
   NS_IMPL_CYCLE_COLLECTION_TRACE_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
-DOMCI_DATA(HTMLCollection, nsFormControlList)
-
 // XPConnect interface list for nsFormControlList
 NS_INTERFACE_TABLE_HEAD(nsFormControlList)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
@@ -2201,7 +2214,6 @@ NS_INTERFACE_TABLE_HEAD(nsFormControlList)
                       nsIHTMLCollection,
                       nsIDOMHTMLCollection)
   NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(nsFormControlList)
-  NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(HTMLCollection)
 NS_INTERFACE_MAP_END
 
 

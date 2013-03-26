@@ -20,8 +20,12 @@ interface HTMLAreaElement : HTMLElement {
            attribute DOMString coords;
            [SetterThrows]
            attribute DOMString shape;
+  // No support for stringifier attributes yet
+  //[SetterThrows]
+  //stringifier attribute DOMString href;
+  stringifier;
            [SetterThrows]
-  stringifier attribute DOMString href;
+           attribute DOMString href;
            [SetterThrows]
            attribute DOMString target;
            [SetterThrows]
@@ -38,16 +42,8 @@ interface HTMLAreaElement : HTMLElement {
   //       attribute DOMString hreflang;
   //       [SetterThrows]
   //       attribute DOMString type;
-
-  // URL decomposition IDL attributes
-           attribute DOMString protocol;
-           attribute DOMString host;
-           attribute DOMString hostname;
-           attribute DOMString port;
-           attribute DOMString pathname;
-           attribute DOMString search;
-           attribute DOMString hash;
 };
+HTMLAreaElement implements URLUtils;
 
 // http://www.whatwg.org/specs/web-apps/current-work/#other-elements,-attributes-and-apis
 partial interface HTMLAreaElement {

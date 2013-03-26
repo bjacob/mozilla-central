@@ -44,10 +44,10 @@ public:
    * Store the last used directory for this location using the
    * content pref service, if it is available
    * @param aURI URI of the current page
-   * @param aFile file chosen by the user - the path to the parent of this
+   * @param aDomFile file chosen by the user - the path to the parent of this
    *        file will be stored
    */
-  nsresult StoreLastUsedDirectory(nsIDocument* aDoc, nsIFile* aFile);
+  nsresult StoreLastUsedDirectory(nsIDocument* aDoc, nsIDOMFile* aDomFile);
 };
 
 class nsHTMLInputElement : public nsGenericHTMLFormElement,
@@ -122,6 +122,11 @@ public:
 
   virtual nsresult PreHandleEvent(nsEventChainPreVisitor& aVisitor);
   virtual nsresult PostHandleEvent(nsEventChainPostVisitor& aVisitor);
+  void PostHandleEventForRangeThumb(nsEventChainPostVisitor& aVisitor);
+  void StartRangeThumbDrag(nsGUIEvent* aEvent);
+  void FinishRangeThumbDrag(nsGUIEvent* aEvent = nullptr);
+  void CancelRangeThumbDrag(bool aIsForUserEvent = true);
+  void SetValueOfRangeForUserEvent(double aValue);
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
@@ -142,6 +147,7 @@ public:
   NS_IMETHOD_(int32_t) GetCols();
   NS_IMETHOD_(int32_t) GetWrapCols();
   NS_IMETHOD_(int32_t) GetRows();
+  NS_IMETHOD_(void) GetDefaultValueFromContent(nsAString& aValue);
   NS_IMETHOD_(bool) ValueChanged() const;
   NS_IMETHOD_(void) GetTextEditorValue(nsAString& aValue, bool aIgnoreWrap) const;
   NS_IMETHOD_(nsIEditor*) GetTextEditor();
@@ -770,6 +776,13 @@ protected:
    */
   nsString mFocusedValue;  
 
+  /**
+   * If mIsDraggingRange is true, this is the value that the input had before
+   * the drag started. Used to reset the input to its old value if the drag is
+   * canceled.
+   */
+  double mRangeThumbDragStartValue;
+
   // Step scale factor values, for input types that have one.
   static const double kStepScaleFactorDate;
   static const double kStepScaleFactorNumberRange;
@@ -804,8 +817,23 @@ protected:
   bool                     mCanShowValidUI      : 1;
   bool                     mCanShowInvalidUI    : 1;
   bool                     mHasRange            : 1;
+  bool                     mIsDraggingRange     : 1;
 
 private:
+
+  /**
+   * Returns true if this input's type will fire a DOM "change" event when it
+   * loses focus if its value has changed since it gained focus.
+   */
+  bool MayFireChangeOnBlur() const {
+    return MayFireChangeOnBlur(mType);
+  }
+
+  static bool MayFireChangeOnBlur(uint8_t aType) {
+    return IsSingleLineTextControl(false, aType) ||
+           aType == NS_FORM_INPUT_RANGE;
+  }
+
   struct nsFilePickerFilter {
     nsFilePickerFilter()
       : mFilterMask(0), mIsTrusted(false) {}

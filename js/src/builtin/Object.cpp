@@ -288,7 +288,7 @@ obj_toSource(JSContext *cx, unsigned argc, Value *vp)
 #endif /* JS_HAS_TOSOURCE */
 
 JSString *
-js::obj_toStringHelper(JSContext *cx, JSObject *obj)
+js::obj_toStringHelper(JSContext *cx, HandleObject obj)
 {
     if (obj->isProxy())
         return Proxy::obj_toString(cx, obj);
@@ -327,7 +327,7 @@ obj_toString(JSContext *cx, unsigned argc, Value *vp)
         return false;
 
     /* Steps 4-5. */
-    UnrootedString str = js::obj_toStringHelper(cx, obj);
+    RawString str = js::obj_toStringHelper(cx, obj);
     if (!str)
         return false;
     args.rval().setString(str);

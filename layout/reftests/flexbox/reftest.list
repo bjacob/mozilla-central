@@ -71,6 +71,9 @@ fails == flexbox-basic-video-vert-2.xhtml flexbox-basic-video-vert-2-ref.xhtml #
 
 # Tests for dynamic modifications of content inside/around a flex container
 == flexbox-dyn-changeFrameWidth-1.xhtml flexbox-dyn-changeFrameWidth-1-ref.xhtml
+== flexbox-dyn-changeFrameWidth-2.xhtml flexbox-dyn-changeFrameWidth-2-ref.xhtml
+== flexbox-dyn-changeFrameWidth-3.xhtml flexbox-dyn-changeFrameWidth-3-ref.xhtml
+== flexbox-dyn-changeFrameWidth-4.xhtml flexbox-dyn-changeFrameWidth-4-ref.xhtml
 == flexbox-dyn-changePadding-1a.xhtml flexbox-dyn-changePadding-1-ref.xhtml
 == flexbox-dyn-changePadding-1b.xhtml flexbox-dyn-changePadding-1-ref.xhtml
 
@@ -78,11 +81,11 @@ fails == flexbox-basic-video-vert-2.xhtml flexbox-basic-video-vert-2-ref.xhtml #
 # (with existing [div | span | text] inside the flexbox, and new content
 # inserted adjacent to that existing content.)
 == flexbox-dyn-insertAroundDiv-1.xhtml flexbox-dyn-insertAroundDiv-1-ref.xhtml
-== flexbox-dyn-insertAroundDiv-2.xhtml flexbox-dyn-insertAroundDiv-2-ref.xhtml
+fuzzy-if(d2d&&layersGPUAccelerated,24,14) == flexbox-dyn-insertAroundDiv-2.xhtml flexbox-dyn-insertAroundDiv-2-ref.xhtml # bug 849692
 == flexbox-dyn-insertAroundDiv-3.xhtml flexbox-dyn-insertAroundDiv-3-ref.xhtml
 
 == flexbox-dyn-insertAroundSpan-1.xhtml flexbox-dyn-insertAroundDiv-1-ref.xhtml
-== flexbox-dyn-insertAroundSpan-2.xhtml flexbox-dyn-insertAroundDiv-2-ref.xhtml
+fuzzy-if(d2d&&layersGPUAccelerated,24,14) == flexbox-dyn-insertAroundSpan-2.xhtml flexbox-dyn-insertAroundDiv-2-ref.xhtml # bug 849692
 == flexbox-dyn-insertAroundSpan-3.xhtml flexbox-dyn-insertAroundDiv-3-ref.xhtml
 
 == flexbox-dyn-insertAroundText-1.xhtml flexbox-dyn-insertAroundText-1-ref.xhtml
@@ -168,6 +171,14 @@ HTTP(..) == flexbox-intrinsic-sizing-horiz-1b.xhtml flexbox-intrinsic-sizing-hor
 == flexbox-mbp-horiz-2b.xhtml            flexbox-mbp-horiz-2-ref.xhtml
 == flexbox-mbp-horiz-3.xhtml             flexbox-mbp-horiz-3-ref.xhtml
 == flexbox-mbp-horiz-3-reverse.xhtml     flexbox-mbp-horiz-3-reverse-ref.xhtml
+
+# Tests for flex containers with the "overflow" property set
+== flexbox-overflow-horiz-1.html flexbox-overflow-horiz-1-ref.html
+== flexbox-overflow-horiz-2.html flexbox-overflow-horiz-2-ref.html
+== flexbox-overflow-horiz-3.html flexbox-overflow-horiz-3-ref.html
+== flexbox-overflow-vert-1.html flexbox-overflow-vert-1-ref.html
+== flexbox-overflow-vert-2.html flexbox-overflow-vert-2-ref.html
+== flexbox-overflow-vert-3.html flexbox-overflow-vert-3-ref.html
 
 # Tests for flexbox in an iframe that gets resized.
 skip-if(B2G) == flexbox-resizeviewport-1.xhtml flexbox-resizeviewport-1-ref.xhtml

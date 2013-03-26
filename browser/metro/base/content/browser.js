@@ -70,6 +70,7 @@ var Browser = {
     ScrollwheelModule.init(Elements.browsers);
     GestureModule.init();
     BrowserTouchHandler.init();
+    PopupBlockerObserver.init();
 
     // Warning, total hack ahead. All of the real-browser related scrolling code
     // lies in a pretend scrollbox here. Let's not land this as-is. Maybe it's time
@@ -132,12 +133,30 @@ var Browser = {
     if (window.arguments && window.arguments[0])
       commandURL = window.arguments[0];
 
+    // Activation URIs come from protocol activations, secondary tiles, and file activations
+    let activationURI = this.getShortcutOrURI(MetroUtils.activationURI);
+
+    let self = this;
+    function loadStartupURI() {
+      let uri = activationURI || commandURL || Browser.getHomePage();
+      if (StartUI.isStartURI(uri)) {
+        self.addTab(uri, true);
+        StartUI.show(); // This makes about:start load a lot faster
+      } else if (activationURI) {
+        self.addTab(uri, true, null, { flags: Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP });
+      } else {
+        self.addTab(uri, true);
+      }
+    }
+
     // Should we restore the previous session (crash or some other event)
     let ss = Cc["@mozilla.org/browser/sessionstore;1"].getService(Ci.nsISessionStore);
     if (ss.shouldRestore() || Services.prefs.getBoolPref("browser.startup.sessionRestore")) {
       let bringFront = false;
       // First open any commandline URLs, except the homepage
-      if (commandURL && commandURL != this.getHomePage()) {
+      if (activationURI && !StartUI.isStartURI(activationURI)) {
+        this.addTab(activationURI, true, null, { flags: Ci.nsIWebNavigation.LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP });
+      } else if (commandURL && !StartUI.isStartURI(commandURL)) {
         this.addTab(commandURL, true);
       } else {
         bringFront = true;
@@ -149,7 +168,7 @@ var Browser = {
           observe: function(aSubject, aTopic, aData) {
             Services.obs.removeObserver(dummyCleanup, "sessionstore-windows-restored");
             if (aData == "fail")
-              Browser.addTab(commandURL || Browser.getHomePage(), true);
+              loadStartupURI();
             dummy.chromeTab.ignoreUndo = true;
             Browser.closeTab(dummy, { forceClose: true });
           }
@@ -158,7 +177,7 @@ var Browser = {
       }
       ss.restoreLastSession(bringFront);
     } else {
-      this.addTab(commandURL || this.getHomePage(), true);
+      loadStartupURI();
     }
 
     messageManager.addMessageListener("DOMLinkAdded", this);
@@ -332,6 +351,9 @@ var Browser = {
    * @returns the expanded shortcut, or the original URL if not a shortcut
    */
   getShortcutOrURI: function getShortcutOrURI(aURL, aPostDataRef) {
+    if (!aURL)
+      return aURL;
+
     let shortcutURL = null;
     let keyword = aURL;
     let param = "";
@@ -476,6 +498,10 @@ var Browser = {
     tab.browser.messageManager.sendAsyncMessage("Browser:CanUnload", {});
   },
 
+  savePage: function() {
+    ContentAreaUtils.saveDocument(this.selectedBrowser.contentWindow.document);
+  },
+
   _doCloseTab: function _doCloseTab(aTab) {
     let nextTab = this._getNextTab(aTab);
     if (!nextTab)
@@ -560,7 +586,6 @@ var Browser = {
     } else {
       // Update all of our UI to reflect the new tab's location
       BrowserUI.updateURI();
-      IdentityUI.checkIdentity();
 
       let event = document.createEvent("Events");
       event.initEvent("TabSelect", true, false);
@@ -967,7 +992,7 @@ var Browser = {
 
       case "Browser:TapOnSelection":
         if (!InputSourceHelper.isPrecise) {
-          if (SelectionHelperUI.isActive()) {
+          if (SelectionHelperUI.isActive) {
             SelectionHelperUI.shutdown();
           }
           if (SelectionHelperUI.canHandle(aMessage)) {
@@ -1220,8 +1245,22 @@ nsBrowserAccess.prototype = {
  * Handler for blocked popups, triggered by DOMUpdatePageReport events in browser.xml
  */
 var PopupBlockerObserver = {
-  onUpdatePageReport: function onUpdatePageReport(aEvent)
-  {
+  init: function init() {
+    Elements.browsers.addEventListener("mousedown", this, true);
+  },
+
+  handleEvent: function handleEvent(aEvent) {
+    switch (aEvent.type) {
+      case "mousedown":
+        let box = Browser.getNotificationBox();
+        let notification = box.getNotificationWithValue("popup-blocked");
+        if (notification && !notification.contains(aEvent.target))
+          box.removeNotification(notification);
+        break;
+    }
+  },
+
+  onUpdatePageReport: function onUpdatePageReport(aEvent) {
     var cBrowser = Browser.selectedBrowser;
     if (aEvent.originalTarget != cBrowser)
       return;
@@ -1239,14 +1278,12 @@ var PopupBlockerObserver = {
     if (!cBrowser.pageReport.reported) {
       if (Services.prefs.getBoolPref("privacy.popups.showBrowserMessage")) {
         var brandShortName = Strings.brand.GetStringFromName("brandShortName");
-        var message;
         var popupCount = cBrowser.pageReport.length;
 
         let strings = Strings.browser;
-        if (popupCount > 1)
-          message = strings.formatStringFromName("popupWarningMultiple", [brandShortName, popupCount], 2);
-        else
-          message = strings.formatStringFromName("popupWarning", [brandShortName], 1);
+        let message = PluralForm.get(popupCount, strings.GetStringFromName("popupWarning.message"))
+                                .replace("#1", brandShortName)
+                                .replace("#2", popupCount);
 
         var notificationBox = Browser.getNotificationBox();
         var notification = notificationBox.getNotificationWithValue("popup-blocked");
@@ -1256,25 +1293,26 @@ var PopupBlockerObserver = {
         else {
           var buttons = [
             {
-              label: strings.GetStringFromName("popupButtonAllowOnce"),
-              accessKey: null,
+              isDefault: false,
+              label: strings.GetStringFromName("popupButtonAllowOnce2"),
+              accessKey: "",
               callback: function() { PopupBlockerObserver.showPopupsForSite(); }
             },
             {
-              label: strings.GetStringFromName("popupButtonAlwaysAllow2"),
-              accessKey: null,
+              label: strings.GetStringFromName("popupButtonAlwaysAllow3"),
+              accessKey: "",
               callback: function() { PopupBlockerObserver.allowPopupsForSite(true); }
             },
             {
-              label: strings.GetStringFromName("popupButtonNeverWarn2"),
-              accessKey: null,
+              label: strings.GetStringFromName("popupButtonNeverWarn3"),
+              accessKey: "",
               callback: function() { PopupBlockerObserver.allowPopupsForSite(false); }
             }
           ];
 
           const priority = notificationBox.PRIORITY_WARNING_MEDIUM;
           notificationBox.appendNotification(message, "popup-blocked",
-                                             "",
+                                             "chrome://browser/skin/images/infobar-popup.png",
                                              priority, buttons);
         }
       }
@@ -1887,7 +1925,7 @@ var ContentAreaObserver = {
       let [scrollbox, scrollInterface] = ScrollUtils.getScrollboxFromElement(currentElement);
       if (scrollbox && scrollInterface && currentElement && currentElement != scrollbox) {
         // retrieve the direct child of the scrollbox
-        while (currentElement.parentNode != scrollbox)
+        while (currentElement && currentElement.parentNode != scrollbox)
           currentElement = currentElement.parentNode;
   
         setTimeout(function() { scrollInterface.ensureElementIsVisible(currentElement) }, 0);

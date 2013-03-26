@@ -52,6 +52,14 @@ TransplantObjectWithWrapper(JSContext *cx,
 JSObject *
 GetXBLScope(JSContext *cx, JSObject *contentScope);
 
+// Returns whether XBL scopes have been explicitly disabled for code running
+// in this compartment. See the comment around mAllowXBLScope.
+bool
+AllowXBLScope(JSCompartment *c);
+
+bool
+IsSandboxPrototypeProxy(JSObject *obj);
+
 } /* namespace xpc */
 
 #define XPCONNECT_GLOBAL_FLAGS                                                \
@@ -236,7 +244,8 @@ public:
                         JS::Value* rval, bool* sharedBuffer)
     {
         if (buf == sCachedBuffer &&
-            js::GetGCThingCompartment(sCachedString) == js::GetContextCompartment(cx)) {
+            JS::GetGCThingZone(sCachedString) == js::GetContextZone(cx))
+        {
             *rval = JS::StringValue(sCachedString);
             *sharedBuffer = false;
             return true;
@@ -289,6 +298,20 @@ inline bool StringToJsval(JSContext *cx, nsAString &str, JS::Value *rval)
         return true;
     }
     return NonVoidStringToJsval(cx, str, rval);
+}
+
+inline bool
+NonVoidStringToJsval(JSContext* cx, const nsAString& str, JS::Value *rval)
+{
+    nsString mutableCopy(str);
+    return NonVoidStringToJsval(cx, mutableCopy, rval);
+}
+
+inline bool
+StringToJsval(JSContext* cx, const nsAString& str, JS::Value *rval)
+{
+    nsString mutableCopy(str);
+    return StringToJsval(cx, mutableCopy, rval);
 }
 
 /**
@@ -393,7 +416,7 @@ Throw(JSContext *cx, nsresult rv);
 } // namespace xpc
 
 nsCycleCollectionParticipant *
-xpc_JSCompartmentParticipant();
+xpc_JSZoneParticipant();
 
 namespace mozilla {
 namespace dom {
@@ -414,7 +437,7 @@ inline bool IsDOMProxy(JSObject *obj)
 }
 
 typedef JSObject*
-(*DefineInterface)(JSContext *cx, JSObject *global, bool *enabled);
+(*DefineInterface)(JSContext *cx, JSObject *global, jsid id, bool *enabled);
 
 typedef bool
 (*PrefEnabled)();

@@ -1325,6 +1325,9 @@ var gCSSProperties = {
 				"url(404.png) green padding-box",
 				"url(404.png) border-box transparent",
 				"content-box url(404.png) blue",
+				"url(404.png) green padding-box padding-box",
+				"url(404.png) green padding-box border-box",
+				"content-box border-box url(404.png) blue",
 		],
 		invalid_values: [
 			/* mixes with keywords have to be in correct order */
@@ -1351,6 +1354,11 @@ var gCSSProperties = {
 			/* bug 513395: old syntax for gradients */
 			"-moz-radial-gradient(10% bottom, 30px, 20px 20px, 10px, from(#ffffff), to(black)) scroll no-repeat",
 			"-moz-linear-gradient(10px 10px, 20px 20px, from(red), to(blue)) repeat",
+			/* clip and origin separated in the shorthand */
+			"url(404.png) padding-box green border-box",
+			"url(404.png) padding-box green padding-box",
+			"transparent padding-box url(404.png) border-box",
+			"transparent padding-box url(404.png) padding-box",
 		]
 	},
 	"background-attachment": {
@@ -3583,14 +3591,6 @@ var gCSSProperties = {
 		other_values: [ "url(#mymask)" ],
 		invalid_values: []
 	},
-	"mask-type": {
-		domProp: "maskType",
-		inherited: false,
-		type: CSS_TYPE_LONGHAND,
-		initial_values: [ "luminance" ],
-		other_values: [ "alpha" ],
-		invalid_values: []
-	},
 	"shape-rendering": {
 		domProp: "shapeRendering",
 		inherited: true,
@@ -4255,6 +4255,17 @@ if (SpecialPowers.getBoolPref("layout.css.flexbox.enabled")) {
 	}
 	gCSSProperties["display"].other_values.push("flex");
 	gCSSProperties["display"].other_values.push("inline-flex");
+}
+
+if (SpecialPowers.getBoolPref("layout.css.masking.enabled")) {
+	gCSSProperties["mask-type"] = {
+		domProp: "maskType",
+		inherited: false,
+		type: CSS_TYPE_LONGHAND,
+		initial_values: [ "luminance" ],
+		other_values: [ "alpha" ],
+		invalid_values: []
+	};
 }
 
 if (SpecialPowers.getBoolPref("svg.paint-order.enabled")) {

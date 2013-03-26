@@ -604,11 +604,6 @@ NS_IMETHODIMP imgRequest::OnStopRequest(nsIRequest *aRequest, nsISupports *ctxt,
 {
   LOG_FUNC(GetImgLog(), "imgRequest::OnStopRequest");
 
-  bool lastPart = true;
-  nsCOMPtr<nsIMultiPartChannel> mpchan(do_QueryInterface(aRequest));
-  if (mpchan)
-    mpchan->GetIsLastPart(&lastPart);
-
   // XXXldb What if this is a non-last part of a multipart request?
   // xxx before we release our reference to mRequest, lets
   // save the last status that we saw so that the
@@ -624,11 +619,16 @@ NS_IMETHODIMP imgRequest::OnStopRequest(nsIRequest *aRequest, nsISupports *ctxt,
     mChannel = nullptr;
   }
 
+  bool lastPart = true;
+  nsCOMPtr<nsIMultiPartChannel> mpchan(do_QueryInterface(aRequest));
+  if (mpchan)
+    mpchan->GetIsLastPart(&lastPart);
+
   // Tell the image that it has all of the source data. Note that this can
   // trigger a failure, since the image might be waiting for more non-optional
   // data and this is the point where we break the news that it's not coming.
   if (mImage) {
-    nsresult rv = mImage->OnImageDataComplete(aRequest, ctxt, status);
+    nsresult rv = mImage->OnImageDataComplete(aRequest, ctxt, status, lastPart);
 
     // If we got an error in the OnImageDataComplete() call, we don't want to
     // proceed as if nothing bad happened. However, we also want to give
@@ -637,9 +637,6 @@ NS_IMETHODIMP imgRequest::OnStopRequest(nsIRequest *aRequest, nsISupports *ctxt,
     if (NS_FAILED(rv) && NS_SUCCEEDED(status))
       status = rv;
   }
-
-  imgStatusTracker& statusTracker = GetStatusTracker();
-  statusTracker.RecordStopRequest(lastPart, status);
 
   // If the request went through, update the cache entry size. Otherwise,
   // cancel the request, which removes us from the cache.
@@ -653,7 +650,12 @@ NS_IMETHODIMP imgRequest::OnStopRequest(nsIRequest *aRequest, nsISupports *ctxt,
     this->Cancel(status);
   }
 
-  GetStatusTracker().OnStopRequest(lastPart, status);
+  if (!mImage) {
+    // We have to fire imgStatusTracker::OnStopRequest ourselves because there's
+    // no image capable of doing so.
+    imgStatusTracker& statusTracker = GetStatusTracker();
+    statusTracker.OnStopRequest(lastPart, status);
+  }
 
   mTimedChannel = nullptr;
   return NS_OK;

@@ -10,7 +10,6 @@ VPATH		= @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
-MODULE		= content
 LIBRARY_NAME	= gkcontentsvg_s
 LIBXUL_LIBRARY	= 1
 ifndef _MSC_VER
@@ -30,11 +29,9 @@ CPPSRCS		= \
 		DOMSVGPoint.cpp \
 		DOMSVGPointList.cpp \
 		DOMSVGStringList.cpp \
-		DOMSVGTests.cpp \
 		DOMSVGTransform.cpp \
 		DOMSVGTransformList.cpp \
 		nsDOMSVGZoomEvent.cpp \
-		nsDOMSVGEvent.cpp \
 		nsISVGPoint.cpp \
 		nsSVGAngle.cpp \
 		nsSVGBoolean.cpp \
@@ -80,6 +77,24 @@ CPPSRCS		= \
 		SVGDescElement.cpp \
 		SVGElementFactory.cpp \
 		SVGEllipseElement.cpp \
+		SVGFEBlendElement.cpp \
+		SVGFEColorMatrixElement.cpp \
+		SVGFEComponentTransferElement.cpp \
+		SVGFECompositeElement.cpp \
+		SVGFEConvolveMatrixElement.cpp \
+		SVGFEDiffuseLightingElement.cpp \
+		SVGFEDisplacementMapElement.cpp \
+		SVGFEDistantLightElement.cpp \
+		SVGFEFloodElement.cpp \
+		SVGFEGaussianBlurElement.cpp \
+		SVGFEImageElement.cpp \
+		SVGFEMergeElement.cpp \
+		SVGFEMergeNodeElement.cpp \
+		SVGFEOffsetElement.cpp \
+		SVGFEPointLightElement.cpp \
+		SVGFESpecularLightingElement.cpp \
+		SVGFESpotLightElement.cpp \
+		SVGFETileElement.cpp \
 		SVGFilterElement.cpp \
 		SVGForeignObjectElement.cpp \
 		SVGFragmentIdentifier.cpp \
@@ -124,6 +139,7 @@ CPPSRCS		= \
 		SVGSymbolElement.cpp \
 		SVGSVGElement.cpp \
 		SVGSwitchElement.cpp \
+		SVGTests.cpp \
 		SVGTextContentElement.cpp \
 		SVGTextElement.cpp \
 		SVGTextPathElement.cpp \
@@ -146,9 +162,12 @@ include $(topsrcdir)/config/config.mk
 FORCE_STATIC_LIB = 1
 
 EXPORTS =  			\
+	nsSVGClass.h               \
+	nsSVGElement.h             \
 	nsSVGFeatures.h            \
 	nsSVGRect.h                \
 	SVGAttrValueWrapper.h      \
+	SVGStringList.h            \
 	$(NULL)
 
 EXPORTS_NAMESPACES = mozilla/dom
@@ -170,6 +189,24 @@ EXPORTS_mozilla/dom = \
 	SVGDefsElement.h \
 	SVGDescElement.h \
 	SVGEllipseElement.h \
+	SVGFEBlendElement.h \
+	SVGFEColorMatrixElement.h \
+	SVGFEComponentTransferElement.h \
+	SVGFECompositeElement.h \
+	SVGFEConvolveMatrixElement.h \
+	SVGFEDiffuseLightingElement.h \
+	SVGFEDisplacementMapElement.h \
+	SVGFEDistantLightElement.h \
+	SVGFEFloodElement.h \
+	SVGFEGaussianBlurElement.h \
+	SVGFEImageElement.h \
+	SVGFEMergeElement.h \
+	SVGFEMergeNodeElement.h \
+	SVGFEOffsetElement.h \
+	SVGFEPointLightElement.h \
+	SVGFESpecularLightingElement.h \
+	SVGFESpotLightElement.h \
+	SVGFETileElement.h \
 	SVGFilterElement.h \
 	SVGForeignObjectElement.h \
 	SVGGElement.h \
@@ -194,6 +231,7 @@ EXPORTS_mozilla/dom = \
 	SVGSymbolElement.h \
 	SVGSVGElement.h \
 	SVGSwitchElement.h \
+	SVGTests.h \
 	SVGTextContentElement.h \
 	SVGTextElement.h \
 	SVGTextPathElement.h \

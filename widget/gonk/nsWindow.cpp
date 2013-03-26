@@ -190,7 +190,7 @@ nsWindow::nsWindow()
         // to know the color depth, which asks our native window.
         // This has to happen after other init has finished.
         gfxPlatform::GetPlatform();
-        sUsingOMTC = UseOffMainThreadCompositing();
+        sUsingOMTC = ShouldUseOffMainThreadCompositing();
         sUsingHwc = Preferences::GetBool("layers.composer2d.enabled", false);
 
         if (sUsingOMTC) {
@@ -216,8 +216,6 @@ nsWindow::DoDraw(void)
         LOG("  no window to draw, bailing");
         return;
     }
-
-    StopBootAnimation();
 
     nsIntRegion region = gWindowToRedraw->mDirtyRegion;
     gWindowToRedraw->mDirtyRegion.SetEmpty();
@@ -569,6 +567,8 @@ nsWindow::GetLayerManager(PLayersChild* aShadowManager,
         }
         return mLayerManager;
     }
+
+    StopBootAnimation();
 
     // Set mUseLayersAcceleration here to make it consistent with
     // nsBaseWidget::GetLayerManager

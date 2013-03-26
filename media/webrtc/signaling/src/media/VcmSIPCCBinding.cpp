@@ -2,9 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "CC_Common.h"
+#include "CSFLog.h"
 
-#include "CSFLogStream.h"
+#include "CC_Common.h"
 
 #include "CSFMediaProvider.h"
 #include "CSFAudioTermination.h"
@@ -125,13 +125,13 @@ MediaProviderObserver * VcmSIPCCBinding::getMediaProviderObserver()
 
 void VcmSIPCCBinding::setAudioCodecs(int codecMask)
 {
-  CSFLogDebugS(logTag, "SETTING AUDIO: " << codecMask);
+  CSFLogDebug(logTag, "SETTING AUDIO: %d", codecMask);
   VcmSIPCCBinding::gAudioCodecMask = codecMask;
 }
 
 void VcmSIPCCBinding::setVideoCodecs(int codecMask)
 {
-  CSFLogDebugS(logTag, "SETTING VIDEO: " << codecMask);
+  CSFLogDebug(logTag, "SETTING VIDEO: %d", codecMask);
   VcmSIPCCBinding::gVideoCodecMask = codecMask;
 }
 
@@ -705,20 +705,19 @@ static short vcmSetIceCandidate_m(const char *peerconnection,
   if (!stream)
     return VCM_ERROR;
 
-  nsresult res;
-  nsresult rv = pc.impl()->media()->ice_ctx()->thread()->Dispatch(
-    WrapRunnableRet(stream, &NrIceMediaStream::ParseTrickleCandidate, icecandidate, &res),
-    NS_DISPATCH_SYNC);
+  nsresult rv = RUN_ON_THREAD(pc.impl()->media()->ice_ctx()->thread(),
+                              WrapRunnable(stream,
+                                           &NrIceMediaStream::ParseTrickleCandidate,
+                                           std::string(icecandidate)),
+                              NS_DISPATCH_NORMAL);
 
   if (!NS_SUCCEEDED(rv)) {
     CSFLogError( logTag, "%s(): Could not dispatch to ICE thread", __FUNCTION__, level);
     return VCM_ERROR;
   }
 
-  if (!NS_SUCCEEDED(res)) {
-    CSFLogError( logTag, "%s(): Could not parse trickle candidate for stream %d", __FUNCTION__, level);
-    return VCM_ERROR;
-  }
+  // TODO(ekr@rtfm.com): generate an error if the parse
+  // fails. Bug 847449.
 
   return 0;
 }
@@ -769,18 +768,17 @@ static short vcmStartIceChecks_m(const char *peerconnection, cc_boolean isContro
     CSFLogError( logTag, "%s: couldn't set controlling", __FUNCTION__ );
     return VCM_ERROR;
   }
+  // TODO(ekr@rtfm.com): Figure out how to report errors here.
+  // Bug 854516.
   nsresult rv = pc.impl()->media()->ice_ctx()->thread()->Dispatch(
-    WrapRunnableRet(pc.impl()->media()->ice_ctx(), &NrIceCtx::StartChecks, &res),
-      NS_DISPATCH_SYNC);
+    WrapRunnable(pc.impl()->media()->ice_ctx(), &NrIceCtx::StartChecks),
+      NS_DISPATCH_NORMAL);
 
   if (!NS_SUCCEEDED(rv)) {
     CSFLogError( logTag, "%s(): Could not dispatch to ICE thread", __FUNCTION__);
     return VCM_ERROR;
   }
-  if (!NS_SUCCEEDED(res)) {
-    CSFLogError( logTag, "%s: couldn't start ICE checks", __FUNCTION__ );
-    return VCM_ERROR;
-  }
+
   return 0;
 }
 
@@ -2683,20 +2681,44 @@ vcmCreateTransportFlow(sipcc::PeerConnectionImpl *pc, int level, bool rtcp,
       return NULL;
     }
 
-    std::queue<TransportLayer *> layers;
-    layers.push(ice.forget());
-    layers.push(dtls.forget());
+    nsAutoPtr<std::queue<TransportLayer *> > layers(new std::queue<TransportLayer *>);
+    layers->push(ice.forget());
+    layers->push(dtls.forget());
 
 
     // Layers are now owned by the flow.
+    // TODO(ekr@rtfm.com): Propagate errors for when this fails.
+    // Bug 854518.
     nsresult rv = pc->media()->ice_ctx()->thread()->Dispatch(
-        WrapRunnableRet(flow, &TransportFlow::PushLayers, layers, &res),
-        NS_DISPATCH_SYNC);
+        WrapRunnable(flow, &TransportFlow::PushLayers, layers),
+        NS_DISPATCH_NORMAL);
 
-    if (NS_FAILED(rv) || NS_FAILED(res) || !pc->media().get()) { // SYNC re-check
+    if (NS_FAILED(rv)) {
       return NULL;
     }
+
+    // Note, this flow may actually turn out to be invalid
+    // because PushLayers is async and can fail.
     pc->media()->AddTransportFlow(level, rtcp, flow);
   }
   return flow;
 }
+
+
+/**
+ * vcmOnSdpParseError
+ *
+ * This method is called for each parsing error of SDP.  It does not necessarily
+ * mean the SDP read was fatal and can be called many times for the same SDP.
+ *
+ */
+int vcmOnSdpParseError(const char *peerconnection, const char *message) {
+
+  sipcc::PeerConnectionWrapper pc(peerconnection);
+  ENSURE_PC(pc, VCM_ERROR);
+
+  pc.impl()->OnSdpParseError(message);
+
+  return 0;
+}
+

@@ -178,6 +178,7 @@ public:
   // ICE events
   void IceGatheringCompleted(NrIceCtx *aCtx);
   void IceCompleted(NrIceCtx *aCtx);
+  void IceFailed(NrIceCtx *aCtx);
   void IceStreamReady(NrIceMediaStream *aStream);
 
   static void ListenThread(void *aData);
@@ -222,6 +223,15 @@ public:
   NS_IMETHODIMP CreateOffer(MediaConstraints& aConstraints);
   NS_IMETHODIMP CreateAnswer(MediaConstraints& aConstraints);
 
+  // Called whenever something is unrecognized by the parser
+  // May be called more than once and does not necessarily mean
+  // that parsing was stopped, only that something was unrecognized.
+  void OnSdpParseError(const char* errorMessage);
+
+  // Called when OnLocal/RemoteDescriptionSuccess/Error
+  // is called to start the list over.
+  void ClearSdpParseErrorMessages();
+
 private:
   PeerConnectionImpl(const PeerConnectionImpl&rhs);
   PeerConnectionImpl& operator=(PeerConnectionImpl);
@@ -260,8 +270,7 @@ private:
   void ShutdownMedia(bool isSynchronous);
 
   // ICE callbacks run on the right thread.
-  nsresult IceGatheringCompleted_m();
-  nsresult IceCompleted_m();
+  nsresult IceStateChange_m(IceState aState);
 
   // The role we are adopting
   Role mRole;
@@ -305,6 +314,16 @@ private:
 #endif
 
   nsRefPtr<PeerConnectionMedia> mMedia;
+
+  // Temporary: used to prevent multiple audio streams or multiple video streams
+  // in a single PC. This is tied up in the IETF discussion around proper
+  // representation of multiple streams in SDP, and strongly related to
+  // Bug 840728.
+  int mNumAudioStreams;
+  int mNumVideoStreams;
+
+  // Holder for error messages from parsing SDP
+  std::vector<std::string> mSDPParseErrorMessages;
 
 public:
   //these are temporary until the DataChannel Listen/Connect API is removed

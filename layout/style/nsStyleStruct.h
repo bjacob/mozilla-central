@@ -26,17 +26,13 @@
 #include "nsCOMArray.h"
 #include "nsTArray.h"
 #include "nsIAtom.h"
-#include "nsIURI.h"
 #include "nsCSSValue.h"
-#include "nsStyleTransformMatrix.h"
-#include "nsAlgorithm.h"
 #include "imgRequestProxy.h"
-#include "gfxRect.h"
 #include <algorithm>
 
 class nsIFrame;
+class nsIURI;
 class imgIContainer;
-struct nsCSSValueList;
 
 // Includes nsStyleStructID.
 #include "nsStyleStructFwd.h"
@@ -1340,19 +1336,22 @@ struct nsStyleText {
            mWhiteSpace == NS_STYLE_WHITESPACE_PRE_DISCARD_NEWLINES;
   }
 
-  bool WhiteSpaceCanWrap() const {
+  bool WhiteSpaceCanWrapStyle() const {
     return mWhiteSpace == NS_STYLE_WHITESPACE_NORMAL ||
            mWhiteSpace == NS_STYLE_WHITESPACE_PRE_WRAP ||
            mWhiteSpace == NS_STYLE_WHITESPACE_PRE_LINE;
   }
 
-  bool WordCanWrap() const {
-    return WhiteSpaceCanWrap() && mWordWrap == NS_STYLE_WORDWRAP_BREAK_WORD;
+  bool WordCanWrapStyle() const {
+    return WhiteSpaceCanWrapStyle() &&
+           mWordWrap == NS_STYLE_WORDWRAP_BREAK_WORD;
   }
 
   // These are defined in nsStyleStructInlines.h.
   inline bool HasTextShadow(const nsIFrame* aFrame) const;
   inline nsCSSShadowArray* GetTextShadow(const nsIFrame* aFrame) const;
+  inline bool WhiteSpaceCanWrap(const nsIFrame* aFrame) const;
+  inline bool WordCanWrap(const nsIFrame* aFrame) const;
 };
 
 struct nsStyleVisibility {

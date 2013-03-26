@@ -24,6 +24,25 @@ SCRIPT_DIR = os.path.abspath(os.path.realpath(os.path.dirname(sys.argv[0])))
 sys.path.insert(0, SCRIPT_DIR)
 import automationutils
 
+# --------------------------------------------------------------
+# TODO: this is a hack for mozbase without virtualenv, remove with bug 849900
+#
+here = os.path.dirname(__file__)
+mozbase = os.path.realpath(os.path.join(os.path.dirname(here), 'mozbase'))
+
+try:
+    import mozcrash
+except:
+    deps = ['mozcrash',
+            'mozfile',
+            'mozlog']
+    for dep in deps:
+        module = os.path.join(mozbase, dep)
+        if module not in sys.path:
+            sys.path.append(module)
+    import mozcrash
+# ---------------------------------------------------------------
+
 _DEFAULT_WEB_SERVER = "127.0.0.1"
 _DEFAULT_HTTP_PORT = 8888
 _DEFAULT_SSL_PORT = 4443
@@ -468,12 +487,14 @@ user_pref("test.mousescroll", true);
 user_pref("security.default_personal_cert", "Select Automatically"); // Need to client auth test be w/o any dialogs
 user_pref("network.http.prompt-temp-redirect", false);
 user_pref("media.cache_size", 100);
+user_pref("media.volume_scale", "0.01");
 user_pref("security.warn_viewing_mixed", false);
 user_pref("app.update.enabled", false);
 user_pref("app.update.staging.enabled", false);
 user_pref("browser.panorama.experienced_first_run", true); // Assume experienced
 user_pref("dom.w3c_touch_events.enabled", 1);
 user_pref("dom.undo_manager.enabled", true);
+user_pref("dom.webcomponents.enabled", true);
 // Set a future policy version to avoid the telemetry prompt.
 user_pref("toolkit.telemetry.prompted", 999);
 user_pref("toolkit.telemetry.notifiedOptOut", 999);
@@ -527,6 +548,14 @@ user_pref("security.notification_enable_delay", 0);
 
 // Make enablePrivilege continue to work for test code. :-(
 user_pref("security.turn_off_all_security_so_that_viruses_can_take_over_this_computer", true);
+
+// In the default configuration, we bypass XBL scopes (a security feature) for
+// domains whitelisted for remote XUL, so that intranet apps and such continue
+// to work without major rewrites. However, we also use the whitelist mechanism
+// to run our XBL tests in automation, in which case we really want to be testing
+// the configuration that we ship to users without special whitelisting. So we
+// use an additional pref here to allow automation to use the "normal" behavior.
+user_pref("dom.use_xbl_scopes_for_remote_xul", true);
 
 // Get network events.
 user_pref("network.activity.blipIntervalMilliseconds", 250);
@@ -825,6 +854,15 @@ user_pref("camino.use_system_proxy_settings", false); // Camino-only, harmless t
     env['XRE_NO_WINDOWS_CRASH_DIALOG'] = '1'
     env['NS_TRACE_MALLOC_DISABLE_STACKS'] = '1'
 
+    # Additional temporary logging while we try to debug some intermittent
+    # WebRTC conditions. This is necessary to troubleshoot bugs 841496,
+    # 841150, and 839677 (at least)
+    if 'NSPR_LOG_MODULES' not in env:
+      env['NSPR_LOG_MODULES'] = 'signaling:5,mtransport:3'
+    env['R_LOG_LEVEL'] = '5'
+    env['R_LOG_DESTINATION'] = 'stderr'
+    env['R_LOG_VERBOSE'] = '1'
+
     # ASan specific environment stuff
     if self.IS_ASAN and (self.IS_LINUX or self.IS_MAC):
       try:
@@ -1005,7 +1043,7 @@ user_pref("camino.use_system_proxy_settings", false); // Camino-only, harmless t
     else:
       logsource = proc.stdout
 
-      if self.IS_DEBUG_BUILD and (self.IS_MAC or self.IS_LINUX) and symbolsPath and os.path.exists(symbolsPath):
+      if self.IS_DEBUG_BUILD and symbolsPath and os.path.exists(symbolsPath):
         # Run each line through a function in fix_stack_using_bpsyms.py (uses breakpad symbol files)
         # This method is preferred for Tinderbox builds, since native symbols may have been stripped.
         sys.path.insert(0, utilityPath)
@@ -1121,7 +1159,7 @@ user_pref("camino.use_system_proxy_settings", false); // Camino-only, harmless t
     return foundZombie
 
   def checkForCrashes(self, profileDir, symbolsPath):
-    return automationutils.checkForCrashes(os.path.join(profileDir, "minidumps"), symbolsPath, self.lastTestSeen)
+    return mozcrash.check_for_crashes(os.path.join(profileDir, "minidumps"), symbolsPath, test_name=self.lastTestSeen)
 
   def runApp(self, testURL, env, app, profileDir, extraArgs,
              runSSLTunnel = False, utilityPath = None,

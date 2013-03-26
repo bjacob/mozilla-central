@@ -39,6 +39,7 @@
 #include "nsContentUtils.h"
 #include "nsLayoutStylesheetCache.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/dom/EncodingUtils.h"
 
 #include "nsIDeviceContextSpec.h"
 #include "nsViewManager.h"
@@ -155,6 +156,7 @@ static const char sPrintOptionsContractID[]         = "@mozilla.org/gfx/printset
 #include "jsfriendapi.h"
 
 using namespace mozilla;
+using namespace mozilla::dom;
 
 #ifdef DEBUG
 
@@ -989,7 +991,7 @@ nsDocumentViewer::LoadComplete(nsresult aStatus)
   NS_ENSURE_TRUE(mDocument, NS_ERROR_NOT_AVAILABLE);
 
   // First, get the window from the document...
-  nsPIDOMWindow *window = mDocument->GetWindow();
+  nsCOMPtr<nsPIDOMWindow> window = mDocument->GetWindow();
 
   mLoaded = true;
 
@@ -1025,9 +1027,10 @@ nsDocumentViewer::LoadComplete(nsresult aStatus)
                     nsIDocument::READYSTATE_UNINITIALIZED &&
                   NS_IsAboutBlank(mDocument->GetDocumentURI())),
                  "Bad readystate");
+      nsCOMPtr<nsIDocument> d = mDocument;
       mDocument->SetReadyStateInternal(nsIDocument::READYSTATE_COMPLETE);
 
-      nsRefPtr<nsDOMNavigationTiming> timing(mDocument->GetNavigationTiming());
+      nsRefPtr<nsDOMNavigationTiming> timing(d->GetNavigationTiming());
       if (timing) {
         timing->NotifyLoadEventStart();
       }
@@ -1267,7 +1270,7 @@ nsDocumentViewer::PageHide(bool aIsUnload)
 
   if (aIsUnload) {
     // Poke the GC. The window might be collectable garbage now.
-    nsJSContext::PokeGC(js::gcreason::PAGE_HIDE, NS_GC_DELAY * 2);
+    nsJSContext::PokeGC(JS::gcreason::PAGE_HIDE, NS_GC_DELAY * 2);
 
     // if Destroy() was called during OnPageHide(), mDocument is nullptr.
     NS_ENSURE_STATE(mDocument);
@@ -2969,10 +2972,14 @@ nsDocumentViewer::GetDefaultCharacterSet(nsACString& aDefaultCharacterSet)
     const nsAdoptingCString& defCharset =
       Preferences::GetLocalizedCString("intl.charset.default");
 
-    if (!defCharset.IsEmpty()) {
-      mDefaultCharacterSet = defCharset;
+    // Don't let the user break things by setting intl.charset.default to
+    // not a rough ASCII superset
+    nsAutoCString canonical;
+    if (EncodingUtils::FindEncodingForLabel(defCharset, canonical) &&
+        EncodingUtils::IsAsciiCompatible(canonical)) {
+      mDefaultCharacterSet = canonical;
     } else {
-      mDefaultCharacterSet.AssignLiteral("ISO-8859-1");
+      mDefaultCharacterSet.AssignLiteral("windows-1252");
     }
   }
   aDefaultCharacterSet = mDefaultCharacterSet;
@@ -3651,6 +3658,9 @@ nsDocumentViewer::Print(nsIPrintSettings*       aPrintSettings,
   dom::Element* root = mDocument->GetRootElement();
   if (root && root->HasAttr(kNameSpaceID_None, nsGkAtoms::mozdisallowselectionprint)) {
     mPrintEngine->SetDisallowSelectionPrint(true);
+  }
+  if (root && root->HasAttr(kNameSpaceID_None, nsGkAtoms::moznomarginboxes)) {
+    mPrintEngine->SetNoMarginBoxes(true);
   }
   rv = mPrintEngine->Print(aPrintSettings, aWebProgressListener);
   if (NS_FAILED(rv)) {

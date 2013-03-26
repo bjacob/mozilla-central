@@ -70,7 +70,6 @@ JSSHELL_BINS  = \
   $(DIST)/bin/$(DLL_PREFIX)mozglue$(DLL_SUFFIX) \
   $(NULL)
 ifndef MOZ_NATIVE_NSPR
-JSSHELL_BINS += $(DIST)/bin/$(DLL_PREFIX)nspr4$(DLL_SUFFIX)
 ifeq ($(OS_ARCH),WINNT)
 ifeq ($(_MSC_VER),1400)
 JSSHELL_BINS += $(DIST)/bin/Microsoft.VC80.CRT.manifest
@@ -87,10 +86,15 @@ ifeq ($(_MSC_VER),1700)
 JSSHELL_BINS += $(DIST)/bin/msvcr110.dll
 endif
 else
+ifdef MOZ_FOLD_LIBS
+JSSHELL_BINS += $(DIST)/bin/$(DLL_PREFIX)nss3$(DLL_SUFFIX)
+else
 JSSHELL_BINS += \
+  $(DIST)/bin/$(DLL_PREFIX)nspr4$(DLL_SUFFIX) \
   $(DIST)/bin/$(DLL_PREFIX)plds4$(DLL_SUFFIX) \
   $(DIST)/bin/$(DLL_PREFIX)plc4$(DLL_SUFFIX) \
   $(NULL)
+endif # MOZ_FOLD_LIBS
 endif
 endif # MOZ_NATIVE_NSPR
 MAKE_JSSHELL  = $(ZIP) -9j $(PKG_JSSHELL) $(JSSHELL_BINS)
@@ -98,7 +102,7 @@ endif # LIBXUL_SDK
 
 _ABS_DIST = $(call core_abspath,$(DIST))
 JARLOG_DIR = $(call core_abspath,$(DEPTH)/jarlog/)
-JARLOG_DIR_AB_CD = $(JARLOG_DIR)/$(AB_CD)
+JARLOG_FILE_AB_CD = $(JARLOG_DIR)/$(AB_CD).log
 
 TAR_CREATE_FLAGS := --exclude=.mkdir.done $(TAR_CREATE_FLAGS)
 CREATE_FINAL_TAR = $(TAR) -c --owner=0 --group=0 --numeric-owner \
@@ -323,11 +327,7 @@ ABI_DIR = armeabi
 endif
 endif
 
-ifneq (,$(filter mobile/xul b2g,$(MOZ_BUILD_APP)))
-GECKO_APP_AP_PATH = $(call core_abspath,$(DEPTH)/embedding/android)
-else
 GECKO_APP_AP_PATH = $(call core_abspath,$(DEPTH)/mobile/android/base)
-endif
 
 ifdef ENABLE_TESTS
 INNER_ROBOCOP_PACKAGE=echo
@@ -347,9 +347,7 @@ INNER_ROBOCOP_PACKAGE=echo 'Testing is disabled - No Robocop for you'
 endif
 
 ifdef MOZ_OMX_PLUGIN
-OMX_PLUGIN_NAMES = libomxplugin.so libomxplugingb.so libomxplugingb235.so libomxpluginhc.so libomxpluginsony.so libomxpluginfroyo.so
-else
-OMX_PLUGIN_NAMES =
+DIST_FILES += libomxplugin.so libomxplugingb.so libomxplugingb235.so libomxpluginhc.so libomxpluginsony.so libomxpluginfroyo.so libomxpluginjb-htc.so
 endif
 
 PKG_SUFFIX      = .apk
@@ -359,7 +357,7 @@ INNER_MAKE_PACKAGE	= \
   cp $(GECKO_APP_AP_PATH)/gecko.ap_ $(_ABS_DIST) && \
   ( cd $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH) && \
     mkdir -p lib/$(ABI_DIR) && \
-    mv libmozglue.so $(MOZ_CHILD_PROCESS_NAME) $(OMX_PLUGIN_NAMES) lib/$(ABI_DIR) && \
+    mv libmozglue.so $(MOZ_CHILD_PROCESS_NAME) lib/$(ABI_DIR) && \
     rm -f lib.id && \
     for SOMELIB in *.so ; \
     do \
@@ -382,12 +380,6 @@ INNER_UNMAKE_PACKAGE	= \
   pushd $(MOZ_PKG_DIR) && \
   $(UNZIP) $(UNPACKAGE) && \
   mv lib/$(ABI_DIR)/libmozglue.so . && \
-  mv lib/$(ABI_DIR)/libomxplugin.so . && \
-  mv lib/$(ABI_DIR)/libomxplugingb.so . && \
-  mv lib/$(ABI_DIR)/libomxplugingb235.so . && \
-  mv lib/$(ABI_DIR)/libomxpluginhc.so . && \
-  mv lib/$(ABI_DIR)/libomxpluginsony.so . && \
-  mv lib/$(ABI_DIR)/libomxpluginfroyo.so . && \
   mv lib/$(ABI_DIR)/*plugin-container* $(MOZ_CHILD_PROCESS_NAME) && \
   rm -rf lib/$(ABI_DIR) && \
   popd
@@ -527,6 +519,10 @@ endif
 
 DEFINES += -DDLL_PREFIX=$(DLL_PREFIX) -DDLL_SUFFIX=$(DLL_SUFFIX) -DBIN_SUFFIX=$(BIN_SUFFIX)
 
+ifdef MOZ_FOLD_LIBS
+DEFINES += -DMOZ_FOLD_LIBS=1
+endif
+
 GARBAGE		+= $(DIST)/$(PACKAGE) $(PACKAGE)
 
 # The following target stages files into two directories: one directory for
@@ -583,7 +579,8 @@ ifneq (android,$(MOZ_WIDGET_TOOLKIT))
 OPTIMIZEJARS = 1
 endif
 
-export NO_PKG_FILES USE_ELF_HACK ELF_HACK_FLAGS _BINPATH
+export NO_PKG_FILES USE_ELF_HACK ELF_HACK_FLAGS
+
 stage-package: $(MOZ_PKG_MANIFEST)
 	@rm -rf $(DIST)/$(PKG_PATH)$(PKG_BASENAME).tar $(DIST)/$(PKG_PATH)$(PKG_BASENAME).dmg $@ $(EXCLUDE_LIST)
 	$(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/packager.py $(DEFINES) \
@@ -591,12 +588,12 @@ stage-package: $(MOZ_PKG_MANIFEST)
 		$(addprefix --removals ,$(MOZ_PKG_REMOVALS)) \
 		$(if $(filter-out 0,$(MOZ_PKG_FATAL_WARNINGS)),,--ignore-errors) \
 		$(if $(MOZ_PACKAGER_MINIFY),--minify) \
-		$(if $(JARLOG_DIR),--jarlogs $(JARLOG_DIR_AB_CD)) \
+		$(if $(JARLOG_DIR),$(addprefix --jarlog ,$(wildcard $(JARLOG_FILE_AB_CD)))) \
 		$(if $(OPTIMIZEJARS),--optimizejars) \
 		$(addprefix --unify ,$(UNIFY_DIST)) \
-		$(MOZ_PKG_MANIFEST) $(DIST) $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR) \
+		$(MOZ_PKG_MANIFEST) $(DIST) $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)$(if $(MOZ_PKG_MANIFEST),,$(_BINPATH)) \
 		$(if $(filter omni,$(MOZ_PACKAGER_FORMAT)),$(if $(NON_OMNIJAR_FILES),--non-resource $(NON_OMNIJAR_FILES)))
-	$(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/find-dupes.py $(DIST)/$(MOZ_PKG_DIR)
+	$(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/find-dupes.py $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)
 ifndef LIBXUL_SDK
 ifdef MOZ_PACKAGE_JSSHELL
 # Package JavaScript Shell
@@ -700,6 +697,9 @@ make-sdk:
 	(cd $(DIST)/sdk/lib && $(TAR) $(TAR_CREATE_FLAGS) - .) | \
 	  (cd $(DIST)/$(MOZ_APP_NAME)-sdk/lib && tar -xf -)
 	$(NSINSTALL) -D $(DIST)/$(SDK_PATH)
+ifndef PKG_SKIP_STRIP
+	USE_ELF_HACK= $(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/strip.py $(DIST)/$(MOZ_APP_NAME)-sdk
+endif
 	cd $(DIST) && $(MAKE_SDK)
 
 ifeq ($(OS_TARGET), WINNT)

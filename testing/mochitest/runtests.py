@@ -584,6 +584,8 @@ class Mochitest(object):
 
   def buildProfile(self, options):
     """ create the profile and add optional chrome bits and files if requested """
+    if options.browserChrome and options.timeout:
+      options.extraPrefs.append("testing.browserTestHarness.timeout=%d" % options.timeout)
     self.automation.initializeProfile(options.profilePath,
                                       options.extraPrefs,
                                       useServerLocations=True)
@@ -743,7 +745,7 @@ class Mochitest(object):
     # then again to actually run mochitest
     if options.timeout:
       timeout = options.timeout + 30
-    elif not options.autorun:
+    elif options.debugger or not options.autorun:
       timeout = None
     else:
       timeout = 330.0 # default JS harness timeout is 300 seconds

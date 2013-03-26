@@ -5,7 +5,6 @@
 
 package org.mozilla.gecko.gfx;
 
-import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.Tab;
@@ -14,6 +13,7 @@ import org.mozilla.gecko.ZoomConstraints;
 import org.mozilla.gecko.util.EventDispatcher;
 import org.mozilla.gecko.util.FloatUtils;
 import org.mozilla.gecko.util.GeckoEventListener;
+import org.mozilla.gecko.util.ThreadUtils;
 
 import org.json.JSONObject;
 
@@ -23,6 +23,7 @@ import android.os.Build;
 import android.util.FloatMath;
 import android.util.Log;
 import android.view.GestureDetector;
+import android.view.KeyEvent;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
@@ -81,6 +82,9 @@ class JavaPanZoomController
         WAITING_LISTENERS, /* a state halfway between NOTHING and TOUCHING - the user has
                         put a finger down, but we don't yet know if a touch listener has
                         prevented the default actions yet. we still need to abort animations. */
+        AUTOSCROLL,     /* We are scrolling using an AutoscrollRunnable animation. This is similar
+                        to the FLING state except that it must be stopped manually by the code that
+                        started it, and it's velocity can be updated while it's running. */
     }
 
     private final PanZoomTarget mTarget;
@@ -89,7 +93,6 @@ class JavaPanZoomController
     private final Axis mY;
     private final TouchEventHandler mTouchEventHandler;
     private final EventDispatcher mEventDispatcher;
-    private Thread mMainThread;
 
     /* The timer that handles flings or bounces. */
     private Timer mAnimationTimer;
@@ -109,7 +112,6 @@ class JavaPanZoomController
         mY = new AxisY(mSubscroller);
         mTouchEventHandler = new TouchEventHandler(view.getContext(), view, this);
 
-        mMainThread = GeckoApp.mAppContext.getMainLooper().getThread();
         checkMainThread();
 
         setState(PanZoomState.NOTHING);
@@ -122,6 +124,7 @@ class JavaPanZoomController
         Axis.initPrefs();
     }
 
+    @Override
     public void destroy() {
         unregisterEventListener(MESSAGE_ZOOM_RECT);
         unregisterEventListener(MESSAGE_ZOOM_PAGE);
@@ -156,14 +159,14 @@ class JavaPanZoomController
         return mTarget.getViewportMetrics();
     }
 
-    // for debugging bug 713011; it can be taken out once that is resolved.
     private void checkMainThread() {
-        if (mMainThread != Thread.currentThread()) {
+        if (!ThreadUtils.isOnUiThread()) {
             // log with full stack trace
             Log.e(LOGTAG, "Uh-oh, we're running on the wrong thread!", new Exception());
         }
     }
 
+    @Override
     public void handleMessage(String event, JSONObject message) {
         try {
             if (MESSAGE_ZOOM_RECT.equals(event)) {
@@ -173,6 +176,7 @@ class JavaPanZoomController
                                      x + (float)message.getDouble("w"),
                                      y + (float)message.getDouble("h"));
                 mTarget.post(new Runnable() {
+                    @Override
                     public void run() {
                         animatedZoomTo(zoomRect);
                     }
@@ -191,6 +195,7 @@ class JavaPanZoomController
                                     cssPageRect.width(),
                                     y + dh/2 + newHeight);
                 mTarget.post(new Runnable() {
+                    @Override
                     public void run() {
                         animatedZoomTo(r);
                     }
@@ -200,6 +205,7 @@ class JavaPanZoomController
                 final Tab tab = Tabs.getInstance().getTab(tabId);
                 tab.setHasTouchListeners(true);
                 mTarget.post(new Runnable() {
+                    @Override
                     public void run() {
                         if (Tabs.getInstance().isSelectedTab(tab))
                             mTouchEventHandler.setWaitForTouchListeners(true);
@@ -212,6 +218,27 @@ class JavaPanZoomController
     }
 
     /** This function MUST be called on the UI thread */
+    @Override
+    public boolean onKeyEvent(KeyEvent event) {
+        if (Build.VERSION.SDK_INT <= 11) {
+            return false;
+        }
+
+        if ((event.getSource() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+            && event.getAction() == KeyEvent.ACTION_DOWN) {
+
+            switch (event.getKeyCode()) {
+            case KeyEvent.KEYCODE_ZOOM_IN:
+                return animatedScale(0.2f);
+            case KeyEvent.KEYCODE_ZOOM_OUT:
+                return animatedScale(-0.2f);
+            }
+        }
+        return false;
+    }
+
+    /** This function MUST be called on the UI thread */
+    @Override
     public boolean onMotionEvent(MotionEvent event) {
         if (Build.VERSION.SDK_INT <= 11) {
             return false;
@@ -223,11 +250,17 @@ class JavaPanZoomController
             case MotionEvent.ACTION_SCROLL: return handlePointerScroll(event);
             }
             break;
+        case InputDevice.SOURCE_CLASS_JOYSTICK:
+            switch (event.getAction() & MotionEvent.ACTION_MASK) {
+            case MotionEvent.ACTION_MOVE: return handleJoystickScroll(event);
+            }
+            break;
         }
         return false;
     }
 
     /** This function MUST be called on the UI thread */
+    @Override
     public boolean onTouchEvent(MotionEvent event) {
         return mTouchEventHandler.handleEvent(event);
     }
@@ -243,11 +276,13 @@ class JavaPanZoomController
     }
 
     /** This function MUST be called on the UI thread */
+    @Override
     public void notifyDefaultActionPrevented(boolean prevented) {
         mTouchEventHandler.handleEventListenerAction(!prevented);
     }
 
     /** This function must be called from the UI thread. */
+    @Override
     public void abortAnimation() {
         checkMainThread();
         // this happens when gecko changes the viewport on us or if the device is rotated.
@@ -300,6 +335,7 @@ class JavaPanZoomController
     }
 
     /** This must be called on the UI thread. */
+    @Override
     public void pageRectUpdated() {
         if (mState == PanZoomState.NOTHING) {
             synchronized (mTarget.getLock()) {
@@ -330,6 +366,7 @@ class JavaPanZoomController
             mTarget.forceRedraw();
             // fall through
         case FLING:
+        case AUTOSCROLL:
         case BOUNCE:
         case NOTHING:
         case WAITING_LISTENERS:
@@ -352,6 +389,7 @@ class JavaPanZoomController
 
         switch (mState) {
         case FLING:
+        case AUTOSCROLL:
         case BOUNCE:
         case WAITING_LISTENERS:
             // should never happen
@@ -399,6 +437,7 @@ class JavaPanZoomController
 
         switch (mState) {
         case FLING:
+        case AUTOSCROLL:
         case BOUNCE:
         case WAITING_LISTENERS:
             // should never happen
@@ -458,6 +497,43 @@ class JavaPanZoomController
 
             scrollBy(scrollX * MAX_SCROLL, scrollY * MAX_SCROLL);
             bounce();
+            return true;
+        }
+        return false;
+    }
+
+    private float normalizeJoystick(float value, InputDevice.MotionRange range) {
+        // The 1e-2 here should really be range.getFlat() + range.getFuzz() but the
+        // values those functions return on the Ouya are zero so we're just hard-coding
+        // it for now.
+        if (Math.abs(value) < 1e-2) {
+            return 0;
+        }
+        // joystick axis positions are already normalized to [-1, 1] so just scale it up by how much we want
+        return value * MAX_SCROLL;
+    }
+
+    // Since this event is a position-based event rather than a motion-based event, we need to
+    // set up an AUTOSCROLL animation to keep scrolling even while we don't get events.
+    private boolean handleJoystickScroll(MotionEvent event) {
+        float velocityX = normalizeJoystick(event.getX(0), event.getDevice().getMotionRange(MotionEvent.AXIS_X));
+        float velocityY = normalizeJoystick(event.getY(0), event.getDevice().getMotionRange(MotionEvent.AXIS_Y));
+
+        if (velocityX == 0 && velocityY == 0) {
+            if (mState == PanZoomState.AUTOSCROLL) {
+                bounce(); // if not needed, this will automatically go to state NOTHING
+                return true;
+            }
+            return false;
+        }
+
+        if (mState == PanZoomState.NOTHING) {
+            setState(PanZoomState.AUTOSCROLL);
+            startAnimationTimer(new AutoscrollRunnable());
+        }
+        if (mState == PanZoomState.AUTOSCROLL) {
+            mX.setAutoscrollVelocity(velocityX);
+            mY.setAutoscrollVelocity(velocityY);
             return true;
         }
         return false;
@@ -587,7 +663,7 @@ class JavaPanZoomController
     /* Starts the fling or bounce animation. */
     private void startAnimationTimer(final AnimationRunnable runnable) {
         if (mAnimationTimer != null) {
-            Log.e(LOGTAG, "Attempted to start a new fling without canceling the old one!");
+            Log.e(LOGTAG, "Attempted to start a new timer without canceling the old one!");
             stopAnimationTimer();
         }
 
@@ -617,6 +693,7 @@ class JavaPanZoomController
         return FloatMath.sqrt(xvel * xvel + yvel * yvel);
     }
 
+    @Override
     public PointF getVelocityVector() {
         return new PointF(mX.getRealVelocity(), mY.getRealVelocity());
     }
@@ -647,6 +724,7 @@ class JavaPanZoomController
         private boolean mAnimationTerminated;
 
         /* This should always run on the UI thread */
+        @Override
         public final void run() {
             /*
              * Since the animation timer queues this runnable on the UI thread, it
@@ -668,6 +746,18 @@ class JavaPanZoomController
         }
     }
 
+    private class AutoscrollRunnable extends AnimationRunnable {
+        @Override
+        protected void animateFrame() {
+            if (mState != PanZoomState.AUTOSCROLL) {
+                finishAnimation();
+                return;
+            }
+
+            updatePosition();
+        }
+    }
+
     /* The callback that performs the bounce animation. */
     private class BounceRunnable extends AnimationRunnable {
         /* The current frame of the bounce-back animation */
@@ -684,6 +774,7 @@ class JavaPanZoomController
             mBounceEndMetrics = endMetrics;
         }
 
+        @Override
         protected void animateFrame() {
             /*
              * The pan/zoom controller might have signaled to us that it wants to abort the
@@ -728,6 +819,7 @@ class JavaPanZoomController
 
     // The callback that performs the fling animation.
     private class FlingRunnable extends AnimationRunnable {
+        @Override
         protected void animateFrame() {
             /*
              * The pan/zoom controller might have signaled to us that it wants to abort the
@@ -815,15 +907,21 @@ class JavaPanZoomController
 
         // Ensure minZoomFactor keeps the page at least as big as the viewport.
         if (pageRect.width() > 0) {
-            float scaleFactor = viewport.width() / pageRect.width();
+            float pageWidth = pageRect.width() +
+              viewportMetrics.fixedLayerMarginLeft +
+              viewportMetrics.fixedLayerMarginRight;
+            float scaleFactor = viewport.width() / pageWidth;
             minZoomFactor = Math.max(minZoomFactor, zoomFactor * scaleFactor);
-            if (viewport.width() > pageRect.width())
+            if (viewport.width() > pageWidth)
                 focusX = 0.0f;
         }
         if (pageRect.height() > 0) {
-            float scaleFactor = viewport.height() / pageRect.height();
+            float pageHeight = pageRect.height() +
+              viewportMetrics.fixedLayerMarginTop +
+              viewportMetrics.fixedLayerMarginBottom;
+            float scaleFactor = viewport.height() / pageHeight;
             minZoomFactor = Math.max(minZoomFactor, zoomFactor * scaleFactor);
-            if (viewport.height() > pageRect.height())
+            if (viewport.height() > pageHeight)
                 focusY = 0.0f;
         }
 
@@ -843,7 +941,7 @@ class JavaPanZoomController
         }
 
         /* Now we pan to the right origin. */
-        viewportMetrics = viewportMetrics.clamp();
+        viewportMetrics = viewportMetrics.clampWithMargins();
 
         return viewportMetrics;
     }
@@ -855,9 +953,15 @@ class JavaPanZoomController
         @Override
         protected float getViewportLength() { return getMetrics().getWidth(); }
         @Override
-        protected float getPageStart() { return getMetrics().pageRectLeft; }
+        protected float getPageStart() {
+            ImmutableViewportMetrics metrics = getMetrics();
+            return metrics.pageRectLeft - metrics.fixedLayerMarginLeft;
+        }
         @Override
-        protected float getPageLength() { return getMetrics().getPageWidth(); }
+        protected float getPageLength() {
+            ImmutableViewportMetrics metrics = getMetrics();
+            return metrics.getPageWidth() + metrics.fixedLayerMarginLeft + metrics.fixedLayerMarginRight;
+        }
     }
 
     private class AxisY extends Axis {
@@ -867,9 +971,15 @@ class JavaPanZoomController
         @Override
         protected float getViewportLength() { return getMetrics().getHeight(); }
         @Override
-        protected float getPageStart() { return getMetrics().pageRectTop; }
+        protected float getPageStart() {
+            ImmutableViewportMetrics metrics = getMetrics();
+            return metrics.pageRectTop - metrics.fixedLayerMarginTop;
+        }
         @Override
-        protected float getPageLength() { return getMetrics().getPageHeight(); }
+        protected float getPageLength() {
+            ImmutableViewportMetrics metrics = getMetrics();
+            return metrics.getPageHeight() + metrics.fixedLayerMarginTop + metrics.fixedLayerMarginBottom;
+        }
     }
 
     /*
@@ -906,61 +1016,79 @@ class JavaPanZoomController
             return true;
         }
 
-        float spanRatio = detector.getCurrentSpan() / prevSpan;
-
-        /*
-         * Apply edge resistance if we're zoomed out smaller than the page size by scaling the zoom
-         * factor toward 1.0.
-         */
-        float resistance = Math.min(mX.getEdgeResistance(true), mY.getEdgeResistance(true));
-        if (spanRatio > 1.0f)
-            spanRatio = 1.0f + (spanRatio - 1.0f) * resistance;
-        else
-            spanRatio = 1.0f - (1.0f - spanRatio) * resistance;
-
         synchronized (mTarget.getLock()) {
-            float newZoomFactor = getMetrics().zoomFactor * spanRatio;
-            float minZoomFactor = 0.0f;
-            float maxZoomFactor = MAX_ZOOM;
-
-            ZoomConstraints constraints = mTarget.getZoomConstraints();
-
-            if (constraints.getMinZoom() > 0)
-                minZoomFactor = constraints.getMinZoom();
-            if (constraints.getMaxZoom() > 0)
-                maxZoomFactor = constraints.getMaxZoom();
-
-            if (newZoomFactor < minZoomFactor) {
-                // apply resistance when zooming past minZoomFactor,
-                // such that it asymptotically reaches minZoomFactor / 2.0
-                // but never exceeds that
-                final float rate = 0.5f; // controls how quickly we approach the limit
-                float excessZoom = minZoomFactor - newZoomFactor;
-                excessZoom = 1.0f - (float)Math.exp(-excessZoom * rate);
-                newZoomFactor = minZoomFactor * (1.0f - excessZoom / 2.0f);
-            }
-
-            if (newZoomFactor > maxZoomFactor) {
-                // apply resistance when zooming past maxZoomFactor,
-                // such that it asymptotically reaches maxZoomFactor + 1.0
-                // but never exceeds that
-                float excessZoom = newZoomFactor - maxZoomFactor;
-                excessZoom = 1.0f - (float)Math.exp(-excessZoom);
-                newZoomFactor = maxZoomFactor + excessZoom;
-            }
-
+            float zoomFactor = getAdjustedZoomFactor(detector.getCurrentSpan() / prevSpan);
             scrollBy(mLastZoomFocus.x - detector.getFocusX(),
                      mLastZoomFocus.y - detector.getFocusY());
-            PointF focus = new PointF(detector.getFocusX(), detector.getFocusY());
-            scaleWithFocus(newZoomFactor, focus);
+            mLastZoomFocus.set(detector.getFocusX(), detector.getFocusY());
+            ImmutableViewportMetrics target = getMetrics().scaleTo(zoomFactor, mLastZoomFocus);
+            mTarget.setViewportMetrics(target);
         }
-
-        mLastZoomFocus.set(detector.getFocusX(), detector.getFocusY());
 
         GeckoEvent event = GeckoEvent.createNativeGestureEvent(GeckoEvent.ACTION_MAGNIFY, mLastZoomFocus, getMetrics().zoomFactor);
         GeckoAppShell.sendEventToGecko(event);
 
         return true;
+    }
+
+    private boolean animatedScale(float zoomDelta) {
+        if (mState != PanZoomState.NOTHING && mState != PanZoomState.BOUNCE) {
+            return false;
+        }
+        synchronized (mTarget.getLock()) {
+            ImmutableViewportMetrics metrics = getMetrics();
+            float oldZoom = metrics.zoomFactor;
+            float newZoom = oldZoom + zoomDelta;
+            float adjustedZoom = getAdjustedZoomFactor(newZoom / oldZoom);
+            PointF center = new PointF(metrics.getWidth() / 2.0f, metrics.getHeight() / 2.0f);
+            metrics = metrics.scaleTo(adjustedZoom, center);
+            bounce(getValidViewportMetrics(metrics), PanZoomState.BOUNCE);
+        }
+        return true;
+    }
+
+    private float getAdjustedZoomFactor(float zoomRatio) {
+        /*
+         * Apply edge resistance if we're zoomed out smaller than the page size by scaling the zoom
+         * factor toward 1.0.
+         */
+        float resistance = Math.min(mX.getEdgeResistance(true), mY.getEdgeResistance(true));
+        if (zoomRatio > 1.0f)
+            zoomRatio = 1.0f + (zoomRatio - 1.0f) * resistance;
+        else
+            zoomRatio = 1.0f - (1.0f - zoomRatio) * resistance;
+
+        float newZoomFactor = getMetrics().zoomFactor * zoomRatio;
+        float minZoomFactor = 0.0f;
+        float maxZoomFactor = MAX_ZOOM;
+
+        ZoomConstraints constraints = mTarget.getZoomConstraints();
+
+        if (constraints.getMinZoom() > 0)
+            minZoomFactor = constraints.getMinZoom();
+        if (constraints.getMaxZoom() > 0)
+            maxZoomFactor = constraints.getMaxZoom();
+
+        if (newZoomFactor < minZoomFactor) {
+            // apply resistance when zooming past minZoomFactor,
+            // such that it asymptotically reaches minZoomFactor / 2.0
+            // but never exceeds that
+            final float rate = 0.5f; // controls how quickly we approach the limit
+            float excessZoom = minZoomFactor - newZoomFactor;
+            excessZoom = 1.0f - (float)Math.exp(-excessZoom * rate);
+            newZoomFactor = minZoomFactor * (1.0f - excessZoom / 2.0f);
+        }
+
+        if (newZoomFactor > maxZoomFactor) {
+            // apply resistance when zooming past maxZoomFactor,
+            // such that it asymptotically reaches maxZoomFactor + 1.0
+            // but never exceeds that
+            float excessZoom = newZoomFactor - maxZoomFactor;
+            excessZoom = 1.0f - (float)Math.exp(-excessZoom);
+            newZoomFactor = maxZoomFactor + excessZoom;
+        }
+
+        return newZoomFactor;
     }
 
     @Override
@@ -984,16 +1112,7 @@ class JavaPanZoomController
         GeckoAppShell.sendEventToGecko(event);
     }
 
-    /**
-     * Scales the viewport, keeping the given focus point in the same place before and after the
-     * scale operation. You must hold the monitor while calling this.
-     */
-    private void scaleWithFocus(float zoomFactor, PointF focus) {
-        ImmutableViewportMetrics viewportMetrics = getMetrics();
-        viewportMetrics = viewportMetrics.scaleTo(zoomFactor, focus);
-        mTarget.setViewportMetrics(viewportMetrics);
-    }
-
+    @Override
     public boolean getRedrawHint() {
         switch (mState) {
             case PINCHING:
@@ -1110,16 +1229,19 @@ class JavaPanZoomController
     }
 
     /** This function must be called from the UI thread. */
+    @Override
     public void abortPanning() {
         checkMainThread();
         bounce();
     }
 
+    @Override
     public void setOverScrollMode(int overscrollMode) {
         mX.setOverScrollMode(overscrollMode);
         mY.setOverScrollMode(overscrollMode);
     }
 
+    @Override
     public int getOverScrollMode() {
         return mX.getOverScrollMode();
     }

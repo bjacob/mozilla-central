@@ -67,7 +67,7 @@
 #include "nsIObserverService.h"
 #include "nsIScrollableFrame.h"
 #include "mozilla/Preferences.h"
-#include "sampler.h"
+#include "GeckoProfiler.h"
 #include <algorithm>
 
 // headers for plugin scriptability
@@ -288,7 +288,7 @@ NS_IMETHODIMP nsObjectFrame::GetPluginPort(HWND *aPort)
 #endif
 #endif
 
-NS_IMETHODIMP 
+void
 nsObjectFrame::Init(nsIContent*      aContent,
                     nsIFrame*        aParent,
                     nsIFrame*        aPrevInFlow)
@@ -296,9 +296,7 @@ nsObjectFrame::Init(nsIContent*      aContent,
   PR_LOG(GetObjectFrameLog(), PR_LOG_DEBUG,
          ("Initializing nsObjectFrame %p for content %p\n", this, aContent));
 
-  nsresult rv = nsObjectFrameSuper::Init(aContent, aParent, aPrevInFlow);
-
-  return rv;
+  nsObjectFrameSuper::Init(aContent, aParent, aPrevInFlow);
 }
 
 void
@@ -311,15 +309,12 @@ nsObjectFrame::DestroyFrom(nsIFrame* aDestructRoot)
   // Tell content owner of the instance to disconnect its frame.
   nsCOMPtr<nsIObjectLoadingContent> objContent(do_QueryInterface(mContent));
   NS_ASSERTION(objContent, "Why not an object loading content?");
-  objContent->DisconnectFrame();
+  objContent->HasNewFrame(nullptr);
 
   if (mBackgroundSink) {
     mBackgroundSink->Destroy();
   }
 
-  if (mInstanceOwner) {
-    mInstanceOwner->SetFrame(nullptr);
-  }
   SetInstanceOwner(nullptr);
 
   nsObjectFrameSuper::DestroyFrom(aDestructRoot);
@@ -2071,6 +2066,8 @@ nsObjectFrame::HandleEvent(nsPresContext* aPresContext,
   if (mInstanceOwner->SendNativeEvents() &&
       NS_IS_PLUGIN_EVENT(anEvent)) {
     *anEventStatus = mInstanceOwner->ProcessEvent(*anEvent);
+    // Due to plugin code reentering Gecko, this frame may be dead at this
+    // point.
     return rv;
   }
 
@@ -2085,6 +2082,8 @@ nsObjectFrame::HandleEvent(nsPresContext* aPresContext,
        anEvent->message == NS_WHEEL_WHEEL) &&
       mInstanceOwner->GetEventModel() == NPEventModelCocoa) {
     *anEventStatus = mInstanceOwner->ProcessEvent(*anEvent);
+    // Due to plugin code reentering Gecko, this frame may be dead at this
+    // point.
     return rv;
   }
 #endif
@@ -2209,11 +2208,20 @@ nsObjectFrame::EndSwapDocShells(nsIContent* aContent, void*)
     nsIWidget* parent =
       rootPC->PresShell()->GetRootFrame()->GetNearestWidget();
     widget->SetParent(parent);
+    nsWeakFrame weakFrame(objectFrame);
     objectFrame->CallSetWindow();
+    if (!weakFrame.IsAlive()) {
+      return;
+    }
+  }
 
-    // Register for geometry updates and make a request.
+#ifdef XP_MACOSX
+  if (objectFrame->mWidget) {
     objectFrame->RegisterPluginForGeometryUpdates();
   }
+#else
+  objectFrame->RegisterPluginForGeometryUpdates();
+#endif
 }
 
 nsIFrame*

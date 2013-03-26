@@ -23,6 +23,7 @@
 #include "nsIContentViewer.h"
 #include "nsIController.h"
 #include "nsIControllers.h"
+#include "nsIDOMDOMImplementation.h"
 #include "nsIDocument.h"
 #include "nsIDocumentEncoder.h"
 #include "nsIFactory.h"
@@ -70,8 +71,6 @@
 // DOM includes
 #include "nsDOMException.h"
 #include "nsDOMFileReader.h"
-
-#include "ArchiveReader.h"
 
 #include "nsFormData.h"
 #include "nsHostObjectProtocolHandler.h"
@@ -179,12 +178,6 @@ class nsIDocumentLoaderFactory;
 
 #define PRODUCT_NAME "Gecko"
 
-#define NS_HTMLIMGELEMENT_CONTRACTID \
-  "@mozilla.org/content/element/html;1?name=img"
-
-#define NS_HTMLOPTIONELEMENT_CONTRACTID \
-  "@mozilla.org/content/element/html;1?name=option"
-
 #ifdef MOZ_MEDIA
 #define NS_HTMLAUDIOELEMENT_CONTRACTID \
   "@mozilla.org/content/element/html;1?name=audio"
@@ -224,10 +217,15 @@ static void Shutdown();
 
 #include "nsGeolocation.h"
 #include "nsDeviceSensors.h"
+#ifdef MOZ_GAMEPAD
+#include "mozilla/dom/GamepadService.h"
+#endif
 #include "nsCSPService.h"
 #include "nsISmsService.h"
+#include "nsIMobileMessageService.h"
 #include "nsIMobileMessageDatabaseService.h"
-#include "mozilla/dom/sms/SmsServicesFactory.h"
+#include "mozilla/dom/mobilemessage/MobileMessageService.h"
+#include "mozilla/dom/mobilemessage/SmsServicesFactory.h"
 #include "nsIPowerManagerService.h"
 #include "nsIAlarmHalService.h"
 #include "nsIMediaManager.h"
@@ -246,8 +244,7 @@ static void Shutdown();
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using namespace mozilla::dom::file;
-using namespace mozilla::dom::sms;
+using namespace mozilla::dom::mobilemessage;
 using mozilla::dom::alarm::AlarmHalService;
 using mozilla::dom::indexedDB::IndexedDatabaseManager;
 using mozilla::dom::power::PowerManagerService;
@@ -271,7 +268,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsXMLHttpRequest, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(EventSource)
 NS_GENERIC_FACTORY_CONSTRUCTOR(Activity)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsDOMFileReader, Init)
-NS_GENERIC_FACTORY_CONSTRUCTOR(ArchiveReader)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsFormData)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsBlobProtocolHandler)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMediaStreamProtocolHandler)
@@ -311,14 +307,23 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsHapticFeedback)
 #endif
 #endif
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(ThirdPartyUtil, Init)
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsISmsService, SmsServicesFactory::CreateSmsService)
-NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMobileMessageDatabaseService, SmsServicesFactory::CreateMobileMessageDatabaseService)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsISmsService,
+                                         SmsServicesFactory::CreateSmsService)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMobileMessageService,
+                                         MobileMessageService::GetInstance)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIMobileMessageDatabaseService,
+                                         SmsServicesFactory::CreateMobileMessageDatabaseService)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIPowerManagerService,
                                          PowerManagerService::GetInstance)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIAlarmHalService,
                                          AlarmHalService::GetInstance)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsITimeService,
                                          TimeService::GetInstance)
+#ifdef MOZ_GAMEPAD
+using mozilla::dom::GamepadServiceTest;
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(GamepadServiceTest,
+                                         GamepadServiceTest::CreateService)
+#endif
 
 #ifdef MOZ_WIDGET_GONK
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIGeolocationProvider,
@@ -764,7 +769,6 @@ NS_DEFINE_NAMED_CID(TRANSFORMIIX_XPATH_EVALUATOR_CID);
 NS_DEFINE_NAMED_CID(TRANSFORMIIX_NODESET_CID);
 NS_DEFINE_NAMED_CID(NS_XMLSERIALIZER_CID);
 NS_DEFINE_NAMED_CID(NS_FILEREADER_CID);
-NS_DEFINE_NAMED_CID(NS_ARCHIVEREADER_CID);
 NS_DEFINE_NAMED_CID(NS_FORMDATA_CID);
 NS_DEFINE_NAMED_CID(NS_BLOBPROTOCOLHANDLER_CID);
 NS_DEFINE_NAMED_CID(NS_MEDIASTREAMPROTOCOLHANDLER_CID);
@@ -832,6 +836,7 @@ NS_DEFINE_NAMED_CID(NS_HAPTICFEEDBACK_CID);
 #endif
 #endif
 NS_DEFINE_NAMED_CID(SMS_SERVICE_CID);
+NS_DEFINE_NAMED_CID(MOBILE_MESSAGE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(MOBILE_MESSAGE_DATABASE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_POWERMANAGERSERVICE_CID);
 NS_DEFINE_NAMED_CID(OSFILECONSTANTSSERVICE_CID);
@@ -842,6 +847,9 @@ NS_DEFINE_NAMED_CID(NS_TIMESERVICE_CID);
 NS_DEFINE_NAMED_CID(GONK_GPS_GEOLOCATION_PROVIDER_CID);
 #endif
 NS_DEFINE_NAMED_CID(NS_MEDIAMANAGERSERVICE_CID);
+#ifdef MOZ_GAMEPAD
+NS_DEFINE_NAMED_CID(NS_GAMEPAD_TEST_CID);
+#endif
 
 static nsresult
 CreateWindowCommandTableConstructor(nsISupports *aOuter,
@@ -1047,7 +1055,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kTRANSFORMIIX_NODESET_CID, false, NULL, txNodeSetAdaptorConstructor },
   { &kNS_XMLSERIALIZER_CID, false, NULL, nsDOMSerializerConstructor },
   { &kNS_FILEREADER_CID, false, NULL, nsDOMFileReaderConstructor },
-  { &kNS_ARCHIVEREADER_CID, false, NULL, ArchiveReaderConstructor },
   { &kNS_FORMDATA_CID, false, NULL, nsFormDataConstructor },
   { &kNS_BLOBPROTOCOLHANDLER_CID, false, NULL, nsBlobProtocolHandlerConstructor },
   { &kNS_MEDIASTREAMPROTOCOLHANDLER_CID, false, NULL, nsMediaStreamProtocolHandlerConstructor },
@@ -1111,6 +1118,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kTHIRDPARTYUTIL_CID, false, NULL, ThirdPartyUtilConstructor },
   { &kNS_STRUCTUREDCLONECONTAINER_CID, false, NULL, nsStructuredCloneContainerConstructor },
   { &kSMS_SERVICE_CID, false, NULL, nsISmsServiceConstructor },
+  { &kMOBILE_MESSAGE_SERVICE_CID, false, NULL, nsIMobileMessageServiceConstructor },
   { &kMOBILE_MESSAGE_DATABASE_SERVICE_CID, false, NULL, nsIMobileMessageDatabaseServiceConstructor },
   { &kNS_POWERMANAGERSERVICE_CID, false, NULL, nsIPowerManagerServiceConstructor },
   { &kOSFILECONSTANTSSERVICE_CID, true, NULL, OSFileConstantsServiceConstructor },
@@ -1121,6 +1129,9 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kGONK_GPS_GEOLOCATION_PROVIDER_CID, false, NULL, nsIGeolocationProviderConstructor },
 #endif
   { &kNS_MEDIAMANAGERSERVICE_CID, false, NULL, nsIMediaManagerServiceConstructor },
+#ifdef MOZ_GAMEPAD
+  { &kNS_GAMEPAD_TEST_CID, false, NULL, GamepadServiceTestConstructor },
+#endif
   { NULL }
 };
 
@@ -1149,8 +1160,8 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { "@mozilla.org/content/post-content-iterator;1", &kNS_CONTENTITERATOR_CID },
   { "@mozilla.org/content/pre-content-iterator;1", &kNS_PRECONTENTITERATOR_CID },
   { "@mozilla.org/content/subtree-content-iterator;1", &kNS_SUBTREEITERATOR_CID },
-  { NS_HTMLIMGELEMENT_CONTRACTID, &kNS_HTMLIMAGEELEMENT_CID },
-  { NS_HTMLOPTIONELEMENT_CONTRACTID, &kNS_HTMLOPTIONELEMENT_CID },
+  { "@mozilla.org/content/element/html;1?name=img", &kNS_HTMLIMAGEELEMENT_CID },
+  { "@mozilla.org/content/element/html;1?name=option", &kNS_HTMLOPTIONELEMENT_CID },
 #ifdef MOZ_MEDIA
   { NS_HTMLAUDIOELEMENT_CONTRACTID, &kNS_HTMLAUDIOELEMENT_CID },
 #endif
@@ -1192,7 +1203,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { TRANSFORMIIX_NODESET_CONTRACTID, &kTRANSFORMIIX_NODESET_CID },
   { NS_XMLSERIALIZER_CONTRACTID, &kNS_XMLSERIALIZER_CID },
   { NS_FILEREADER_CONTRACTID, &kNS_FILEREADER_CID },
-  { NS_ARCHIVEREADER_CONTRACTID, &kNS_ARCHIVEREADER_CID },
   { NS_FORMDATA_CONTRACTID, &kNS_FORMDATA_CID },
   { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX BLOBURI_SCHEME, &kNS_BLOBPROTOCOLHANDLER_CID },
   { NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX MEDIASTREAMURI_SCHEME, &kNS_MEDIASTREAMPROTOCOLHANDLER_CID },
@@ -1254,6 +1264,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { THIRDPARTYUTIL_CONTRACTID, &kTHIRDPARTYUTIL_CID },
   { NS_STRUCTUREDCLONECONTAINER_CONTRACTID, &kNS_STRUCTUREDCLONECONTAINER_CID },
   { SMS_SERVICE_CONTRACTID, &kSMS_SERVICE_CID },
+  { MOBILE_MESSAGE_SERVICE_CONTRACTID, &kMOBILE_MESSAGE_SERVICE_CID },
   { MOBILE_MESSAGE_DATABASE_SERVICE_CONTRACTID, &kMOBILE_MESSAGE_DATABASE_SERVICE_CID },
   { POWERMANAGERSERVICE_CONTRACTID, &kNS_POWERMANAGERSERVICE_CID },
   { OSFILECONSTANTSSERVICE_CONTRACTID, &kOSFILECONSTANTSSERVICE_CID },
@@ -1263,16 +1274,15 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
 #ifdef MOZ_WIDGET_GONK
   { GONK_GPS_GEOLOCATION_PROVIDER_CONTRACTID, &kGONK_GPS_GEOLOCATION_PROVIDER_CID },
 #endif
+#ifdef MOZ_GAMEPAD
+  { NS_GAMEPAD_TEST_CONTRACTID, &kNS_GAMEPAD_TEST_CID },
+#endif
   { MEDIAMANAGERSERVICE_CONTRACTID, &kNS_MEDIAMANAGERSERVICE_CID },
   { NULL }
 };
 
 static const mozilla::Module::CategoryEntry kLayoutCategories[] = {
   XPCONNECT_CATEGORIES
-  { JAVASCRIPT_GLOBAL_CONSTRUCTOR_CATEGORY, "Image", NS_HTMLIMGELEMENT_CONTRACTID },
-  { JAVASCRIPT_GLOBAL_CONSTRUCTOR_PROTO_ALIAS_CATEGORY, "Image", "HTMLImageElement" },
-  { JAVASCRIPT_GLOBAL_CONSTRUCTOR_CATEGORY, "Option", NS_HTMLOPTIONELEMENT_CONTRACTID },
-  { JAVASCRIPT_GLOBAL_CONSTRUCTOR_PROTO_ALIAS_CATEGORY, "Option", "HTMLOptionElement" },
 #ifdef MOZ_MEDIA
   { JAVASCRIPT_GLOBAL_CONSTRUCTOR_CATEGORY, "Audio", NS_HTMLAUDIOELEMENT_CONTRACTID },
   { JAVASCRIPT_GLOBAL_CONSTRUCTOR_PROTO_ALIAS_CATEGORY, "Audio", "HTMLAudioElement" },

@@ -31,6 +31,11 @@ class OverflowChangedTracker
 {
 public:
 
+  ~OverflowChangedTracker()
+  {
+    NS_ASSERTION(mEntryList.empty(), "Need to flush before destroying!");
+  }
+
   /**
    * Add a frame that has had a style change, and needs its
    * overflow updated.
@@ -43,8 +48,10 @@ public:
    * be called on the parent.
    */
   void AddFrame(nsIFrame* aFrame) {
-    if (!mEntryList.contains(Entry(aFrame, true))) {
-      mEntryList.insert(new Entry(aFrame, true));
+    uint32_t depth = aFrame->GetDepthInFrameTree();
+    if (mEntryList.empty() ||
+        !mEntryList.contains(Entry(aFrame, depth, true))) {
+      mEntryList.insert(new Entry(aFrame, depth, true));
     }
   }
 
@@ -52,8 +59,13 @@ public:
    * Remove a frame.
    */
   void RemoveFrame(nsIFrame* aFrame) {
-    if (mEntryList.contains(Entry(aFrame, 0, false))) {
-      delete mEntryList.remove(Entry(aFrame, 0, false));
+    if (mEntryList.empty()) {
+      return;
+    }
+
+    uint32_t depth = aFrame->GetDepthInFrameTree();
+    if (mEntryList.contains(Entry(aFrame, depth, false))) {
+      delete mEntryList.remove(Entry(aFrame, depth, false));
     }
   }
 
@@ -121,11 +133,15 @@ private:
     }
  
     /**
-     * Sort by the frame pointer.
+     * Sort by *reverse* depth in the tree, and break ties with
+     * the frame pointer.
      */
     bool operator<(const Entry& aOther) const
     {
-      return mFrame < aOther.mFrame;
+      if (mDepth == aOther.mDepth) {
+        return mFrame < aOther.mFrame;
+      }
+      return mDepth > aOther.mDepth; /* reverse, want "min" to be deepest */
     }
 
     static int compare(const Entry& aOne, const Entry& aTwo)
@@ -247,8 +263,7 @@ private:
    */
   inline void ProcessOneRestyle(Element* aElement,
                                 nsRestyleHint aRestyleHint,
-                                nsChangeHint aChangeHint,
-                                OverflowChangedTracker& aTracker);
+                                nsChangeHint aChangeHint);
 
   /**
    * The guts of our restyle processing.

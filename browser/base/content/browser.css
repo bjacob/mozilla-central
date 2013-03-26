@@ -52,14 +52,6 @@ tabbrowser {
               opacity 50ms ease-out 180ms /* hide the tab for the last 20ms of the max-width transition */;
 }
 
-.tabbrowser-tabs[dontresize] > .tabbrowser-tab[fadein]:not([pinned]) {
-  /* controlled in tabbrowser.xml */
-}
-
-.tabbrowser-tabs[dontanimate] > .tabbrowser-tab {
-  transition: none !important;
-}
-
 .tab-throbber:not([fadein]):not([pinned]),
 .tab-label:not([fadein]):not([pinned]),
 .tab-icon-image:not([fadein]):not([pinned]),
@@ -397,6 +389,14 @@ window[chromehidden~="toolbar"] toolbar:not(.toolbar-primary):not(.chromeclass-m
   opacity: 0.0;
 }
 
+/* When the modal fullscreen approval UI is showing, don't allow interaction
+   with the page, but when we're just showing the warning upon entering
+   fullscreen on an already approved page, do allow interaction with the page.
+ */
+#full-screen-warning-container:not([obscure-browser]) {
+  pointer-events: none;
+}
+
 #full-screen-warning-message {
   /* We must specify a max-width, otherwise word-wrap:break-word doesn't
      work in descendant <description> and <label> elements. Bug 630864. */
@@ -619,4 +619,5 @@ chatbox {
 chatbar {
   -moz-binding: url("chrome://browser/content/socialchat.xml#chatbar");
   height: 0;
+  max-height: 0;
 }

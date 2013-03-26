@@ -32,43 +32,9 @@ function bindDOMWindowUtils(aWindow) {
   if (!aWindow)
     return
 
-  var util = aWindow.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
-                   .getInterface(Components.interfaces.nsIDOMWindowUtils);
-  // This bit of magic brought to you by the letters
-  // B Z, and E, S and the number 5.
-  //
-  // Take all of the properties on the nsIDOMWindowUtils-implementing
-  // object, and rebind them onto a new object with a stub that uses
-  // apply to call them from this privileged scope. This way we don't
-  // have to explicitly stub out new methods that appear on
-  // nsIDOMWindowUtils.
-  //
-  // Note that this will be a chrome object that is (possibly) exposed to
-  // content. Make sure to define __exposedProps__ for each property to make
-  // sure that it gets through the security membrane.
-  var proto = Object.getPrototypeOf(util);
-  var target = { __exposedProps__: {} };
-  function rebind(desc, prop) {
-    if (prop in desc && typeof(desc[prop]) == "function") {
-      var oldval = desc[prop];
-      try {
-        desc[prop] = function() {
-          return oldval.apply(util, arguments);
-        };
-      } catch (ex) {
-        dump("WARNING: Special Powers failed to rebind function: " + desc + "::" + prop + "\n");
-      }
-    }
-  }
-  for (var i in proto) {
-    var desc = Object.getOwnPropertyDescriptor(proto, i);
-    rebind(desc, "get");
-    rebind(desc, "set");
-    rebind(desc, "value");
-    Object.defineProperty(target, i, desc);
-    target.__exposedProps__[i] = 'rw';
-  }
-  return target;
+   var util = aWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                     .getInterface(Ci.nsIDOMWindowUtils);
+   return wrapPrivileged(util);
 }
 
 function getRawComponents(aWindow) {
@@ -745,6 +711,17 @@ SpecialPowersAPI.prototype = {
      return obj1 instanceof obj2;
   },
 
+  // Returns a privileged getter from an object. GetOwnPropertyDescriptor does
+  // not work here because xray wrappers don't properly implement it.
+  //
+  // This terribleness is used by content/base/test/test_object.html because
+  // <object> and <embed> tags will spawn plugins if their prototype is touched,
+  // so we need to get and cache the getter of |hasRunningPlugin| if we want to
+  // call it without paradoxically spawning the plugin.
+  do_lookupGetter: function(obj, name) {
+    return Object.prototype.__lookupGetter__.call(obj, name);
+  },
+
   // Mimic the get*Pref API
   getBoolPref: function(aPrefName) {
     return (this._getPref(aPrefName, 'BOOL'));
@@ -1206,6 +1183,10 @@ SpecialPowersAPI.prototype = {
     var debug = Cc["@mozilla.org/xpcom/debug;1"].getService(Ci.nsIDebug2);
     return this.isDebugBuild = debug.isDebugBuild;
   },
+  assertionCount: function() {
+    var debugsvc = Cc['@mozilla.org/xpcom/debug;1'].getService(Ci.nsIDebug2);
+    return debugsvc.assertionCount;
+  },
 
   /**
    * Get the message manager associated with an <iframe mozbrowser>.
@@ -1274,7 +1255,7 @@ SpecialPowersAPI.prototype = {
                            : Ci.nsIPermissionManager.DENY_ACTION;
 
     var msg = {
-      'op': "add",
+      'op': 'add',
       'type': type,
       'permission': permission,
       'url': url,
@@ -1289,7 +1270,7 @@ SpecialPowersAPI.prototype = {
     let [url, appId, isInBrowserElement] = this._getInfoFromPermissionArg(arg);
 
     var msg = {
-      'op': "remove",
+      'op': 'remove',
       'type': type,
       'url': url,
       'appId': appId,
@@ -1297,6 +1278,33 @@ SpecialPowersAPI.prototype = {
     };
 
     this._sendSyncMessage('SPPermissionManager', msg);
+  },
+
+  hasPermission: function (type, arg) {
+   let [url, appId, isInBrowserElement] = this._getInfoFromPermissionArg(arg);
+
+    var msg = {
+      'op': 'has',
+      'type': type,
+      'url': url,
+      'appId': appId,
+      'isInBrowserElement': isInBrowserElement
+    };
+
+    return this._sendSyncMessage('SPPermissionManager', msg)[0];
+  },
+  testPermission: function (type, value, arg) {
+   let [url, appId, isInBrowserElement] = this._getInfoFromPermissionArg(arg);
+
+    var msg = {
+      'op': 'test',
+      'type': type,
+      'value': value, 
+      'url': url,
+      'appId': appId,
+      'isInBrowserElement': isInBrowserElement
+    };
+    return this._sendSyncMessage('SPPermissionManager', msg)[0];
   },
 
   getMozFullPath: function(file) {

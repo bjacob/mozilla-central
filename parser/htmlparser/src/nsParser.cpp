@@ -791,15 +791,7 @@ DetermineParseMode(const nsString& aBuffer, nsDTDMode& aParseMode,
 {
   if (aMimeType.EqualsLiteral(TEXT_HTML)) {
     DetermineHTMLParseMode(aBuffer, aParseMode, aDocType);
-  } else if (aMimeType.EqualsLiteral(TEXT_PLAIN) ||
-             aMimeType.EqualsLiteral(TEXT_CACHE_MANIFEST) ||
-             aMimeType.EqualsLiteral(TEXT_CSS) ||
-             aMimeType.EqualsLiteral(APPLICATION_JAVASCRIPT) ||
-             aMimeType.EqualsLiteral(APPLICATION_XJAVASCRIPT) ||
-             aMimeType.EqualsLiteral(APPLICATION_JSON) ||
-             aMimeType.EqualsLiteral(TEXT_ECMASCRIPT) ||
-             aMimeType.EqualsLiteral(APPLICATION_ECMASCRIPT) ||
-             aMimeType.EqualsLiteral(TEXT_JAVASCRIPT)) {
+  } else if (nsContentUtils::IsPlainTextType(aMimeType)) {
     aDocType = ePlainText;
     aParseMode = eDTDMode_quirks;
   } else { // Some form of XML
@@ -1751,8 +1743,8 @@ ExtractCharsetFromXmlDeclaration(const unsigned char* aBytes, int32_t aLen,
               if (q && q == qi) {
                 int32_t count = i - encStart;
                 // encoding value is invalid if it is UTF-16
-                if (count > 0 && (0 != PL_strcmp("UTF-16",
-                    (char*) (aBytes + encStart)))) {
+                if (count > 0 && PL_strncasecmp("UTF-16",
+                    (char*) (aBytes + encStart), count)) {
                   oCharset.Assign((char*) (aBytes + encStart), count);
                 }
                 encodingFound = true;

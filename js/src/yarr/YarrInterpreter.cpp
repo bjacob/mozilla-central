@@ -746,7 +746,7 @@ public:
                     ASSERT((&term - term.atom.parenthesesWidth)->inputPosition == term.inputPosition);
 #endif
                     unsigned subpatternId = term.atom.subpatternId;
-                    output[subpatternId << 1] = input.getPos() + (&term - term.atom.parenthesesWidth)->inputPosition;
+                    output[subpatternId << 1] = input.getPos() + term.inputPosition;
                 }
                 context->term -= term.atom.parenthesesWidth;
                 return true;
@@ -1734,6 +1734,7 @@ public:
         unsigned numSubpatterns = lastSubpatternId - subpatternId + 1;
         ByteDisjunction* parenthesesDisjunction = js_new<ByteDisjunction>(numSubpatterns, callFrameSize);
 
+        parenthesesDisjunction->terms.reserve(endTerm - beginTerm + 1);
         parenthesesDisjunction->terms.append(ByteTerm::SubpatternBegin());
         for (unsigned termInParentheses = beginTerm + 1; termInParentheses < endTerm; ++termInParentheses)
             parenthesesDisjunction->terms.append(m_bodyDisjunction->terms[termInParentheses]);

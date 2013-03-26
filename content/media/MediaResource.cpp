@@ -23,7 +23,7 @@
 #include "nsIStreamListener.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsCrossSiteListenerProxy.h"
-#include "nsHTMLMediaElement.h"
+#include "mozilla/dom/HTMLMediaElement.h"
 #include "nsError.h"
 #include "nsICachingChannel.h"
 #include "nsURILoader.h"
@@ -50,8 +50,10 @@ static const uint32_t HTTP_PARTIAL_RESPONSE_CODE = 206;
 namespace mozilla {
 
 ChannelMediaResource::ChannelMediaResource(MediaDecoder* aDecoder,
-    nsIChannel* aChannel, nsIURI* aURI)
-  : BaseMediaResource(aDecoder, aChannel, aURI),
+                                           nsIChannel* aChannel,
+                                           nsIURI* aURI,
+                                           const nsACString& aContentType)
+  : BaseMediaResource(aDecoder, aChannel, aURI, aContentType),
     mOffset(0), mSuspendCount(0),
     mReopenOnError(false), mIgnoreClose(false),
     mCacheStream(this),
@@ -150,7 +152,7 @@ ChannelMediaResource::OnStartRequest(nsIRequest* aRequest)
 
   MediaDecoderOwner* owner = mDecoder->GetMediaOwner();
   NS_ENSURE_TRUE(owner, NS_ERROR_FAILURE);
-  nsHTMLMediaElement* element = owner->GetMediaElement();
+  HTMLMediaElement* element = owner->GetMediaElement();
   NS_ENSURE_TRUE(element, NS_ERROR_FAILURE);
   nsresult status;
   nsresult rv = aRequest->GetStatus(&status);
@@ -608,7 +610,7 @@ nsresult ChannelMediaResource::OpenChannel(nsIStreamListener** aStreamListener)
     // an authorizing Access-Control header.
     MediaDecoderOwner* owner = mDecoder->GetMediaOwner();
     NS_ENSURE_TRUE(owner, NS_ERROR_FAILURE);
-    nsHTMLMediaElement* element = owner->GetMediaElement();
+    HTMLMediaElement* element = owner->GetMediaElement();
     NS_ENSURE_TRUE(element, NS_ERROR_FAILURE);
     if (element->ShouldCheckAllowOrigin()) {
       nsRefPtr<nsCORSListenerProxy> crossSiteListener =
@@ -667,7 +669,7 @@ void ChannelMediaResource::SetupChannelHeaders()
     if (!owner) {
       return;
     }
-    nsHTMLMediaElement* element = owner->GetMediaElement();
+    HTMLMediaElement* element = owner->GetMediaElement();
     if (!element) {
       return;
     }
@@ -704,7 +706,10 @@ MediaResource* ChannelMediaResource::CloneData(MediaDecoder* aDecoder)
   NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
   NS_ASSERTION(mCacheStream.IsAvailableForSharing(), "Stream can't be cloned");
 
-  ChannelMediaResource* resource = new ChannelMediaResource(aDecoder, nullptr, mURI);
+  ChannelMediaResource* resource = new ChannelMediaResource(aDecoder,
+                                                            nullptr,
+                                                            mURI,
+                                                            GetContentType());
   if (resource) {
     // Initially the clone is treated as suspended by the cache, because
     // we don't have a channel. If the cache needs to read data from the clone
@@ -813,7 +818,7 @@ void ChannelMediaResource::Suspend(bool aCloseImmediately)
     // Shutting down; do nothing.
     return;
   }
-  nsHTMLMediaElement* element = owner->GetMediaElement();
+  HTMLMediaElement* element = owner->GetMediaElement();
   if (!element) {
     // Shutting down; do nothing.
     return;
@@ -848,7 +853,7 @@ void ChannelMediaResource::Resume()
     // Shutting down; do nothing.
     return;
   }
-  nsHTMLMediaElement* element = owner->GetMediaElement();
+  HTMLMediaElement* element = owner->GetMediaElement();
   if (!element) {
     // Shutting down; do nothing.
     return;
@@ -897,7 +902,7 @@ ChannelMediaResource::RecreateChannel()
     // The decoder is being shut down, so don't bother opening a new channel
     return NS_OK;
   }
-  nsHTMLMediaElement* element = owner->GetMediaElement();
+  HTMLMediaElement* element = owner->GetMediaElement();
   if (!element) {
     // The decoder is being shut down, so don't bother opening a new channel
     return NS_OK;
@@ -916,11 +921,9 @@ ChannelMediaResource::RecreateChannel()
   // the channel to avoid a sniffing failure, which would be expected because we
   // are probably seeking in the middle of the bitstream, and sniffing relies
   // on the presence of a magic number at the beginning of the stream.
-  nsAutoCString contentType;
-  element->GetMimeType(contentType);
-  NS_ASSERTION(!contentType.IsEmpty(),
+  NS_ASSERTION(!GetContentType().IsEmpty(),
       "When recreating a channel, we should know the Content-Type.");
-  mChannel->SetContentType(contentType);
+  mChannel->SetContentType(GetContentType());
 
   return rv;
 }
@@ -1241,8 +1244,11 @@ ChannelMediaResource::PossiblyResume()
 class FileMediaResource : public BaseMediaResource
 {
 public:
-  FileMediaResource(MediaDecoder* aDecoder, nsIChannel* aChannel, nsIURI* aURI) :
-    BaseMediaResource(aDecoder, aChannel, aURI),
+  FileMediaResource(MediaDecoder* aDecoder,
+                    nsIChannel* aChannel,
+                    nsIURI* aURI,
+                    const nsACString& aContentType) :
+    BaseMediaResource(aDecoder, aChannel, aURI, aContentType),
     mSize(-1),
     mLock("FileMediaResource.mLock"),
     mSizeInitialized(false)
@@ -1424,7 +1430,7 @@ nsresult FileMediaResource::Open(nsIStreamListener** aStreamListener)
     // web server.
     MediaDecoderOwner* owner = mDecoder->GetMediaOwner();
     NS_ENSURE_TRUE(owner, NS_ERROR_FAILURE);
-    nsHTMLMediaElement* element = owner->GetMediaElement();
+    HTMLMediaElement* element = owner->GetMediaElement();
     NS_ENSURE_TRUE(element, NS_ERROR_FAILURE);
 
     rv = nsContentUtils::GetSecurityManager()->
@@ -1489,7 +1495,7 @@ MediaResource* FileMediaResource::CloneData(MediaDecoder* aDecoder)
     // The decoder is being shut down, so we can't clone
     return nullptr;
   }
-  nsHTMLMediaElement* element = owner->GetMediaElement();
+  HTMLMediaElement* element = owner->GetMediaElement();
   if (!element) {
     // The decoder is being shut down, so we can't clone
     return nullptr;
@@ -1503,7 +1509,7 @@ MediaResource* FileMediaResource::CloneData(MediaDecoder* aDecoder)
   if (NS_FAILED(rv))
     return nullptr;
 
-  return new FileMediaResource(aDecoder, channel, mURI);
+  return new FileMediaResource(aDecoder, channel, mURI, GetContentType());
 }
 
 nsresult FileMediaResource::ReadFromCache(char* aBuffer, int64_t aOffset, uint32_t aCount)
@@ -1581,11 +1587,14 @@ MediaResource::Create(MediaDecoder* aDecoder, nsIChannel* aChannel)
   nsresult rv = NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
   NS_ENSURE_SUCCESS(rv, nullptr);
 
+  nsAutoCString contentType;
+  aChannel->GetContentType(contentType);
+
   nsCOMPtr<nsIFileChannel> fc = do_QueryInterface(aChannel);
   if (fc || IsBlobURI(uri)) {
-    return new FileMediaResource(aDecoder, aChannel, uri);
+    return new FileMediaResource(aDecoder, aChannel, uri, contentType);
   }
-  return new ChannelMediaResource(aDecoder, aChannel, uri);
+  return new ChannelMediaResource(aDecoder, aChannel, uri, contentType);
 }
 
 void BaseMediaResource::MoveLoadsToBackground() {
@@ -1601,7 +1610,7 @@ void BaseMediaResource::MoveLoadsToBackground() {
     NS_WARNING("Null owner in MediaResource::MoveLoadsToBackground()");
     return;
   }
-  nsHTMLMediaElement* element = owner->GetMediaElement();
+  HTMLMediaElement* element = owner->GetMediaElement();
   if (!element) {
     NS_WARNING("Null element in MediaResource::MoveLoadsToBackground()");
     return;

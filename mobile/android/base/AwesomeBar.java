@@ -7,12 +7,12 @@ package org.mozilla.gecko;
 
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.BrowserContract.Combined;
-import org.mozilla.gecko.util.GeckoAsyncTask;
 import org.mozilla.gecko.util.StringUtils;
+import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.util.UiAsyncTask;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -20,7 +20,6 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
-import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
@@ -69,7 +68,6 @@ public class AwesomeBar extends GeckoActivity {
     private AwesomeBarTabs mAwesomeTabs;
     private CustomEditText mText;
     private ImageButton mGoButton;
-    private ContentResolver mResolver;
     private ContextMenuSubject mContextMenuSubject;
     private boolean mIsUsingSwype;
     private boolean mDelayRestartInput;
@@ -80,9 +78,7 @@ public class AwesomeBar extends GeckoActivity {
 
         Log.d(LOGTAG, "creating awesomebar");
 
-        mResolver = Tabs.getInstance().getContentResolver();
         LayoutInflater.from(this).setFactory(GeckoViewsFactory.getInstance());
-
         setContentView(R.layout.awesomebar);
 
         mGoButton = (ImageButton) findViewById(R.id.awesomebar_button);
@@ -93,16 +89,20 @@ public class AwesomeBar extends GeckoActivity {
 
         mAwesomeTabs = (AwesomeBarTabs) findViewById(R.id.awesomebar_tabs);
         mAwesomeTabs.setOnUrlOpenListener(new AwesomeBarTabs.OnUrlOpenListener() {
+            @Override
             public void onUrlOpen(String url, String title) {
                 openUrlAndFinish(url, title, false);
             }
 
+            @Override
             public void onSearch(String engine, String text) {
                 openSearchAndFinish(text, engine);
             }
 
+            @Override
             public void onEditSuggestion(final String text) {
-                GeckoApp.mAppContext.mMainHandler.post(new Runnable() {
+                ThreadUtils.postToUiThread(new Runnable() {
+                    @Override
                     public void run() {
                         mText.setText(text);
                         mText.setSelection(mText.getText().length());
@@ -115,6 +115,7 @@ public class AwesomeBar extends GeckoActivity {
         });
 
         mGoButton.setOnClickListener(new Button.OnClickListener() {
+            @Override
             public void onClick(View v) {
                 openUserEnteredAndFinish(mText.getText().toString());
             }
@@ -144,6 +145,7 @@ public class AwesomeBar extends GeckoActivity {
         mAwesomeTabs.setTarget(mTarget);
 
         mText.setOnKeyPreImeListener(new CustomEditText.OnKeyPreImeListener() {
+            @Override
             public boolean onKeyPreIme(View v, int keyCode, KeyEvent event) {
                 // We only want to process one event per tap
                 if (event.getAction() != KeyEvent.ACTION_DOWN)
@@ -180,6 +182,7 @@ public class AwesomeBar extends GeckoActivity {
         });
 
         mText.addTextChangedListener(new TextWatcher() {
+            @Override
             public void afterTextChanged(Editable s) {
                 String text = s.toString();
                 mAwesomeTabs.filter(text);
@@ -195,11 +198,13 @@ public class AwesomeBar extends GeckoActivity {
                 }
             }
 
+            @Override
             public void beforeTextChanged(CharSequence s, int start, int count,
                                           int after) {
                 // do nothing
             }
 
+            @Override
             public void onTextChanged(CharSequence s, int start, int before,
                                       int count) {
                 // do nothing
@@ -207,6 +212,7 @@ public class AwesomeBar extends GeckoActivity {
         });
 
         mText.setOnKeyListener(new View.OnKeyListener() {
+            @Override
             public boolean onKey(View v, int keyCode, KeyEvent event) {
                 if (keyCode == KeyEvent.KEYCODE_ENTER) {
                     if (event.getAction() != KeyEvent.ACTION_DOWN)
@@ -221,6 +227,7 @@ public class AwesomeBar extends GeckoActivity {
         });
 
         mText.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
             public void onFocusChange(View v, boolean hasFocus) {
                 if (v == null || hasFocus) {
                     return;
@@ -266,7 +273,7 @@ public class AwesomeBar extends GeckoActivity {
         if (showReadingList) {
             BookmarksTab bookmarksTab = mAwesomeTabs.getBookmarksTab();
             bookmarksTab.setShowReadingList(true);
-            mAwesomeTabs.setCurrentTabByTag(bookmarksTab.getTag());
+            mAwesomeTabs.setCurrentItemByTag(bookmarksTab.getTag());
         }
     }
 
@@ -384,10 +391,10 @@ public class AwesomeBar extends GeckoActivity {
         String keywordSearch = null;
 
         if (index == -1) {
-            keywordUrl = BrowserDB.getUrlForKeyword(mResolver, url);
+            keywordUrl = BrowserDB.getUrlForKeyword(getContentResolver(), url);
             keywordSearch = "";
         } else {
-            keywordUrl = BrowserDB.getUrlForKeyword(mResolver, url.substring(0, index));
+            keywordUrl = BrowserDB.getUrlForKeyword(getContentResolver(), url.substring(0, index));
             keywordSearch = url.substring(index + 1);
         }
 
@@ -558,7 +565,7 @@ public class AwesomeBar extends GeckoActivity {
             }
             case R.id.edit_bookmark: {
                 AlertDialog.Builder editPrompt = new AlertDialog.Builder(this);
-                View editView = getLayoutInflater().inflate(R.layout.bookmark_edit, null);
+                final View editView = getLayoutInflater().inflate(R.layout.bookmark_edit, null);
                 editPrompt.setTitle(R.string.bookmark_edit_title);
                 editPrompt.setView(editView);
 
@@ -570,12 +577,13 @@ public class AwesomeBar extends GeckoActivity {
                 keywordText.setText(keyword);
 
                 editPrompt.setPositiveButton(R.string.button_ok, new DialogInterface.OnClickListener() {
+                    @Override
                     public void onClick(DialogInterface dialog, int whichButton) {
-                        (new GeckoAsyncTask<Void, Void, Void>(GeckoApp.mAppContext, GeckoAppShell.getHandler()) {
+                        (new UiAsyncTask<Void, Void, Void>(ThreadUtils.getBackgroundHandler()) {
                             @Override
                             public Void doInBackground(Void... params) {
                                 String newUrl = locationText.getText().toString().trim();
-                                BrowserDB.updateBookmark(mResolver, id, newUrl, nameText.getText().toString(),
+                                BrowserDB.updateBookmark(getContentResolver(), id, newUrl, nameText.getText().toString(),
                                                          keywordText.getText().toString());
                                 return null;
                             }
@@ -589,7 +597,8 @@ public class AwesomeBar extends GeckoActivity {
                 });
 
                 editPrompt.setNegativeButton(R.string.button_cancel, new DialogInterface.OnClickListener() {
-                      public void onClick(DialogInterface dialog, int whichButton) {
+                    @Override
+                    public void onClick(DialogInterface dialog, int whichButton) {
                           // do nothing
                       }
                 });
@@ -600,10 +609,13 @@ public class AwesomeBar extends GeckoActivity {
                 locationText.addTextChangedListener(new TextWatcher() {
                     private boolean mEnabled = true;
 
+                    @Override
                     public void afterTextChanged(Editable s) {}
 
+                    @Override
                     public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
 
+                    @Override
                     public void onTextChanged(CharSequence s, int start, int before, int count) {
                         boolean enabled = (s.toString().trim().length() > 0);
                         if (mEnabled != enabled) {
@@ -617,7 +629,7 @@ public class AwesomeBar extends GeckoActivity {
                 break;
             }
             case R.id.remove_bookmark: {
-                (new AsyncTask<Void, Void, Void>() {
+                (new UiAsyncTask<Void, Void, Void>(ThreadUtils.getBackgroundHandler()) {
                     private boolean mInReadingList;
 
                     @Override
@@ -627,7 +639,7 @@ public class AwesomeBar extends GeckoActivity {
 
                     @Override
                     public Void doInBackground(Void... params) {
-                        BrowserDB.removeBookmark(mResolver, id);
+                        BrowserDB.removeBookmark(getContentResolver(), id);
                         return null;
                     }
 
@@ -647,10 +659,10 @@ public class AwesomeBar extends GeckoActivity {
                 break;
             }
             case R.id.remove_history: {
-                (new GeckoAsyncTask<Void, Void, Void>(GeckoApp.mAppContext, GeckoAppShell.getHandler()) {
+                (new UiAsyncTask<Void, Void, Void>(ThreadUtils.getBackgroundHandler()) {
                     @Override
                     public Void doInBackground(Void... params) {
-                        BrowserDB.removeHistoryEntry(mResolver, id);
+                        BrowserDB.removeHistoryEntry(getContentResolver(), id);
                         return null;
                     }
 

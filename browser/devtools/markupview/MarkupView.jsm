@@ -18,6 +18,7 @@ this.EXPORTED_SYMBOLS = ["MarkupView"];
 
 Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
 Cu.import("resource:///modules/devtools/CssRuleView.jsm");
+Cu.import("resource:///modules/devtools/InplaceEditor.jsm");
 Cu.import("resource:///modules/devtools/Templater.jsm");
 Cu.import("resource:///modules/devtools/Undo.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -149,10 +150,24 @@ MarkupView.prototype = {
         this.navigate(this._containers.get(this._rootNode.firstChild));
         break;
       case Ci.nsIDOMKeyEvent.DOM_VK_LEFT:
-        this.collapseNode(this._selectedContainer.node);
+        if (this._selectedContainer.expanded) {
+          this.collapseNode(this._selectedContainer.node);
+        } else {
+          let parent = this._selectionWalker().parentNode();
+          if (parent) {
+            this.navigate(parent.container);
+          }
+        }
         break;
       case Ci.nsIDOMKeyEvent.DOM_VK_RIGHT:
-        this.expandNode(this._selectedContainer.node);
+        if (!this._selectedContainer.expanded) {
+          this.expandNode(this._selectedContainer.node);
+        } else {
+          let next = this._selectionWalker().nextNode();
+          if (next) {
+            this.navigate(next.container);
+          }
+        }
         break;
       case Ci.nsIDOMKeyEvent.DOM_VK_UP:
         let prev = this._selectionWalker().previousNode();
@@ -630,7 +645,7 @@ MarkupView.prototype = {
     delete this._boundFocus;
 
     this._frame.contentWindow.removeEventListener("scroll", this._boundUpdatePreview, true);
-    this._frame.contentWindow.removeEventListener("resize", this._boundUpdatePreview, true);
+    this._frame.contentWindow.removeEventListener("resize", this._boundResizePreview, true);
     this._frame.contentWindow.removeEventListener("overflow", this._boundResizePreview, true);
     this._frame.contentWindow.removeEventListener("underflow", this._boundResizePreview, true);
     delete this._boundUpdatePreview;
@@ -948,7 +963,7 @@ function TextEditor(aContainer, aNode, aTemplate)
 
   aContainer.markup.template(aTemplate, this);
 
-  _editableField({
+  editableField({
     element: this.value,
     stopOnReturn: true,
     trigger: "dblclick",
@@ -1017,7 +1032,7 @@ function ElementEditor(aContainer, aNode)
   // Make the tag name editable (unless this is a document element)
   if (aNode != aNode.ownerDocument.documentElement) {
     this.tag.setAttribute("tabindex", "0");
-    _editableField({
+    editableField({
       element: this.tag,
       trigger: "dblclick",
       stopOnReturn: true,
@@ -1026,7 +1041,7 @@ function ElementEditor(aContainer, aNode)
   }
 
   // Make the new attribute space editable.
-  _editableField({
+  editableField({
     element: this.newAttr,
     trigger: "dblclick",
     stopOnReturn: true,
@@ -1083,7 +1098,7 @@ ElementEditor.prototype = {
 
   _createAttribute: function EE_createAttribute(aAttr, aBefore)
   {
-    if (aAttr.name in this.attrs) {
+    if (this.attrs.indexOf(aAttr.name) !== -1) {
       var attr = this.attrs[aAttr.name];
       var name = attr.querySelector(".attrname");
       var val = attr.querySelector(".attrvalue");
@@ -1106,7 +1121,7 @@ ElementEditor.prototype = {
       this.attrList.insertBefore(attr, before);
 
       // Make the attribute editable.
-      _editableField({
+      editableField({
         element: inner,
         trigger: "dblclick",
         stopOnReturn: true,

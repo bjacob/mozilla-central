@@ -54,7 +54,7 @@
 #include "nsClientRect.h"
 #include <algorithm>
 #ifdef MOZ_MEDIA
-#include "nsHTMLVideoElement.h"
+#include "mozilla/dom/HTMLVideoElement.h"
 #endif
 #include "mozilla/dom/HTMLImageElement.h"
 #include "imgIRequest.h"
@@ -78,6 +78,7 @@
 #include "nsSVGOuterSVGFrame.h"
 #include "nsSVGTextFrame2.h"
 #include "nsStyleStructInlines.h"
+#include "nsStyleTransformMatrix.h"
 
 #include "mozilla/dom/PBrowserChild.h"
 #include "mozilla/dom/TabChild.h"
@@ -87,7 +88,7 @@
 #include "nsXULPopupManager.h"
 #endif
 
-#include "sampler.h"
+#include "GeckoProfiler.h"
 #include "nsAnimationManager.h"
 #include "nsTransitionManager.h"
 #include "nsViewportInfo.h"
@@ -620,8 +621,7 @@ nsLayoutUtils::GetChildListNameFor(nsIFrame* aChildFrame)
       return nsIFrame::kPopupList;
 #endif // MOZ_XUL
     } else {
-      NS_ASSERTION(aChildFrame->IsFloating(),
-                   "not a floated frame");
+      NS_ASSERTION(aChildFrame->IsFloating(), "not a floated frame");
       id = nsIFrame::kFloatList;
     }
 
@@ -659,6 +659,10 @@ nsLayoutUtils::GetChildListNameFor(nsIFrame* aChildFrame)
     else if (aChildFrame->IsFloating()) {
       found = parent->GetChildList(nsIFrame::kOverflowOutOfFlowList)
                 .ContainsFrame(aChildFrame);
+      if (!found) {
+        found = parent->GetChildList(nsIFrame::kPushedFloatsList)
+                  .ContainsFrame(aChildFrame);
+      }
     }
     // else it's positioned and should have been on the 'id' child list.
     NS_POSTCONDITION(found, "not in child list");
@@ -1740,7 +1744,7 @@ nsLayoutUtils::GetFrameForPoint(nsIFrame* aFrame, nsPoint aPt,
                                 bool aShouldIgnoreSuppression,
                                 bool aIgnoreRootScrollFrame)
 {
-  SAMPLE_LABEL("nsLayoutUtils", "GetFrameForPoint");
+  PROFILER_LABEL("nsLayoutUtils", "GetFrameForPoint");
   nsresult rv;
   nsAutoTArray<nsIFrame*,8> outFrames;
   rv = GetFramesForArea(aFrame, nsRect(aPt, nsSize(1, 1)), outFrames,
@@ -1755,7 +1759,7 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
                                 bool aShouldIgnoreSuppression,
                                 bool aIgnoreRootScrollFrame)
 {
-  SAMPLE_LABEL("nsLayoutUtils","GetFramesForArea");
+  PROFILER_LABEL("nsLayoutUtils","GetFramesForArea");
   nsDisplayListBuilder builder(aFrame, nsDisplayListBuilder::EVENT_DELIVERY,
 		                       false);
   nsDisplayList list;
@@ -1795,7 +1799,7 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
                           const nsRegion& aDirtyRegion, nscolor aBackstop,
                           uint32_t aFlags)
 {
-  SAMPLE_LABEL("nsLayoutUtils","PaintFrame");
+  PROFILER_LABEL("nsLayoutUtils","PaintFrame");
   if (aFlags & PAINT_WIDGET_LAYERS) {
     nsView* view = aFrame->GetView();
     if (!(view && view->GetWidget() && GetDisplayRootFrame(aFrame) == aFrame)) {
@@ -1913,7 +1917,7 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
   nsRect dirtyRect = visibleRegion.GetBounds();
   builder.EnterPresShell(aFrame, dirtyRect);
   {
-    SAMPLE_LABEL("nsLayoutUtils","PaintFrame::BuildDisplayList");
+    PROFILER_LABEL("nsLayoutUtils","PaintFrame::BuildDisplayList");
     aFrame->BuildDisplayListForStackingContext(&builder, dirtyRect, &list);
   }
   const bool paintAllContinuations = aFlags & PAINT_ALL_CONTINUATIONS;
@@ -1926,7 +1930,7 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
   if (paintAllContinuations) {
     nsIFrame* currentFrame = aFrame;
     while ((currentFrame = currentFrame->GetNextContinuation()) != nullptr) {
-      SAMPLE_LABEL("nsLayoutUtils","PaintFrame::ContinuationsBuildDisplayList");
+      PROFILER_LABEL("nsLayoutUtils","PaintFrame::ContinuationsBuildDisplayList");
       nsRect frameDirty = dirtyRect - builder.ToReferenceFrame(currentFrame);
       currentFrame->BuildDisplayListForStackingContext(&builder,
                                                        frameDirty, &list);
@@ -2257,10 +2261,12 @@ void nsLayoutUtils::RectAccumulator::AddRect(const nsRect& aRect) {
 }
 
 nsLayoutUtils::RectListBuilder::RectListBuilder(nsClientRectList* aList)
-  : mRectList(aList), mRV(NS_OK) {}
+  : mRectList(aList)
+{
+}
 
 void nsLayoutUtils::RectListBuilder::AddRect(const nsRect& aRect) {
-  nsRefPtr<nsClientRect> rect = new nsClientRect();
+  nsRefPtr<nsClientRect> rect = new nsClientRect(mRectList);
 
   rect->SetLayoutRect(aRect);
   mRectList->Append(rect);
@@ -3770,10 +3776,14 @@ GraphicsFilter
 nsLayoutUtils::GetGraphicsFilterForFrame(nsIFrame* aForFrame)
 {
   GraphicsFilter defaultFilter = gfxPattern::FILTER_GOOD;
-  nsIFrame *frame = nsCSSRendering::IsCanvasFrame(aForFrame) ?
-    nsCSSRendering::FindBackgroundStyleFrame(aForFrame) : aForFrame;
+  nsStyleContext *sc;
+  if (nsCSSRendering::IsCanvasFrame(aForFrame)) {
+    nsCSSRendering::FindBackground(aForFrame, &sc);
+  } else {
+    sc = aForFrame->StyleContext();
+  }
 
-  switch (frame->StyleSVG()->mImageRendering) {
+  switch (sc->StyleSVG()->mImageRendering) {
   case NS_STYLE_IMAGE_RENDERING_OPTIMIZESPEED:
     return gfxPattern::FILTER_FAST;
   case NS_STYLE_IMAGE_RENDERING_OPTIMIZEQUALITY:
@@ -3969,15 +3979,16 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
 
 
 static nsresult
-DrawImageInternal(nsRenderingContext* aRenderingContext,
-                  imgIContainer*       aImage,
-                  GraphicsFilter       aGraphicsFilter,
-                  const nsRect&        aDest,
-                  const nsRect&        aFill,
-                  const nsPoint&       aAnchor,
-                  const nsRect&        aDirty,
-                  const nsIntSize&     aImageSize,
-                  uint32_t             aImageFlags)
+DrawImageInternal(nsRenderingContext*    aRenderingContext,
+                  imgIContainer*         aImage,
+                  GraphicsFilter         aGraphicsFilter,
+                  const nsRect&          aDest,
+                  const nsRect&          aFill,
+                  const nsPoint&         aAnchor,
+                  const nsRect&          aDirty,
+                  const nsIntSize&       aImageSize,
+                  const SVGImageContext* aSVGContext,
+                  uint32_t               aImageFlags)
 {
   if (aDest.Contains(aFill)) {
     aImageFlags |= imgIContainer::FLAG_CLAMP;
@@ -3999,7 +4010,7 @@ DrawImageInternal(nsRenderingContext* aRenderingContext,
 
   aImage->Draw(ctx, aGraphicsFilter, drawingParams.mUserSpaceToImageSpace,
                drawingParams.mFillRect, drawingParams.mSubimage, aImageSize,
-               aImageFlags);
+               aSVGContext, imgIContainer::FRAME_CURRENT, aImageFlags);
   return NS_OK;
 }
 
@@ -4077,17 +4088,18 @@ nsLayoutUtils::DrawSingleUnscaledImage(nsRenderingContext* aRenderingContext,
   fill.IntersectRect(fill, dest);
   return DrawImageInternal(aRenderingContext, aImage, aGraphicsFilter,
                            dest, fill, aDest, aDirty ? *aDirty : dest,
-                           imageSize, aImageFlags);
+                           imageSize, nullptr, aImageFlags);
 }
 
 /* static */ nsresult
-nsLayoutUtils::DrawSingleImage(nsRenderingContext* aRenderingContext,
-                               imgIContainer*       aImage,
-                               GraphicsFilter       aGraphicsFilter,
-                               const nsRect&        aDest,
-                               const nsRect&        aDirty,
-                               uint32_t             aImageFlags,
-                               const nsRect*        aSourceArea)
+nsLayoutUtils::DrawSingleImage(nsRenderingContext*    aRenderingContext,
+                               imgIContainer*         aImage,
+                               GraphicsFilter         aGraphicsFilter,
+                               const nsRect&          aDest,
+                               const nsRect&          aDirty,
+                               const SVGImageContext* aSVGContext,
+                               uint32_t               aImageFlags,
+                               const nsRect*          aSourceArea)
 {
   nsIntSize imageSize;
   if (aImage->GetType() == imgIContainer::TYPE_VECTOR) {
@@ -4116,7 +4128,7 @@ nsLayoutUtils::DrawSingleImage(nsRenderingContext* aRenderingContext,
   nsRect fill;
   fill.IntersectRect(aDest, dest);
   return DrawImageInternal(aRenderingContext, aImage, aGraphicsFilter, dest, fill,
-                           fill.TopLeft(), aDirty, imageSize, aImageFlags);
+                           fill.TopLeft(), aDirty, imageSize, aSVGContext, aImageFlags);
 }
 
 /* static */ void
@@ -4128,18 +4140,11 @@ nsLayoutUtils::ComputeSizeForDrawing(imgIContainer *aImage,
 {
   aGotWidth  = NS_SUCCEEDED(aImage->GetWidth(&aImageSize.width));
   aGotHeight = NS_SUCCEEDED(aImage->GetHeight(&aImageSize.height));
+  bool gotRatio = NS_SUCCEEDED(aImage->GetIntrinsicRatio(&aIntrinsicRatio));
 
-  if (aGotWidth && aGotHeight) {
-    aIntrinsicRatio = nsSize(aImageSize.width, aImageSize.height);
-    return;
-  }
-
-  // If we failed to get width or height, we either have a vector image and
-  // should return its intrinsic ratio, or we hit an error (say, because the
-  // image failed to load or couldn't be decoded) and should return zero size.
-  if (nsIFrame* rootFrame = aImage->GetRootLayoutFrame()) {
-    aIntrinsicRatio = rootFrame->GetIntrinsicRatio();
-  } else {
+  if (!(aGotWidth && aGotHeight) && !gotRatio) {
+    // We hit an error (say, because the image failed to load or couldn't be
+    // decoded) and should return zero size.
     aGotWidth = aGotHeight = true;
     aImageSize = nsIntSize(0, 0);
     aIntrinsicRatio = nsSize(0, 0);
@@ -4158,7 +4163,7 @@ nsLayoutUtils::DrawBackgroundImage(nsRenderingContext* aRenderingContext,
                                    const nsRect&       aDirty,
                                    uint32_t            aImageFlags)
 {
-  SAMPLE_LABEL("layout", "nsLayoutUtils::DrawBackgroundImage");
+  PROFILER_LABEL("layout", "nsLayoutUtils::DrawBackgroundImage");
 
   if (UseBackgroundNearestFiltering()) {
     aGraphicsFilter = gfxPattern::FILTER_NEAREST;
@@ -4166,7 +4171,7 @@ nsLayoutUtils::DrawBackgroundImage(nsRenderingContext* aRenderingContext,
 
   return DrawImageInternal(aRenderingContext, aImage, aGraphicsFilter,
                            aDest, aFill, aAnchor, aDirty,
-                           aImageSize, aImageFlags);
+                           aImageSize, nullptr, aImageFlags);
 }
 
 /* static */ nsresult
@@ -4215,7 +4220,7 @@ nsLayoutUtils::DrawImage(nsRenderingContext* aRenderingContext,
 
   return DrawImageInternal(aRenderingContext, aImage, aGraphicsFilter,
                            aDest, aFill, aAnchor, aDirty,
-                           imageSize, aImageFlags);
+                           imageSize, nullptr, aImageFlags);
 }
 
 /* static */ nsRect
@@ -4323,8 +4328,7 @@ nsLayoutUtils::GetFrameTransparency(nsIFrame* aBackgroundFrame,
   }
 
   nsStyleContext* bgSC;
-  if (!nsCSSRendering::FindBackground(aBackgroundFrame->PresContext(),
-                                      aBackgroundFrame, &bgSC)) {
+  if (!nsCSSRendering::FindBackground(aBackgroundFrame, &bgSC)) {
     return eTransparencyTransparent;
   }
   const nsStyleBackground* bg = bgSC->StyleBackground();
@@ -4643,7 +4647,7 @@ nsLayoutUtils::SurfaceFromElement(HTMLCanvasElement* aElement,
 }
 
 nsLayoutUtils::SurfaceFromElementResult
-nsLayoutUtils::SurfaceFromElement(nsHTMLVideoElement* aElement,
+nsLayoutUtils::SurfaceFromElement(HTMLVideoElement* aElement,
                                   uint32_t aSurfaceFlags)
 {
   SurfaceFromElementResult result;
@@ -4708,8 +4712,8 @@ nsLayoutUtils::SurfaceFromElement(dom::Element* aElement,
 
 #ifdef MOZ_MEDIA
   // Maybe it's <video>?
-  if (nsHTMLVideoElement* video =
-        nsHTMLVideoElement::FromContentOrNull(aElement)) {
+  if (HTMLVideoElement* video =
+        HTMLVideoElement::FromContentOrNull(aElement)) {
     return SurfaceFromElement(video, aSurfaceFlags);
   }
 #endif
@@ -5273,7 +5277,7 @@ ShouldInflateFontsForContainer(const nsIFrame *aFrame)
          !(aFrame->GetStateBits() & NS_FRAME_IN_CONSTRAINED_HEIGHT) &&
          // We also want to disable font inflation for containers that have
          // preformatted text.
-         styleText->WhiteSpaceCanWrap();
+         styleText->WhiteSpaceCanWrap(aFrame);
 }
 
 nscoord

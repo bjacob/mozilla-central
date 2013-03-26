@@ -436,7 +436,8 @@ JSBool ObjectEmulatesUndefined(RawObject obj);
 
 bool IteratorMore(JSContext *cx, HandleObject obj, JSBool *res);
 
-// Allocation functions for JSOP_NEWARRAY and JSOP_NEWOBJECT
+// Allocation functions for JSOP_NEWARRAY and JSOP_NEWOBJECT and parallel array inlining
+JSObject *NewInitParallelArray(JSContext *cx, HandleObject templateObj);
 JSObject *NewInitArray(JSContext *cx, uint32_t count, types::TypeObject *type);
 JSObject *NewInitObject(JSContext *cx, HandleObject templateObject);
 
@@ -465,6 +466,10 @@ bool OperatorIn(JSContext *cx, HandleValue key, HandleObject obj, JSBool *out);
 bool GetIntrinsicValue(JSContext *cx, HandlePropertyName name, MutableHandleValue rval);
 
 bool CreateThis(JSContext *cx, HandleObject callee, MutableHandleValue rval);
+
+void GetDynamicName(JSContext *cx, JSObject *scopeChain, JSString *str, Value *vp);
+
+JSBool FilterArguments(JSContext *cx, JSString *str);
 
 } // namespace ion
 } // namespace js

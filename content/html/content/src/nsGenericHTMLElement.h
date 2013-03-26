@@ -23,7 +23,6 @@ class nsIFrame;
 class nsIStyleRule;
 class nsChildContentList;
 class nsDOMCSSDeclaration;
-class nsHTMLMenuElement;
 class nsIDOMCSSStyleDeclaration;
 class nsIURI;
 class nsIFormControlFrame;
@@ -41,6 +40,7 @@ class nsDOMSettableTokenList;
 namespace mozilla {
 namespace dom{
 class HTMLPropertiesCollection;
+class HTMLMenuElement;
 }
 }
 
@@ -220,7 +220,7 @@ public:
     }
     return false;
   }
-  nsHTMLMenuElement* GetContextMenu() const;
+  mozilla::dom::HTMLMenuElement* GetContextMenu() const;
   bool Spellcheck();
   void SetSpellcheck(bool aSpellcheck, mozilla::ErrorResult& aError)
   {
@@ -517,14 +517,6 @@ public:
   static void MapCommonAttributesInto(const nsMappedAttributes* aAttributes, 
                                       nsRuleData* aRuleData);
 
-  /**
-   * This method is used by embed elements because they should ignore the hidden
-   * attribute for the moment.
-   * TODO: This should be removed when bug 614825 will be fixed.
-   */
-  static void MapCommonAttributesExceptHiddenInto(const nsMappedAttributes* aAttributes,
-                                                  nsRuleData* aRuleData);
-
   static const MappedAttributeEntry sCommonAttributeMap[];
   static const MappedAttributeEntry sImageMarginSizeAttributeMap[];
   static const MappedAttributeEntry sImageBorderAttributeMap[];
@@ -723,7 +715,7 @@ public:
 
   virtual bool IsLabelable() const;
 
-  static bool PrefEnabled();
+  static bool TouchEventsEnabled(JSContext* /* unused */, JSObject* /* unused */);
 
 protected:
   /**
@@ -768,10 +760,6 @@ private:
   void RegUnRegAccessKey(bool aDoReg);
 
 protected:
-  virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
-                                 bool aNotify);
-
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
                                 const nsAttrValue* aValue, bool aNotify);
 
@@ -795,6 +783,12 @@ protected:
   void GetHTMLURIAttr(nsIAtom* aName, nsAString& aResult) const
   {
     GetURIAttr(aName, nullptr, aResult);
+  }
+  uint32_t GetHTMLUnsignedIntAttr(nsIAtom* aName, uint32_t aDefault)
+  {
+    uint32_t result;
+    GetUnsignedIntAttr(aName, aDefault, &result);
+    return result;
   }
 
   void SetHTMLAttr(nsIAtom* aName, const nsAString& aValue)
@@ -1915,6 +1909,7 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(Body)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Button)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Canvas)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Mod)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(Data)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(DataList)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Div)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(FieldSet)
@@ -1959,9 +1954,11 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(Table)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(TableRow)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(TableSection)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Tbody)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(Template)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(TextArea)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Tfoot)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Thead)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(Time)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Title)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Unknown)
 #if defined(MOZ_MEDIA)

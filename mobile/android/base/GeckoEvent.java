@@ -37,6 +37,8 @@ import java.nio.ByteBuffer;
 public class GeckoEvent {
     private static final String LOGTAG = "GeckoEvent";
 
+    // Make sure to keep these values in sync with the enum in
+    // AndroidGeckoEvent in widget/android/AndroidJavaWrapper.h
     private static final int NATIVE_POKE = 0;
     private static final int KEY_EVENT = 1;
     private static final int MOTION_EVENT = 2;
@@ -49,7 +51,7 @@ public class GeckoEvent {
     private static final int ACTIVITY_PAUSING = 10;
     private static final int ACTIVITY_SHUTDOWN = 11;
     private static final int LOAD_URI = 12;
-    private static final int GECKO_EVENT_SYNC = 15;
+    private static final int NOOP = 15;
     private static final int ACTIVITY_START = 17;
     private static final int BROADCAST = 19;
     private static final int VIEWPORT = 20;
@@ -58,9 +60,10 @@ public class GeckoEvent {
     private static final int ACTIVITY_RESUMING = 24;
     private static final int THUMBNAIL = 25;
     private static final int SCREENORIENTATION_CHANGED = 27;
-    private static final int COMPOSITOR_PAUSE = 28;
-    private static final int COMPOSITOR_RESUME = 29;
-    private static final int NATIVE_GESTURE_EVENT = 30;
+    private static final int COMPOSITOR_CREATE = 28;
+    private static final int COMPOSITOR_PAUSE = 29;
+    private static final int COMPOSITOR_RESUME = 30;
+    private static final int NATIVE_GESTURE_EVENT = 31;
 
     /**
      * These DOM_KEY_LOCATION constants mirror the DOM KeyboardEvent's constants.
@@ -103,39 +106,53 @@ public class GeckoEvent {
     public static final int ACTION_MAGNIFY = 12;
     public static final int ACTION_MAGNIFY_END = 13;
 
-    final public int mType;
-    public int mAction;
-    public long mTime;
-    public Point[] mPoints;
-    public int[] mPointIndicies;
-    public int mPointerIndex; // index of the point that has changed
-    public float[] mOrientations;
-    public float[] mPressures;
-    public Point[] mPointRadii;
-    public Rect mRect;
-    public double mX, mY, mZ;
+    private final int mType;
+    private int mAction;
+    private boolean mAckNeeded;
+    private long mTime;
+    private Point[] mPoints;
+    private int[] mPointIndicies;
+    private int mPointerIndex; // index of the point that has changed
+    private float[] mOrientations;
+    private float[] mPressures;
+    private Point[] mPointRadii;
+    private Rect mRect;
+    private double mX;
+    private double mY;
+    private double mZ;
 
-    public int mMetaState, mFlags;
-    public int mKeyCode, mUnicodeChar;
-    public int mRepeatCount;
-    public int mCount;
-    public int mStart, mEnd;
-    public String mCharacters, mCharactersExtra;
-    public int mRangeType, mRangeStyles, mRangeLineStyle;
-    public boolean mRangeBoldLine;
-    public int mRangeForeColor, mRangeBackColor, mRangeLineColor;
-    public Location mLocation;
-    public Address  mAddress;
-    public int mDomKeyLocation;
+    private int mMetaState;
+    private int mFlags;
+    private int mKeyCode;
+    private int mUnicodeChar;
+    private int mRepeatCount;
+    private int mCount;
+    private int mStart;
+    private int mEnd;
+    private String mCharacters;
+    private String mCharactersExtra;
+    private int mRangeType;
+    private int mRangeStyles;
+    private int mRangeLineStyle;
+    private boolean mRangeBoldLine;
+    private int mRangeForeColor;
+    private int mRangeBackColor;
+    private int mRangeLineColor;
+    private Location mLocation;
+    private Address mAddress;
+    private int mDomKeyLocation;
 
-    public double mBandwidth;
-    public boolean mCanBeMetered;
+    private double mBandwidth;
+    private boolean mCanBeMetered;
 
-    public int mNativeWindow;
+    private int mNativeWindow;
 
-    public short mScreenOrientation;
+    private short mScreenOrientation;
 
-    public ByteBuffer mBuffer;
+    private ByteBuffer mBuffer;
+
+    private int mWidth;
+    private int mHeight;
 
     private GeckoEvent(int evType) {
         mType = evType;
@@ -169,13 +186,20 @@ public class GeckoEvent {
         return new GeckoEvent(ACTIVITY_SHUTDOWN);
     }
 
-    public static GeckoEvent createSyncEvent() {
-        return new GeckoEvent(GECKO_EVENT_SYNC);
+    public static GeckoEvent createNoOpEvent() {
+        return new GeckoEvent(NOOP);
     }
 
-    public static GeckoEvent createKeyEvent(KeyEvent k) {
+    public static GeckoEvent createKeyEvent(KeyEvent k, int metaState) {
         GeckoEvent event = new GeckoEvent(KEY_EVENT);
-        event.initKeyEvent(k);
+        event.initKeyEvent(k, metaState);
+        return event;
+    }
+
+    public static GeckoEvent createCompositorCreateEvent(int width, int height) {
+        GeckoEvent event = new GeckoEvent(COMPOSITOR_CREATE);
+        event.mWidth = width;
+        event.mHeight = height;
         return event;
     }
 
@@ -187,13 +211,21 @@ public class GeckoEvent {
         return new GeckoEvent(COMPOSITOR_RESUME);
     }
 
-    private void initKeyEvent(KeyEvent k) {
+    private void initKeyEvent(KeyEvent k, int metaState) {
         mAction = k.getAction();
         mTime = k.getEventTime();
-        mMetaState = k.getMetaState();
+        // Normally we expect k.getMetaState() to reflect the current meta-state; however,
+        // some software-generated key events may not have k.getMetaState() set, e.g. key
+        // events from Swype. Therefore, it's necessary to combine the key's meta-states
+        // with the meta-states that we keep separately in KeyListener
+        mMetaState = k.getMetaState() | metaState;
         mFlags = k.getFlags();
         mKeyCode = k.getKeyCode();
         mUnicodeChar = k.getUnicodeChar();
+        if (mUnicodeChar == 0) {
+            // e.g. for Ctrl+A, Android returns 0, but Gecko expects 'a' as mUnicodeChar
+            mUnicodeChar = k.getUnicodeChar(0);
+        }
         mRepeatCount = k.getRepeatCount();
         mCharacters = k.getCharacters();
         mDomKeyLocation = isJoystickButton(mKeyCode) ? DOM_KEY_LOCATION_JOYSTICK : DOM_KEY_LOCATION_MOBILE;
@@ -548,6 +580,10 @@ public class GeckoEvent {
         sb.append("{ \"x\" : ").append(metrics.viewportRectLeft)
           .append(", \"y\" : ").append(metrics.viewportRectTop)
           .append(", \"zoom\" : ").append(metrics.zoomFactor)
+          .append(", \"fixedMarginLeft\" : ").append(metrics.fixedLayerMarginLeft)
+          .append(", \"fixedMarginTop\" : ").append(metrics.fixedLayerMarginTop)
+          .append(", \"fixedMarginRight\" : ").append(metrics.fixedLayerMarginRight)
+          .append(", \"fixedMarginBottom\" : ").append(metrics.fixedLayerMarginBottom)
           .append(", \"displayPort\" :").append(displayPort.toJSON())
           .append('}');
         event.mCharactersExtra = sb.toString();
@@ -601,5 +637,9 @@ public class GeckoEvent {
         GeckoEvent event = new GeckoEvent(SCREENORIENTATION_CHANGED);
         event.mScreenOrientation = aScreenOrientation;
         return event;
+    }
+
+    public void setAckNeeded(boolean ackNeeded) {
+        mAckNeeded = ackNeeded;
     }
 }

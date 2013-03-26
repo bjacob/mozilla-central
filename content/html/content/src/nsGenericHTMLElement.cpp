@@ -80,7 +80,7 @@
 #include "nsITextControlElement.h"
 #include "mozilla/dom/Element.h"
 #include "HTMLFieldSetElement.h"
-#include "nsHTMLMenuElement.h"
+#include "HTMLMenuElement.h"
 #include "nsAsyncDOMEvent.h"
 #include "nsDOMMutationObserver.h"
 #include "mozilla/Preferences.h"
@@ -775,23 +775,6 @@ nsGenericHTMLElement::GetHrefURIForAnchors() const
 }
 
 nsresult
-nsGenericHTMLElement::BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                    const nsAttrValueOrString* aValue,
-                                    bool aNotify)
-{
-  if (aNamespaceID == kNameSpaceID_None &&
-      aName == nsGkAtoms::dir &&
-      HasDirAuto()) {
-      // setting dir on an element that currently has dir=auto
-    WalkDescendantsClearAncestorDirAuto(this);
-    SetHasDirAuto();
-  }
-
-  return nsGenericHTMLElementBase::BeforeSetAttr(aNamespaceID, aName,
-                                                 aValue, aNotify);
-}
-
-nsresult
 nsGenericHTMLElement::AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
                                    const nsAttrValue* aValue, bool aNotify)
 {
@@ -823,11 +806,11 @@ nsGenericHTMLElement::AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
       } else {
         ClearHasValidDir();
         ClearHasFixedDir();
-        ClearHasDirAuto();
-        ClearHasDirAutoSet();
         if (NodeInfo()->Equals(nsGkAtoms::bdi)) {
           SetHasDirAuto();
         } else {
+          ClearHasDirAuto();
+          ClearHasDirAutoSet();
           dir = RecomputeDirectionality(this, aNotify);
         }
       }
@@ -1477,8 +1460,8 @@ nsGenericHTMLElement::ParseScrollingValue(const nsAString& aString,
  * Handle attributes common to all html elements
  */
 void
-nsGenericHTMLElement::MapCommonAttributesExceptHiddenInto(const nsMappedAttributes* aAttributes,
-                                                          nsRuleData* aData)
+nsGenericHTMLElement::MapCommonAttributesInto(const nsMappedAttributes* aAttributes,
+                                              nsRuleData* aData)
 {
   if (aData->mSIDs & NS_STYLE_INHERIT_BIT(UserInterface)) {
     nsCSSValue* userModify = aData->ValueForUserModify();
@@ -1506,13 +1489,6 @@ nsGenericHTMLElement::MapCommonAttributesExceptHiddenInto(const nsMappedAttribut
                                             eCSSUnit_Ident);
     }
   }
-}
-
-void
-nsGenericHTMLElement::MapCommonAttributesInto(const nsMappedAttributes* aAttributes,
-                                              nsRuleData* aData)
-{
-  nsGenericHTMLElement::MapCommonAttributesExceptHiddenInto(aAttributes, aData);
 
   if (aData->mSIDs & NS_STYLE_INHERIT_BIT(Display)) {
     nsCSSValue* display = aData->ValueForDisplay();
@@ -1589,7 +1565,7 @@ nsGenericHTMLElement::MapImageAlignAttributeInto(const nsMappedAttributes* aAttr
     if (value && value->Type() == nsAttrValue::eEnum) {
       int32_t align = value->GetEnumValue();
       if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Display)) {
-        nsCSSValue* cssFloat = aRuleData->ValueForCssFloat();
+        nsCSSValue* cssFloat = aRuleData->ValueForFloat();
         if (cssFloat->GetUnit() == eCSSUnit_Null) {
           if (align == NS_STYLE_TEXT_ALIGN_LEFT) {
             cssFloat->SetIntValue(NS_STYLE_FLOAT_LEFT, eCSSUnit_Enumerated);
@@ -2055,7 +2031,7 @@ nsGenericHTMLElement::GetEnumAttr(nsIAtom* aAttr,
   }
 }
 
-nsHTMLMenuElement*
+HTMLMenuElement*
 nsGenericHTMLElement::GetContextMenu() const
 {
   nsAutoString value;
@@ -2063,7 +2039,7 @@ nsGenericHTMLElement::GetContextMenu() const
   if (!value.IsEmpty()) {
     nsIDocument* doc = GetCurrentDoc();
     if (doc) {
-      return nsHTMLMenuElement::FromContentOrNull(doc->GetElementById(value));
+      return HTMLMenuElement::FromContentOrNull(doc->GetElementById(value));
     }
   }
   return nullptr;
@@ -2156,20 +2132,9 @@ nsGenericHTMLElement::SetUndoScopeInternal(bool aUndoScope)
 
 // static
 bool
-nsGenericHTMLElement::PrefEnabled()
+nsGenericHTMLElement::TouchEventsEnabled(JSContext* /* unused */, JSObject* /* unused */)
 {
-  // This is a bit of a hack because we don't support non-bool prefs to enable
-  // properties. This function will be called every time a HTMLElement interface
-  // prototype object is created. The first time this is called we set a boolean
-  // pref (dom.w3c_touch_events.expose) which controls the touch event
-  // properties on HTMLElement.
-  static bool sDidSetPref = false;
-  if (!sDidSetPref) {
-    sDidSetPref = true;
-    Preferences::SetBool("dom.w3c_touch_events.expose",
-                         nsDOMTouchEvent::PrefEnabled());
-  }
-  return true;
+  return nsDOMTouchEvent::PrefEnabled();
 }
 
 //----------------------------------------------------------------------

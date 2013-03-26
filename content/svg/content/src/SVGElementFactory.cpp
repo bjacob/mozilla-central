@@ -4,10 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SVGElementFactory.h"
-#include "mozilla/Util.h"
-#include "nsContentCreatorFunctions.h"
 #include "nsGkAtoms.h"
+#include "nsIContent.h"
 #include "nsINodeInfo.h"
+#include "mozilla/dom/FromParser.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -96,8 +96,10 @@ SVGElementFactory::Init()
 void
 SVGElementFactory::Shutdown()
 {
-  PL_HashTableDestroy(sTagAtomTable);
-  sTagAtomTable = nullptr;
+  if (sTagAtomTable) {
+    PL_HashTableDestroy(sTagAtomTable);
+    sTagAtomTable = nullptr;
+  }
 }
 
 nsresult

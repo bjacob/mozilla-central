@@ -122,7 +122,7 @@ extern nsresult nsStringInputStreamConstructor(nsISupports *, REFNSIID, void **)
 
 #include "mozilla/VisualEventTracer.h"
 
-#include "sampler.h"
+#include "GeckoProfiler.h"
 
 using base::AtExitManager;
 using mozilla::ipc::BrowserProcessSubThread;
@@ -318,7 +318,7 @@ NS_InitXPCOM2(nsIServiceManager* *result,
               nsIFile* binDirectory,
               nsIDirectoryServiceProvider* appFileLocationProvider)
 {
-    SAMPLER_INIT();
+    profiler_init();
     nsresult rv = NS_OK;
 
      // We are not shutting down
@@ -439,8 +439,14 @@ NS_InitXPCOM2(nsIServiceManager* *result,
     // Create the Component/Service Manager
     nsComponentManagerImpl::gComponentManager = new nsComponentManagerImpl();
     NS_ADDREF(nsComponentManagerImpl::gComponentManager);
-    
-    rv = nsCycleCollector_startup();
+
+    // Global cycle collector initialization.
+    if (!nsCycleCollector_init()) {
+        return NS_ERROR_UNEXPECTED;
+    }
+
+    // And start it up for this thread too.
+    rv = nsCycleCollector_startup(CCSingleThread);
     if (NS_FAILED(rv)) return rv;
 
     rv = nsComponentManagerImpl::gComponentManager->Init();
@@ -588,10 +594,6 @@ ShutdownXPCOM(nsIServiceManager* servMgr)
         // We save the "xpcom-shutdown-loaders" observers to notify after
         // the observerservice is gone.
         if (observerService) {
-            // FIXME: This can cause harmless writes from sqlite committing
-            // log files. We have to ignore them before we can move
-            // the mozilla::PoisonWrite call before this point. See bug
-            // 834945 for the details.
             observerService->
                 EnumerateObservers(NS_XPCOM_SHUTDOWN_LOADERS_OBSERVER_ID,
                                    getter_AddRefs(moduleLoaders));
@@ -625,12 +627,6 @@ ShutdownXPCOM(nsIServiceManager* servMgr)
     // Release the directory service
     NS_IF_RELEASE(nsDirectoryService::gService);
 
-    SAMPLE_MARKER("Shutdown xpcom");
-    // If we are doing any shutdown checks, poison writes.
-    if (gShutdownChecks != SCM_NOTHING) {
-        mozilla::PoisonWrite();
-    }
-
     nsCycleCollector_shutdown();
 
     if (moduleLoaders) {
@@ -644,6 +640,10 @@ ShutdownXPCOM(nsIServiceManager* servMgr)
             // no reason for weak-ref observers to register for
             // xpcom-shutdown-loaders
 
+            // FIXME: This can cause harmless writes from sqlite committing
+            // log files. We have to ignore them before we can move
+            // the mozilla::PoisonWrite call before this point. See bug
+            // 834945 for the details.
             nsCOMPtr<nsIObserver> obs(do_QueryInterface(el));
             if (obs)
                 (void) obs->Observe(nullptr,
@@ -652,6 +652,12 @@ ShutdownXPCOM(nsIServiceManager* servMgr)
         }
 
         moduleLoaders = nullptr;
+    }
+
+    PROFILER_MARKER("Shutdown xpcom");
+    // If we are doing any shutdown checks, poison writes.
+    if (gShutdownChecks != SCM_NOTHING) {
+        mozilla::PoisonWrite();
     }
 
     // Shutdown nsLocalFile string conversion

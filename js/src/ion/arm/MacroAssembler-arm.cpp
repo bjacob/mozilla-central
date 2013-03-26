@@ -6,12 +6,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/DebugOnly.h"
+#include "mozilla/MathAlgorithms.h"
 
 #include "ion/arm/MacroAssembler-arm.h"
 #include "ion/MoveEmitter.h"
 
 using namespace js;
 using namespace ion;
+
+using mozilla::Abs;
 
 bool
 isValueDTRDCandidate(ValueOperand &val)
@@ -1383,37 +1386,6 @@ MacroAssemblerARM::ma_vstr(VFPRegister src, Register base, Register index, int32
     ma_vstr(src, Operand(ScratchRegister, 0), cc);
 }
 
-
-int32_t
-MacroAssemblerARM::transferMultipleByRuns(FloatRegisterSet set, LoadStore ls,
-                                          Register rm, DTMMode mode)
-{
-    int32_t delta;
-    if (mode == IA) {
-        delta = sizeof(double);
-    } else if (mode == DB) {
-        delta = -sizeof(double);
-    } else {
-        JS_NOT_REACHED("Invalid data transfer addressing mode");
-    }
-
-    int32_t offset = 0;
-    FloatRegisterForwardIterator iter(set);
-    while (iter.more()) {
-        startFloatTransferM(ls, rm, mode, WriteBack);
-        int32_t reg = (*iter).code_;
-        do {
-            offset += delta;
-            transferFloatReg(*iter);
-        } while ((++iter).more() && (*iter).code_ == ++reg);
-        finishFloatTransfer();
-    }
-
-    JS_ASSERT(offset == set.size() * sizeof(double) * (mode == DB ? -1 : 1));
-    ma_sub(Imm32(offset), rm);
-    return offset;
-}
-
 bool
 MacroAssemblerARMCompat::buildFakeExitFrame(const Register &scratch, uint32_t *offset)
 {
@@ -2523,7 +2495,7 @@ MacroAssemblerARMCompat::storeValue(ValueOperand val, Operand dst) {
 void
 MacroAssemblerARMCompat::storeValue(ValueOperand val, const BaseIndex &dest)
 {
-    if (isValueDTRDCandidate(val) && (abs(dest.offset) <= 255)) {
+    if (isValueDTRDCandidate(val) && Abs(dest.offset) <= 255) {
         Register tmpIdx;
         if (dest.offset == 0) {
             if (dest.scale == TimesOne) {
@@ -2547,7 +2519,7 @@ MacroAssemblerARMCompat::storeValue(ValueOperand val, const BaseIndex &dest)
 void
 MacroAssemblerARMCompat::loadValue(const BaseIndex &addr, ValueOperand val)
 {
-    if (isValueDTRDCandidate(val) && (abs(addr.offset) <= 255)) {
+    if (isValueDTRDCandidate(val) && Abs(addr.offset) <= 255) {
         Register tmpIdx;
         if (addr.offset == 0) {
             if (addr.scale == TimesOne) {

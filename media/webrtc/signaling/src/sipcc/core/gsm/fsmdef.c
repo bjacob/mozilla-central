@@ -2154,7 +2154,7 @@ fsmdef_set_req_pending_timer (fsmdef_dcb_t *dcb)
         dcb->req_pending_tmr = cprCreateTimer("Request Pending",
                                               GSM_REQ_PENDING_TIMER,
                                               TIMER_EXPIRATION,
-                                              gsm_msg_queue);
+                                              gsm_msgq);
 
         if (dcb->req_pending_tmr == NULL) {
             FSM_DEBUG_SM(get_debug_string(FSMDEF_DBG_TMR_CREATE_FAILED),
@@ -3301,6 +3301,19 @@ fsmdef_ev_setremotedesc(sm_event_t *event) {
         return (SM_RC_END);
     }
 
+    // XXX We don't currently support renegotiation. If the remote SDP
+    // has already been set, return an error to the application. This is
+    // temporary until Bug 840728 is implemented.
+    if (dcb->sdp && dcb->sdp->dest_sdp) {
+        FSM_DEBUG_SM(DEB_F_PREFIX"Renegotiation not currently supported.\n",
+                     DEB_F_PREFIX_ARGS(FSM, __FUNCTION__));
+        ui_set_remote_description(evSetRemoteDescError, line, call_id,
+            dcb->caller_id.call_instance_id, strlib_empty(),
+            PC_SETREMOTEDESCERROR);
+        return (SM_RC_END);
+    }
+
+
     if (dcb == NULL) {
         FSM_DEBUG_SM(DEB_F_PREFIX"dcb is NULL.\n", DEB_F_PREFIX_ARGS(FSM, __FUNCTION__));
         return SM_RC_CLEANUP;
@@ -4166,7 +4179,7 @@ fsmdef_ev_collectinginfo_release (sm_event_t *event)
     dcb->err_onhook_tmr = cprCreateTimer("Error Onhook",
                                          GSM_ERROR_ONHOOK_TIMER,
                                          TIMER_EXPIRATION,
-                                         gsm_msg_queue);
+                                         gsm_msgq);
     if (dcb->err_onhook_tmr == NULL) {
         FSM_DEBUG_SM(get_debug_string(FSMDEF_DBG_TMR_CREATE_FAILED),
                      dcb->call_id, dcb->line, "", "Error Onhook");
@@ -4504,7 +4517,7 @@ fsmdef_ev_callsent_release (sm_event_t *event)
             dcb->err_onhook_tmr = cprCreateTimer("Error Onhook",
                     GSM_ERROR_ONHOOK_TIMER,
                     TIMER_EXPIRATION,
-                    gsm_msg_queue);
+                    gsm_msgq);
             if (dcb->err_onhook_tmr == NULL) {
                 FSM_DEBUG_SM(get_debug_string(FSMDEF_DBG_TMR_CREATE_FAILED),
                         dcb->call_id, dcb->line, "", "Error Onhook");
@@ -8672,7 +8685,7 @@ fsmdef_init (void)
         dcb->ringback_delay_tmr = cprCreateTimer("Ringback Delay",
                                                  GSM_RINGBACK_DELAY_TIMER,
                                                  TIMER_EXPIRATION,
-                                                 gsm_msg_queue);
+                                                 gsm_msgq);
         if (dcb->ringback_delay_tmr == NULL) {
             FSM_DEBUG_SM(get_debug_string(FSMDEF_DBG_TMR_CREATE_FAILED),
                          dcb->call_id, dcb->line, fname, "Ringback Delay");
@@ -8685,7 +8698,7 @@ fsmdef_init (void)
         dcb->autoAnswerTimer = cprCreateTimer("Auto Answer",
                                               GSM_AUTOANSWER_TIMER,
                                               TIMER_EXPIRATION,
-                                              gsm_msg_queue);
+                                              gsm_msgq);
         if (dcb->autoAnswerTimer == NULL) {
             FSM_DEBUG_SM(get_debug_string(FSMDEF_DBG_TMR_CREATE_FAILED),
                          dcb->call_id, dcb->line, fname, "Auto Answer");
@@ -8696,7 +8709,7 @@ fsmdef_init (void)
         dcb->revertTimer = cprCreateTimer("Call Reversion",
                                               GSM_REVERSION_TIMER,
                                               TIMER_EXPIRATION,
-                                              gsm_msg_queue);
+                                              gsm_msgq);
 		dcb->reversionInterval = -1;
         if (dcb->revertTimer == NULL) {
             FSM_DEBUG_SM(get_debug_string(FSMDEF_DBG_TMR_CREATE_FAILED),

@@ -313,6 +313,15 @@ DataChannelConnection::Init(unsigned short aPort, uint16_t aNumStreams, bool aUs
     return false;
   }
 
+  // Make non-blocking for bind/connect.  SCTP over UDP defaults to non-blocking
+  // in associations for normal IO
+  if (usrsctp_set_non_blocking(mMasterSocket, 1) < 0) {
+    LOG(("Couldn't set non_blocking on SCTP socket"));
+    // We can't handle connect() safely if it will block, not that this will
+    // even happen.
+    goto error_cleanup;
+  }
+
   // Make sure when we close the socket, make sure it doesn't call us back again!
   // This would cause it try to use an invalid DataChannelConnection pointer
   struct linger l;
@@ -321,17 +330,20 @@ DataChannelConnection::Init(unsigned short aPort, uint16_t aNumStreams, bool aUs
   if (usrsctp_setsockopt(mMasterSocket, SOL_SOCKET, SO_LINGER,
                          (const void *)&l, (socklen_t)sizeof(struct linger)) < 0) {
     LOG(("Couldn't set SO_LINGER on SCTP socket"));
+    // unsafe to allow it to continue if this fails
+    goto error_cleanup;
   }
 
   // XXX Consider disabling this when we add proper SDP negotiation.
   // We may want to leave enabled for supporting 'cloning' of SDP offers, which
   // implies re-use of the same pseudo-port number, or forcing a renegotiation.
-  uint32_t on = 1;
-  if (usrsctp_setsockopt(mMasterSocket, IPPROTO_SCTP, SCTP_REUSE_PORT,
-                         (const void *)&on, (socklen_t)sizeof(on)) < 0) {
-    LOG(("Couldn't set SCTP_REUSE_PORT on SCTP socket"));
+  {
+    uint32_t on = 1;
+    if (usrsctp_setsockopt(mMasterSocket, IPPROTO_SCTP, SCTP_REUSE_PORT,
+                           (const void *)&on, (socklen_t)sizeof(on)) < 0) {
+      LOG(("Couldn't set SCTP_REUSE_PORT on SCTP socket"));
+    }
   }
-
 
   if (!aUsingDtls) {
     memset(&encaps, 0, sizeof(encaps));
@@ -453,60 +465,6 @@ DataChannelConnection::Notify(nsITimer *timer)
 }
 
 #ifdef MOZ_PEERCONNECTION
-class DataChannelConnectRunnable : public nsRunnable
-{
-public:
-  DataChannelConnectRunnable(DataChannelConnection *aConnection)
-    : mConnection(aConnection) {}
-
-  NS_IMETHOD Run()
-  {
-    struct sockaddr_conn addr;
-
-    memset(&addr, 0, sizeof(addr));
-    addr.sconn_family = AF_CONN;
-#if defined(__Userspace_os_Darwin)
-    addr.sconn_len = sizeof(addr);
-#endif
-    addr.sconn_port = htons(mConnection->mLocalPort);
-
-    int r = usrsctp_bind(mConnection->mMasterSocket, reinterpret_cast<struct sockaddr *>(&addr),
-                         sizeof(addr));
-    if (r < 0) {
-      LOG(("usrsctp_bind failed: %d", r));
-    } else {
-      // This is the remote addr
-      addr.sconn_port = htons(mConnection->mRemotePort);
-      addr.sconn_addr = static_cast<void *>(mConnection.get());
-      r = usrsctp_connect(mConnection->mMasterSocket, reinterpret_cast<struct sockaddr *>(&addr),
-                          sizeof(addr));
-      if (r < 0) {
-        LOG(("usrsctp_connect failed: %d", r));
-      } else {
-        // Notify Connection open
-        LOG(("%s: sending ON_CONNECTION for %p", __FUNCTION__, mConnection.get()));
-        mConnection->mSocket = mConnection->mMasterSocket;
-        mConnection->mState = DataChannelConnection::OPEN;
-        LOG(("DTLS connect() succeeded!  Entering connected mode"));
-
-        NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
-                                  DataChannelOnMessageAvailable::ON_CONNECTION,
-                                  mConnection, true));
-        return NS_OK;
-      }
-    }
-    // on errors, we simply don't notify there was a connection, but we
-    // want to kill the thread (can we kill ourselves here? That would be better)
-    NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
-                              DataChannelOnMessageAvailable::ON_CONNECTION,
-                              mConnection, false));
-    return NS_OK;
-  }
-
-private:
-  nsRefPtr<DataChannelConnection> mConnection;
-};
-
 bool
 DataChannelConnection::ConnectDTLS(TransportFlow *aFlow, uint16_t localport, uint16_t remoteport)
 {
@@ -519,11 +477,54 @@ DataChannelConnection::ConnectDTLS(TransportFlow *aFlow, uint16_t localport, uin
   mTransportFlow->SignalPacketReceived.connect(this, &DataChannelConnection::SctpDtlsInput);
   mLocalPort = localport;
   mRemotePort = remoteport;
+  mState = CONNECTING;
 
-  nsCOMPtr<nsIRunnable> connect_event = new DataChannelConnectRunnable(this);
-  nsresult rv = NS_NewThread(getter_AddRefs(mConnectThread), connect_event);
+  struct sockaddr_conn addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sconn_family = AF_CONN;
+#if defined(__Userspace_os_Darwin)
+  addr.sconn_len = sizeof(addr);
+#endif
+  addr.sconn_port = htons(mLocalPort);
 
-  return NS_SUCCEEDED(rv);
+  LOG(("Calling usrsctp_bind"));
+  int r = usrsctp_bind(mMasterSocket, reinterpret_cast<struct sockaddr *>(&addr),
+                       sizeof(addr));
+  if (r < 0) {
+    LOG(("usrsctp_bind failed: %d", r));
+  } else {
+    // This is the remote addr
+    addr.sconn_port = htons(mRemotePort);
+    addr.sconn_addr = static_cast<void *>(this);
+    LOG(("Calling usrsctp_connect"));
+    r = usrsctp_connect(mMasterSocket, reinterpret_cast<struct sockaddr *>(&addr),
+                        sizeof(addr));
+    if (r < 0) {
+      if (errno == EINPROGRESS) {
+        // non-blocking
+        return true;
+      } else {
+        LOG(("usrsctp_connect failed: %d", errno));
+        mState = CLOSED;
+      }
+    } else {
+      // Notify Connection open
+      LOG(("%s: sending ON_CONNECTION for %p", __FUNCTION__, this));
+      mSocket = mMasterSocket;
+      mState = OPEN;
+      LOG(("DTLS connect() succeeded!  Entering connected mode"));
+
+      NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
+                                DataChannelOnMessageAvailable::ON_CONNECTION,
+                                this, true));
+      return true;
+    }
+  }
+  // Note: currently this doesn't actually notify the application
+  NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
+                            DataChannelOnMessageAvailable::ON_CONNECTION,
+                            this, false));
+  return false;
 }
 
 void
@@ -1340,15 +1341,34 @@ DataChannelConnection::HandleAssociationChangeEvent(const struct sctp_assoc_chan
   switch (sac->sac_state) {
   case SCTP_COMM_UP:
     LOG(("Association change: SCTP_COMM_UP"));
+    if (mState == CONNECTING) {
+      mSocket = mMasterSocket;
+      mState = OPEN;
+
+      NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
+                                DataChannelOnMessageAvailable::ON_CONNECTION,
+                                this, true));
+      LOG(("DTLS connect() succeeded!  Entering connected mode"));
+    } else if (mState == OPEN) {
+      LOG(("DataConnection Already OPEN"));
+    } else {
+      LOG(("Unexpected state: %d", mState));
+    }
     break;
   case SCTP_COMM_LOST:
     LOG(("Association change: SCTP_COMM_LOST"));
+    NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
+                              DataChannelOnMessageAvailable::ON_DISCONNECTED,
+                              this));
     break;
   case SCTP_RESTART:
     LOG(("Association change: SCTP_RESTART"));
     break;
   case SCTP_SHUTDOWN_COMP:
     LOG(("Association change: SCTP_SHUTDOWN_COMP"));
+    NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
+                              DataChannelOnMessageAvailable::ON_DISCONNECTED,
+                              this));
     break;
   case SCTP_CANT_STR_ASSOC:
     LOG(("Association change: SCTP_CANT_STR_ASSOC"));
@@ -1594,6 +1614,7 @@ DataChannelConnection::HandleStreamResetEvent(const struct sctp_stream_reset_eve
           if (channel->mState == DataChannel::OPEN ||
               channel->mState == DataChannel::WAITING_TO_OPEN) {
             ResetOutgoingStream(channel->mStreamOut);
+            SendOutgoingStreamReset();
             NS_DispatchToMainThread(new DataChannelOnMessageAvailable(
                                       DataChannelOnMessageAvailable::ON_CHANNEL_CLOSED, this,
                                       channel));
@@ -2102,9 +2123,23 @@ DataChannelConnection::Close(DataChannel *aChannel)
   channel->mBufferedData.Clear();
   if (channel->mStreamOut != INVALID_STREAM) {
     ResetOutgoingStream(channel->mStreamOut);
-    SendOutgoingStreamReset();
+    if (mState == CLOSED) { // called from CloseAll()
+      // Let resets accumulate then send all at once in CloseAll()
+      // we're not going to hang around waiting
+      mStreamsOut[channel->mStreamOut] = nullptr;
+    } else {
+      SendOutgoingStreamReset();
+    }
   }
   channel->mState = CLOSING;
+  if (mState == CLOSED) {
+    // we're not going to hang around waiting
+    if (channel->mStreamOut != INVALID_STREAM) {
+      mStreamsIn[channel->mStreamIn] = nullptr;
+    }
+    channel->Destroy();
+  }
+  // At this point when we leave here, the object is a zombie held alive only by the DOM object
 }
 
 void DataChannelConnection::CloseAll()
@@ -2118,9 +2153,11 @@ void DataChannelConnection::CloseAll()
   // Close current channels
   // If there are runnables, they hold a strong ref and keep the channel
   // and/or connection alive (even if in a CLOSED state)
+  bool closed_some = false;
   for (uint32_t i = 0; i < mStreamsOut.Length(); ++i) {
     if (mStreamsOut[i]) {
       mStreamsOut[i]->Close();
+      closed_some = true;
     }
   }
 
@@ -2129,6 +2166,13 @@ void DataChannelConnection::CloseAll()
   while (nullptr != (channel = dont_AddRef(static_cast<DataChannel *>(mPending.PopFront())))) {
     LOG(("closing pending channel %p, stream %d", channel.get(), channel->mStreamOut));
     channel->Close(); // also releases the ref on each iteration
+    closed_some = true;
+  }
+  // It's more efficient to let the Resets queue in shutdown and then
+  // SendOutgoingStreamReset() here.
+  if (closed_some) {
+    MutexAutoLock lock(mLock);
+    SendOutgoingStreamReset();
   }
 }
 

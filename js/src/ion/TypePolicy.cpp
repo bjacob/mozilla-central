@@ -121,7 +121,9 @@ ComparePolicy::adjustInputs(MInstruction *def)
     if (compare->compareType() == MCompare::Compare_Boolean) {
         // Unbox rhs that is definitely Boolean
         MDefinition *rhs = def->getOperand(1);
-        if (rhs->type() == MIRType_Value) {
+        if (rhs->type() != MIRType_Boolean) {
+            if (rhs->type() != MIRType_Value)
+                rhs = boxAt(def, rhs);
             MInstruction *unbox = MUnbox::New(rhs, MIRType_Boolean, MUnbox::Infallible);
             def->block()->insertBefore(def, unbox);
             def->replaceOperand(1, unbox);
@@ -145,7 +147,9 @@ ComparePolicy::adjustInputs(MInstruction *def)
     if (compare->compareType() == MCompare::Compare_StrictString) {
         // Unbox rhs that is definitely String
         MDefinition *rhs = def->getOperand(1);
-        if (rhs->type() == MIRType_Value) {
+        if (rhs->type() != MIRType_String) {
+            if (rhs->type() != MIRType_Value)
+                rhs = boxAt(def, rhs);
             MInstruction *unbox = MUnbox::New(rhs, MIRType_String, MUnbox::Infallible);
             def->block()->insertBefore(def, unbox);
             def->replaceOperand(1, unbox);
@@ -156,13 +160,17 @@ ComparePolicy::adjustInputs(MInstruction *def)
         return true;
     }
 
+    if (compare->compareType() == MCompare::Compare_Undefined ||
+        compare->compareType() == MCompare::Compare_Null)
+    {
+        // Nothing to do for undefined and null, lowering handles all types.
+        return true;
+    }
+
     // Convert all inputs to the right input type
     MIRType type = compare->inputType();
-
-    // Nothing to do for undefined and null, lowering handles all types.
-    if (type == MIRType_Undefined || type == MIRType_Null)
-        return true;
-
+    JS_ASSERT(type == MIRType_Int32 || type == MIRType_Double ||
+              type == MIRType_Object || type == MIRType_String);
     for (size_t i = 0; i < 2; i++) {
         MDefinition *in = def->getOperand(i);
         if (in->type() == type)
@@ -270,10 +278,11 @@ PowPolicy::adjustInputs(MInstruction *ins)
     return IntPolicy<1>::staticAdjustInputs(ins);
 }
 
+template <unsigned Op>
 bool
-StringPolicy::staticAdjustInputs(MInstruction *def)
+StringPolicy<Op>::staticAdjustInputs(MInstruction *def)
 {
-    MDefinition *in = def->getOperand(0);
+    MDefinition *in = def->getOperand(Op);
     if (in->type() == MIRType_String)
         return true;
 
@@ -287,9 +296,12 @@ StringPolicy::staticAdjustInputs(MInstruction *def)
     }
 
     def->block()->insertBefore(def, replace);
-    def->replaceOperand(0, replace);
+    def->replaceOperand(Op, replace);
     return true;
 }
+
+template bool StringPolicy<0>::staticAdjustInputs(MInstruction *ins);
+template bool StringPolicy<1>::staticAdjustInputs(MInstruction *ins);
 
 template <unsigned Op>
 bool

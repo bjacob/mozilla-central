@@ -9,7 +9,6 @@
 #include "nsDocument.h"
 #include "nsIHTMLDocument.h"
 #include "nsIDOMHTMLDocument.h"
-#include "nsIDOMHTMLBodyElement.h"
 #include "nsIDOMHTMLCollection.h"
 #include "nsIScriptElement.h"
 #include "jsapi.h"
@@ -26,6 +25,7 @@
 
 #include "nsICommandManager.h"
 #include "mozilla/dom/HTMLSharedElement.h"
+#include "nsDOMEvent.h"
 
 class nsIEditor;
 class nsIParser;
@@ -100,6 +100,11 @@ public:
   // nsIDOMHTMLDocument interface
   NS_DECL_NSIDOMHTMLDOCUMENT
 
+  void RouteEvent(nsDOMEvent& aEvent)
+  {
+    RouteEvent(&aEvent);
+  }
+
   /**
    * Returns the result of document.all[aID] which can either be a node
    * or a nodelist depending on if there are multiple nodes with the same
@@ -109,10 +114,10 @@ public:
                                     nsWrapperCache **aCache,
                                     nsresult *aResult);
 
-  virtual nsresult ResolveName(const nsAString& aName,
-                               nsIContent *aForm,
-                               nsISupports **aResult,
-                               nsWrapperCache **aCache);
+  nsISupports* ResolveName(const nsAString& aName, nsWrapperCache **aCache);
+  virtual already_AddRefed<nsISupports> ResolveName(const nsAString& aName,
+                                                    nsIContent *aForm,
+                                                    nsWrapperCache **aCache);
 
   virtual void AddedForm();
   virtual void RemovedForm();
@@ -263,7 +268,7 @@ protected:
 
   static void DocumentWriteTerminationFunc(nsISupports *aRef);
 
-  void GetDomainURI(nsIURI **uri);
+  already_AddRefed<nsIURI> GetDomainURI();
 
   nsresult WriteCommon(JSContext *cx, const nsAString& aText,
                        bool aNewlineTerminate);
@@ -296,8 +301,6 @@ protected:
   int32_t mNumForms;
 
   static uint32_t gWyciwygSessionCnt;
-
-  static bool IsAsciiCompatible(const nsACString& aPreferredName);
 
   static void TryHintCharset(nsIMarkupDocumentViewer* aMarkupDV,
                              int32_t& aCharsetSource,
@@ -357,6 +360,12 @@ protected:
 
   // When false, the .cookies property is completely disabled
   bool mDisableCookieAccess;
+
+  /**
+   * Temporary flag that is set in EndUpdate() to ignore
+   * MaybeEditingStateChanged() script runners from a nested scope.
+   */
+  bool mPendingMaybeEditingStateChanged;
 };
 
 #define NS_HTML_DOCUMENT_INTERFACE_TABLE_BEGIN(_class)                        \

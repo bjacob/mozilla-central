@@ -54,23 +54,11 @@ add_task(function test_init() {
   let m = provider.getMeasurement("DummyMeasurement", 1);
   do_check_true(m instanceof Metrics.Measurement);
   do_check_eq(m.id, 1);
-  do_check_eq(m._fieldsByName.size, 7);
+  do_check_eq(Object.keys(m._fields).length, 7);
   do_check_true(m.hasField("daily-counter"));
   do_check_false(m.hasField("does-not-exist"));
 
   yield storage.close();
-});
-
-add_test(function test_prefs_integration() {
-  let branch = "testing.prefs_integration.";
-  let provider = new DummyProvider();
-  provider.initPreferences(branch);
-  let prefs = new Preferences(branch);
-
-  prefs.set("DummyProvider.foo", "bar");
-  do_check_eq(provider._prefs.get("foo"), "bar");
-
-  run_next_test();
 });
 
 add_task(function test_default_collectors() {

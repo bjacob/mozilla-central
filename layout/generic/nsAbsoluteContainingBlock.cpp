@@ -127,9 +127,9 @@ nsAbsoluteContainingBlock::Reflow(nsContainerFrame*        aDelegatingFrame,
       if (!NS_FRAME_IS_FULLY_COMPLETE(kidStatus)) {
         // Need a continuation
         if (!nextFrame) {
-          nsresult rv = aPresContext->PresShell()->FrameConstructor()->
-            CreateContinuingFrame(aPresContext, kidFrame, aDelegatingFrame, &nextFrame);
-          NS_ENSURE_SUCCESS(rv, rv);
+          nextFrame =
+            aPresContext->PresShell()->FrameConstructor()->
+              CreateContinuingFrame(aPresContext, kidFrame, aDelegatingFrame);
         }
         // Add it as an overflow container.
         //XXXfr This is a hack to fix some of our printing dataloss.
@@ -366,7 +366,17 @@ nsAbsoluteContainingBlock::ReflowAbsoluteFrame(nsIFrame*                aDelegat
 
   nsresult  rv;
   // Get the border values
-  const nsMargin& border = aReflowState.mStyleBorder->GetComputedBorder();
+  nsMargin border = aReflowState.mStyleBorder->GetComputedBorder();
+
+  // Respect fixed position margins.
+  if (aDelegatingFrame->GetAbsoluteListID() == nsIFrame::kFixedList) {
+    const nsMargin& fixedMargins = aPresContext->PresShell()->
+      GetContentDocumentFixedPositionMargins();
+
+    border += fixedMargins;
+    aContainingBlockWidth -= fixedMargins.left + fixedMargins.right;
+    aContainingBlockHeight -= fixedMargins.top + fixedMargins.bottom;
+  }
 
   nscoord availWidth = aContainingBlockWidth;
   if (availWidth == -1) {

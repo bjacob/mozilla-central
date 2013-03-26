@@ -6,6 +6,7 @@
 #include "mozilla/layers/ImageContainerParent.h"
 #include "mozilla/layers/ImageBridgeParent.h"
 #include "mozilla/layers/SharedImageUtils.h"
+#include "mozilla/unused.h"
 #include "CompositorParent.h"
 
 namespace mozilla {
@@ -29,7 +30,7 @@ bool ImageContainerParent::RecvPublishImage(const SharedImage& aImage)
   }
 
   if (prevImage && !mStop) {
-    SendReturnImage(*prevImage);
+    unused << SendReturnImage(*prevImage);
     delete prevImage;
   }
   return true;
@@ -60,7 +61,6 @@ bool ImageContainerParent::Recv__delete__()
   NS_ABORT_IF_FALSE(mStop, "Should be in a stopped state when __delete__");
   SharedImage* removed = RemoveSharedImage(mID);
   if (removed) {
-    DeallocSharedImageData(this, *removed);
     delete removed;
   }
 
@@ -92,6 +92,8 @@ struct ImageIDPair {
 };
 
 typedef nsTArray<ImageIDPair> SharedImageMap;
+// We currently leak this, because there's not a good time to clean it
+// up.  We're not on the main thread so can't use ClearOnShutdown().
 SharedImageMap *sSharedImageMap = nullptr;
 
 static const int SHAREDIMAGEMAP_INVALID_INDEX = -1;

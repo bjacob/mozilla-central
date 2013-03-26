@@ -27,15 +27,15 @@ var gActiveListeners = {};
 var gActiveObservers = {};
 var gShownState = {};
 
+function goNext() {
+  if (++gTestIndex == tests.length)
+    executeSoon(finish);
+  else
+    executeSoon(runNextTest);
+}
+
 function runNextTest() {
   let nextTest = tests[gTestIndex];
-
-  function goNext() {
-    if (++gTestIndex == tests.length)
-      executeSoon(finish);
-    else
-      executeSoon(runNextTest);
-  }
 
   function addObserver(topic) {
     function observer() {
@@ -54,7 +54,7 @@ function runNextTest() {
     addObserver("backgroundShow");
   } else if (nextTest.updateNotShowing) {
     addObserver("updateNotShowing");
-  } else {
+  } else if (nextTest.onShown) {
     doOnPopupEvent("popupshowing", function () {
       info("[Test #" + gTestIndex + "] popup showing");
     });
@@ -724,6 +724,72 @@ var tests = [
       ok(!this.notifyObj.dismissalCallbackTriggered, "dismissal callback was not triggered");
       PopupNotifications.buttonDelay = PREF_SECURITY_DELAY_INITIAL;
     },
+  },
+  { // Test #25 - location change in background tab removes notification
+    run: function () {
+      let oldSelectedTab = gBrowser.selectedTab;
+      let newTab = gBrowser.addTab("about:blank");
+      gBrowser.selectedTab = newTab;
+
+      loadURI("http://example.com/", function() {
+        gBrowser.selectedTab = oldSelectedTab;
+        let browser = gBrowser.getBrowserForTab(newTab);
+
+        let notifyObj = new basicNotification();
+        notifyObj.browser = browser;
+        notifyObj.options.eventCallback = function (eventName) {
+          if (eventName == "removed") {
+            ok(true, "Notification removed in background tab after reloading");
+            executeSoon(function () {
+              gBrowser.removeTab(newTab);
+              goNext();
+            });
+          }
+        };
+        showNotification(notifyObj);
+        executeSoon(function () {
+          browser.reload();
+        });
+      });
+    }
+  },
+  { // Test #26 -  Popup notification anchor shouldn't disappear when a notification with the same ID is re-added in a background tab
+    run: function () {
+      loadURI("http://example.com/", function () {
+        let originalTab = gBrowser.selectedTab;
+        let bgTab = gBrowser.addTab("about:blank");
+        gBrowser.selectedTab = bgTab;
+        loadURI("http://example.com/", function () {
+          let anchor = document.createElement("box");
+          anchor.id = "test26-anchor";
+          anchor.className = "notification-anchor-icon";
+          PopupNotifications.iconBox.appendChild(anchor);
+
+          gBrowser.selectedTab = originalTab;
+
+          let fgNotifyObj = new basicNotification();
+          fgNotifyObj.anchorID = anchor.id;
+          fgNotifyObj.options.dismissed = true;
+          let fgNotification = showNotification(fgNotifyObj);
+
+          let bgNotifyObj = new basicNotification();
+          bgNotifyObj.anchorID = anchor.id;
+          bgNotifyObj.browser = gBrowser.getBrowserForTab(bgTab);
+          // show the notification in the background tab ...
+          let bgNotification = showNotification(bgNotifyObj);
+          // ... and re-show it
+          bgNotification = showNotification(bgNotifyObj);
+
+          ok(fgNotification.id, "notification has id");
+          is(fgNotification.id, bgNotification.id, "notification ids are the same");
+          is(anchor.getAttribute("showing"), "true", "anchor still showing");
+
+          fgNotification.remove();
+          gBrowser.removeTab(bgTab);
+          goNext();
+        });
+      });
+    }
   }
 ];
 

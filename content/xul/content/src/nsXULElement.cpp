@@ -21,7 +21,6 @@
 #include "nsError.h"
 #include "nsDOMString.h"
 #include "nsIDOMEvent.h"
-#include "nsHashtable.h"
 #include "nsIAtom.h"
 #include "nsIBaseWindow.h"
 #include "nsIDOMAttr.h"
@@ -341,8 +340,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_ADDREF_INHERITED(nsXULElement, nsStyledElement)
 NS_IMPL_RELEASE_INHERITED(nsXULElement, nsStyledElement)
 
-DOMCI_NODE_DATA(XULElement, nsXULElement)
-
 NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(nsXULElement)
     NS_NODE_OFFSET_AND_INTERFACE_TABLE_BEGIN(nsXULElement)
         NS_INTERFACE_TABLE_ENTRY(nsXULElement, nsIDOMNode)
@@ -354,7 +351,6 @@ NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(nsXULElement)
                                    new nsXULElementTearoff(this))
     NS_INTERFACE_MAP_ENTRY_TEAROFF(nsIFrameLoaderOwner,
                                    new nsXULElementTearoff(this))
-    NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(XULElement)
 NS_ELEMENT_INTERFACE_MAP_END
 
 //----------------------------------------------------------------------
@@ -1938,9 +1934,9 @@ nsXULElement::IsEventAttributeName(nsIAtom *aName)
 }
 
 JSObject*
-nsXULElement::WrapNode(JSContext *aCx, JSObject *aScope, bool *aTriedToWrap)
+nsXULElement::WrapNode(JSContext *aCx, JSObject *aScope)
 {
-    return dom::XULElementBinding::Wrap(aCx, aScope, this, aTriedToWrap);
+    return dom::XULElementBinding::Wrap(aCx, aScope, this);
 }
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsXULPrototypeNode)
@@ -2169,8 +2165,7 @@ nsXULPrototypeElement::Deserialize(nsIObjectInputStream* aStream,
     uint32_t numChildren = int32_t(number);
 
     if (numChildren > 0) {
-        if (!mChildren.SetCapacity(numChildren))
-            return NS_ERROR_OUT_OF_MEMORY;
+        mChildren.SetCapacity(numChildren);
 
         for (i = 0; i < numChildren; i++) {
             tmp = aStream->Read32(&number);
@@ -2471,8 +2466,8 @@ nsXULPrototypeScript::Deserialize(nsIObjectInputStream* aStream,
     nsIScriptContext *context = aGlobal->GetScriptContext();
     NS_ASSERTION(context != nullptr, "Have no context for deserialization");
     NS_ENSURE_TRUE(context, NS_ERROR_UNEXPECTED);
-    nsScriptObjectHolder<JSScript> newScriptObject(context);
-    rv = context->Deserialize(aStream, newScriptObject);
+    JS::Rooted<JSScript*> newScriptObject(context->GetNativeContext());
+    rv = context->Deserialize(aStream, &newScriptObject);
     if (NS_FAILED(rv)) {
         NS_WARNING("Language deseralization failed");
         return rv;
@@ -2591,7 +2586,7 @@ nsXULPrototypeScript::Compile(const PRUnichar* aText,
 
     // Ok, compile it to create a prototype script object!
 
-    nsScriptObjectHolder<JSScript> newScriptObject(context);
+    JS::Rooted<JSScript*> newScriptObject(context->GetNativeContext());
 
     // If the script was inline, tell the JS parser to save source for
     // Function.prototype.toSource(). If it's out of line, we retrieve the
@@ -2610,7 +2605,7 @@ nsXULPrototypeScript::Compile(const PRUnichar* aText,
                                 urlspec.get(),
                                 aLineNo,
                                 mLangVersion,
-                                newScriptObject,
+                                &newScriptObject,
                                 saveSource);
     if (NS_FAILED(rv))
         return rv;
