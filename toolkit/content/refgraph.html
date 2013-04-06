@@ -78,6 +78,30 @@
         output += dumpVertex(edge.target, level + 1, root_address, itbcc && isTraversedByCC);
       }
     }
+
+    var backEdgeCount = vertex.backEdgeCount;
+    var backWeakEdgeCount = vertex.backWeakEdgeCount;
+    var backRefCount = 0;
+    var backWeakRefCount = 0;
+    for (var e = 0; e < backEdgeCount; e++) {
+      var back = vertex.backEdge(e);
+      if (back.cycleIndex != cycleIndex) {
+        var t = back.typeName;
+        output += ind + "referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
+        backRefCount++;
+      }
+    }
+    output += ind + "backRefCount: " + backRefCount + "\n";
+    for (var e = 0; e < backWeakEdgeCount; e++) {
+      var back = vertex.backWeakEdge(e);
+      if (back.cycleIndex != cycleIndex) {
+        var t = back.typeName;
+        output += ind + "weak-referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
+        backWeakRefCount++;
+      }
+    }
+    output += ind + "backWeakRefCount: " + backWeakRefCount + "\n\n\n";
+
     return output;
   }
   function typeSearch() {
@@ -96,7 +120,7 @@
       resultText += "\n\nFirst result: " + typeName + "\n";
       var vertexCount = 0;
       for(var vertex = refgraph.findVertex(typeName, null);
-          vertex != null && vertexCount < 10;
+          vertex != null && vertexCount < 100;
           vertex = refgraph.findVertex(typeName, vertex))
       {
         resultText += "\n\nVertex:\n\n";

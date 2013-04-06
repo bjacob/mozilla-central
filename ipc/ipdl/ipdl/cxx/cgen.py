@@ -242,6 +242,7 @@ class CxxCodeGen(CodePrinter, Visitor):
 
         self.printdentln('{')
         self.indent()
+        self.printdentln('refgraph::SetType(this);')
 
         self.visitBlock(cd)
 

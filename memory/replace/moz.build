@@ -6,3 +6,5 @@
 # Build jemalloc3 as a replace-malloc lib when building with mozjemalloc
 if not CONFIG['MOZ_JEMALLOC']:
     DIRS += ['jemalloc']
+
+DIRS += ['refgraph']
