@@ -47,23 +47,21 @@ public class GeckoEvent {
     private static final int IME_EVENT = 6;
     private static final int DRAW = 7;
     private static final int SIZE_CHANGED = 8;
-    private static final int ACTIVITY_STOPPING = 9;
-    private static final int ACTIVITY_PAUSING = 10;
-    private static final int ACTIVITY_SHUTDOWN = 11;
+    private static final int APP_BACKGROUNDING = 9;
+    private static final int APP_FOREGROUNDING = 10;
     private static final int LOAD_URI = 12;
     private static final int NOOP = 15;
-    private static final int ACTIVITY_START = 17;
     private static final int BROADCAST = 19;
     private static final int VIEWPORT = 20;
     private static final int VISITED = 21;
     private static final int NETWORK_CHANGED = 22;
-    private static final int ACTIVITY_RESUMING = 24;
     private static final int THUMBNAIL = 25;
     private static final int SCREENORIENTATION_CHANGED = 27;
     private static final int COMPOSITOR_CREATE = 28;
     private static final int COMPOSITOR_PAUSE = 29;
     private static final int COMPOSITOR_RESUME = 30;
     private static final int NATIVE_GESTURE_EVENT = 31;
+    private static final int IME_KEY_EVENT = 32;
 
     /**
      * These DOM_KEY_LOCATION constants mirror the DOM KeyboardEvent's constants.
@@ -125,6 +123,7 @@ public class GeckoEvent {
     private int mFlags;
     private int mKeyCode;
     private int mUnicodeChar;
+    private int mBaseUnicodeChar; // mUnicodeChar without meta states applied
     private int mRepeatCount;
     private int mCount;
     private int mStart;
@@ -158,32 +157,12 @@ public class GeckoEvent {
         mType = evType;
     }
 
-    public static GeckoEvent createPauseEvent(boolean isApplicationInBackground) {
-        GeckoEvent event = new GeckoEvent(ACTIVITY_PAUSING);
-        event.mFlags = isApplicationInBackground ? 0 : 1;
-        return event;
+    public static GeckoEvent createAppBackgroundingEvent() {
+        return new GeckoEvent(APP_BACKGROUNDING);
     }
 
-    public static GeckoEvent createResumeEvent(boolean isApplicationInBackground) {
-        GeckoEvent event = new GeckoEvent(ACTIVITY_RESUMING);
-        event.mFlags = isApplicationInBackground ? 0 : 1;
-        return event;
-    }
-
-    public static GeckoEvent createStoppingEvent(boolean isApplicationInBackground) {
-        GeckoEvent event = new GeckoEvent(ACTIVITY_STOPPING);
-        event.mFlags = isApplicationInBackground ? 0 : 1;
-        return event;
-    }
-
-    public static GeckoEvent createStartEvent(boolean isApplicationInBackground) {
-        GeckoEvent event = new GeckoEvent(ACTIVITY_START);
-        event.mFlags = isApplicationInBackground ? 0 : 1;
-        return event;
-    }
-
-    public static GeckoEvent createShutdownEvent() {
-        return new GeckoEvent(ACTIVITY_SHUTDOWN);
+    public static GeckoEvent createAppForegroundingEvent() {
+        return new GeckoEvent(APP_FOREGROUNDING);
     }
 
     public static GeckoEvent createNoOpEvent() {
@@ -221,11 +200,10 @@ public class GeckoEvent {
         mMetaState = k.getMetaState() | metaState;
         mFlags = k.getFlags();
         mKeyCode = k.getKeyCode();
-        mUnicodeChar = k.getUnicodeChar();
-        if (mUnicodeChar == 0) {
-            // e.g. for Ctrl+A, Android returns 0, but Gecko expects 'a' as mUnicodeChar
-            mUnicodeChar = k.getUnicodeChar(0);
-        }
+        mUnicodeChar = k.getUnicodeChar(mMetaState);
+        // e.g. for Ctrl+A, Android returns 0 for mUnicodeChar,
+        // but Gecko expects 'a', so we return that in mBaseUnicodeChar
+        mBaseUnicodeChar = k.getUnicodeChar(0);
         mRepeatCount = k.getRepeatCount();
         mCharacters = k.getCharacters();
         mDomKeyLocation = isJoystickButton(mKeyCode) ? DOM_KEY_LOCATION_JOYSTICK : DOM_KEY_LOCATION_MOBILE;
@@ -501,6 +479,12 @@ public class GeckoEvent {
     public static GeckoEvent createIMEEvent(int action) {
         GeckoEvent event = new GeckoEvent(IME_EVENT);
         event.mAction = action;
+        return event;
+    }
+
+    public static GeckoEvent createIMEKeyEvent(KeyEvent k) {
+        GeckoEvent event = new GeckoEvent(IME_KEY_EVENT);
+        event.initKeyEvent(k, 0);
         return event;
     }
 

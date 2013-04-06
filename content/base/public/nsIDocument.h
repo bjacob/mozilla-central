@@ -77,6 +77,7 @@ class nsSmallVoidArray;
 class nsDOMCaretPosition;
 class nsViewportInfo;
 class nsDOMEvent;
+class nsIGlobalObject;
 
 namespace mozilla {
 class ErrorResult;
@@ -110,8 +111,8 @@ typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0x45ce048f, 0x5970, 0x411e, \
-  { 0xaa, 0x99, 0x12, 0xed, 0x3a, 0x55, 0xc9, 0xc3 } }
+{ 0x8f33bc23, 0x5625, 0x448a, \
+  { 0xb3, 0x38, 0xfe, 0x88, 0x16, 0xe, 0xb3, 0xdb } }
 
 // Flag for AddStyleSheet().
 #define NS_STYLESHEET_FROM_CATALOG                (1 << 0)
@@ -806,7 +807,8 @@ public:
    * document is truly gone. Use this object when you're trying to find a
    * content wrapper in XPConnect.
    */
-  virtual nsIScriptGlobalObject* GetScopeObject() const = 0;
+  virtual nsIGlobalObject* GetScopeObject() const = 0;
+  virtual void SetScopeObject(nsIGlobalObject* aGlobal) = 0;
 
   /**
    * Return the window containing the document (the outer window).
@@ -1306,7 +1308,9 @@ public:
    * Get the box object for an element. This is not exposed through a
    * scriptable interface except for XUL documents.
    */
-  NS_IMETHOD GetBoxObjectFor(nsIDOMElement* aElement, nsIBoxObject** aResult) = 0;
+  virtual already_AddRefed<nsIBoxObject>
+    GetBoxObjectFor(mozilla::dom::Element* aElement,
+                    mozilla::ErrorResult& aRv) = 0;
 
   /**
    * Get the compatibility mode for this document
@@ -1906,7 +1910,7 @@ public:
   }
 
   // WebIDL API
-  nsIScriptGlobalObject* GetParentObject() const
+  nsIGlobalObject* GetParentObject() const
   {
     return GetScopeObject();
   }
@@ -2310,6 +2314,8 @@ protected:
   // document was created entirely in memory
   bool mHaveInputEncoding;
 
+  bool mHasHadDefaultView;
+
   // The document's script global object, the object from which the
   // document can get its script context and scope. This is the
   // *inner* window object.
@@ -2509,7 +2515,7 @@ NS_NewDOMDocument(nsIDOMDocument** aInstancePtrResult,
                   nsIURI* aBaseURI,
                   nsIPrincipal* aPrincipal,
                   bool aLoadedAsData,
-                  nsIScriptGlobalObject* aEventObject,
+                  nsIGlobalObject* aEventObject,
                   DocumentFlavor aFlavor);
 
 // This is used only for xbl documents created from the startup cache.

@@ -262,7 +262,7 @@ nsXBLPrototypeHandler::ExecuteHandler(nsIDOMEventTarget* aTarget,
       boundDocument = content->OwnerDoc();
     }
 
-    boundGlobal = boundDocument->GetScopeObject();
+    boundGlobal = do_QueryInterface(boundDocument->GetScopeObject());
   }
 
   if (!boundGlobal)
@@ -295,6 +295,7 @@ nsXBLPrototypeHandler::ExecuteHandler(nsIDOMEventTarget* aTarget,
   JSAutoRequest ar(cx);
   JS::Rooted<JSObject*> globalObject(cx, boundGlobal->GetGlobalJSObject());
   JS::Rooted<JSObject*> scopeObject(cx, xpc::GetXBLScope(cx, globalObject));
+  NS_ENSURE_TRUE(scopeObject, NS_ERROR_OUT_OF_MEMORY);
 
   // Bind it to the bound element. Note that if we're using a separate XBL scope,
   // we'll actually be binding the event handler to a cross-compartment wrapper
@@ -375,6 +376,7 @@ nsXBLPrototypeHandler::EnsureEventHandler(nsIScriptGlobalObject* aGlobal,
 
   JS::Rooted<JSObject*> globalObject(cx, aGlobal->GetGlobalJSObject());
   JS::Rooted<JSObject*> scopeObject(cx, xpc::GetXBLScope(cx, globalObject));
+  NS_ENSURE_TRUE(scopeObject, NS_ERROR_OUT_OF_MEMORY);
 
   nsAutoCString bindingURI;
   mPrototypeBinding->DocURI()->GetSpec(bindingURI);
@@ -814,7 +816,7 @@ nsXBLPrototypeHandler::ConstructPrototype(nsIContent* aKeyElement,
     char* str = ToNewCString(modifiers);
     char* newStr;
     char* token = nsCRT::strtok( str, ", \t", &newStr );
-    while( token != NULL ) {
+    while( token != nullptr ) {
       if (PL_strcmp(token, "shift") == 0)
         mKeyMask |= cShift | cShiftMask;
       else if (PL_strcmp(token, "alt") == 0)

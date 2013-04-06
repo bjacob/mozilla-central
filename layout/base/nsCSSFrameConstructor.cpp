@@ -9,11 +9,13 @@
  * tree and updating of that tree in response to dynamic changes
  */
 
+#include "nsCSSFrameConstructor.h"
+
 #include "mozilla/DebugOnly.h"
+#include "mozilla/dom/HTMLSelectElement.h"
 #include "mozilla/Likely.h"
 #include "mozilla/LinkedList.h"
 
-#include "nsCSSFrameConstructor.h"
 #include "nsAbsoluteContainingBlock.h"
 #include "nsCRT.h"
 #include "nsIAtom.h"
@@ -40,7 +42,6 @@
 #include "nsIDOMXULElement.h"
 #include "nsContainerFrame.h"
 #include "nsINameSpaceManager.h"
-#include "nsHTMLSelectElement.h"
 #include "nsIDOMHTMLLegendElement.h"
 #include "nsIComboboxControlFrame.h"
 #include "nsIListControlFrame.h"
@@ -115,7 +116,6 @@
 #undef NOISY_FIRST_LETTER
 
 #include "nsMathMLParts.h"
-#include "nsIDOMSVGFilters.h"
 #include "mozilla/dom/SVGTests.h"
 #include "nsSVGEffects.h"
 #include "nsSVGTextFrame2.h"
@@ -2873,7 +2873,7 @@ nsCSSFrameConstructor::ConstructSelectFrame(nsFrameConstructorState& aState,
   nsStyleContext* const styleContext = aItem.mStyleContext;
 
   // Construct a frame-based listbox or combobox
-  nsHTMLSelectElement* sel = nsHTMLSelectElement::FromContent(content);
+  dom::HTMLSelectElement* sel = dom::HTMLSelectElement::FromContent(content);
   MOZ_ASSERT(sel);
   uint32_t size = sel->Size();
   bool multipleSelect = sel->Multiple();

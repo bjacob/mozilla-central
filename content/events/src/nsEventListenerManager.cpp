@@ -628,7 +628,7 @@ nsEventListenerManager::SetEventHandler(nsIAtom *aName,
 
     // We want to allow compiling an event handler even in an unloaded
     // document, so use GetScopeObject here, not GetScriptHandlingObject.
-    global = doc->GetScopeObject();
+    global = do_QueryInterface(doc->GetScopeObject());
   } else {
     nsCOMPtr<nsPIDOMWindow> win = GetTargetAsInnerWindow();
     if (win) {
@@ -669,11 +669,12 @@ nsEventListenerManager::SetEventHandler(nsIAtom *aName,
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (csp) {
-      bool inlineOK;
-      rv = csp->GetAllowsInlineScript(&inlineOK);
+      bool inlineOK = true;
+      bool reportViolations = false;
+      rv = csp->GetAllowsInlineScript(&reportViolations, &inlineOK);
       NS_ENSURE_SUCCESS(rv, rv);
 
-      if ( !inlineOK ) {
+      if (reportViolations) {
         // gather information to log with violation report
         nsIURI* uri = doc->GetDocumentURI();
         nsAutoCString asciiSpec;
@@ -693,6 +694,10 @@ nsEventListenerManager::SetEventHandler(nsIAtom *aName,
                                  NS_ConvertUTF8toUTF16(asciiSpec),
                                  scriptSample,
                                  0);
+      }
+
+      // return early if CSP wants us to block inline scripts
+      if (!inlineOK) {
         return NS_OK;
       }
     }

@@ -140,6 +140,8 @@
 #include "nsIPrompt.h"
 #include "nsIPropertyBag2.h"
 #include "nsIDOMPageTransitionEvent.h"
+#include "nsIDOMStyleSheetAddedEvent.h"
+#include "nsIDOMStyleSheetRemovedEvent.h"
 #include "nsJSUtils.h"
 #include "nsFrameLoader.h"
 #include "nsEscape.h"
@@ -156,7 +158,7 @@
 #include "mozAutoDocUpdate.h"
 #include "nsGlobalWindow.h"
 #include "mozilla/dom/EncodingUtils.h"
-#include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
+#include "mozilla/dom/quota/QuotaManager.h"
 #include "nsDOMNavigationTiming.h"
 #include "nsEventStateManager.h"
 
@@ -178,7 +180,9 @@
 #include "mozilla/dom/HTMLElementBinding.h"
 #include "nsXULAppAPI.h"
 #include "nsDOMTouchEvent.h"
+#include "mozilla/dom/Touch.h"
 #include "DictionaryHelpers.h"
+#include "GeneratedEvents.h"
 
 #include "mozilla/Preferences.h"
 
@@ -1945,7 +1949,7 @@ nsDocument::Reset(nsIChannel* aChannel, nsILoadGroup* aLoadGroup)
   nsCOMPtr<nsIURI> uri;
   nsCOMPtr<nsIPrincipal> principal;
   if (aChannel) {
-    // Note: this code is duplicated in nsXULDocument::StartDocumentLoad and
+    // Note: this code is duplicated in XULDocument::StartDocumentLoad and
     // nsScriptSecurityManager::GetChannelPrincipal.
     // Note: this should match nsDocShell::OnLoadingSite
     NS_GetFinalChannelURI(aChannel, getter_AddRefs(uri));
@@ -3658,6 +3662,53 @@ nsDocument::AddStyleSheetToStyleSets(nsIStyleSheet* aSheet)
   }
 }
 
+#define DO_STYLESHEET_NOTIFICATION(createFunc, initMethod, concreteInterface, type) \
+  do {                                                                  \
+    nsCOMPtr<nsIDOMEvent> event;                                        \
+    nsresult rv = createFunc(getter_AddRefs(event), this,               \
+                             mPresShell ?                               \
+                             mPresShell->GetPresContext() : nullptr,    \
+                             nullptr);                                  \
+    if (NS_FAILED(rv)) {                                                \
+      return;                                                           \
+    }                                                                   \
+    nsCOMPtr<nsIDOMCSSStyleSheet> cssSheet(do_QueryInterface(aSheet));  \
+    if (!cssSheet) {                                                    \
+      return;                                                           \
+    }                                                                   \
+    nsCOMPtr<concreteInterface> ssEvent(do_QueryInterface(event));      \
+    MOZ_ASSERT(ssEvent);                                                \
+    ssEvent->initMethod(NS_LITERAL_STRING(type), true, true,            \
+                        cssSheet, aDocumentSheet);                      \
+    event->SetTrusted(true);                                            \
+    event->SetTarget(this);                                             \
+    nsRefPtr<nsAsyncDOMEvent> asyncEvent = new nsAsyncDOMEvent(this, event); \
+    asyncEvent->mDispatchChromeOnly = true;                             \
+    asyncEvent->PostDOMEvent();                                         \
+  } while (0);
+
+void
+nsDocument::NotifyStyleSheetAdded(nsIStyleSheet* aSheet, bool aDocumentSheet)
+{
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (this, aSheet, aDocumentSheet));
+  DO_STYLESHEET_NOTIFICATION(NS_NewDOMStyleSheetAddedEvent,
+                             InitStyleSheetAddedEvent,
+                             nsIDOMStyleSheetAddedEvent,
+                             "StyleSheetAdded");
+}
+
+void
+nsDocument::NotifyStyleSheetRemoved(nsIStyleSheet* aSheet, bool aDocumentSheet)
+{
+  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetRemoved, (this, aSheet, aDocumentSheet));
+  DO_STYLESHEET_NOTIFICATION(NS_NewDOMStyleSheetRemovedEvent,
+                             InitStyleSheetRemovedEvent,
+                             nsIDOMStyleSheetRemovedEvent,
+                             "StyleSheetRemoved");
+}
+
+#undef DO_STYLESHEET_NOTIFICATION
+
 void
 nsDocument::AddStyleSheet(nsIStyleSheet* aSheet)
 {
@@ -3669,7 +3720,7 @@ nsDocument::AddStyleSheet(nsIStyleSheet* aSheet)
     AddStyleSheetToStyleSets(aSheet);
   }
 
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (this, aSheet, true));
+  NotifyStyleSheetAdded(aSheet, true);
 }
 
 void
@@ -3697,7 +3748,7 @@ nsDocument::RemoveStyleSheet(nsIStyleSheet* aSheet)
       RemoveStyleSheetFromStyleSets(aSheet);
     }
 
-    NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetRemoved, (this, aSheet, true));
+    NotifyStyleSheetRemoved(aSheet, true);
   }
 
   aSheet->SetOwningDocument(nullptr);
@@ -3733,7 +3784,7 @@ nsDocument::UpdateStyleSheets(nsCOMArray<nsIStyleSheet>& aOldSheets,
         AddStyleSheetToStyleSets(newSheet);
       }
 
-      NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (this, newSheet, true));
+      NotifyStyleSheetAdded(newSheet, true);
     }
   }
 
@@ -3752,7 +3803,7 @@ nsDocument::InsertStyleSheetAt(nsIStyleSheet* aSheet, int32_t aIndex)
     AddStyleSheetToStyleSets(aSheet);
   }
 
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (this, aSheet, true));
+  NotifyStyleSheetAdded(aSheet, true);
 }
 
 
@@ -3810,7 +3861,7 @@ nsDocument::AddCatalogStyleSheet(nsCSSStyleSheet* aSheet)
     }
   }
 
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (this, aSheet, false));
+  NotifyStyleSheetAdded(aSheet, false);
 }
 
 void
@@ -3905,7 +3956,7 @@ nsDocument::LoadAdditionalStyleSheet(additionalSheetType aType, nsIURI* aSheetUR
 
   // Passing false, so documet.styleSheets.length will not be affected by
   // these additional sheets.
-  NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetAdded, (this, sheet, false));
+  NotifyStyleSheetAdded(sheet, false);
   EndUpdate(UPDATE_STYLE);
 
   return NS_OK;
@@ -3935,7 +3986,7 @@ nsDocument::RemoveAdditionalStyleSheet(additionalSheetType aType, nsIURI* aSheet
 
     // Passing false, so documet.styleSheets.length will not be affected by
     // these additional sheets.
-    NS_DOCUMENT_NOTIFY_OBSERVERS(StyleSheetRemoved, (this, sheetRef, false));
+    NotifyStyleSheetRemoved(sheetRef, false);
     EndUpdate(UPDATE_STYLE);
 
     sheetRef->SetOwningDocument(nullptr);
@@ -3970,11 +4021,20 @@ nsDocument::GetScriptGlobalObject() const
    return mScriptGlobalObject;
 }
 
-nsIScriptGlobalObject*
+nsIGlobalObject*
 nsDocument::GetScopeObject() const
 {
-  nsCOMPtr<nsIScriptGlobalObject> scope(do_QueryReferent(mScopeObject));
+  nsCOMPtr<nsIGlobalObject> scope(do_QueryReferent(mScopeObject));
   return scope;
+}
+
+void
+nsDocument::SetScopeObject(nsIGlobalObject* aGlobal)
+{
+  mScopeObject = do_GetWeakReference(aGlobal);
+  if (aGlobal) {
+    mHasHadScriptHandlingObject = true;
+  }
 }
 
 static void
@@ -4039,12 +4099,11 @@ nsDocument::SetScriptGlobalObject(nsIScriptGlobalObject *aScriptGlobalObject)
   mScriptGlobalObject = aScriptGlobalObject;
 
   if (aScriptGlobalObject) {
-    mScriptObject = nullptr;
     mHasHadScriptHandlingObject = true;
+    mHasHadDefaultView = true;
     // Go back to using the docshell for the layout history state
     mLayoutHistoryState = nullptr;
     mScopeObject = do_GetWeakReference(aScriptGlobalObject);
-
 #ifdef DEBUG
     if (!mWillReparent) {
       // We really shouldn't have a wrapper here but if we do we need to make sure
@@ -4092,11 +4151,14 @@ nsDocument::SetScriptGlobalObject(nsIScriptGlobalObject *aScriptGlobalObject)
 nsIScriptGlobalObject*
 nsDocument::GetScriptHandlingObjectInternal() const
 {
-  NS_ASSERTION(!mScriptGlobalObject,
-               "Do not call this when mScriptGlobalObject is set!");
+  MOZ_ASSERT(!mScriptGlobalObject,
+             "Do not call this when mScriptGlobalObject is set!");
+  if (mHasHadDefaultView) {
+    return nullptr;
+  }
 
   nsCOMPtr<nsIScriptGlobalObject> scriptHandlingObject =
-    do_QueryReferent(mScriptObject);
+    do_QueryReferent(mScopeObject);
   nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(scriptHandlingObject);
   if (win) {
     NS_ASSERTION(win->IsInnerWindow(), "Should have inner window here!");
@@ -4116,16 +4178,17 @@ nsDocument::SetScriptHandlingObject(nsIScriptGlobalObject* aScriptObject)
                "Wrong script object!");
   nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(aScriptObject);
   NS_ASSERTION(!win || win->IsInnerWindow(), "Should have inner window here!");
-  mScopeObject = mScriptObject = do_GetWeakReference(aScriptObject);
   if (aScriptObject) {
+    mScopeObject = do_GetWeakReference(aScriptObject);
     mHasHadScriptHandlingObject = true;
+    mHasHadDefaultView = false;
   }
 }
 
 nsPIDOMWindow *
 nsDocument::GetWindowInternal() const
 {
-  NS_ASSERTION(!mWindow, "This should not be called when mWindow is not null!");
+  MOZ_ASSERT(!mWindow, "This should not be called when mWindow is not null!");
 
   nsCOMPtr<nsPIDOMWindow> win(do_QueryInterface(GetScriptGlobalObject()));
 
@@ -4139,8 +4202,8 @@ nsDocument::GetWindowInternal() const
 nsPIDOMWindow *
 nsDocument::GetInnerWindowInternal()
 {
-  NS_ASSERTION(mRemovedFromDocShell,
-               "This document should have been removed from docshell!");
+  MOZ_ASSERT(mRemovedFromDocShell,
+             "This document should have been removed from docshell!");
 
   nsCOMPtr<nsPIDOMWindow> win(do_QueryInterface(GetScriptGlobalObject()));
 
@@ -4585,7 +4648,8 @@ nsDocument::GetImplementation(ErrorResult& rv)
       rv.Throw(NS_ERROR_UNEXPECTED);
       return nullptr;
     }
-    mDOMImplementation = new DOMImplementation(this, scriptObject, uri, uri);
+    mDOMImplementation = new DOMImplementation(this,
+      scriptObject ? scriptObject : GetScopeObject(), uri, uri);
   }
 
   return mDOMImplementation;
@@ -4988,7 +5052,7 @@ nsDocument::Register(JSContext* aCx, const nsAString& aName,
     return nullptr;
   }
 
-  nsIScriptGlobalObject* sgo = GetScopeObject();
+  nsIGlobalObject* sgo = GetScopeObject();
   if (!sgo) {
     rv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
@@ -5005,7 +5069,7 @@ nsDocument::Register(JSContext* aCx, const nsAString& aName,
 
   JSObject* protoObject;
   if (!aOptions.mPrototype) {
-    protoObject = JS_NewObject(aCx, NULL, htmlProto, NULL);
+    protoObject = JS_NewObject(aCx, nullptr, htmlProto, nullptr);
     if (!protoObject) {
       rv.Throw(NS_ERROR_UNEXPECTED);
       return nullptr;
@@ -5927,16 +5991,21 @@ nsDocument::DoNotifyPossibleTitleChange()
                                       true, true);
 }
 
-NS_IMETHODIMP
-nsDocument::GetBoxObjectFor(nsIDOMElement* aElement, nsIBoxObject** aResult)
+already_AddRefed<nsIBoxObject>
+nsDocument::GetBoxObjectFor(Element* aElement, ErrorResult& aRv)
 {
-  nsCOMPtr<nsIContent> content(do_QueryInterface(aElement));
-  NS_ENSURE_TRUE(content, NS_ERROR_UNEXPECTED);
+  if (!aElement) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
 
-  nsIDocument* doc = content->OwnerDoc();
-  NS_ENSURE_TRUE(doc == this, NS_ERROR_DOM_WRONG_DOCUMENT_ERR);
+  nsIDocument* doc = aElement->OwnerDoc();
+  if (doc != this) {
+    aRv.Throw(NS_ERROR_DOM_WRONG_DOCUMENT_ERR);
+    return nullptr;
+  }
 
-  if (!mHasWarnedAboutBoxObjects && !content->IsXUL()) {
+  if (!mHasWarnedAboutBoxObjects && !aElement->IsXUL()) {
     mHasWarnedAboutBoxObjects = true;
     nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
                                     "BoxObjects", this,
@@ -5944,22 +6013,18 @@ nsDocument::GetBoxObjectFor(nsIDOMElement* aElement, nsIBoxObject** aResult)
                                     "UseOfGetBoxObjectForWarning");
   }
 
-  *aResult = nullptr;
-
   if (!mBoxObjectTable) {
     mBoxObjectTable = new nsInterfaceHashtable<nsPtrHashKey<nsIContent>, nsPIBoxObject>;
     mBoxObjectTable->Init(12);
   } else {
-    // Want to use Get(content, aResult); but it's the wrong type
-    *aResult = mBoxObjectTable->GetWeak(content);
-    if (*aResult) {
-      NS_ADDREF(*aResult);
-      return NS_OK;
+    nsCOMPtr<nsPIBoxObject> boxObject = mBoxObjectTable->Get(aElement);
+    if (boxObject) {
+      return boxObject.forget();
     }
   }
 
   int32_t namespaceID;
-  nsCOMPtr<nsIAtom> tag = BindingManager()->ResolveTag(content, &namespaceID);
+  nsCOMPtr<nsIAtom> tag = BindingManager()->ResolveTag(aElement, &namespaceID);
 
   nsAutoCString contractID("@mozilla.org/layout/xul-boxobject");
   if (namespaceID == kNameSpaceID_XUL) {
@@ -5984,19 +6049,18 @@ nsDocument::GetBoxObjectFor(nsIDOMElement* aElement, nsIBoxObject** aResult)
   contractID += ";1";
 
   nsCOMPtr<nsPIBoxObject> boxObject(do_CreateInstance(contractID.get()));
-  if (!boxObject)
-    return NS_ERROR_FAILURE;
-
-  boxObject->Init(content);
-
-  if (mBoxObjectTable) {
-    mBoxObjectTable->Put(content, boxObject.get());
+  if (!boxObject) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
   }
 
-  *aResult = boxObject;
-  NS_ADDREF(*aResult);
+  boxObject->Init(aElement);
 
-  return NS_OK;
+  if (mBoxObjectTable) {
+    mBoxObjectTable->Put(aElement, boxObject.get());
+  }
+
+  return boxObject.forget();
 }
 
 void
@@ -6463,7 +6527,8 @@ GetContextAndScope(nsIDocument* aOldDocument, nsIDocument* aNewDocument,
   JSObject* newScope = aNewDocument->GetWrapper();
   JSObject* global;
   if (!newScope) {
-    nsIScriptGlobalObject *newSGO = aNewDocument->GetScopeObject();
+    nsIGlobalObject *newSGO = aNewDocument->GetScopeObject();
+
     if (!newSGO || !(global = newSGO->GetGlobalJSObject())) {
       return NS_OK;
     }
@@ -7638,11 +7703,11 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
     }
   }
 
-  // Check if we have running IndexedDB transactions
-  indexedDB::IndexedDatabaseManager* idbManager =
-    win ? indexedDB::IndexedDatabaseManager::Get() : nullptr;
-  if (idbManager && idbManager->HasOpenTransactions(win)) {
-    return false;
+  // Check if we have running offline storage transactions
+  quota::QuotaManager* quotaManager =
+    win ? quota::QuotaManager::Get() : nullptr;
+  if (quotaManager && quotaManager->HasOpenTransactions(win)) {
+   return false;
   }
 
 #ifdef MOZ_WEBRTC
@@ -8255,8 +8320,11 @@ nsDocument::CloneDocHelper(nsDocument* clone) const
   nsIScriptGlobalObject* scriptObject =
     GetScriptHandlingObject(hasHadScriptObject);
   NS_ENSURE_STATE(scriptObject || !hasHadScriptObject);
-  clone->SetScriptHandlingObject(scriptObject);
-
+  if (scriptObject) {
+    clone->SetScriptHandlingObject(scriptObject);
+  } else {
+    clone->SetScopeObject(GetScopeObject());
+  }
   // Make the clone a data document
   clone->SetLoadedAsData(true);
 
@@ -9205,14 +9273,14 @@ nsIDocument::CreateTouch(nsIDOMWindow* aView,
                          float aForce)
 {
   nsCOMPtr<nsIDOMEventTarget> target = do_QueryInterface(aTarget);
-  nsCOMPtr<nsIDOMTouch> touch = new nsDOMTouch(target,
-                                               aIdentifier,
-                                               aPageX, aPageY,
-                                               aScreenX, aScreenY,
-                                               aClientX, aClientY,
-                                               aRadiusX, aRadiusY,
-                                               aRotationAngle,
-                                               aForce);
+  nsCOMPtr<nsIDOMTouch> touch = new Touch(target,
+                                          aIdentifier,
+                                          aPageX, aPageY,
+                                          aScreenX, aScreenY,
+                                          aClientX, aClientY,
+                                          aRadiusX, aRadiusY,
+                                          aRotationAngle,
+                                          aForce);
   return touch.forget();
 }
 
@@ -11134,7 +11202,7 @@ nsDocument::DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
     0;
 
   aWindowSizes->mDOMOther +=
-    mStyledLinks.SizeOfExcludingThis(NULL, aWindowSizes->mMallocSizeOf);
+    mStyledLinks.SizeOfExcludingThis(nullptr, aWindowSizes->mMallocSizeOf);
 
   aWindowSizes->mDOMOther +=
     mIdentifierMap.SizeOfExcludingThis(nsIdentifierMapEntry::SizeOfExcludingThis,

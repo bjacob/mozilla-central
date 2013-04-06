@@ -8,6 +8,7 @@ DOM_SRCDIRS = \
   dom/encoding \
   dom/file \
   dom/power \
+  dom/push \
   dom/quota \
   dom/media \
   dom/network/src \
@@ -58,6 +59,10 @@ DOM_SRCDIRS += dom/bluetooth
 endif
 
 DOM_SRCDIRS += dom/refgraph
+
+ifdef MOZ_WEBSPEECH
+DOM_SRCDIRS += content/media/webspeech
+endif
 
 LOCAL_INCLUDES += $(DOM_SRCDIRS:%=-I$(topsrcdir)/%)
 DEFINES += -D_IMPL_NS_LAYOUT

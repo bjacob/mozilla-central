@@ -51,7 +51,6 @@
 #include "nsIDOMStorageIndexedDB.h"
 #include "nsIDOMOfflineResourceList.h"
 #include "nsIArray.h"
-#include "nsIIDBFactory.h"
 #include "nsFrameMessageManager.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/TimeStamp.h"
@@ -72,6 +71,10 @@
 #ifdef MOZ_B2G
 #include "nsIDOMWindowB2G.h"
 #endif // MOZ_B2G
+
+#ifdef MOZ_WEBSPEECH
+#include "nsISpeechSynthesisGetter.h"
+#endif // MOZ_WEBSPEECH
 
 #define DEFAULT_HOME_PAGE "www.mozilla.org"
 #define PREF_BROWSER_STARTUP_HOMEPAGE "browser.startup.homepage"
@@ -120,6 +123,9 @@ namespace mozilla {
 namespace dom {
 class Navigator;
 class URL;
+namespace indexedDB {
+class IDBFactory;
+} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla
 
@@ -254,7 +260,6 @@ class nsGlobalWindow : public mozilla::dom::EventTarget,
                        public nsPIDOMWindow,
                        public nsIScriptGlobalObject,
                        public nsIDOMJSWindow,
-                       public nsIScriptObjectPrincipal,
                        public nsIDOMStorageIndexedDB,
                        public nsSupportsWeakReference,
                        public nsIInterfaceRequestor,
@@ -265,6 +270,9 @@ class nsGlobalWindow : public mozilla::dom::EventTarget,
 #ifdef MOZ_B2G
                      , public nsIDOMWindowB2G
 #endif // MOZ_B2G
+#ifdef MOZ_WEBSPEECH
+                     , public nsISpeechSynthesisGetter
+#endif // MOZ_WEBSPEECH
 {
 public:
   typedef mozilla::TimeStamp TimeStamp;
@@ -288,9 +296,11 @@ public:
     return EnsureInnerWindow() ? GetWrapper() : nullptr;
   }
 
+  // nsIGlobalJSObjectHolder
+  virtual JSObject *GetGlobalJSObject();
+
   // nsIScriptGlobalObject
   virtual nsIScriptContext *GetContext();
-  virtual JSObject *GetGlobalJSObject();
   JSObject *FastGetGlobalJSObject()
   {
     return mJSObject;
@@ -300,6 +310,7 @@ public:
 
   virtual nsIScriptContext *GetScriptContext();
 
+  void PoisonOuterWindowProxy(JSObject *aObject);
   virtual void OnFinalize(JSObject* aObject);
   virtual void SetScriptsEnabled(bool aEnabled, bool aFireTimeouts);
 
@@ -315,6 +326,11 @@ public:
   // nsIDOMWindowB2G
   NS_DECL_NSIDOMWINDOWB2G
 #endif // MOZ_B2G
+
+#ifdef MOZ_WEBSPEECH
+  // nsISpeechSynthesisGetter
+  NS_DECL_NSISPEECHSYNTHESISGETTER
+#endif // MOZ_WEBSPEECH
 
   // nsIDOMWindowPerformance
   NS_DECL_NSIDOMWINDOWPERFORMANCE
@@ -614,13 +630,13 @@ public:
   }
 
 #ifdef MOZ_GAMEPAD
-  void AddGamepad(PRUint32 aIndex, nsDOMGamepad* aGamepad);
-  void RemoveGamepad(PRUint32 aIndex);
-  already_AddRefed<nsDOMGamepad> GetGamepad(PRUint32 aIndex);
+  void AddGamepad(uint32_t aIndex, nsDOMGamepad* aGamepad);
+  void RemoveGamepad(uint32_t aIndex);
+  already_AddRefed<nsDOMGamepad> GetGamepad(uint32_t aIndex);
   void SetHasSeenGamepadInput(bool aHasSeen);
   bool HasSeenGamepadInput();
   void SyncGamepadState();
-  static PLDHashOperator EnumGamepadsForSync(const PRUint32& aKey,
+  static PLDHashOperator EnumGamepadsForSync(const uint32_t& aKey,
                                              nsDOMGamepad* aData,
                                              void* userArg);
 #endif
@@ -966,8 +982,10 @@ protected:
 
   void UpdateCanvasFocus(bool aFocusChanged, nsIContent* aNewContent);
 
-  already_AddRefed<nsPIWindowRoot> GetTopWindowRoot();
+public:
+  virtual already_AddRefed<nsPIWindowRoot> GetTopWindowRoot() MOZ_OVERRIDE;
 
+protected:
   static void NotifyDOMWindowDestroyed(nsGlobalWindow* aWindow);
   void NotifyWindowIDDestroyed(const char* aTopic);
 
@@ -1096,7 +1114,6 @@ protected:
   nsRefPtr<nsDOMWindowUtils>    mWindowUtils;
   nsString                      mStatus;
   nsString                      mDefaultStatus;
-  // index 0->language_id 1, so index MAX-1 == language_id MAX
   nsGlobalWindowObserver*       mObserver;
   nsCOMPtr<nsIDOMCrypto>        mCrypto;
 
@@ -1148,7 +1165,7 @@ protected:
 
   nsCOMPtr<nsIDocument> mSuspendedDoc;
 
-  nsCOMPtr<nsIIDBFactory> mIndexedDB;
+  nsRefPtr<mozilla::dom::indexedDB::IDBFactory> mIndexedDB;
 
   // This counts the number of windows that have been opened in rapid succession
   // (i.e. within dom.successive_dialog_time_limit of each other). It is reset

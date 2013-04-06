@@ -189,9 +189,11 @@ var ContextMenuUI = {
       return false;
     }
 
+    let coords =
+      aMessage.target.msgBrowserToClient(aMessage, true);
     this._menuPopup.show(Util.extend({}, this._defaultPositionOptions, {
-      xPos: aMessage.json.xPos,
-      yPos: aMessage.json.yPos,
+      xPos: coords.x,
+      yPos: coords.y,
       source: aMessage.json.source
     }));
     return true;
@@ -343,6 +345,7 @@ MenuPopup.prototype = {
 
     window.addEventListener("keypress", this, true);
     window.addEventListener("mousedown", this, true);
+    Elements.stack.addEventListener("PopupChanged", this, false);
 
     this._panel.hidden = false;
     this._position(aPositionOptions || {});
@@ -372,6 +375,7 @@ MenuPopup.prototype = {
 
     window.removeEventListener("keypress", this, true);
     window.removeEventListener("mousedown", this, true);
+    Elements.stack.removeEventListener("PopupChanged", this, false);
 
     let self = this;
     this._panel.addEventListener("transitionend", function () {
@@ -491,6 +495,11 @@ MenuPopup.prototype = {
       case "mousedown":
         if (!this._popup.contains(aEvent.target)) {
           aEvent.stopPropagation();
+          this.hide();
+        }
+        break;
+      case "PopupChanged":
+        if (aEvent.detail) {
           this.hide();
         }
         break;

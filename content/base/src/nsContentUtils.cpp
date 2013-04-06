@@ -1666,7 +1666,7 @@ nsContentUtils::InProlog(nsINode *aNode)
 JSContext *
 nsContentUtils::GetContextFromDocument(nsIDocument *aDocument)
 {
-  nsIScriptGlobalObject *sgo = aDocument->GetScopeObject();
+  nsCOMPtr<nsIScriptGlobalObject> sgo =  do_QueryInterface(aDocument->GetScopeObject());
   if (!sgo) {
     // No script global, no context.
     return nullptr;
@@ -1693,7 +1693,7 @@ nsContentUtils::TraceSafeJSContext(JSTracer* aTrc)
     return;
   }
   if (JSObject* global = JS_GetGlobalObject(cx)) {
-    JS_CALL_OBJECT_TRACER(aTrc, global, "safe context");
+    JS_CallObjectTracer(aTrc, global, "safe context");
   }
 }
 
@@ -4698,6 +4698,15 @@ nsContentUtils::IsSystemPrincipal(nsIPrincipal* aPrincipal)
   return NS_SUCCEEDED(rv) && isSystem;
 }
 
+nsIPrincipal*
+nsContentUtils::GetSystemPrincipal()
+{
+  nsCOMPtr<nsIPrincipal> sysPrin;
+  nsresult rv = sSecurityManager->GetSystemPrincipal(getter_AddRefs(sysPrin));
+  MOZ_ASSERT(NS_SUCCEEDED(rv) && sysPrin);
+  return sysPrin;
+}
+
 bool
 nsContentUtils::CombineResourcePrincipals(nsCOMPtr<nsIPrincipal>* aResourcePrincipal,
                                           nsIPrincipal* aExtraPrincipal)
@@ -5035,10 +5044,15 @@ nsContentUtils::AddScriptBlocker()
   ++sScriptBlockerCount;
 }
 
+#ifdef DEBUG
+static bool sRemovingScriptBlockers = false;
+#endif
+
 /* static */
 void
 nsContentUtils::RemoveScriptBlocker()
 {
+  MOZ_ASSERT(!sRemovingScriptBlockers);
   NS_ASSERTION(sScriptBlockerCount != 0, "Negative script blockers");
   --sScriptBlockerCount;
   if (sScriptBlockerCount) {
@@ -5054,14 +5068,23 @@ nsContentUtils::RemoveScriptBlocker()
                "bad sRunnersCountAtFirstBlocker");
 
   while (firstBlocker < lastBlocker) {
-    nsCOMPtr<nsIRunnable> runnable = (*sBlockedScriptRunners)[firstBlocker];
+    nsCOMPtr<nsIRunnable> runnable;
+    runnable.swap((*sBlockedScriptRunners)[firstBlocker]);
     ++firstBlocker;
 
+    // Calling the runnable can reenter us
     runnable->Run();
+    // So can dropping the reference to the runnable
+    runnable = nullptr;
+
     NS_ASSERTION(sRunnersCountAtFirstBlocker == 0,
                  "Bad count");
     NS_ASSERTION(!sScriptBlockerCount, "This is really bad");
   }
+#ifdef DEBUG
+  AutoRestore<bool> removingScriptBlockers(sRemovingScriptBlockers);
+  sRemovingScriptBlockers = true;
+#endif
   sBlockedScriptRunners->RemoveElementsAt(originalFirstBlocker, blockersCount);
 }
 
@@ -6405,7 +6428,7 @@ nsContentUtils::FindInternalContentViewer(const char* aType,
   // one helper factory, please
   nsCOMPtr<nsICategoryManager> catMan(do_GetService(NS_CATEGORYMANAGER_CONTRACTID));
   if (!catMan)
-    return NULL;
+    return nullptr;
 
   nsCOMPtr<nsIDocumentLoaderFactory> docFactory;
 
@@ -6434,7 +6457,7 @@ nsContentUtils::FindInternalContentViewer(const char* aType,
   }
 #endif // MOZ_MEDIA
 
-  return NULL;
+  return nullptr;
 }
 
 // static
@@ -6508,7 +6531,7 @@ nsContentUtils::SetUpChannelOwner(nsIPrincipal* aLoadingPrincipal,
   //      can't provide their own security context!
   //
   //      (Currently chrome URIs set the owner when they are created!
-  //      So setting a NULL owner would be bad!)
+  //      So setting a nullptr owner would be bad!)
   //
   // If aForceOwner is true, the owner will be set, even for a channel that
   // can provide its own security context. This is used for the HTML5 IFRAME
