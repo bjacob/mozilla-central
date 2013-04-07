@@ -67,23 +67,38 @@ typedef std::basic_string<char,
                           >
         string_t;
 
-struct ref_t
+struct ref_info_t
 {
-  uint32_t target;
-  uint8_t flags;
   uint64_t offset;
-  string_t refname;
-  string_t reftypename;
+  string_t type;
 
-  ref_t()
-    : target(0)
-    , flags(0)
-    , offset(0)
+  ref_info_t()
+    : offset(0)
   {}
 };
 
-typedef std::vector<ref_t, stl_allocator_bypassing_instrumentation<ref_t> >
-        refs_vector_t;
+typedef std::vector<ref_info_t, stl_allocator_bypassing_instrumentation<ref_info_t> >
+        ref_infos_vector_t;
+
+struct edge_t
+{
+  uint32_t target;
+  uint8_t flags;
+  string_t ccname;
+  ref_infos_vector_t ref_infos;
+
+  edge_t()
+    : target(0)
+    , flags(0)
+  {}
+
+  bool operator < (const edge_t& other) const {
+    return target < other.target;
+  }
+};
+
+typedef std::vector<edge_t, stl_allocator_bypassing_instrumentation<edge_t> >
+        edges_vector_t;
 
 typedef std::vector<uint32_t, stl_allocator_bypassing_instrumentation<uint32_t> >
         index_vector_t;
@@ -119,7 +134,7 @@ struct block_t {
   uint64_t size;
 
   string_t type;
-  refs_vector_t refs;
+  edges_vector_t edges;
   index_vector_t weakrefs;
   index_vector_t backrefs;
   index_vector_t backweakrefs;
@@ -159,18 +174,40 @@ typedef std::multimap<string_t,
 
 class Refgraph;
 class RefgraphEdge;
+class RefgraphEdgeRefInfo;
 class RefgraphVertex;
+
+class RefgraphEdgeRefInfo
+{
+  friend class Refgraph;
+
+  nsRefPtr<Refgraph> mParent;
+  ref_infos_vector_t::const_iterator mRefInfo;
+
+public:
+  RefgraphEdgeRefInfo(Refgraph* parent, ref_infos_vector_t::const_iterator refInfo);
+
+  nsISupports* GetParentObject() const;
+
+  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphEdgeRefInfo)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphEdgeRefInfo)
+
+  uint64_t Offset() const;
+  void GetTypeName(nsString& retval) const;
+};
 
 class RefgraphEdge
 {
   friend class Refgraph;
 
   nsRefPtr<Refgraph> mParent;
-  refs_vector_t::const_iterator mRef;
+  edges_vector_t::const_iterator mEdge;
 
 public:
 
-  RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref);
+  RefgraphEdge(Refgraph* parent, edges_vector_t::const_iterator ref);
 
   nsISupports* GetParentObject() const;
 
@@ -181,8 +218,9 @@ public:
 
   already_AddRefed<RefgraphVertex> Target() const;
   bool IsTraversedByCC() const;
-  void GetRefName(nsString& retval) const;
-  void GetRefTypeName(nsString& retval) const;
+  void GetCCName(nsString& retval) const;
+  uint32_t RefInfoCount() const;
+  already_AddRefed<RefgraphEdgeRefInfo> RefInfo(uint32_t index) const;
 };
 
 class RefgraphVertex
@@ -262,7 +300,8 @@ class Refgraph {
   // parser state
 
   block_t* mCurrentBlock;
-  ref_t* mCurrentRef;
+  edge_t* mCurrentEdge;
+  ref_info_t* mCurrentRefInfo;
   enum ParserState {
     ParserDefaultState,
     ParserInRefgraphDump,
@@ -275,8 +314,7 @@ class Refgraph {
 
   class ScopedAssertWorkspacesClear {
     Refgraph* r;
-
-public:
+    public:
     ScopedAssertWorkspacesClear(Refgraph*);
     ~ScopedAssertWorkspacesClear();
   };
@@ -318,7 +356,8 @@ public:
   Refgraph(RefgraphController* parent)
     : mParent(parent)
     , mCurrentBlock(nullptr)
-    , mCurrentRef(nullptr)
+    , mCurrentEdge(nullptr)
+    , mCurrentRefInfo(nullptr)
     , mParserState(ParserDefaultState)
   {}
 

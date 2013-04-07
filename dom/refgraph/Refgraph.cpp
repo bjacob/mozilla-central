@@ -82,7 +82,7 @@ bool Refgraph::HandleLine_b(const char* start, const char* end)
   }
 #ifndef ANDROID
   if (mCurrentBlock) {
-    mCurrentBlock->refs.shrink_to_fit();
+    mCurrentBlock->edges.shrink_to_fit();
     mCurrentBlock->weakrefs.shrink_to_fit();
     mCurrentBlock->backrefs.shrink_to_fit();
     mCurrentBlock->backweakrefs.shrink_to_fit();
@@ -94,14 +94,14 @@ bool Refgraph::HandleLine_b(const char* start, const char* end)
 
 bool Refgraph::HandleLine_f(const char* start, const char* end)
 {
-  if (!mCurrentRef) {
+  if (!mCurrentEdge) {
     return false;
   }
-  bool success = ParseNumber(start, end, &mCurrentRef->flags);
+  bool success = ParseNumber(start, end, &mCurrentEdge->flags);
   if (!success) {
     return false;
   }
-  if (mCurrentRef->flags > 0xf) {
+  if (mCurrentEdge->flags > 0xf) {
     return false;
   }
   return true;
@@ -113,16 +113,37 @@ bool Refgraph::HandleLine_s(const char* start, const char* end)
   if (!mCurrentBlock) {
     return false;
   }
-  mCurrentBlock->refs.push_back(ref_t());
-  mCurrentRef = &mCurrentBlock->refs.back();
-  bool success = ParseNumber(pos, end, &mCurrentRef->target, &pos) &&
-                 ParseNumber(pos, end, &mCurrentRef->offset, &pos);
+  uint32_t target;
+  uint64_t offset;
+
+  bool success = ParseNumber(pos, end, &target, &pos) &&
+                 ParseNumber(pos, end, &offset, &pos);
+
   if (!success) {
     return false;
   }
-  if (mCurrentRef->target >= mBlocks.size()) {
+  if (target >= mBlocks.size()) {
     return false;
   }
+
+  if (mCurrentEdge && mCurrentEdge->target > target) {
+    // input data breaks our assumption that edges are sorted by increasing target
+    return false;
+  }
+
+  if (!mCurrentEdge || mCurrentEdge->target != target) {
+    // we're going to start a new edge, instead of just appending a ref_info_t to
+    // the current edge.
+    mCurrentBlock->edges.push_back(edge_t());
+    mCurrentEdge = &mCurrentBlock->edges.back();
+    mCurrentEdge->target = target;
+  }
+
+  // in any case, we are definitely starting a new ref_info_t.
+  mCurrentEdge->ref_infos.push_back(ref_info_t());
+  mCurrentRefInfo = &mCurrentEdge->ref_infos.back();
+  mCurrentRefInfo->offset = offset;
+
   return true;
 }
 
@@ -154,10 +175,10 @@ bool Refgraph::HandleLine_n(const char* start, const char* end)
     return false;
   }
 
-  if (!mCurrentRef) {
+  if (!mCurrentRefInfo) {
     return false;
   }
-  mCurrentRef->refname.assign(pos, end - pos);
+  mCurrentRefInfo->type.assign(pos, end - pos);
   return true;
 }
 
@@ -191,11 +212,11 @@ bool Refgraph::HandleLine_u(const char* start, const char* end)
     return false;
   }
 
-  if (!mCurrentRef) {
+  if (!mCurrentEdge) {
     return false;
   }
 
-  mCurrentRef->reftypename.assign(pos, end - pos);
+  mCurrentEdge->ccname.assign(pos, end - pos);
   return true;
 }
 
@@ -279,23 +300,23 @@ bool Refgraph::HandleLine_e(const char* start, const char* end)
   if (!mCurrentBlock) {
     return false;
   }
-  for (refs_vector_t::iterator it1 = mCurrentBlock->refs.begin();
-      it1 != mCurrentBlock->refs.end();
+  for (edges_vector_t::iterator it1 = mCurrentBlock->edges.begin();
+      it1 != mCurrentBlock->edges.end();
       ++it1)
   {
     block_t& targetBlock1 = mBlocks[it1->target];
     if (targetBlock1.contains(address)) {
       it1->flags |= traversedByCCFlag;
-      it1->refname.assign(pos, end - pos);
+      it1->ccname.assign(pos, end - pos);
     }
-    for (refs_vector_t::iterator it2 = targetBlock1.refs.begin();
-        it2 != targetBlock1.refs.end();
+    for (edges_vector_t::iterator it2 = targetBlock1.edges.begin();
+        it2 != targetBlock1.edges.end();
         ++it2)
     {
-      block_t& targetBlock2 = mBlocks[it1->target];
+      block_t& targetBlock2 = mBlocks[it2->target];
       if (targetBlock2.contains(address)) {
         it2->flags |= traversedByCCFlag;
-        it2->refname.assign(pos, end - pos);
+        it2->ccname.assign(pos, end - pos);
       }
     }
   }
@@ -428,8 +449,8 @@ void Refgraph::ResolveHereditaryStrongRefs()
        bi != mBlocks.end();
        ++bi)
   {
-    for (refs_vector_t::iterator ri = bi->refs.begin();
-         ri != bi->refs.end();
+    for (edges_vector_t::iterator ri = bi->edges.begin();
+         ri != bi->edges.end();
          ++ri)
     {
       if (ri->flags & hereditaryFlag) {
@@ -439,11 +460,17 @@ void Refgraph::ResolveHereditaryStrongRefs()
             weakref_it != hereditary_block.weakrefs.end();
             ++weakref_it)
         {
-          ref_t r;
-          r.target = *weakref_it;
-          r.flags = ri->flags;
-          r.reftypename.assign("(inherited)");
-          hereditary_block.refs.push_back(r);
+          edge_t e;
+          e.target = *weakref_it;
+
+          edges_vector_t::iterator ei =
+            std::lower_bound(hereditary_block.edges.begin(), hereditary_block.edges.end(), e);
+          if (ei == hereditary_block.edges.end() || ei->target != e.target) {
+            edges_vector_t::iterator new_edge = hereditary_block.edges.insert(ei, e);
+            new_edge->flags = ri->flags;
+            new_edge->ccname.assign("(hereditary)");
+            // leave ref_infos empty
+          }
         }
         hereditary_block.weakrefs.clear();
       }
@@ -462,8 +489,8 @@ void Refgraph::RecurseCycles(
   cycle_index++;
   stack.push_back(v_index);
 
-  for (refs_vector_t::const_iterator ri = v.refs.begin();
-       ri != v.refs.end();
+  for (edges_vector_t::const_iterator ri = v.edges.begin();
+       ri != v.edges.end();
        ++ri)
   {
     uint32_t w_index = ri->target;
@@ -553,8 +580,8 @@ void Refgraph::ComputeCycles()
     const index_vector_t& cycle_vertices = mCycles[c].vertices;
     for (size_t v = 0; v < cycle_vertices.size(); v++) {
       const block_t& b = mBlocks[cycle_vertices[v]];
-      for (refs_vector_t::const_iterator ri = b.refs.begin();
-          ri != b.refs.end();
+      for (edges_vector_t::const_iterator ri = b.edges.begin();
+          ri != b.edges.end();
           ++ri)
       {
         if (!(ri->flags & traversedByCCFlag) &&
@@ -633,8 +660,8 @@ void Refgraph::ResolveBackRefs()
        b < mBlocks.size();
        ++b)
   {
-    for (refs_vector_t::iterator ri = mBlocks[b].refs.begin();
-         ri != mBlocks[b].refs.end();
+    for (edges_vector_t::iterator ri = mBlocks[b].edges.begin();
+         ri != mBlocks[b].edges.end();
          ++ri)
     {
       mBlocks[ri->target].backrefs.push_back(b);
@@ -773,29 +800,50 @@ void RefgraphCycle::GetName(nsString& retval) const {
   retval = NS_ConvertASCIItoUTF16(nsDependentCString(mParent->mCycles[mIndex].name.c_str()));
 }
 
-RefgraphEdge::RefgraphEdge(Refgraph* parent, refs_vector_t::const_iterator ref)
+RefgraphEdge::RefgraphEdge(Refgraph* parent, edges_vector_t::const_iterator edge)
   : mParent(parent)
-  , mRef(ref)
+  , mEdge(edge)
 {
 }
 
 already_AddRefed<RefgraphVertex>
 RefgraphEdge::Target() const
 {
-  nsRefPtr<RefgraphVertex> r = new RefgraphVertex(mParent, mParent->mBlocks[mRef->target]);
+  nsRefPtr<RefgraphVertex> r = new RefgraphVertex(mParent, mParent->mBlocks[mEdge->target]);
   return r.forget();
 }
 
 bool RefgraphEdge::IsTraversedByCC() const {
-  return mRef->flags & traversedByCCFlag;
+  return mEdge->flags & traversedByCCFlag;
 }
 
-void RefgraphEdge::GetRefName(nsString& retval) const {
-  retval = NS_ConvertASCIItoUTF16(nsDependentCString(mRef->refname.c_str()));
+void RefgraphEdge::GetCCName(nsString& retval) const {
+  retval = NS_ConvertASCIItoUTF16(nsDependentCString(mEdge->ccname.c_str()));
 }
 
-void RefgraphEdge::GetRefTypeName(nsString& retval) const {
-  retval = NS_ConvertASCIItoUTF16(nsDependentCString(mRef->reftypename.c_str()));
+uint32_t RefgraphEdge::RefInfoCount() const {
+  return mEdge->ref_infos.size();
+}
+
+already_AddRefed<RefgraphEdgeRefInfo>
+RefgraphEdge::RefInfo(uint32_t index) const
+{
+  nsRefPtr<RefgraphEdgeRefInfo> r = new RefgraphEdgeRefInfo(mParent, mEdge->ref_infos.begin() + index);
+  return r.forget();
+}
+
+RefgraphEdgeRefInfo::RefgraphEdgeRefInfo(Refgraph* parent, ref_infos_vector_t::const_iterator refInfo)
+  : mParent(parent)
+  , mRefInfo(refInfo)
+{
+}
+
+uint64_t RefgraphEdgeRefInfo::Offset() const {
+  return mRefInfo->offset;
+}
+
+void RefgraphEdgeRefInfo::GetTypeName(nsString& retval) const {
+  retval = NS_ConvertASCIItoUTF16(nsDependentCString(mRefInfo->type.c_str()));
 }
 
 RefgraphVertex::RefgraphVertex(Refgraph* parent, map_types_to_block_indices_t::const_iterator block)
@@ -812,7 +860,6 @@ RefgraphVertex::RefgraphVertex(Refgraph* parent, const block_t& block)
 {
 }
 
-
 uint64_t RefgraphVertex::Address() const {
   return mBlock.address;
 }
@@ -826,7 +873,7 @@ void RefgraphVertex::GetTypeName(nsString& retval) const {
 }
 
 uint32_t RefgraphVertex::EdgeCount() const {
-  return mBlock.refs.size();
+  return mBlock.edges.size();
 }
 
 uint32_t RefgraphVertex::CycleIndex() const {
@@ -838,7 +885,7 @@ RefgraphVertex::Edge(uint32_t index) const {
   if (index >= EdgeCount()) {
     return nullptr;
   }
-  nsRefPtr<RefgraphEdge> r = new RefgraphEdge(mParent, mBlock.refs.begin() + index);
+  nsRefPtr<RefgraphEdge> r = new RefgraphEdge(mParent, mBlock.edges.begin() + index);
   return r.forget();
 }
 
@@ -1017,6 +1064,28 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdge, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdge, Release)
+
+JSObject*
+RefgraphEdgeRefInfo::WrapObject(JSContext *cx, JSObject *scope)
+{
+    return dom::RefgraphEdgeRefInfoBinding::Wrap(cx, scope, this);
+}
+
+nsISupports*
+RefgraphEdgeRefInfo::GetParentObject() const {
+  return mParent->GetParentObject();
+}
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphEdgeRefInfo)
+NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphEdgeRefInfo)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdgeRefInfo, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdgeRefInfo, Release)
 
 JSObject*
 RefgraphCycle::WrapObject(JSContext *cx, JSObject *scope)

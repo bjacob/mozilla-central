@@ -29,12 +29,19 @@ interface RefgraphVertex {
   RefgraphVertex? backWeakEdge(unsigned long index);
 };
 
+interface RefgraphEdgeRefInfo {
+  readonly attribute long long offset;
+  readonly attribute DOMString typeName;
+};
+
 interface RefgraphEdge {
   [Creator]
   readonly attribute RefgraphVertex target;
   readonly attribute boolean isTraversedByCC;
-  readonly attribute DOMString refTypeName;
-  readonly attribute DOMString refName;
+  readonly attribute DOMString CCName;
+  readonly attribute unsigned long refInfoCount;
+  [Creator]
+  RefgraphEdgeRefInfo? refInfo(unsigned long index);
 };
 
 interface RefgraphCycle {
