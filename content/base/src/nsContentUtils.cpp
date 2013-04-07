@@ -3061,7 +3061,7 @@ IsContextOnStack(nsIJSContextStack *aStack, JSContext *aContext)
 }
 
 bool
-nsCxPusher::Push(nsIDOMEventTarget *aCurrentTarget)
+nsCxPusher::Push(EventTarget *aCurrentTarget)
 {
   if (mPushedSomething) {
     NS_ERROR("Whaaa! No double pushing with nsCxPusher::Push()!");
@@ -3073,7 +3073,13 @@ nsCxPusher::Push(nsIDOMEventTarget *aCurrentTarget)
   nsresult rv;
   nsIScriptContext* scx =
     aCurrentTarget->GetContextForEventHandlers(&rv);
+#ifdef DEBUG_smaug
   NS_ENSURE_SUCCESS(rv, false);
+#else
+  if(NS_FAILED(rv)) {
+    return false;
+  }
+#endif
 
   if (!scx) {
     // The target may have a special JS context for event handlers.
@@ -3098,7 +3104,7 @@ nsCxPusher::Push(nsIDOMEventTarget *aCurrentTarget)
 }
 
 bool
-nsCxPusher::RePush(nsIDOMEventTarget *aCurrentTarget)
+nsCxPusher::RePush(EventTarget *aCurrentTarget)
 {
   if (!mPushedSomething) {
     return Push(aCurrentTarget);
@@ -3554,10 +3560,10 @@ nsresult GetEventAndTarget(nsIDocument* aDoc, nsISupports* aTarget,
                            const nsAString& aEventName,
                            bool aCanBubble, bool aCancelable,
                            bool aTrusted, nsIDOMEvent** aEvent,
-                           nsIDOMEventTarget** aTargetOut)
+                           EventTarget** aTargetOut)
 {
   nsCOMPtr<nsIDOMDocument> domDoc = do_QueryInterface(aDoc);
-  nsCOMPtr<nsIDOMEventTarget> target(do_QueryInterface(aTarget));
+  nsCOMPtr<EventTarget> target(do_QueryInterface(aTarget));
   NS_ENSURE_TRUE(domDoc && target, NS_ERROR_INVALID_ARG);
 
   nsCOMPtr<nsIDOMEvent> event;
@@ -3608,7 +3614,7 @@ nsContentUtils::DispatchEvent(nsIDocument* aDoc, nsISupports* aTarget,
                               bool aTrusted, bool *aDefaultAction)
 {
   nsCOMPtr<nsIDOMEvent> event;
-  nsCOMPtr<nsIDOMEventTarget> target;
+  nsCOMPtr<EventTarget> target;
   nsresult rv = GetEventAndTarget(aDoc, aTarget, aEventName, aCanBubble,
                                   aCancelable, aTrusted, getter_AddRefs(event),
                                   getter_AddRefs(target));
@@ -3627,7 +3633,7 @@ nsContentUtils::DispatchChromeEvent(nsIDocument *aDoc,
 {
 
   nsCOMPtr<nsIDOMEvent> event;
-  nsCOMPtr<nsIDOMEventTarget> target;
+  nsCOMPtr<EventTarget> target;
   nsresult rv = GetEventAndTarget(aDoc, aTarget, aEventName, aCanBubble,
                                   aCancelable, true, getter_AddRefs(event),
                                   getter_AddRefs(target));
@@ -3637,7 +3643,7 @@ nsContentUtils::DispatchChromeEvent(nsIDocument *aDoc,
   if (!aDoc->GetWindow())
     return NS_ERROR_INVALID_ARG;
 
-  nsIDOMEventTarget* piTarget = aDoc->GetWindow()->GetParentTarget();
+  EventTarget* piTarget = aDoc->GetWindow()->GetParentTarget();
   if (!piTarget)
     return NS_ERROR_INVALID_ARG;
 
@@ -3879,7 +3885,7 @@ nsContentUtils::HasMutationListeners(nsINode* aNode,
 
   // If we have a window, we can check it for mutation listeners now.
   if (aNode->IsInDoc()) {
-    nsCOMPtr<nsIDOMEventTarget> piTarget(do_QueryInterface(window));
+    nsCOMPtr<EventTarget> piTarget(do_QueryInterface(window));
     if (piTarget) {
       nsEventListenerManager* manager = piTarget->GetListenerManager(false);
       if (manager && manager->HasMutationListeners()) {
@@ -5926,7 +5932,7 @@ nsContentUtils::DispatchXULCommand(nsIContent* aTarget,
     return aShell->HandleDOMEventWithTarget(aTarget, event, &status);
   }
 
-  nsCOMPtr<nsIDOMEventTarget> target = do_QueryInterface(aTarget);
+  nsCOMPtr<EventTarget> target = do_QueryInterface(aTarget);
   NS_ENSURE_STATE(target);
   bool dummy;
   return target->DispatchEvent(event, &dummy);

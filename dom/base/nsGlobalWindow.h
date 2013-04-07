@@ -123,6 +123,7 @@ namespace mozilla {
 namespace dom {
 class Navigator;
 class URL;
+class SpeechSynthesis;
 namespace indexedDB {
 class IDBFactory;
 } // namespace indexedDB
@@ -352,7 +353,7 @@ public:
   virtual NS_HIDDEN_(void) ActivateOrDeactivate(bool aActivate);
   virtual NS_HIDDEN_(void) SetActive(bool aActive);
   virtual NS_HIDDEN_(void) SetIsBackground(bool aIsBackground);
-  virtual NS_HIDDEN_(void) SetChromeEventHandler(nsIDOMEventTarget* aChromeEventHandler);
+  virtual NS_HIDDEN_(void) SetChromeEventHandler(mozilla::dom::EventTarget* aChromeEventHandler);
 
   virtual NS_HIDDEN_(void) SetInitialPrincipalToSubject();
 
@@ -414,12 +415,12 @@ public:
   static nsGlobalWindow *FromSupports(nsISupports *supports)
   {
     // Make sure this matches the casts we do in QueryInterface().
-    return (nsGlobalWindow *)(nsIDOMEventTarget *)supports;
+    return (nsGlobalWindow *)(mozilla::dom::EventTarget *)supports;
   }
   static nsISupports *ToSupports(nsGlobalWindow *win)
   {
     // Make sure this matches the casts we do in QueryInterface().
-    return (nsISupports *)(nsIDOMEventTarget *)win;
+    return (nsISupports *)(mozilla::dom::EventTarget *)win;
   }
   static nsGlobalWindow *FromWrapper(nsIXPConnectWrappedNative *wrapper)
   {
@@ -702,6 +703,10 @@ public:
 #undef BEFOREUNLOAD_EVENT
 #undef ERROR_EVENT
 #undef EVENT
+
+#ifdef MOZ_WEBSPEECH
+  mozilla::dom::SpeechSynthesis* GetSpeechSynthesisInternal();
+#endif
 
 protected:
   // Array of idle observers that are notified of idle events.
@@ -1192,6 +1197,11 @@ protected:
   nsTHashtable<nsPtrHashKey<nsDOMEventTargetHelper> > mEventTargetObjects;
 
   nsTArray<uint32_t> mEnabledSensors;
+
+#ifdef MOZ_WEBSPEECH
+  // mSpeechSynthesis is only used on inner windows.
+  nsRefPtr<mozilla::dom::SpeechSynthesis> mSpeechSynthesis;
+#endif
 
   friend class nsDOMScriptableHelper;
   friend class nsDOMWindowUtils;
