@@ -145,6 +145,14 @@
          <item name="android:orientation">vertical</item>
     </style>
 
+    <style name="TabsItem">
+         <item name="android:nextFocusRight">@+id/close</item>
+    </style>
+
+    <style name="TabsItemClose">
+         <item name="android:nextFocusLeft">@+id/info</item>
+    </style>
+
     <!-- RemoteTabsList -->
     <style name="RemoteTabsList" parent="android:style/Widget.ListView">
          <item name="android:listSelector">@android:color/transparent</item>
@@ -191,7 +199,7 @@
         <item name="android:layout_marginRight">5dip</item>
         <item name="android:scaleType">fitCenter</item>
         <item name="android:layout_centerVertical">true</item>
-        <item name="android:background">@android:color/transparent</item>
+        <item name="android:background">@drawable/action_bar_button_inverse</item>
     </style>
 
     <style name="WebView">

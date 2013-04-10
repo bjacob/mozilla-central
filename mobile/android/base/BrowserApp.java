@@ -25,15 +25,15 @@ import org.json.JSONObject;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
-import android.content.SharedPreferences;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
-import android.graphics.drawable.BitmapDrawable;
-import android.graphics.drawable.Drawable;
 import android.graphics.PointF;
 import android.graphics.Rect;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.nfc.NdefMessage;
 import android.nfc.NdefRecord;
@@ -592,6 +592,11 @@ abstract public class BrowserApp extends GeckoApp
 
         mBrowserToolbar.updateBackButton(false);
         mBrowserToolbar.updateForwardButton(false);
+
+        // Reset mToolbarHeight before setting margins so we force the
+        // Viewport:FixedMarginsChanged message to be sent again now that
+        // Gecko has loaded.
+        mToolbarHeight = 0;
         ((BrowserToolbarLayout)mBrowserToolbar.getLayout()).refreshMargins();
 
         mDoorHangerPopup.setAnchor(mBrowserToolbar.mFavicon);
@@ -1461,6 +1466,10 @@ abstract public class BrowserApp extends GeckoApp
         // In ICS+, it's easy to kill an app through the task switcher.
         aMenu.findItem(R.id.quit).setVisible(Build.VERSION.SDK_INT < 14 || HardwareUtils.isTelevision());
 
+        if (AppConstants.MOZ_PROFILING) {
+            aMenu.findItem(R.id.toggle_profiling).setVisible(true);
+        }
+
         if (tab == null || tab.getURL() == null) {
             bookmark.setEnabled(false);
             forward.setEnabled(false);
@@ -1538,6 +1547,11 @@ abstract public class BrowserApp extends GeckoApp
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == R.id.toggle_profiling) {
+            GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("ToggleProfiling", null));
+            return true;
+        }
+
         Tab tab = null;
         Intent intent = null;
         switch (item.getItemId()) {
@@ -1721,5 +1735,14 @@ abstract public class BrowserApp extends GeckoApp
             mAboutHomeContent.refresh();
         }
 
+    }
+
+    @Override
+    public int getLayout() { return R.layout.gecko_app; }
+
+    @Override
+    protected String getDefaultProfileName() {
+        String profile = GeckoProfile.findDefaultProfile(this);
+        return (profile != null ? profile : "default");
     }
 }
