@@ -72,7 +72,6 @@ bool Refgraph::ParseNumber(const char* start,
 
 bool Refgraph::HandleLine_b(const char* start, const char* end)
 {
-  fprintf(stderr, "Refgraph: new block\n");
   uint32_t n;
   bool success = ParseNumber(start, end, &n);
   if (!success) {
@@ -129,10 +128,7 @@ bool Refgraph::HandleLine_s(const char* start, const char* end)
     return false;
   }
 
-  fprintf(stderr, "Refgraph: target=%d\n", target);
-
   if (mCurrentEdge && mCurrentEdge->target > target) {
-    fprintf(stderr, "Refgraph: mCurrentEdge->target=%d > target=%d\n", mCurrentEdge->target, target);
     // input data breaks our assumption that edges are sorted by increasing target
     return false;
   }
@@ -143,7 +139,6 @@ bool Refgraph::HandleLine_s(const char* start, const char* end)
     mCurrentBlock->edges.push_back(edge_t());
     mCurrentEdge = &mCurrentBlock->edges.back();
     mCurrentEdge->target = target;
-    fprintf(stderr, "Refgraph: new mCurrentEdge->target=%d\n", mCurrentEdge->target);
   }
 
   // in any case, we are definitely starting a new ref_info_t.
@@ -219,11 +214,11 @@ bool Refgraph::HandleLine_u(const char* start, const char* end)
     return false;
   }
 
-  if (!mCurrentEdge) {
+  if (!mCurrentRefInfo) {
     return false;
   }
 
-  mCurrentEdge->ccname.assign(pos, end - pos);
+  mCurrentRefInfo->type.assign(pos, end - pos);
   return true;
 }
 

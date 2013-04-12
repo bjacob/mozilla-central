@@ -48,59 +48,60 @@
     }
     return r;
   }
-  function dumpVertex(vertex, level, root_address, itbcc) {
-    var ind = indent(level);
+  function dumpVertex(vertex) {
     var output = "";
-    output += ind + "type name: " + vertex.typeName + "\n";
-    output += ind + "address: 0x" + vertex.address.toString(16) + "\n";
-    output += ind + "size: " + vertex.size + " bytes\n";
+    output += "type name: " + vertex.typeName + "\n";
+    output += "address: 0x" + vertex.address.toString(16) + "\n";
+    output += "size: " + vertex.size + " bytes\n";
     if (vertex.cycleIndex != vertex.ALONE_IN_CYCLE) {
-      output += ind + "belongs to Cycle " + vertex.cycleIndex + "\n";
+      output += "belongs to Cycle " + vertex.cycleIndex + "\n";
     }
-    if (level >= 2 &&
-        root_address == vertex.address &&
-        itbcc == false)
-    {
-      output += ind + "*** CYCLE NOT TRAVERSED BY THE CC! ***\n";
-    }
-    if (level <= 2) {
-      var edgeCount = vertex.edgeCount;
-      for (var i = 0; i < edgeCount; i++) {
-        var edge = vertex.edge(i);
-        var isTraversedByCC = edge.isTraversedByCC;
-        if (edge.refName) {
-          output += ind + "reference name: " + edge.refName + "\n";
-        }
-        if (edge.refTypeName) {
-          output += ind + "reference type name: " + edge.refTypeName + "\n";
-        }
-        output += ind + (isTraversedByCC ? "traversed" : "NON-traversed") + " by the CC\n";
-        output += dumpVertex(edge.target, level + 1, root_address, itbcc && isTraversedByCC);
+    var edgeCount = vertex.edgeCount;
+    output += "Strong references:\n";
+    for (var i = 0; i < edgeCount; i++) {
+      output += "  strong reference " + i + "\n";
+      var edge = vertex.edge(i);
+      var isTraversedByCC = edge.isTraversedByCC;
+      if (edge.CCName) {
+        output += "    reference name: " + edge.CCName + "\n";
       }
+      var refInfoCount = edge.refInfoCount
+      for (var j = 0; j < refInfoCount; j++) {
+        output += "    reference type name: " + edge.refInfo(j).typeName + "\n";
+      }
+      output += "    " + (isTraversedByCC ? "traversed" : "NON-traversed") + " by the CC\n";
     }
 
+    output += "Weak references:\n";
+    var weakEdgeCount = vertex.weakEdgeCount;
+    if (weakEdgeCount) {
+      for (var i = 0; i < weakEdgeCount; i++) {
+        output += "  weak reference " + i + "\n";
+        var v = vertex.weakEdge(i);
+        var t = v.typeName;
+        output += "    " + (t ? t : "<unknown>") + " at 0x" + v.address.toString(16) + "\n";
+      }
+    } else {
+      output += "  none\n";
+    }
+
+    output += "Back strong references:\n";
     var backEdgeCount = vertex.backEdgeCount;
+    for (var i = 0; i < backEdgeCount; i++) {
+      output += "  back strong reference " + i + "\n";
+      var v = vertex.backEdge(i);
+      var t = v.typeName;
+      output += "    " + (t ? t : "<unknown>") + " at 0x" + v.address.toString(16) + "\n";
+    }
+
+    output += "Back weak references:\n";
     var backWeakEdgeCount = vertex.backWeakEdgeCount;
-    var backRefCount = 0;
-    var backWeakRefCount = 0;
-    for (var e = 0; e < backEdgeCount; e++) {
-      var back = vertex.backEdge(e);
-      if (back.cycleIndex != cycleIndex) {
-        var t = back.typeName;
-        output += ind + "referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
-        backRefCount++;
-      }
+    for (var i = 0; i < backWeakEdgeCount; i++) {
+      output += "  back weak reference " + i + "\n";
+      var v = vertex.backWeakEdge(i);
+      var t = v.typeName;
+      output += "    " + (t ? t : "<unknown>") + " at 0x" + v.address.toString(16) + "\n";
     }
-    output += ind + "backRefCount: " + backRefCount + "\n";
-    for (var e = 0; e < backWeakEdgeCount; e++) {
-      var back = vertex.backWeakEdge(e);
-      if (back.cycleIndex != cycleIndex) {
-        var t = back.typeName;
-        output += ind + "weak-referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
-        backWeakRefCount++;
-      }
-    }
-    output += ind + "backWeakRefCount: " + backWeakRefCount + "\n\n\n";
 
     return output;
   }
@@ -150,6 +151,9 @@
       cycleIndex = Math.min(cycleIndex+1, refgraph.cycleCount - 1);
       var oldcycle = cycle;
       cycle = refgraph.cycle(cycleIndex);
+      if (cycleIndex == 0) {
+        break;
+      }
       if (cycleIndex == refgraph.cycleCount - 1) {
         break;
       }
@@ -224,7 +228,6 @@
           if (back.cycleIndex != cycleIndex) {
             var t = back.typeName;
             isReferencedByOutside = true;
-            backRefCount++;
           }
         }
       }
@@ -237,7 +240,6 @@
           if (back.cycleIndex != cycleIndex) {
             var t = back.typeName;
             isWeakReferencedByOutside = true;
-            backRefCount++;
           }
         }
       }
@@ -252,52 +254,12 @@
     var reachableFromOutside = false;
     for (var i = 0; i < vertexCount; i++) {
       var vertex = cycle.vertex(i);
-      resultText += "type name: " + vertex.typeName + "\n";
-      resultText += "address: 0x" + vertex.address.toString(16) + "\n";
-      resultText += "size: " + vertex.size + " bytes\n";
-      if (vertex.cycleIndex != vertex.ALONE_IN_CYCLE) {
-        resultText += "cycleIndex: " + vertex.cycleIndex + "\n";
-      }
-      resultText += "Cycle edges:\n";
-      for (var j = 0; j < vertex.edgeCount; j++) {
-        var edge = vertex.edge(j);
-        var target = edge.target;
-        if (target.address == vertex.address) {
-          continue;
-        }
-        if (target.cycleIndex == cycleIndex) {
-          resultText += "    " + edge.refTypeName + " " + edge.refName + " to " + target.typeName + " at 0x" + target.address.toString(16) + "\n";
-          if (!edge.isTraversedByCC) {
-            resultText += "        NOT TRAVERSED BY CC\n";
-          }
-        }
-      }
-      var backEdgeCount = vertex.backEdgeCount;
-      var backWeakEdgeCount = vertex.backWeakEdgeCount;
-      var backRefCount = 0;
-      var backWeakRefCount = 0;
-      for (var e = 0; e < backEdgeCount; e++) {
-        var back = vertex.backEdge(e);
-        if (back.cycleIndex != cycleIndex) {
-          var t = back.typeName;
-          resultText += "referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
-          backRefCount++;
-        }
-      }
-      resultText += "backRefCount: " + backRefCount + "\n";
-      for (var e = 0; e < backWeakEdgeCount; e++) {
-        var back = vertex.backWeakEdge(e);
-        if (back.cycleIndex != cycleIndex) {
-          var t = back.typeName;
-          resultText += "weak-referenced by " + (t ? t : "<unknown>") + " at 0x" + back.address.toString(16) + "\n";
-          backWeakRefCount++;
-        }
-      }
-      resultText += "backWeakRefCount: " + backWeakRefCount + "\n\n\n";
+      resultText += "Vertex " + i + ":\n\n" + dumpVertex(vertex) + "\n\n";
     }
     document.getElementById("results").textContent = resultText;
   }
   function cyclesSummary() {
+    cycleIndex = -1;
     var resultText = "";
     function report(count, name, vertexCount, isTraversedByCC) {
       if (count) {
