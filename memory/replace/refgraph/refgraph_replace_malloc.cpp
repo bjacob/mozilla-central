@@ -40,6 +40,14 @@ bool IsWorkingAroundGCCDemanglerStupidity() {
   return false;
 }
 
+template<typename T>
+void ensure_at_least_one(T& x)
+{
+  if (!x) {
+    x = 1;
+  }
+}
+
 class PagesMap {
   uint8_t* map;
   uintptr_t first_represented_page, last_represented_page;
@@ -211,13 +219,6 @@ instrument_new_block(real_block_t* real_block, size_t extra_space, size_t size)
   return payload_for_list_elem(elem);
 }
 
-// Even though it is legal for malloc(0) to always return null, lots of software out there
-// (including Xorg and Mozilla) assume wrongly that malloc only returns null on OOM.
-static payload_t* dummy_malloc_0() {
-  static int retval;
-  return reinterpret_cast<payload_t*>(&retval);
-}
-
 } // end namespace refgraph
 
 using namespace refgraph;
@@ -226,8 +227,7 @@ void* replace_malloc(size_t size)
 {
   AutoLock autoLock;
 
-  if (!size)
-    return dummy_malloc_0();
+  ensure_at_least_one(size);
 
   size_t extra_space = sizeof(list_elem_t);
 
@@ -251,10 +251,7 @@ int replace_posix_memalign(void **memptr, size_t alignment, size_t size)
     return EINVAL;
   }
 
-  if (!size) {
-    *memptr = dummy_malloc_0();
-    return 0;
-  }
+  ensure_at_least_one(size);
 
   while (alignment < sizeof(list_elem_t))
     alignment *= 2;
@@ -281,8 +278,7 @@ void *replace_aligned_alloc(size_t alignment, size_t size)
     return nullptr;
   }
 
-  if (!size)
-    return dummy_malloc_0();
+  ensure_at_least_one(size);
 
   while (alignment < sizeof(list_elem_t))
     alignment *= 2;
@@ -301,8 +297,8 @@ void *replace_calloc(size_t num, size_t size)
 
   const size_t extra_space = sizeof(list_elem_t);
 
-  if (!num || !size)
-    return dummy_malloc_0();
+  ensure_at_least_one(num);
+  ensure_at_least_one(size);
 
   const size_t size_t_max = -1;
 
@@ -320,6 +316,8 @@ void *replace_calloc(size_t num, size_t size)
 
 void *replace_realloc(void *oldp, size_t newsize)
 {
+  ensure_at_least_one(newsize);
+
   if (MOZ_UNLIKELY(IsWorkingAroundGCCDemanglerStupidity())) {
     if (newsize <= max_demangled_name_length) {
       static char demangled_name_buffer[max_demangled_name_length];
@@ -333,10 +331,8 @@ void *replace_realloc(void *oldp, size_t newsize)
 
   const size_t extra_space = sizeof(list_elem_t);
 
-  if (!oldp || oldp == dummy_malloc_0()) {
+  if (!oldp) {
     // this just a malloc
-    if (!newsize)
-      return dummy_malloc_0();
 
     real_block_t* real_block = static_cast<real_block_t*>(gMallocFuncsTable->malloc(newsize + extra_space));
 
@@ -348,13 +344,6 @@ void *replace_realloc(void *oldp, size_t newsize)
 
   list_elem_t* old_elem = list_elem_for_payload(static_cast<payload_t*>(oldp));
   real_block_t* old_real_block = real_block_for_list_elem(old_elem);
-
-  if (!newsize) {
-    // this is just a free
-    remove_list_elem(old_elem);
-    gMallocFuncsTable->free(old_real_block);
-    return dummy_malloc_0();
-  }
 
   // we can't use realloc, because remove_list_elem wants to overwrite the old block with 0x5a's.
   real_block_t* new_real_block = static_cast<real_block_t*>(gMallocFuncsTable->malloc(newsize + extra_space));
@@ -377,9 +366,6 @@ void replace_free(void *ptr)
   if (!ptr)
     return;
 
-  if (ptr == dummy_malloc_0())
-    return;
-
   if (MOZ_UNLIKELY(IsWorkingAroundGCCDemanglerStupidity())) {
     return;
   }
@@ -396,8 +382,7 @@ void *replace_memalign(size_t alignment, size_t size)
 {
   AutoLock autoLock;
 
-  if (!size)
-    return dummy_malloc_0();
+  ensure_at_least_one(size);
 
   if ((!alignment) ||
       (alignment & (alignment - 1)))
@@ -422,8 +407,7 @@ void *replace_valloc(size_t size)
 
   const size_t alignment = page_size;
 
-  if (!size)
-    return dummy_malloc_0();
+  ensure_at_least_one(size);
 
   real_block_t* real_block = static_cast<real_block_t*>(gMallocFuncsTable->valloc(size + alignment));
   if (!real_block)
@@ -436,7 +420,7 @@ size_t replace_malloc_usable_size(usable_ptr_t ptr)
 {
   AutoLock autoLock;
 
-  if (ptr == 0 || ptr == dummy_malloc_0())
+  if (!ptr)
     return 0;
 
   return payload_size_for_payload((payload_t*)ptr);

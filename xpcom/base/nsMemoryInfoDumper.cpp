@@ -751,43 +751,6 @@ DMDWrite(void* aState, const char* aFmt, va_list ap)
 static nsresult
 DumpProcessMemoryReportsToGZFileWriter(nsIGZFileWriter *aWriter)
 {
-  MOZ_ASSERT(!aIdentifier.IsEmpty());
-
-  {
-    nsCString filename = nsPrintfCString("refgraph-%d",
-                                          getpid());
-    nsCOMPtr<nsIFile> tmpFile;
-
-    nsresult rv = NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(tmpFile));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    tmpFile->AppendRelativeNativePath(filename);
-
-    nsString tmpFilePath;
-    tmpFile->GetPath(tmpFilePath);
-
-    LOG("logging refgraph to %s", NS_ConvertUTF16toUTF8(tmpFilePath).get());
-    refgraph::RefgraphController(nullptr).SnapshotToFile(tmpFilePath);
-    return NS_OK;
-  }
-
-  // Open a new file named something like
-  //
-  //   incomplete-memory-report-<identifier>-<pid>.json.gz
-  //
-  // in NS_OS_TEMP_DIR for writing.  When we're finished writing the report,
-  // we'll rename this file and get rid of the "incomplete-" prefix.
-  //
-  // We do this because we don't want scripts which poll the filesystem
-  // looking for memory report dumps to grab a file before we're finished
-  // writing to it.
-
-  // Note that |mrFilename| is missing the "incomplete-" prefix; we'll tack
-  // that on in a moment.
-  nsCString mrFilename;
-  MakeFilename("memory-report", aIdentifier, "json.gz", mrFilename);
-
-  nsCOMPtr<nsIFile> mrTmpFile;
   nsresult rv;
 
   // Increment this number if the format changes.
@@ -866,6 +829,24 @@ nsresult
 DumpProcessMemoryInfoToTempDir(const nsAString& aIdentifier)
 {
   MOZ_ASSERT(!aIdentifier.IsEmpty());
+
+  {
+    nsCString filename = nsPrintfCString("refgraph-%d",
+                                          getpid());
+    nsCOMPtr<nsIFile> tmpFile;
+
+    nsresult rv = NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(tmpFile));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    tmpFile->AppendRelativeNativePath(filename);
+
+    nsString tmpFilePath;
+    tmpFile->GetPath(tmpFilePath);
+
+    LOG("logging refgraph to %s", NS_ConvertUTF16toUTF8(tmpFilePath).get());
+    refgraph::RefgraphController(nullptr).SnapshotToFile(tmpFilePath);
+    return NS_OK;
+  }
 
 #ifdef MOZ_DMD
   // Clear DMD's reportedness state before running the memory reporters, to
