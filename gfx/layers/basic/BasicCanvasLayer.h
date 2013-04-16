@@ -104,7 +104,6 @@ class BasicShadowableCanvasLayer : public BasicCanvasLayer,
 public:
   BasicShadowableCanvasLayer(BasicShadowLayerManager* aManager) :
     BasicCanvasLayer(aManager),
-    mBufferIsOpaque(false),
     mCanvasClient(nullptr)
   {
     MOZ_COUNT_CTOR(BasicShadowableCanvasLayer);
@@ -148,13 +147,12 @@ private:
 
   CompositableType GetCompositableClientType()
   {
-    if (mGLContext) {
+    if (mGLContext && XRE_GetProcessType() == GeckoProcessType_Default) {
       return BUFFER_IMAGE_BUFFERED;
     }
     return BUFFER_IMAGE_SINGLE;
   }
 
-  bool mBufferIsOpaque;
   RefPtr<CanvasClient> mCanvasClient;
 };
 

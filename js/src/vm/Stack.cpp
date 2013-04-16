@@ -407,8 +407,7 @@ StackFrame::epilogue(JSContext *cx)
     if (cx->compartment->debugMode())
         DebugScopes::onPopCall(this, cx);
 
-
-    if (isConstructing() && returnValue().isPrimitive())
+    if (isConstructing() && thisValue().isObject() && returnValue().isPrimitive())
         setReturnValue(ObjectValue(constructorThis()));
 }
 
@@ -1210,7 +1209,6 @@ ContextStack::popGeneratorFrame(const GeneratorFrameGuard &gfg)
 {
     JSGenerator *gen = gfg.gen_;
     HeapValue *genvp = gen->stackSnapshot;
-    JS_ASSERT(genvp == HeapValueify(gen->fp->generatorArgsSnapshotBegin()));
 
     const FrameRegs &stackRegs = gfg.regs_;
     StackFrame *stackfp = stackRegs.fp();

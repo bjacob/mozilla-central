@@ -205,7 +205,7 @@ GC(JSContext *cx, unsigned argc, jsval *vp)
             if (!JS_StringEqualsAscii(cx, arg.toString(), "compartment", &compartment))
                 return false;
         } else if (arg.isObject()) {
-            PrepareZoneForGC(UnwrapObject(&arg.toObject())->zone());
+            PrepareZoneForGC(UncheckedUnwrap(&arg.toObject())->zone());
             compartment = true;
         }
     }
@@ -408,7 +408,7 @@ ScheduleGC(JSContext *cx, unsigned argc, jsval *vp)
         JS_ScheduleGC(cx, args[0].toInt32());
     } else if (args[0].isObject()) {
         /* Ensure that |zone| is collected during the next GC. */
-        Zone *zone = UnwrapObject(&args[0].toObject())->zone();
+        Zone *zone = UncheckedUnwrap(&args[0].toObject())->zone();
         PrepareZoneForGC(zone);
     } else if (args[0].isString()) {
         /* This allows us to schedule atomsCompartment for GC. */
@@ -750,7 +750,7 @@ finalize_counter_finalize(JSFreeOp *fop, JSObject *obj)
 static JSClass FinalizeCounterClass = {
     "FinalizeCounter", JSCLASS_IS_ANONYMOUS,
     JS_PropertyStub,       /* addProperty */
-    JS_PropertyStub,       /* delProperty */
+    JS_DeletePropertyStub, /* delProperty */
     JS_PropertyStub,       /* getProperty */
     JS_StrictPropertyStub, /* setProperty */
     JS_EnumerateStub,

@@ -133,6 +133,10 @@ struct nsTArrayFallibleAllocatorBase
   static ResultTypeProxy FailureResult() {
     return false;
   }
+
+  static ResultType ConvertBoolToResultType(bool aValue) {
+    return aValue;
+  }
 };
 
 struct nsTArrayInfallibleAllocatorBase
@@ -154,6 +158,12 @@ struct nsTArrayInfallibleAllocatorBase
   static ResultTypeProxy FailureResult() {
     NS_RUNTIMEABORT("Infallible nsTArray should never fail");
     return ResultTypeProxy();
+  }
+
+  static ResultType ConvertBoolToResultType(bool aValue) {
+    if (!aValue) {
+      NS_RUNTIMEABORT("infallible nsTArray should never convert false to ResultType");
+    }
   }
 };
 
@@ -1220,12 +1230,12 @@ public:
   // constructor.
   // @param minLen  The desired minimum length of this array.
   // @return        True if the operation succeeded; false otherwise.
-  bool EnsureLengthAtLeast(size_type minLen) {
+typename Alloc::ResultType EnsureLengthAtLeast(size_type minLen) {
     size_type oldLen = Length();
     if (minLen > oldLen) {
-      return InsertElementsAt(oldLen, minLen - oldLen) != nullptr;
+      return Alloc::ConvertBoolToResultType(!!InsertElementsAt(oldLen, minLen - oldLen));
     }
-    return true;
+    return Alloc::ConvertBoolToResultType(true);
   }
 
   // This method inserts elements into the array, constructing

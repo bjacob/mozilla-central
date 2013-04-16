@@ -79,7 +79,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     // X64 helpers.
     /////////////////////////////////////////////////////////////////
     void call(ImmWord target) {
-        movq(target, rax);
+        mov(target, rax);
         call(rax);
     }
 
@@ -166,7 +166,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         JS_ASSERT(dest.valueReg() != ScratchReg);
         if (payload != dest.valueReg())
             movq(payload, dest.valueReg());
-        movq(ImmShiftedTag(type), ScratchReg);
+        mov(ImmShiftedTag(type), ScratchReg);
         orq(Operand(ScratchReg), dest.valueReg());
     }
     void pushValue(ValueOperand val) {
@@ -207,7 +207,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         JS_ASSERT(src != dest);
 
         JSValueShiftedTag tag = (JSValueShiftedTag)JSVAL_TYPE_TO_SHIFTED_TAG(type);
-        movq(ImmShiftedTag(tag), dest);
+        mov(ImmShiftedTag(tag), dest);
 #ifdef DEBUG
         if (type == JSVAL_TYPE_INT32 || type == JSVAL_TYPE_BOOLEAN) {
             Label upper32BitsZeroed;
@@ -344,7 +344,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
 
     void cmpPtr(const Register &lhs, const ImmWord rhs) {
         JS_ASSERT(lhs != ScratchReg);
-        movq(rhs, ScratchReg);
+        mov(rhs, ScratchReg);
         cmpq(lhs, ScratchReg);
     }
     void cmpPtr(const Register &lhs, const ImmGCPtr rhs) {
@@ -357,7 +357,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         cmpq(lhs, ScratchReg);
     }
     void cmpPtr(const Operand &lhs, const ImmWord rhs) {
-        movq(rhs, ScratchReg);
+        mov(rhs, ScratchReg);
         cmpq(lhs, ScratchReg);
     }
     void cmpPtr(const Address &lhs, const ImmGCPtr rhs) {
@@ -413,7 +413,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
     void addPtr(ImmWord imm, const Register &dest) {
         JS_ASSERT(dest != ScratchReg);
-        movq(imm, ScratchReg);
+        mov(imm, ScratchReg);
         addq(ScratchReg, dest);
     }
     void addPtr(const Address &src, const Register &dest) {
@@ -430,20 +430,27 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     void branch32(Condition cond, const AbsoluteAddress &lhs, Imm32 rhs, Label *label) {
-        movq(ImmWord(lhs.addr), ScratchReg);
+        mov(ImmWord(lhs.addr), ScratchReg);
         branch32(cond, Address(ScratchReg, 0), rhs, label);
     }
 
     // Specialization for AbsoluteAddress.
     void branchPtr(Condition cond, const AbsoluteAddress &addr, const Register &ptr, Label *label) {
         JS_ASSERT(ptr != ScratchReg);
-        movq(ImmWord(addr.addr), ScratchReg);
+        mov(ImmWord(addr.addr), ScratchReg);
         branchPtr(cond, Operand(ScratchReg, 0x0), ptr, label);
     }
 
     template <typename T>
     void branchPrivatePtr(Condition cond, T lhs, ImmWord ptr, Label *label) {
         branchPtr(cond, lhs, ImmWord(ptr.value >> 1), label);
+    }
+
+    void branchPrivatePtr(Condition cond, Address lhs, Register ptr, Label *label) {
+        if (ptr != ScratchReg)
+            movePtr(ptr, ScratchReg);
+        rshiftPtr(Imm32(1), ScratchReg);
+        branchPtr(cond, lhs, ScratchReg, label);
     }
 
     template <typename T, typename S>
@@ -486,13 +493,13 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         movq(src, dest);
     }
     void movePtr(ImmWord imm, Register dest) {
-        movq(imm, dest);
+        mov(imm, dest);
     }
     void movePtr(ImmGCPtr imm, Register dest) {
         movq(imm, dest);
     }
     void loadPtr(const AbsoluteAddress &address, Register dest) {
-        movq(ImmWord(address.addr), ScratchReg);
+        mov(ImmWord(address.addr), ScratchReg);
         movq(Operand(ScratchReg, 0x0), dest);
     }
     void loadPtr(const Address &address, Register dest) {
@@ -509,7 +516,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         shlq(Imm32(1), dest);
     }
     void storePtr(ImmWord imm, const Address &address) {
-        movq(imm, ScratchReg);
+        mov(imm, ScratchReg);
         movq(ScratchReg, Operand(address));
     }
     void storePtr(ImmGCPtr imm, const Address &address) {
@@ -523,7 +530,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         movq(src, dest);
     }
     void storePtr(const Register &src, const AbsoluteAddress &address) {
-        movq(ImmWord(address.addr), ScratchReg);
+        mov(ImmWord(address.addr), ScratchReg);
         movq(src, Operand(ScratchReg, 0x0));
     }
     void rshiftPtr(Imm32 imm, Register dest) {
@@ -864,7 +871,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         } pun;
         pun.d = d;
         if (!maybeInlineDouble(pun.u, dest)) {
-            movq(ImmWord(pun.u), ScratchReg);
+            mov(ImmWord(pun.u), ScratchReg);
             movqsd(ScratchReg, dest);
         }
     }
@@ -975,7 +982,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     void callWithABI(void *fun, Result result = GENERAL);
     void callWithABI(Address fun, Result result = GENERAL);
 
-    void handleException();
+    void handleFailureWithHandler(void *handler);
 
     void makeFrameDescriptor(Register frameSizeReg, FrameType type) {
         shlq(Imm32(FRAMESIZE_SHIFT), frameSizeReg);
@@ -983,7 +990,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     // Save an exit frame (which must be aligned to the stack pointer) to
-    // ThreadData::ionTop.
+    // ThreadData::ionTop of the main thread.
     void linkExitFrame() {
         mov(ImmWord(GetIonContext()->runtime), ScratchReg);
         mov(StackPointer, Operand(ScratchReg, offsetof(JSRuntime, mainThread.ionTop)));
@@ -994,6 +1001,12 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         makeFrameDescriptor(dynStack, IonFrame_OptimizedJS);
         Push(dynStack);
         call(target);
+    }
+
+    // Save an exit frame to the thread data of the current thread, given a
+    // register that holds a PerThreadData *.
+    void linkParallelExitFrame(const Register &pt) {
+        mov(StackPointer, Operand(pt, offsetof(PerThreadData, ionTop)));
     }
 
     void enterOsr(Register calleeToken, Register code) {

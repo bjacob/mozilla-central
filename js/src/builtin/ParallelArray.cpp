@@ -53,7 +53,7 @@ Class ParallelArrayObject::protoClass = {
     "ParallelArray",
     JSCLASS_HAS_CACHED_PROTO(JSProto_ParallelArray),
     JS_PropertyStub,         // addProperty
-    JS_PropertyStub,         // delProperty
+    JS_DeletePropertyStub,   // delProperty
     JS_PropertyStub,         // getProperty
     JS_StrictPropertyStub,   // setProperty
     JS_EnumerateStub,
@@ -65,7 +65,7 @@ Class ParallelArrayObject::class_ = {
     "ParallelArray",
     JSCLASS_HAS_CACHED_PROTO(JSProto_ParallelArray),
     JS_PropertyStub,         // addProperty
-    JS_PropertyStub,         // delProperty
+    JS_DeletePropertyStub,   // delProperty
     JS_PropertyStub,         // getProperty
     JS_StrictPropertyStub,   // setProperty
     JS_EnumerateStub,
@@ -155,7 +155,7 @@ ParallelArrayObject::constructHelper(JSContext *cx, MutableHandleFunction ctor, 
                 types::TypeScript::InitObject(cx, script, pc, JSProto_ParallelArray);
             if (!paTypeObject)
                 return false;
-            if (paTypeObject->getPropertyCount() == 0) {
+            if (paTypeObject->getPropertyCount() == 0 && !paTypeObject->unknownProperties()) {
                 if (!paTypeObject->addDefiniteProperties(cx, result))
                     return false;
 

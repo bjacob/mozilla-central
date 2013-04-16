@@ -1282,7 +1282,7 @@ MacroAssemblerARM::ma_vimm(double value, FloatRegister dest, Condition cc)
 {
     union DoublePun {
         struct {
-#if defined(IS_LITTLE_ENDIAN) && !defined(FPU_IS_ARM_FPA)
+#if defined(IS_LITTLE_ENDIAN)
             uint32_t lo, hi;
 #else
             uint32_t hi, lo;
@@ -2830,6 +2830,12 @@ MacroAssemblerARMCompat::linkExitFrame() {
     ma_str(StackPointer, Operand(ScratchRegister, 0));
 }
 
+void
+MacroAssemblerARMCompat::linkParallelExitFrame(const Register &pt)
+{
+    ma_str(StackPointer, Operand(pt, offsetof(PerThreadData, ionTop)));
+}
+
 // ARM says that all reads of pc will return 8 higher than the
 // address of the currently executing instruction.  This means we are
 // correctly storing the address of the instruction after the call
@@ -3134,7 +3140,7 @@ MacroAssemblerARMCompat::callWithABI(const Address &fun, Result result)
 }
 
 void
-MacroAssemblerARMCompat::handleException()
+MacroAssemblerARMCompat::handleFailureWithHandler(void *handler)
 {
     // Reserve space for exception information.
     int size = (sizeof(ResumeFromException) + 7) & ~7;
@@ -3144,7 +3150,7 @@ MacroAssemblerARMCompat::handleException()
     // Ask for an exception handler.
     setupUnalignedABICall(1, r1);
     passABIArg(r0);
-    callWithABI(JS_FUNC_TO_DATA_PTR(void *, ion::HandleException));
+    callWithABI(handler);
 
     Label catch_;
     Label entryFrame;

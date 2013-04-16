@@ -10,6 +10,8 @@
 
 #include "mozilla/FloatingPoint.h"
 
+#include "jscpucfg.h"
+
 #include <math.h>
 
 /* A NaN whose bit pattern conforms to JS::Value's bit pattern restrictions. */
@@ -21,7 +23,7 @@ namespace detail {
 
 union DoublePun {
     struct {
-#if defined(IS_LITTLE_ENDIAN) && !defined(FPU_IS_ARM_FPA)
+#if defined(IS_LITTLE_ENDIAN)
         uint32_t lo, hi;
 #else
         uint32_t hi, lo;
@@ -40,7 +42,13 @@ ToIntWidth(double d)
 {
 #if defined(__i386__) || defined(__i386) || defined(__x86_64__) || \
     defined(_M_IX86) || defined(_M_X64)
+
+#ifdef __clang__
+    /* volatile to keep Clang from miscompiling, see bug 859257. */
+    volatile detail::DoublePun du, duh, twoWidth;
+#else
     detail::DoublePun du, duh, twoWidth;
+#endif
     uint32_t di_h, u_tmp, expon, shift_amount;
     int32_t mask32;
 

@@ -143,24 +143,6 @@ JSRuntime::sizeOfIncludingThis(JSMallocSizeOfFun mallocSizeOf, JS::RuntimeSizes 
         rtSizes->scriptData += mallocSizeOf(r.front());
 }
 
-size_t
-JSRuntime::sizeOfExplicitNonHeap()
-{
-    size_t n = stackSpace.sizeOf();
-
-    if (execAlloc_) {
-        JS::CodeSizes sizes;
-        execAlloc_->sizeOfCode(&sizes);
-        n += sizes.jaeger + sizes.ion + sizes.baseline + sizes.asmJS +
-            sizes.regexp + sizes.other + sizes.unused;
-    }
-
-    if (bumpAlloc_)
-        n += bumpAlloc_->sizeOfNonHeapData();
-
-    return n;
-}
-
 void
 JSRuntime::triggerOperationCallback()
 {
@@ -431,7 +413,7 @@ js::DestroyContext(JSContext *cx, DestroyContextMode mode)
         JS::PrepareForFullGC(rt);
         GC(rt, GC_NORMAL, JS::gcreason::DESTROY_CONTEXT);
     }
-    js_delete(cx);
+    js_delete_poison(cx);
 }
 
 bool

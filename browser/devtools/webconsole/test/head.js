@@ -16,6 +16,22 @@ Components.utils.import("resource://gre/modules/devtools/Console.jsm", tempScope
 let console = tempScope.console;
 let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
 
+let gPendingOutputTest = 0;
+
+// The various categories of messages.
+const CATEGORY_NETWORK = 0;
+const CATEGORY_CSS = 1;
+const CATEGORY_JS = 2;
+const CATEGORY_WEBDEV = 3;
+const CATEGORY_INPUT = 4;
+const CATEGORY_OUTPUT = 5;
+
+// The possible message severities.
+const SEVERITY_ERROR = 0;
+const SEVERITY_WARNING = 1;
+const SEVERITY_INFO = 2;
+const SEVERITY_LOG = 3;
+
 const WEBCONSOLE_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
 let WCU_l10n = new WebConsoleUtils.l10n(WEBCONSOLE_STRINGS_URI);
 
@@ -230,11 +246,66 @@ function waitForOpenContextMenu(aContextMenu, aOptions) {
                              eventDetails, targetElement.ownerDocument.defaultView);
 }
 
+/**
+ * Dump the output of all open Web Consoles - used only for debugging purposes.
+ */
+function dumpConsoles()
+{
+  if (gPendingOutputTest) {
+    console.log("dumpConsoles start");
+    for each (let hud in HUDService.hudReferences) {
+      if (!hud.outputNode) {
+        console.debug("no output content for", hud.hudId);
+        continue;
+      }
+
+      console.debug("output content for", hud.hudId);
+      for (let elem of hud.outputNode.childNodes) {
+        dumpMessageElement(elem);
+      }
+    }
+    console.log("dumpConsoles end");
+
+    gPendingOutputTest = 0;
+  }
+}
+
+/**
+ * Dump to output debug information for the given webconsole message.
+ *
+ * @param nsIDOMNode aMessage
+ *        The message element you want to display.
+ */
+function dumpMessageElement(aMessage)
+{
+  let text = getMessageElementText(aMessage);
+  let repeats = aMessage.querySelector(".webconsole-msg-repeat");
+  if (repeats) {
+    repeats = repeats.getAttribute("value");
+  }
+  console.debug("id", aMessage.getAttribute("id"),
+                "date", aMessage.timestamp,
+                "class", aMessage.className,
+                "category", aMessage.category,
+                "severity", aMessage.severity,
+                "repeats", repeats,
+                "clipboardText", aMessage.clipboardText,
+                "text", text);
+}
+
 function finishTest()
 {
   browser = hudId = hud = filterBox = outputNode = cs = null;
 
+  dumpConsoles();
+
   if (HUDConsoleUI.browserConsole) {
+    let hud = HUDConsoleUI.browserConsole;
+
+    if (hud.jsterm) {
+      hud.jsterm.clearOutput(true);
+    }
+
     HUDConsoleUI.toggleBrowserConsole().then(finishTest);
     return;
   }
@@ -244,6 +315,7 @@ function finishTest()
     finish();
     return;
   }
+
   if (hud.jsterm) {
     hud.jsterm.clearOutput(true);
   }
@@ -255,6 +327,8 @@ function finishTest()
 
 function tearDown()
 {
+  dumpConsoles();
+
   if (HUDConsoleUI.browserConsole) {
     HUDConsoleUI.toggleBrowserConsole();
   }
@@ -767,3 +841,358 @@ function openDebugger(aOptions = {})
   return deferred.promise;
 }
 
+/**
+ * Get the full text displayed by a Web Console message.
+ *
+ * @param nsIDOMElement aElement
+ *        The message element from the Web Console output.
+ * @return string
+ *         The full text displayed by the given message element.
+ */
+function getMessageElementText(aElement)
+{
+  let text = aElement.textContent;
+  let labels = aElement.querySelectorAll("label");
+  for (let label of labels) {
+    text += " " + label.getAttribute("value");
+  }
+  return text;
+}
+
+/**
+ * Wait for messages in the Web Console output.
+ *
+ * @param object aOptions
+ *        Options for what you want to wait for:
+ *        - webconsole: the webconsole instance you work with.
+ *        - messages: an array of objects that tells which messages to wait for.
+ *        Properties:
+ *            - text: string or RegExp to match the textContent of each new
+ *            message.
+ *            - repeats: the number of message repeats, as displayed by the Web
+ *            Console.
+ *            - category: match message category. See CATEGORY_* constants at
+ *            the top of this file.
+ *            - severity: match message severity. See SEVERITY_* constants at
+ *            the top of this file.
+ *            - count: how many unique web console messages should be matched by
+ *            this rule.
+ * @return object
+ *         A Promise object is returned once the messages you want are found.
+ */
+function waitForMessages(aOptions)
+{
+  gPendingOutputTest++;
+  let webconsole = aOptions.webconsole;
+  let rules = WebConsoleUtils.cloneObject(aOptions.messages, true);
+  let rulesMatched = 0;
+  let listenerAdded = false;
+  let deferred = Promise.defer();
+
+  function checkText(aRule, aText)
+  {
+    let result;
+    if (typeof aRule == "string") {
+      result = aText.indexOf(aRule) > -1;
+    }
+    else if (aRule instanceof RegExp) {
+      result = aRule.test(aText);
+    }
+    return result;
+  }
+
+  function checkConsoleTrace(aRule, aElement)
+  {
+    let elemText = getMessageElementText(aElement);
+    let trace = aRule.consoleTrace;
+
+    if (!checkText("Stack trace from ", elemText)) {
+      return false;
+    }
+
+    let clickable = aElement.querySelector(".hud-clickable");
+    if (!clickable) {
+      ok(false, "console.trace() message is missing .hud-clickable");
+      displayErrorContext(aRule, aElement);
+      return false;
+    }
+    aRule.clickableElements = [clickable];
+
+    if (trace.file &&
+        !checkText("from " + trace.file + ", ", elemText)) {
+      ok(false, "console.trace() message is missing the file name: " +
+                trace.file);
+      displayErrorContext(aRule, aElement);
+      return false;
+    }
+
+    if (trace.fn &&
+        !checkText(", function " + trace.fn + ", ", elemText)) {
+      ok(false, "console.trace() message is missing the function name: " +
+                trace.fn);
+      displayErrorContext(aRule, aElement);
+      return false;
+    }
+
+    if (trace.line &&
+        !checkText(", line " + trace.line + ".", elemText)) {
+      ok(false, "console.trace() message is missing the line number: " +
+                trace.line);
+      displayErrorContext(aRule, aElement);
+      return false;
+    }
+
+    aRule.category = CATEGORY_WEBDEV;
+    aRule.severity = SEVERITY_LOG;
+
+    return true;
+  }
+
+  function checkConsoleTime(aRule, aElement)
+  {
+    let elemText = getMessageElementText(aElement);
+    let time = aRule.consoleTime;
+
+    if (!checkText(time + ": timer started", elemText)) {
+      return false;
+    }
+
+    aRule.category = CATEGORY_WEBDEV;
+    aRule.severity = SEVERITY_LOG;
+
+    return true;
+  }
+
+  function checkConsoleTimeEnd(aRule, aElement)
+  {
+    let elemText = getMessageElementText(aElement);
+    let time = aRule.consoleTimeEnd;
+    let regex = new RegExp(time + ": \\d+ms");
+
+    if (!checkText(regex, elemText)) {
+      return false;
+    }
+
+    aRule.category = CATEGORY_WEBDEV;
+    aRule.severity = SEVERITY_LOG;
+
+    return true;
+  }
+
+  function checkConsoleDir(aRule, aElement)
+  {
+    if (!aElement.classList.contains("webconsole-msg-inspector")) {
+      return false;
+    }
+
+    let elemText = getMessageElementText(aElement);
+    if (!checkText(aRule.consoleDir, elemText)) {
+      return false;
+    }
+
+    let iframe = aElement.querySelector("iframe");
+    if (!iframe) {
+      ok(false, "console.dir message has no iframe");
+      return false;
+    }
+
+    return true;
+  }
+
+  function checkMessage(aRule, aElement)
+  {
+    let elemText = getMessageElementText(aElement);
+
+    if (aRule.text && !checkText(aRule.text, elemText)) {
+      return false;
+    }
+
+    if (aRule.noText && checkText(aRule.noText, elemText)) {
+      return false;
+    }
+
+    if (aRule.consoleTrace && !checkConsoleTrace(aRule, aElement)) {
+      return false;
+    }
+
+    if (aRule.consoleTime && !checkConsoleTime(aRule, aElement)) {
+      return false;
+    }
+
+    if (aRule.consoleTimeEnd && !checkConsoleTimeEnd(aRule, aElement)) {
+      return false;
+    }
+
+    if (aRule.consoleDir && !checkConsoleDir(aRule, aElement)) {
+      return false;
+    }
+
+    let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
+                          aRule.consoleTimeEnd);
+
+    if (aRule.category && aElement.category != aRule.category) {
+      if (partialMatch) {
+        is(aElement.category, aRule.category,
+           "message category for rule: " + displayRule(aRule));
+        displayErrorContext(aRule, aElement);
+      }
+      return false;
+    }
+
+    if (aRule.severity && aElement.severity != aRule.severity) {
+      if (partialMatch) {
+        is(aElement.severity, aRule.severity,
+           "message severity for rule: " + displayRule(aRule));
+        displayErrorContext(aRule, aElement);
+      }
+      return false;
+    }
+
+    if (aRule.repeats) {
+      let repeats = aElement.querySelector(".webconsole-msg-repeat");
+      if (!repeats || repeats.getAttribute("value") != aRule.repeats) {
+        return false;
+      }
+    }
+
+    if ("longString" in aRule) {
+      let longStrings = aElement.querySelectorAll(".longStringEllipsis");
+      if (aRule.longString != !!longStrings[0]) {
+        if (partialMatch) {
+          is(!!longStrings[0], aRule.longString,
+             "long string existence check failed for message rule: " +
+             displayRule(aRule));
+          displayErrorContext(aRule, aElement);
+        }
+        return false;
+      }
+      aRule.longStrings = longStrings;
+    }
+
+    if ("objects" in aRule) {
+      let clickables = aElement.querySelectorAll(".hud-clickable");
+      if (aRule.objects != !!clickables[0]) {
+        if (partialMatch) {
+          is(!!clickables[0], aRule.objects,
+             "objects existence check failed for message rule: " +
+             displayRule(aRule));
+          displayErrorContext(aRule, aElement);
+        }
+        return false;
+      }
+      aRule.clickableElements = clickables;
+    }
+
+    let count = aRule.count || 1;
+    if (!aRule.matched) {
+      aRule.matched = new Set();
+    }
+    aRule.matched.add(aElement);
+
+    return aRule.matched.size == count;
+  }
+
+  function onMessagesAdded(aEvent, aNewElements)
+  {
+    for (let elem of aNewElements) {
+      let location = elem.querySelector(".webconsole-location");
+      if (location) {
+        let url = location.getAttribute("title");
+        // Prevent recursion with the browser console and any potential
+        // messages coming from head.js.
+        if (url.indexOf("browser/devtools/webconsole/test/head.js") != -1) {
+          continue;
+        }
+      }
+
+      for (let rule of rules) {
+        if (rule._ruleMatched) {
+          continue;
+        }
+
+        let matched = checkMessage(rule, elem);
+        if (matched) {
+          rule._ruleMatched = true;
+          rulesMatched++;
+          ok(1, "matched rule: " + displayRule(rule));
+          if (maybeDone()) {
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  function maybeDone()
+  {
+    if (rulesMatched == rules.length) {
+      if (listenerAdded) {
+        webconsole.ui.off("messages-added", onMessagesAdded);
+        webconsole.ui.off("messages-updated", onMessagesAdded);
+      }
+      gPendingOutputTest--;
+      deferred.resolve(rules);
+      return true;
+    }
+    return false;
+  }
+
+  function testCleanup() {
+    if (rulesMatched == rules.length) {
+      return;
+    }
+
+    if (webconsole.ui) {
+      webconsole.ui.off("messages-added", onMessagesAdded);
+    }
+
+    for (let rule of rules) {
+      if (!rule._ruleMatched) {
+        ok(false, "failed to match rule: " + displayRule(rule));
+      }
+    }
+  }
+
+  function displayRule(aRule)
+  {
+    return aRule.name || aRule.text;
+  }
+
+  function displayErrorContext(aRule, aElement)
+  {
+    console.log("error occured during rule " + displayRule(aRule));
+    console.log("while checking the following message");
+    dumpMessageElement(aElement);
+  }
+
+  executeSoon(() => {
+    onMessagesAdded("messages-added", webconsole.outputNode.childNodes);
+    if (rulesMatched != rules.length) {
+      listenerAdded = true;
+      registerCleanupFunction(testCleanup);
+      webconsole.ui.on("messages-added", onMessagesAdded);
+      webconsole.ui.on("messages-updated", onMessagesAdded);
+    }
+  });
+
+  return deferred.promise;
+}
+
+
+/**
+ * Scroll the Web Console output to the given node.
+ *
+ * @param nsIDOMNode aNode
+ *        The node to scroll to.
+ */
+function scrollOutputToNode(aNode)
+{
+  let richListBoxNode = aNode.parentNode;
+  while (richListBoxNode.tagName != "richlistbox") {
+    richListBoxNode = richListBoxNode.parentNode;
+  }
+
+  let boxObject = richListBoxNode.scrollBoxObject;
+  let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
+  nsIScrollBoxObject.ensureElementIsVisible(aNode);
+}
