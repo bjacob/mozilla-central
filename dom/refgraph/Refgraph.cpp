@@ -99,13 +99,15 @@ bool Refgraph::HandleLine_f(const char* start, const char* end)
   if (!mCurrentEdge) {
     return false;
   }
-  bool success = ParseNumber(start, end, &mCurrentEdge->flags);
+  uint8_t flags;
+  bool success = ParseNumber(start, end, &flags);
   if (!success) {
     return false;
   }
-  if (mCurrentEdge->flags > 0xf) {
+  if (flags > 0xf) {
     return false;
   }
+  mCurrentEdge->flags |= flags;
   return true;
 }
 
@@ -163,24 +165,6 @@ bool Refgraph::HandleLine_m(const char* start, const char* end)
   }
   mCurrentBlock->address = address;
   mCurrentBlock->size = size;
-  return true;
-}
-
-bool Refgraph::HandleLine_n(const char* start, const char* end)
-{
-  const char* pos = start;
-  while(*pos == ' ' && pos != end) {
-    pos++;
-  }
-
-  if (pos == end) {
-    return false;
-  }
-
-  if (!mCurrentRefInfo) {
-    return false;
-  }
-  mCurrentRefInfo->type.assign(pos, end - pos);
   return true;
 }
 
@@ -397,7 +381,6 @@ bool Refgraph::HandleLine(const char* start, const char* end)
         case 'c': return HandleLine_c(start, end);
         case 'f': return HandleLine_f(start, end);
         case 'm': return HandleLine_m(start, end);
-        case 'n': return HandleLine_n(start, end);
         case 's': return HandleLine_s(start, end);
         case 't': return HandleLine_t(start, end);
         case 'u': return HandleLine_u(start, end);

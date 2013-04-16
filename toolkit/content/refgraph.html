@@ -65,6 +65,7 @@
       if (edge.CCName) {
         output += "    reference name: " + edge.CCName + "\n";
       }
+      output += "    address: 0x" + edge.target.address.toString(16) + "\n";
       var refInfoCount = edge.refInfoCount
       for (var j = 0; j < refInfoCount; j++) {
         output += "    reference type name: " + edge.refInfo(j).typeName + "\n";

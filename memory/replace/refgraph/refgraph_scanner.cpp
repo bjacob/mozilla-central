@@ -53,7 +53,6 @@ class Scanner
     size_t offset;
     uint32_t flags;
     const char* reftypename;
-    const char* refname;
 
     bool operator<(const ref_t& other) const {
       return target->address + offset < other.target->address + other.offset;
@@ -411,10 +410,8 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
       r.offset = scanned - target->address;
       r.flags = flags;
 
-      assertion(scanPos <= stop - 2 * sizeof(const char*));
+      assertion(scanPos <= stop - sizeof(const char*));
       r.reftypename = *reinterpret_cast<const char**>(scanPos);
-      scanPos += sizeof(const char*);
-      r.refname = *reinterpret_cast<const char**>(scanPos);
       scanPos += sizeof(const char*);
 
       refs.push_back(r);
@@ -432,14 +429,10 @@ void Scanner::ScanBlock(blocks_vector_t::const_iterator block)
       uint32_t target = it->target - mBlocks.begin();
       size_t offset = it->offset;
       const char* reftypename = it->reftypename;
-      const char* refname = it->refname;
       uint32_t flags = it->flags;
 
       Print("s ", target, " ", offset, "\n");
       Print("f ", flags, "\n");
-      if (refname) {
-        Print("n ", refname, "\n");
-      }
       if (reftypename) {
         const char* demangled = Demangled(reftypename);
         if (demangled) {

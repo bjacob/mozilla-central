@@ -47,7 +47,6 @@ class StrongRefMarker
   volatile marker_t mMarker1;
   volatile marker_t mMarker2;
   volatile const char* mRefTypeName;
-  volatile const char* mRefName;
 
 public:
 
@@ -55,7 +54,6 @@ public:
     : mMarker1(strongRefBaseMarker1)
     , mMarker2(strongRefBaseMarker2)
     , mRefTypeName(nullptr)
-    , mRefName(nullptr)
   {
   }
 
@@ -64,7 +62,6 @@ public:
     : mMarker1(strongRefBaseMarker1)
     , mMarker2(strongRefBaseMarker2)
     , mRefTypeName(nullptr)
-    , mRefName(nullptr)
   {
     SetParent(parent);
   }
@@ -80,7 +77,6 @@ public:
     mMarker1 = 0;
     mMarker2 = 0;
     mRefTypeName = nullptr;
-    mRefName = nullptr;
   }
 
   void SetHereditary() {

@@ -339,7 +339,6 @@ class Refgraph {
   bool HandleLine_e(const char* start, const char* end);
   bool HandleLine_f(const char* start, const char* end);
   bool HandleLine_m(const char* start, const char* end);
-  bool HandleLine_n(const char* start, const char* end);
   bool HandleLine_s(const char* start, const char* end);
   bool HandleLine_t(const char* start, const char* end);
   bool HandleLine_u(const char* start, const char* end);
