@@ -22,6 +22,7 @@ class TelephonyCall : public nsDOMEventTargetHelper,
 
   nsString mNumber;
   nsString mState;
+  bool mEmergency;
   nsCOMPtr<nsIDOMDOMError> mError;
 
   uint32_t mCallIndex;
@@ -38,19 +39,13 @@ public:
 
   static already_AddRefed<TelephonyCall>
   Create(Telephony* aTelephony, const nsAString& aNumber, uint16_t aCallState,
-         uint32_t aCallIndex = kOutgoingPlaceholderCallIndex);
-
-  nsIDOMEventTarget*
-  ToIDOMEventTarget() const
-  {
-    return static_cast<nsDOMEventTargetHelper*>(
-             const_cast<TelephonyCall*>(this));
-  }
+         uint32_t aCallIndex = kOutgoingPlaceholderCallIndex,
+         bool aEmergency = false);
 
   nsISupports*
-  ToISupports() const
+  ToISupports()
   {
-    return ToIDOMEventTarget();
+    return static_cast<EventTarget*>(this);
   }
 
   void
@@ -77,6 +72,12 @@ public:
   CallState() const
   {
     return mCallState;
+  }
+
+  void
+  UpdateEmergency(bool aEmergency)
+  {
+    mEmergency = aEmergency;
   }
 
   bool

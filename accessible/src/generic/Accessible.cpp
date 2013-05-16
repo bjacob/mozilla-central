@@ -143,11 +143,11 @@ Accessible::QueryInterface(REFNSIID aIID, void** aInstancePtr)
     return NS_ERROR_NO_INTERFACE;
   }
 
-  return nsAccessNodeWrap::QueryInterface(aIID, aInstancePtr);
+  return nsAccessNode::QueryInterface(aIID, aInstancePtr);
 }
 
 Accessible::Accessible(nsIContent* aContent, DocAccessible* aDoc) :
-  nsAccessNodeWrap(aContent, aDoc),
+  nsAccessNode(aContent, aDoc),
   mParent(nullptr), mIndexInParent(-1), mChildrenFlags(eChildrenUninitialized),
   mStateFlags(0), mType(0), mGenericTypes(0), mIndexOfEmbeddedChild(-1),
   mRoleMapEntry(nullptr)
@@ -629,6 +629,9 @@ Accessible::VisibilityState()
     nsView* view = curFrame->GetView();
     if (view && view->GetVisibility() == nsViewVisibility_kHide)
       return states::INVISIBLE;
+
+    if (nsLayoutUtils::IsPopup(curFrame))
+      return 0;
 
     // Offscreen state for background tab content and invisible for not selected
     // deck panel.
@@ -1508,9 +1511,9 @@ Accessible::State()
   const uint32_t kExpandCollapseStates = states::COLLAPSED | states::EXPANDED;
   if ((state & kExpandCollapseStates) == kExpandCollapseStates) {
     // Cannot be both expanded and collapsed -- this happens in ARIA expanded
-    // combobox because of limitation of nsARIAMap.
+    // combobox because of limitation of ARIAMap.
     // XXX: Perhaps we will be able to make this less hacky if we support
-    // extended states in nsARIAMap, e.g. derive COLLAPSED from
+    // extended states in ARIAMap, e.g. derive COLLAPSED from
     // EXPANDABLE && !EXPANDED.
     state &= ~states::COLLAPSED;
   }
@@ -2550,7 +2553,7 @@ Accessible::Shutdown()
   if (mParent)
     mParent->RemoveChild(this);
 
-  nsAccessNodeWrap::Shutdown();
+  nsAccessNode::Shutdown();
 }
 
 // Accessible protected
@@ -2847,9 +2850,7 @@ Accessible::SelectedItems()
   while ((selected = iter.Next()))
     selectedItems->AppendElement(selected, false);
 
-  nsIMutableArray* items = nullptr;
-  selectedItems.forget(&items);
-  return items;
+  return selectedItems.forget();
 }
 
 uint32_t

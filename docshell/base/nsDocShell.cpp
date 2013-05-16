@@ -65,7 +65,6 @@
 #include "nsIUploadChannel.h"
 #include "nsISecurityEventSink.h"
 #include "nsIScriptSecurityManager.h"
-#include "nsIJSContextStack.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScrollableFrame.h"
 #include "nsContentPolicyUtils.h" // NS_CheckContentLoadPolicy(...)
@@ -202,6 +201,8 @@
 
 #include "nsIAppShellService.h"
 #include "nsAppShellCID.h"
+
+#include "nsIAppsService.h"
 
 static NS_DEFINE_CID(kDOMScriptObjectFactoryCID,
                      NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
@@ -1651,10 +1652,8 @@ nsDocShell::MaybeInitTiming()
         return NS_OK;
     }
 
-    if (Preferences::GetBool("dom.enable_performance", false)) {
-        mTiming = new nsDOMNavigationTiming();
-        mTiming->NotifyNavigationStart();
-    }
+    mTiming = new nsDOMNavigationTiming();
+    mTiming->NotifyNavigationStart();
     return NS_OK;
 }
 
@@ -1787,11 +1786,11 @@ NS_IMETHODIMP
 nsDocShell::SetChromeEventHandler(nsIDOMEventTarget* aChromeEventHandler)
 {
     // Weak reference. Don't addref.
-    mChromeEventHandler = aChromeEventHandler;
     nsCOMPtr<EventTarget> handler = do_QueryInterface(aChromeEventHandler);
+    mChromeEventHandler = handler.get();
 
     if (mScriptGlobal) {
-        mScriptGlobal->SetChromeEventHandler(handler);
+        mScriptGlobal->SetChromeEventHandler(mChromeEventHandler);
     }
 
     return NS_OK;
@@ -1801,8 +1800,8 @@ NS_IMETHODIMP
 nsDocShell::GetChromeEventHandler(nsIDOMEventTarget** aChromeEventHandler)
 {
     NS_ENSURE_ARG_POINTER(aChromeEventHandler);
-    nsCOMPtr<nsIDOMEventTarget> target = do_QueryInterface(mChromeEventHandler);
-    target.swap(*aChromeEventHandler);
+    nsCOMPtr<EventTarget> handler = mChromeEventHandler;
+    handler.forget(aChromeEventHandler);
     return NS_OK;
 }
 
@@ -2760,7 +2759,7 @@ already_AddRefed<nsDocShell>
 nsDocShell::GetParentDocshell()
 {
     nsCOMPtr<nsIDocShell> docshell = do_QueryInterface(GetAsSupports(mParent));
-    return static_cast<nsDocShell*>(docshell.forget().get());
+    return docshell.forget().downcast<nsDocShell>();
 }
 
 nsresult
@@ -4497,7 +4496,7 @@ nsDocShell::LoadErrorPage(nsIURI *aURI, const PRUnichar *aURL,
     errorPageUrl.AppendLiteral("&u=");
     errorPageUrl.AppendASCII(escapedUrl.get());
     if (!escapedCSSClass.IsEmpty()) {
-        errorPageUrl.AppendASCII("&s=");
+        errorPageUrl.AppendLiteral("&s=");
         errorPageUrl.AppendASCII(escapedCSSClass.get());
     }
     errorPageUrl.AppendLiteral("&c=");
@@ -4598,8 +4597,10 @@ nsDocShell::Stop(uint32_t aStopFlags)
 
     if (nsIWebNavigation::STOP_CONTENT & aStopFlags) {
         // Stop the document loading
-        if (mContentViewer)
-            mContentViewer->Stop();
+        if (mContentViewer) {
+            nsCOMPtr<nsIContentViewer> cv = mContentViewer;
+            cv->Stop();
+        }
     }
 
     if (nsIWebNavigation::STOP_NETWORK & aStopFlags) {
@@ -6439,6 +6440,30 @@ nsDocShell::OnRedirectStateChange(nsIChannel* aOldChannel,
     if (!oldURI || !newURI) {
         return;
     }
+
+    // Check if we have a redirect registered for this url.
+    uint32_t appId;
+    nsresult rv = GetAppId(&appId);
+    if (NS_FAILED(rv)) {
+      return;
+    }
+
+    if (appId != nsIScriptSecurityManager::NO_APP_ID &&
+        appId != nsIScriptSecurityManager::UNKNOWN_APP_ID) {
+      nsCOMPtr<nsIAppsService> appsService =
+        do_GetService(APPS_SERVICE_CONTRACTID);
+      NS_ASSERTION(appsService, "No AppsService available");
+      nsCOMPtr<nsIURI> redirect;
+      rv = appsService->GetRedirect(appId, newURI, getter_AddRefs(redirect));
+      if (NS_SUCCEEDED(rv) && redirect) {
+        aNewChannel->Cancel(NS_BINDING_ABORTED);
+        rv = LoadURI(redirect, nullptr, 0, false);
+        if (NS_SUCCEEDED(rv)) {
+          return;
+        }
+      }
+    }
+
     // On session restore we get a redirect from page to itself. Don't count it.
     bool equals = false;
     if (mTiming &&
@@ -7048,10 +7073,7 @@ nsDocShell::CanSavePresentation(uint32_t aLoadType,
 
     // If the document does not want its presentation cached, then don't.
     nsCOMPtr<nsIDocument> doc = mScriptGlobal->GetExtantDoc();
-    if (!doc || !doc->CanSavePresentation(aNewRequest))
-        return false;
-
-    return true;
+    return doc && doc->CanSavePresentation(aNewRequest);
 }
 
 void
@@ -8677,8 +8699,7 @@ nsDocShell::InternalLoad(nsIURI * aURI,
             // document in |newWin|, if any.
             nsCOMPtr<nsPIDOMWindow> piNewWin = do_QueryInterface(newWin);
             if (piNewWin) {
-                nsCOMPtr<nsIDocument> newDoc =
-                    do_QueryInterface(piNewWin->GetExtantDocument());
+                nsCOMPtr<nsIDocument> newDoc = piNewWin->GetExtantDoc();
                 if (!newDoc || newDoc->IsInitialDocument()) {
                     isNewWindow = true;
                     aFlags |= INTERNAL_LOAD_FLAGS_FIRST_LOAD;
@@ -9114,7 +9135,7 @@ nsDocShell::InternalLoad(nsIURI * aURI,
     // stopped in those cases. In the case where they do result in
     // data, the javascript: URL channel takes care of stopping
     // current network activity.
-    if (!bIsJavascript) {
+    if (!bIsJavascript && aFileName.IsVoid()) {
         // Stop any current network activity.
         // Also stop content if this is a zombie doc. otherwise 
         // the onload will be delayed by other loads initiated in the 
@@ -9525,11 +9546,9 @@ nsDocShell::DoURILoad(nsIURI * aURI,
         }
     }
 
-    if (Preferences::GetBool("dom.enable_performance", false)) {
-        nsCOMPtr<nsITimedChannel> timedChannel(do_QueryInterface(channel));
-        if (timedChannel) {
-            timedChannel->SetTimingEnabled(true);
-        }
+    nsCOMPtr<nsITimedChannel> timedChannel(do_QueryInterface(channel));
+    if (timedChannel) {
+        timedChannel->SetTimingEnabled(true);
     }
 
     rv = DoChannelLoad(channel, uriLoader, aBypassClassifier);
@@ -9716,6 +9735,11 @@ nsDocShell::ScrollToAnchor(nsACString & aCurHash, nsACString & aNewHash,
         // If we failed to get the shell, or if there is no shell,
         // nothing left to do here.
         return NS_OK;
+    }
+
+    nsIScrollableFrame* rootScroll = shell->GetRootScrollFrameAsScrollable();
+    if (rootScroll) {
+        rootScroll->ClearDidHistoryRestore();
     }
 
     // If we have no new anchor, we do not want to scroll, unless there is a
@@ -10503,6 +10527,7 @@ nsDocShell::AddToSessionHistory(nsIURI * aURI, nsIChannel * aChannel,
                 shContainer->GetChildAt(i, getter_AddRefs(child));
                 shContainer->RemoveChild(child);
             }  // for
+            entry->AbandonBFCacheEntry();
         }  // shContainer
     }
 
@@ -11416,9 +11441,17 @@ nsDocShell::EnsureScriptEnvironment()
     uint32_t chromeFlags;
     browserChrome->GetChromeFlags(&chromeFlags);
 
-    bool isModalContentWindow =
-        (chromeFlags & nsIWebBrowserChrome::CHROME_MODAL) &&
-        !(chromeFlags & nsIWebBrowserChrome::CHROME_OPENAS_CHROME);
+    bool isModalContentWindow = (mItemType == typeContent) &&
+        (chromeFlags & nsIWebBrowserChrome::CHROME_MODAL);
+    // There can be various other content docshells associated with the
+    // top-level window, like sidebars. Make sure that we only create an
+    // nsGlobalModalWindow for the primary content shell.
+    if (isModalContentWindow) {
+        nsCOMPtr<nsIDocShellTreeItem> primaryItem;
+        nsresult rv = mTreeOwner->GetPrimaryContentShell(getter_AddRefs(primaryItem));
+        NS_ENSURE_SUCCESS(rv, rv);
+        isModalContentWindow = (primaryItem == this);
+    }
 
     // If our window is modal and we're not opened as chrome, make
     // this window a modal content window.

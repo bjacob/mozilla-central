@@ -17,7 +17,7 @@ namespace mozilla {
 namespace dom {
 
 JSObject*
-SVGPatternElement::WrapNode(JSContext *aCx, JSObject *aScope)
+SVGPatternElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aScope)
 {
   return SVGPatternElementBinding::Wrap(aCx, aScope, this);
 }
@@ -64,10 +64,10 @@ NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGPatternElement)
 
 //----------------------------------------------------------------------
 
-already_AddRefed<nsIDOMSVGAnimatedRect>
+already_AddRefed<SVGAnimatedRect>
 SVGPatternElement::ViewBox()
 {
-  nsCOMPtr<nsIDOMSVGAnimatedRect> rect;
+  nsRefPtr<SVGAnimatedRect> rect;
   mViewBox.ToDOMAnimatedRect(getter_AddRefs(rect), this);
   return rect.forget();
 }

@@ -168,7 +168,7 @@ BrowserGlue.prototype = {
         this._onAppDefaults();
         break;
       case "final-ui-startup":
-        this._onProfileStartup();
+        this._finalUIStartup();
         break;
       case "browser-delayed-startup-finished":
         this._onFirstWindowLoaded();
@@ -388,12 +388,13 @@ BrowserGlue.prototype = {
 
   _onAppDefaults: function BG__onAppDefaults() {
     // apply distribution customizations (prefs)
-    // other customizations are applied in _onProfileStartup()
+    // other customizations are applied in _finalUIStartup()
     this._distributionCustomizer.applyPrefDefaults();
   },
 
-  // profile startup handler (contains profile initialization routines)
-  _onProfileStartup: function BG__onProfileStartup() {
+  // runs on startup, before the first command line handler is invoked
+  // (i.e. before the first window is opened)
+  _finalUIStartup: function BG__finalUIStartup() {
     this._sanitizer.onStartup();
     // check if we're in safe mode
     if (Services.appinfo.inSafeMode) {
@@ -1170,7 +1171,7 @@ BrowserGlue.prototype = {
   },
 
   _migrateUI: function BG__migrateUI() {
-    const UI_VERSION = 11;
+    const UI_VERSION = 13;
     const BROWSER_DOCURL = "chrome://browser/content/browser.xul#";
     let currentUIVersion = 0;
     try {
@@ -1334,6 +1335,30 @@ BrowserGlue.prototype = {
       Services.prefs.clearUserPref("dom.event.contextmenu.enabled");
       Services.prefs.clearUserPref("javascript.enabled");
       Services.prefs.clearUserPref("permissions.default.image");
+    }
+
+    if (currentUIVersion < 12) {
+      // Remove bookmarks-menu-button-container, then place
+      // bookmarks-menu-button into its position.
+      let currentsetResource = this._rdf.GetResource("currentset");
+      let toolbarResource = this._rdf.GetResource(BROWSER_DOCURL + "nav-bar");
+      let currentset = this._getPersist(toolbarResource, currentsetResource);
+      // Need to migrate only if toolbar is customized.
+      if (currentset) {
+        if (currentset.contains("bookmarks-menu-button-container")) {
+          currentset = currentset.replace(/(^|,)bookmarks-menu-button-container($|,)/,
+                                          "$1bookmarks-menu-button$2");
+          this._setPersist(toolbarResource, currentsetResource, currentset);
+        }
+      }
+    }
+
+    if (currentUIVersion < 13) {
+      try {
+        if (Services.prefs.getBoolPref("plugins.hide_infobar_for_missing_plugin"))
+          Services.prefs.setBoolPref("plugins.notifyMissingFlash", false);
+      }
+      catch (ex) {}
     }
 
     if (this._dirty)

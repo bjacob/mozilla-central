@@ -66,13 +66,13 @@ class StaticScopeIter
 
     /* Return whether this static scope will be on the dynamic scope chain. */
     bool hasDynamicScopeObject() const;
-    RawShape scopeShape() const;
+    Shape *scopeShape() const;
 
     enum Type { BLOCK, FUNCTION, NAMED_LAMBDA };
     Type type() const;
 
     StaticBlockObject &block() const;
-    RawScript funScript() const;
+    JSScript *funScript() const;
 };
 
 /*****************************************************************************/
@@ -99,7 +99,7 @@ struct ScopeCoordinate
  * Return a shape representing the static scope containing the variable
  * accessed by the ALIASEDVAR op at 'pc'.
  */
-extern RawShape
+extern Shape *
 ScopeCoordinateToStaticScopeShape(JSContext *cx, JSScript *script, jsbytecode *pc);
 
 /* Return the name being accessed by the given ALIASEDVAR op. */
@@ -190,7 +190,7 @@ class CallObject : public ScopeObject
     create(JSContext *cx, HandleShape shape, HandleTypeObject type, HeapSlot *slots);
 
     static CallObject *
-    createTemplateObject(JSContext *cx, HandleScript script);
+    createTemplateObject(JSContext *cx, HandleScript script, gc::InitialHeap heap);
 
     static const uint32_t RESERVED_SLOTS = 2;
 
@@ -229,7 +229,7 @@ class DeclEnvObject : public ScopeObject
     static const gc::AllocKind FINALIZE_KIND = gc::FINALIZE_OBJECT2;
 
     static DeclEnvObject *
-    createTemplateObject(JSContext *cx, HandleFunction fun);
+    createTemplateObject(JSContext *cx, HandleFunction fun, gc::InitialHeap heap);
 
     static DeclEnvObject *create(JSContext *cx, HandleObject enclosing, HandleFunction callee);
 
@@ -347,7 +347,7 @@ class StaticBlockObject : public BlockObject
     void initPrevBlockChainFromParser(StaticBlockObject *prev);
     void resetPrevBlockChainFromParser();
 
-    static RawShape addVar(JSContext *cx, Handle<StaticBlockObject*> block, HandleId id,
+    static Shape *addVar(JSContext *cx, Handle<StaticBlockObject*> block, HandleId id,
                            int index, bool *redeclared);
 };
 

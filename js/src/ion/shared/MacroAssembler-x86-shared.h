@@ -214,12 +214,6 @@ class MacroAssemblerX86Shared : public Assembler
         ucomisd(ScratchFloatReg, reg);
         return truthy ? NonZero : Zero;
     }
-    void branchTruncateDouble(const FloatRegister &src, const Register &dest, Label *fail) {
-        JS_STATIC_ASSERT(INT_MIN == int(0x80000000));
-        cvttsd2si(src, dest);
-        cmpl(dest, Imm32(INT_MIN));
-        j(Assembler::Equal, fail);
-    }
     void load8ZeroExtend(const Address &src, const Register &dest) {
         movzbl(Operand(src), dest);
     }
@@ -429,14 +423,14 @@ class MacroAssemblerX86Shared : public Assembler
     }
 
     void emitSet(Assembler::Condition cond, const Register &dest,
-                 Assembler::NaNCond ifNaN = Assembler::NaN_Unexpected) {
+                 Assembler::NaNCond ifNaN = Assembler::NaN_HandledByCond) {
         if (GeneralRegisterSet(Registers::SingleByteRegs).has(dest)) {
             // If the register we're defining is a single byte register,
             // take advantage of the setCC instruction
             setCC(cond, dest);
             movzxbl(dest, dest);
 
-            if (ifNaN != Assembler::NaN_Unexpected) {
+            if (ifNaN != Assembler::NaN_HandledByCond) {
                 Label noNaN;
                 j(Assembler::NoParity, &noNaN);
                 if (ifNaN == Assembler::NaN_IsTrue)

@@ -171,7 +171,7 @@ exports.testAutomaticDestroy = function(test) {
 exports.testTabProperties = function(test) {
   test.waitUntilDone();
   openBrowserWindow(function(window, browser) {
-    let tabs= require("sdk/tabs");
+    let tabs = require('sdk/tabs');
     let url = "data:text/html;charset=utf-8,<html><head><title>foo</title></head><body>foo</body></html>";
     tabs.open({
       url: url,
@@ -297,39 +297,6 @@ exports.testTabClose = function(test) {
     });
 
     tabs.open(url);
-  });
-};
-
-// TEST: tab.reload()
-exports.testTabReload = function(test) {
-  test.waitUntilDone();
-  openBrowserWindow(function(window, browser) {
-    let tabs = require("sdk/tabs");
-    let url = "data:text/html;charset=utf-8,<!doctype%20html><title></title>";
-
-    tabs.open({ url: url, onReady: function onReady(tab) {
-      tab.removeListener("ready", onReady);
-
-      browser.addEventListener(
-        "load",
-        function onLoad() {
-          browser.removeEventListener("load", onLoad, true);
-
-          browser.addEventListener(
-            "load",
-            function onReload() {
-              browser.removeEventListener("load", onReload, true);
-              test.pass("the tab was loaded again");
-              test.assertEqual(tab.url, url, "the tab has the same URL");
-              closeBrowserWindow(window, function() test.done());
-            },
-            true
-          );
-          tab.reload();
-        },
-        true
-      );
-    }});
   });
 };
 
@@ -937,49 +904,37 @@ exports['test ready event on new window tab'] = function(test) {
 };
 
 exports['test unique tab ids'] = function(test) {
-  test.waitUntilDone();
+  var windows = require('sdk/windows').browserWindows;
+  var { all, defer } = require('sdk/core/promise');
 
-  var windows = require('sdk/windows').browserWindows,
-    tabIds = {}, win1, win2;
+  function openWindow() {
+    // console.log('in openWindow');
+    let deferred = defer();
+    let win = windows.open({
+      url: "data:text/html;charset=utf-8,<html>foo</html>",
+    });
 
-  let steps = [
-    function (index) {
-      win1 = windows.open({
-          url: "data:text/html;charset=utf-8,foo",
-          onOpen: function(window) {
-            tabIds['tab1'] = window.tabs.activeTab.id;
-            next(index);
-          }
+    win.on('open', function(window) {
+      test.assert(window.tabs.length);
+      test.assert(window.tabs.activeTab);
+      test.assert(window.tabs.activeTab.id);
+      deferred.resolve({
+        id: window.tabs.activeTab.id,
+        win: win
       });
-    },
-    function (index) {
-      win2 = windows.open({
-          url: "data:text/html;charset=utf-8,foo",
-          onOpen: function(window) {
-            tabIds['tab2'] = window.tabs.activeTab.id;
-            next(index);
-          }
-      });
-    },
-    function (index) {
-      test.assertNotEqual(tabIds.tab1, tabIds.tab2, "Tab ids should be unique.");
-      win1.close();
-      win2.close();
-      test.done();
-    }
-  ];
+    });
 
-  function next(index) {
-    if (index === steps.length) {
-      return;
-    }
-    let fn = steps[index];
-    index++
-    fn(index);
+    return deferred.promise;
   }
 
-  // run!
-  next(0);
+  test.waitUntilDone();
+  var one = openWindow(), two = openWindow();
+  all([one, two]).then(function(results) {
+    test.assertNotEqual(results[0].id, results[1].id, "tab Ids should not be equal.");
+    results[0].win.close();
+    results[1].win.close();
+    test.done();
+  });
 }
 
 // related to Bug 671305
@@ -1072,6 +1027,30 @@ exports.testOnPageShowEvent = function (test) {
     });
   });
 };
+
+exports.testFaviconGetterDeprecation = function (test) {
+  const { LoaderWithHookedConsole } = require("sdk/test/loader");
+  let { loader, messages } = LoaderWithHookedConsole(module);
+  let tabs = loader.require('sdk/tabs');
+  test.waitUntilDone();
+
+  tabs.open({
+    url: 'data:text/html;charset=utf-8,',
+    onOpen: function (tab) {
+      let favicon = tab.favicon;
+      test.assert(messages.length === 1, 'only one error is dispatched');
+      test.assert(messages[0].type, 'error', 'the console message is an error');
+
+      let msg = messages[0].msg;
+      test.assert(msg.indexOf('tab.favicon is deprecated') !== -1,
+        'message contains the given message');
+      tab.close(test.done.bind(test));
+      loader.unload();
+    }
+  });
+}
+
+
 
 /******************* helpers *********************/
 

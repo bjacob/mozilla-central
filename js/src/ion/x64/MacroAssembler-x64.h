@@ -318,21 +318,51 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         splitTag(src, ScratchReg);
         return testGCThing(cond, ScratchReg);
     }
-    Condition testGCThing(Condition cond, const BaseIndex &src) {
-        splitTag(src, ScratchReg);
-        return testGCThing(cond, ScratchReg);
-    }
     Condition testMagic(Condition cond, const Address &src) {
-        splitTag(src, ScratchReg);
-        return testMagic(cond, ScratchReg);
-    }
-    Condition testMagic(Condition cond, const BaseIndex &src) {
         splitTag(src, ScratchReg);
         return testMagic(cond, ScratchReg);
     }
     Condition testPrimitive(Condition cond, const ValueOperand &src) {
         splitTag(src, ScratchReg);
         return testPrimitive(cond, ScratchReg);
+    }
+
+
+    Condition testUndefined(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testUndefined(cond, ScratchReg);
+    }
+    Condition testNull(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testNull(cond, ScratchReg);
+    }
+    Condition testBoolean(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testBoolean(cond, ScratchReg);
+    }
+    Condition testString(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testString(cond, ScratchReg);
+    }
+    Condition testInt32(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testInt32(cond, ScratchReg);
+    }
+    Condition testObject(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testObject(cond, ScratchReg);
+    }
+    Condition testDouble(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testDouble(cond, ScratchReg);
+    }
+    Condition testMagic(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testMagic(cond, ScratchReg);
+    }
+    Condition testGCThing(Condition cond, const BaseIndex &src) {
+        splitTag(src, ScratchReg);
+        return testGCThing(cond, ScratchReg);
     }
 
     Condition isMagic(Condition cond, const ValueOperand &src, JSWhyMagic why) {
@@ -432,6 +462,10 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         mov(ImmWord(lhs.addr), ScratchReg);
         branch32(cond, Address(ScratchReg, 0), rhs, label);
     }
+    void branch32(Condition cond, const AbsoluteAddress &lhs, Register rhs, Label *label) {
+        mov(ImmWord(lhs.addr), ScratchReg);
+        branch32(cond, Address(ScratchReg, 0), rhs, label);
+    }
 
     // Specialization for AbsoluteAddress.
     void branchPtr(Condition cond, const AbsoluteAddress &addr, const Register &ptr, Label *label) {
@@ -478,6 +512,10 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
     void branchTestPtr(Condition cond, Register lhs, Imm32 imm, Label *label) {
         testq(lhs, imm);
+        j(cond, label);
+    }
+    void branchTestPtr(Condition cond, const Address &lhs, Imm32 imm, Label *label) {
+        testq(Operand(lhs), imm);
         j(cond, label);
     }
     void decBranchPtr(Condition cond, const Register &lhs, Imm32 imm, Label *label) {
@@ -705,6 +743,19 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         cond = testMagic(cond, t);
         j(cond, label);
     }
+    void branchTestMagicValue(Condition cond, const ValueOperand &val, JSWhyMagic why,
+                              Label *label)
+    {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        // Test for magic
+        Label notmagic;
+        Condition testCond = testMagic(cond, val);
+        j(InvertCondition(testCond), &notmagic);
+        // Test magic value
+        unboxMagic(val, ScratchReg);
+        branch32(cond, ScratchReg, Imm32(static_cast<int32_t>(why)), label);
+        bind(&notmagic);
+    }
     Condition testMagic(Condition cond, const ValueOperand &src) {
         splitTag(src, ScratchReg);
         return testMagic(cond, ScratchReg);
@@ -766,6 +817,10 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
     void unboxBoolean(const Address &src, const Register &dest) {
         unboxBoolean(Operand(src), dest);
+    }
+
+    void unboxMagic(const ValueOperand &src, const Register &dest) {
+        movl(Operand(src.valueReg()), dest);
     }
 
     void unboxDouble(const ValueOperand &src, const FloatRegister &dest) {
@@ -876,6 +931,16 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
     void loadStaticDouble(const double *dp, const FloatRegister &dest) {
         loadConstantDouble(*dp, dest);
+    }
+
+    void branchTruncateDouble(const FloatRegister &src, const Register &dest, Label *fail) {
+        const uint64_t IndefiniteIntegerValue = 0x8000000000000000;
+        JS_ASSERT(dest != ScratchReg);
+        cvttsd2sq(src, dest);
+        movq(ImmWord(IndefiniteIntegerValue), ScratchReg);
+        cmpq(dest, ScratchReg);
+        j(Assembler::Equal, fail);
+        movl(dest, dest); // Zero upper 32-bits.
     }
 
     Condition testInt32Truthy(bool truthy, const ValueOperand &operand) {

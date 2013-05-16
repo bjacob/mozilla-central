@@ -307,8 +307,6 @@ NON_DIST_FILES = \
 
 UPLOAD_EXTRA_FILES += gecko-unsigned-unaligned.apk
 
-include $(MOZILLA_DIR)/ipc/app/defs.mk
-
 DIST_FILES += $(MOZ_CHILD_PROCESS_NAME)
 
 ifeq ($(CPU_ARCH),x86)
@@ -737,6 +735,11 @@ UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(MOZ_BUILDINFO_FILE)) \
   $(call QUOTED_WILDCARD,$(PKG_JSSHELL)) \
   $(if $(UPLOAD_EXTRA_FILES), $(foreach f, $(UPLOAD_EXTRA_FILES), $(wildcard $(DIST)/$(f))))
+
+ifdef MOZ_CRASHREPORTER_UPLOAD_FULL_SYMBOLS
+UPLOAD_FILES += \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(SYMBOL_FULL_ARCHIVE_BASENAME).zip)
+endif
 
 SIGN_CHECKSUM_CMD=
 ifdef MOZ_SIGN_CMD

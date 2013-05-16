@@ -9,7 +9,6 @@ const Cr = Components.results;
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 Components.utils.import("resource://gre/modules/commonjs/sdk/core/promise.js");
-Components.utils.import("resource://gre/modules/Deprecated.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
   "resource://gre/modules/DeferredTask.jsm");
@@ -284,6 +283,20 @@ function ERROR(message, resultCode) {
 function FAIL(message, resultCode) {
   LOG(message);
   throw Components.Exception(message, resultCode || Cr.NS_ERROR_INVALID_ARG);
+}
+
+/**
+ * Truncates big blobs of (data-)URIs to console-friendly sizes
+ * @param str
+ *        String to tone down
+ * @param len
+ *        Maximum length of the string to return. Defaults to the length of a tweet.
+ */
+function limitURILength(str, len) {
+  len = len || 140;
+  if (str.length > len)
+    return str.slice(0, len) + "...";
+  return str;
 }
 
 /**
@@ -1471,7 +1484,7 @@ Engine.prototype = {
     if (!uri)
       return;
 
-    LOG("_setIcon: Setting icon url \"" + uri.spec + "\" for engine \""
+    LOG("_setIcon: Setting icon url \"" + limitURILength(uri.spec) + "\" for engine \""
         + this.name + "\".");
     // Only accept remote icons from http[s] or ftp
     switch (uri.scheme) {
@@ -1684,7 +1697,7 @@ Engine.prototype = {
    * @see http://opensearch.a9.com/spec/1.1/description/#image
    */
   _parseImage: function SRCH_ENG_parseImage(aElement) {
-    LOG("_parseImage: Image textContent: \"" + aElement.textContent + "\"");
+    LOG("_parseImage: Image textContent: \"" + limitURILength(aElement.textContent) + "\"");
     if (aElement.getAttribute("width")  == "16" &&
         aElement.getAttribute("height") == "16") {
       this._setIcon(aElement.textContent, true);
@@ -2592,13 +2605,11 @@ SearchService.prototype = {
     }
 
     let warning =
-      "Search service falling back to synchronous initialization at " +
-      new Error().stack +
-      "\n" +
+      "Search service falling back to synchronous initialization. " +
       "This is generally the consequence of an add-on using a deprecated " +
       "search service API.";
-    // Bug 785487 - Disable reportError until our own callers are fixed.
-    //Components.utils.reportError(warning);
+    // Bug 785487 - Disable warning until our own callers are fixed.
+    //Deprecated.warning(warning, "https://developer.mozilla.org/en-US/docs/XPCOM_Interface_Reference/nsIBrowserSearchService#async_warning");
     LOG(warning);
 
     engineMetadataService.syncInit();
@@ -2612,6 +2623,7 @@ SearchService.prototype = {
   // Used by |_ensureInitialized| as a fallback if initialization is not
   // complete. In this implementation, it is also used by |init|.
   _syncInit: function SRCH_SVC__syncInit() {
+    LOG("_syncInit start");
     try {
       this._syncLoadEngines();
     } catch (ex) {
@@ -2622,7 +2634,7 @@ SearchService.prototype = {
 
     gInitialized = true;
     this._initObservers.resolve(this._initRV);
-    LOG("_syncInit: Completed _syncInit");
+    LOG("_syncInit end");
   },
 
   _engines: { },
@@ -2791,7 +2803,7 @@ SearchService.prototype = {
     try {
       stream.init(aFile, MODE_RDONLY, PERMS_FILE, 0);
       return json.decodeFromStream(stream, stream.available());
-    } catch(ex) {
+    } catch (ex) {
       LOG("_readCacheFile: Error reading cache file: " + ex);
     } finally {
       stream.close();
@@ -3288,6 +3300,7 @@ SearchService.prototype = {
 
   // nsIBrowserSearchService
   init: function SRCH_SVC_init(observer) {
+    LOG("SearchService.init");
     let self = this;
     if (!this._initStarted) {
       TelemetryStopwatch.start("SEARCH_SERVICE_INIT_MS");
@@ -3776,7 +3789,7 @@ var engineMetadataService = {
       let initializer = this._initializer = Promise.defer();
       TaskUtils.spawn((function task_init() {
         LOG("metadata init: starting");
-        switch(this._initState) {
+        switch (this._initState) {
           case engineMetadataService._InitStates.NOT_STARTED:
             // 1. Load json file if it exists
             try {
@@ -3788,6 +3801,7 @@ var engineMetadataService = {
               }
               this._store = JSON.parse(new TextDecoder().decode(contents));
               this._initState = engineMetadataService._InitStates.FINISHED_SUCCESS;
+              return;
             } catch (ex) {
               if (this._initState == engineMetadataService._InitStates.FINISHED_SUCCESS) {
                 // No need to pursue asynchronous initialization,
@@ -3808,7 +3822,7 @@ var engineMetadataService = {
             // Fall through to the next state
 
           case engineMetadataService._InitStates.JSON_LOADING_ATTEMPTED:
-              // 2. Otherwise, load db
+            // 2. Otherwise, load db
             try {
               let store = yield this._asyncMigrateOldDB();
               if (this._initState == engineMetadataService._InitStates.FINISHED_SUCCESS) {
@@ -3838,9 +3852,10 @@ var engineMetadataService = {
             break;
 
           default:
-              throw new Error("Internal error: invalid state " + this._initState);
-          }}).bind(this)).then(
-
+            throw new Error("metadata init: invalid state " + this._initState);
+        }
+        LOG("metadata init: complete");
+      }).bind(this)).then(
         // 3. Inform any observers
         function onSuccess() {
           initializer.resolve();
@@ -3862,9 +3877,8 @@ var engineMetadataService = {
    * initialization.
    */
   syncInit: function epsSyncInit() {
-    Deprecated.warning("Search service falling back to deprecated synchronous initializer.", "https://developer.mozilla.org/en-US/docs/XPCOM_Interface_Reference/nsIBrowserSearchService#async_warning");
-    LOG("metadata syncInit: starting");
-    switch(this._initState) {
+    LOG("metadata syncInit start");
+    switch (this._initState) {
       case engineMetadataService._InitStates.NOT_STARTED:
         let jsonFile = new FileUtils.File(this._jsonFile);
         // 1. Load json file if it exists
@@ -3904,7 +3918,7 @@ var engineMetadataService = {
         break;
 
       default:
-        throw new Error("Internal error: invalid state " + this._initState);
+        throw new Error("metadata syncInit: invalid state " + this._initState);
     }
 
     // 3. Inform any observers
@@ -3913,6 +3927,7 @@ var engineMetadataService = {
     } else {
       this._initializer = Promise.resolve();
     }
+    LOG("metadata syncInit end");
   },
 
   getAttr: function epsGetAttr(engine, name) {
@@ -3992,16 +4007,15 @@ var engineMetadataService = {
   },
 
    _syncMigrateOldDB: function SRCH_SVC_EMS_migrate() {
-     LOG("SRCH_SVC_EMS_migrate start");
      let sqliteFile = FileUtils.getFile(NS_APP_USER_PROFILE_50_DIR,
                                         ["search.sqlite"]);
      if (!sqliteFile.exists()) {
-       LOG("SRCH_SVC_EMS_migrate search.sqlite does not exist");
+       LOG("metadata _syncMigrateOldDB: search.sqlite does not exist");
        return null;
      }
      let store = {};
      try {
-       LOG("SRCH_SVC_EMS_migrate Migrating data from SQL");
+       LOG("metadata _syncMigrateOldDB: Migrating data from SQL");
        const sqliteDb = Services.storage.openDatabase(sqliteFile);
        const statement = sqliteDb.createStatement("SELECT * from engine_data");
        while (statement.executeStep()) {
@@ -4017,7 +4031,7 @@ var engineMetadataService = {
       statement.finalize();
       sqliteDb.close();
      } catch (ex) {
-       LOG("SRCH_SVC_EMS_migrate failed: " + ex);
+       LOG("metadata _syncMigrateOldDB failed: " + ex);
        return null;
      }
      return store;
@@ -4030,47 +4044,45 @@ var engineMetadataService = {
     * - we do not remove search.sqlite after migration, so as to allow
     * downgrading and forensics;
     */
-   _asyncMigrateOldDB: function SRCH_SVC_EMS_asyncMigrate() {
-     LOG("SRCH_SVC_EMS_asyncMigrate start");
-     return TaskUtils.spawn(function task() {
-       let sqliteFile = FileUtils.getFile(NS_APP_USER_PROFILE_50_DIR,
-           ["search.sqlite"]);
-       if (!(yield OS.File.exists(sqliteFile.path))) {
-         LOG("SRCH_SVC_EMS_migrate search.sqlite does not exist");
-         throw new Task.Result(); // Bail out
-       }
-       let store = {};
-       LOG("SRCH_SVC_EMS_migrate Migrating data from SQL");
-       const sqliteDb = Services.storage.openDatabase(sqliteFile);
-       const statement = sqliteDb.createStatement("SELECT * from engine_data");
-       try {
-         yield TaskUtils.executeStatement(
-           statement,
-           function onResult(aResultSet) {
-             while (true) {
-               let row = aResultSet.getNextRow();
-               if (!row) {
-                 break;
-               }
-               let engine = row.engineid;
-               let name   = row.name;
-               let value  = row.value;
-               if (!store[engine]) {
-                 store[engine] = {};
-               }
-               store[engine][name] = value;
-             }
-           }
-         );
-       } catch(ex) {
-         // If loading the db failed, ignore the db
-         throw new Task.Result(); // Bail out
-       } finally {
-         sqliteDb.asyncClose();
-       }
-       throw new Task.Result(store);
-     });
-   },
+  _asyncMigrateOldDB: function SRCH_SVC_EMS_asyncMigrate() {
+    return TaskUtils.spawn(function task() {
+      let sqliteFile = FileUtils.getFile(NS_APP_USER_PROFILE_50_DIR, ["search.sqlite"]);
+      if (!(yield OS.File.exists(sqliteFile.path))) {
+        LOG("metadata _asyncMigrateOldDB: search.sqlite does not exist");
+        throw new Task.Result(); // Bail out
+      }
+      LOG("metadata _asyncMigrateOldDB: Migrating data from SQL");
+      let store = {};
+      const sqliteDb = Services.storage.openDatabase(sqliteFile);
+      const statement = sqliteDb.createStatement("SELECT * from engine_data");
+      try {
+        yield TaskUtils.executeStatement(
+          statement,
+          function onResult(aResultSet) {
+            while (true) {
+              let row = aResultSet.getNextRow();
+              if (!row) {
+                break;
+              }
+              let engine = row.engineid;
+              let name   = row.name;
+              let value  = row.value;
+              if (!store[engine]) {
+                store[engine] = {};
+              }
+              store[engine][name] = value;
+            }
+          }
+        );
+      } catch (ex) {
+        // If loading the db failed, ignore the db
+        throw new Task.Result(); // Bail out
+      } finally {
+        sqliteDb.asyncClose();
+      }
+      throw new Task.Result(store);
+    });
+  },
 
   /**
    * Commit changes to disk, asynchronously.
@@ -4084,34 +4096,34 @@ var engineMetadataService = {
    *               If not specified, this._store is used.
    */
   _commit: function epsCommit(aStore) {
-    LOG("epsCommit: start");
+    LOG("metadata _commit: start");
     let store = aStore || this._store;
     if (!store) {
-      LOG("epsCommit: nothing to do");
+      LOG("metadata _commit: nothing to do");
       return;
     }
 
     if (!this._lazyWriter) {
-      LOG("epsCommit: initializing lazy writer");
+      LOG("metadata _commit: initializing lazy writer");
       function writeCommit() {
-        LOG("epsWriteCommit: start");
+        LOG("metadata writeCommit: start");
         let data = gEncoder.encode(JSON.stringify(store));
         let path = engineMetadataService._jsonFile;
-        LOG("epsCommit path " + path);
+        LOG("metadata writeCommit: path " + path);
         let promise = OS.File.writeAtomic(path, data, { tmpPath: path + ".tmp" });
         promise = promise.then(
           function onSuccess() {
             Services.obs.notifyObservers(null,
               SEARCH_SERVICE_TOPIC,
               SEARCH_SERVICE_METADATA_WRITTEN);
-            LOG("epsWriteCommit: done");
+            LOG("metadata writeCommit: done");
           }
         );
         TaskUtils.captureErrors(promise);
       }
       this._lazyWriter = new DeferredTask(writeCommit, LAZY_SERIALIZE_DELAY);
     }
-    LOG("epsCommit: (re)setting timer");
+    LOG("metadata _commit: (re)setting timer");
     this._lazyWriter.start();
   },
   _lazyWriter: null
@@ -4186,4 +4198,4 @@ var engineUpdateService = {
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([SearchService]);
 
-#include ../../../toolkit/content/debug.js
+#include ../../../toolkit/modules/debug.js

@@ -36,10 +36,10 @@ extern JS_FRIEND_API(JSString *)
 JS_GetAnonymousString(JSRuntime *rt);
 
 extern JS_FRIEND_API(JSObject *)
-JS_FindCompilationScope(JSContext *cx, JSRawObject obj);
+JS_FindCompilationScope(JSContext *cx, JSObject *obj);
 
 extern JS_FRIEND_API(JSFunction *)
-JS_GetObjectFunction(JSRawObject obj);
+JS_GetObjectFunction(JSObject *obj);
 
 extern JS_FRIEND_API(JSBool)
 JS_SplicePrototype(JSContext *cx, JSObject *obj, JSObject *proto);
@@ -116,6 +116,9 @@ JS_ObjectToOuterObject(JSContext *cx, JSObject *obj);
 
 extern JS_FRIEND_API(JSObject *)
 JS_CloneObject(JSContext *cx, JSObject *obj, JSObject *proto, JSObject *parent);
+
+extern JS_FRIEND_API(JSString *)
+JS_BasicObjectToString(JSContext *cx, JSHandleObject obj);
 
 extern JS_FRIEND_API(JSBool)
 js_GetterOnlyPropertyStub(JSContext *cx, JSHandleObject obj, JSHandleId id, JSBool strict, JSMutableHandleValue vp);
@@ -377,13 +380,13 @@ extern JS_FRIEND_DATA(js::Class) ObjectProxyClass;
 extern JS_FRIEND_DATA(js::Class) ObjectClass;
 
 inline js::Class *
-GetObjectClass(RawObject obj)
+GetObjectClass(JSObject *obj)
 {
     return reinterpret_cast<const shadow::Object*>(obj)->type->clasp;
 }
 
 inline JSClass *
-GetObjectJSClass(RawObject obj)
+GetObjectJSClass(JSObject *obj)
 {
     return js::Jsvalify(GetObjectClass(obj));
 }
@@ -399,10 +402,10 @@ IsOuterObject(JSObject *obj) {
 }
 
 JS_FRIEND_API(bool)
-IsScopeObject(RawObject obj);
+IsScopeObject(JSObject *obj);
 
 inline JSObject *
-GetObjectParent(RawObject obj)
+GetObjectParent(JSObject *obj)
 {
     JS_ASSERT(!IsScopeObject(obj));
     return reinterpret_cast<shadow::Object*>(obj)->shape->base->parent;
@@ -415,13 +418,13 @@ GetObjectCompartment(JSObject *obj)
 }
 
 JS_FRIEND_API(JSObject *)
-GetObjectParentMaybeScope(RawObject obj);
+GetObjectParentMaybeScope(JSObject *obj);
 
 JS_FRIEND_API(JSObject *)
-GetGlobalForObjectCrossCompartment(RawObject obj);
+GetGlobalForObjectCrossCompartment(JSObject *obj);
 
 JS_FRIEND_API(void)
-NotifyAnimationActivity(RawObject obj);
+NotifyAnimationActivity(JSObject *obj);
 
 JS_FRIEND_API(bool)
 IsOriginalScriptFunction(JSFunction *fun);
@@ -453,32 +456,32 @@ NewFunctionByIdWithReserved(JSContext *cx, JSNative native, unsigned nargs, unsi
 JS_FRIEND_API(JSObject *)
 InitClassWithReserved(JSContext *cx, JSObject *obj, JSObject *parent_proto,
                       JSClass *clasp, JSNative constructor, unsigned nargs,
-                      JSPropertySpec *ps, JSFunctionSpec *fs,
-                      JSPropertySpec *static_ps, JSFunctionSpec *static_fs);
+                      const JSPropertySpec *ps, const JSFunctionSpec *fs,
+                      const JSPropertySpec *static_ps, const JSFunctionSpec *static_fs);
 
 JS_FRIEND_API(const Value &)
-GetFunctionNativeReserved(RawObject fun, size_t which);
+GetFunctionNativeReserved(JSObject *fun, size_t which);
 
 JS_FRIEND_API(void)
-SetFunctionNativeReserved(RawObject fun, size_t which, const Value &val);
+SetFunctionNativeReserved(JSObject *fun, size_t which, const Value &val);
 
 inline bool
-GetObjectProto(JSContext *cx, JSObject *obj, JSObject **proto)
+GetObjectProto(JSContext *cx, JS::Handle<JSObject*> obj, JS::MutableHandle<JSObject*> proto)
 {
     js::Class *clasp = GetObjectClass(obj);
     if (clasp == &js::ObjectProxyClass ||
         clasp == &js::OuterWindowProxyClass ||
         clasp == &js::FunctionProxyClass)
     {
-        return JS_GetPrototype(cx, obj, proto);
+        return JS_GetPrototype(cx, obj, proto.address());
     }
 
-    *proto = reinterpret_cast<const shadow::Object*>(obj)->type->proto;
+    proto.set(reinterpret_cast<const shadow::Object*>(obj.get())->type->proto);
     return true;
 }
 
 inline void *
-GetObjectPrivate(RawObject obj)
+GetObjectPrivate(JSObject *obj)
 {
     const shadow::Object *nobj = reinterpret_cast<const shadow::Object*>(obj);
     void **addr = reinterpret_cast<void**>(&nobj->fixedSlots()[nobj->numFixedSlots()]);
@@ -490,17 +493,17 @@ GetObjectPrivate(RawObject obj)
  * within the maximum capacity for the object's fixed slots).
  */
 inline const Value &
-GetReservedSlot(RawObject obj, size_t slot)
+GetReservedSlot(JSObject *obj, size_t slot)
 {
     JS_ASSERT(slot < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
     return reinterpret_cast<const shadow::Object *>(obj)->slotRef(slot);
 }
 
 JS_FRIEND_API(void)
-SetReservedSlotWithBarrier(RawObject obj, size_t slot, const Value &value);
+SetReservedSlotWithBarrier(JSObject *obj, size_t slot, const Value &value);
 
 inline void
-SetReservedSlot(RawObject obj, size_t slot, const Value &value)
+SetReservedSlot(JSObject *obj, size_t slot, const Value &value)
 {
     JS_ASSERT(slot < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
     shadow::Object *sobj = reinterpret_cast<shadow::Object *>(obj);
@@ -517,10 +520,10 @@ SetReservedSlot(RawObject obj, size_t slot, const Value &value)
 }
 
 JS_FRIEND_API(uint32_t)
-GetObjectSlotSpan(RawObject obj);
+GetObjectSlotSpan(JSObject *obj);
 
 inline const Value &
-GetObjectSlot(RawObject obj, size_t slot)
+GetObjectSlot(JSObject *obj, size_t slot)
 {
     JS_ASSERT(slot < GetObjectSlotSpan(obj));
     return reinterpret_cast<const shadow::Object *>(obj)->slotRef(slot);
@@ -539,19 +542,19 @@ AtomToLinearString(JSAtom *atom)
 }
 
 static inline js::PropertyOp
-CastAsJSPropertyOp(RawObject object)
+CastAsJSPropertyOp(JSObject *object)
 {
     return JS_DATA_TO_FUNC_PTR(js::PropertyOp, object);
 }
 
 static inline js::StrictPropertyOp
-CastAsJSStrictPropertyOp(RawObject object)
+CastAsJSStrictPropertyOp(JSObject *object)
 {
     return JS_DATA_TO_FUNC_PTR(js::StrictPropertyOp, object);
 }
 
 JS_FRIEND_API(bool)
-GetPropertyNames(JSContext *cx, RawObject obj, unsigned flags, js::AutoIdVector *props);
+GetPropertyNames(JSContext *cx, JSObject *obj, unsigned flags, js::AutoIdVector *props);
 
 JS_FRIEND_API(bool)
 AppendUnique(JSContext *cx, AutoIdVector &base, AutoIdVector &others);
@@ -566,7 +569,7 @@ JS_FRIEND_API(void)
 SetPreserveWrapperCallback(JSRuntime *rt, PreserveWrapperCallback callback);
 
 JS_FRIEND_API(bool)
-IsObjectInContextCompartment(RawObject obj, const JSContext *cx);
+IsObjectInContextCompartment(JSObject *obj, const JSContext *cx);
 
 /*
  * NB: these flag bits are encoded into the bytecode stream in the immediate
@@ -717,12 +720,9 @@ JS_FRIEND_API(void)
 EnableRuntimeProfilingStack(JSRuntime *rt, bool enabled);
 
 JS_FRIEND_API(jsbytecode*)
-ProfilingGetPC(JSRuntime *rt, RawScript script, void *ip);
+ProfilingGetPC(JSRuntime *rt, JSScript *script, void *ip);
 
 #ifdef JS_THREADSAFE
-JS_FRIEND_API(void *)
-GetOwnerThread(const JSContext *cx);
-
 JS_FRIEND_API(bool)
 ContextHasOutstandingRequests(const JSContext *cx);
 #endif
@@ -754,7 +754,7 @@ extern JS_FRIEND_API(bool)
 IsContextRunningJS(JSContext *cx);
 
 typedef void
-(* AnalysisPurgeCallback)(JSRuntime *rt, JSFlatString *desc);
+(* AnalysisPurgeCallback)(JSRuntime *rt, JS::Handle<JSFlatString*> desc);
 
 extern JS_FRIEND_API(AnalysisPurgeCallback)
 SetAnalysisPurgeCallback(JSRuntime *rt, AnalysisPurgeCallback callback);
@@ -852,11 +852,46 @@ NukeCrossCompartmentWrappers(JSContext* cx,
                              NukeReferencesToWindow nukeReferencesToWindow);
 
 /* Specify information about ListBase proxies in the DOM, for use by ICs. */
+
+/*
+ * The ListBaseShadowsCheck function will be called to check if the property for
+ * id should be gotten from the prototype, or if there is an own property that
+ * shadows it.
+ * If DoesntShadow is returned then the slot at listBaseExpandoSlot should
+ * either be undefined or point to an expando object that would contain the own
+ * property.
+ * If DoesntShadowUnique is returned then the slot at listBaseExpandoSlot should
+ * contain a private pointer to a ExpandoAndGeneration, which contains a
+ * JS::Value that should either be undefined or point to an expando object, and
+ * a uint32 value. If that value changes then the IC for getting a property will
+ * be invalidated.
+ */
+
+struct ExpandoAndGeneration {
+  ExpandoAndGeneration()
+    : expando(UndefinedValue()),
+      generation(0)
+  {}
+
+  Value expando;
+  uint32_t generation;
+};
+
+typedef enum ListBaseShadowsResult {
+  ShadowCheckFailed,
+  Shadows,
+  DoesntShadow,
+  DoesntShadowUnique
+} ListBaseShadowsResult;
+typedef ListBaseShadowsResult
+(* ListBaseShadowsCheck)(JSContext* cx, JSHandleObject object, JSHandleId id);
 JS_FRIEND_API(void)
-SetListBaseInformation(void *listBaseHandlerFamily, uint32_t listBaseExpandoSlot);
+SetListBaseInformation(void *listBaseHandlerFamily, uint32_t listBaseExpandoSlot,
+                       ListBaseShadowsCheck listBaseShadowsCheck);
 
 void *GetListBaseHandlerFamily();
 uint32_t GetListBaseExpandoSlot();
+ListBaseShadowsCheck GetListBaseShadowsCheck();
 
 } /* namespace js */
 
@@ -870,7 +905,7 @@ extern JS_FRIEND_API(JSBool)
 js_DateIsValid(JSObject* obj);
 
 extern JS_FRIEND_API(double)
-js_DateGetMsecSinceEpoch(JSRawObject obj);
+js_DateGetMsecSinceEpoch(JSObject *obj);
 
 /* Implemented in jscntxt.cpp. */
 
@@ -925,6 +960,135 @@ enum ViewType {
 };
 
 } /* namespace ArrayBufferView */
+
+/*
+ * A helper for building up an ArrayBuffer object's data
+ * before creating the ArrayBuffer itself.  Will do doubling
+ * based reallocation, up to an optional maximum growth given.
+ *
+ * When all the data has been appended, call getArrayBuffer,
+ * passing in the JSContext* for which the ArrayBuffer object
+ * is to be created.  This also implicitly resets the builder,
+ * or it can be reset explicitly at any point by calling reset().
+ */
+class ArrayBufferBuilder
+{
+    void *rawcontents_;
+    uint8_t *dataptr_;
+    uint32_t capacity_;
+    uint32_t length_;
+  public:
+    ArrayBufferBuilder()
+        : rawcontents_(NULL),
+          dataptr_(NULL),
+          capacity_(0),
+          length_(0)
+    {
+    }
+
+    ~ArrayBufferBuilder() {
+        reset();
+    }
+
+    void reset() {
+        if (rawcontents_)
+            JS_free(NULL, rawcontents_);
+        rawcontents_ = dataptr_ = NULL;
+        capacity_ = length_ = 0;
+    }
+
+    // will truncate if newcap is < length()
+    bool setCapacity(uint32_t newcap) {
+        if (!JS_ReallocateArrayBufferContents(NULL, newcap, &rawcontents_, &dataptr_))
+            return false;
+
+        capacity_ = newcap;
+        if (length_ > newcap)
+            length_ = newcap;
+
+        return true;
+    }
+
+    // Append datalen bytes from data to the current buffer.  If we
+    // need to grow the buffer, grow by doubling the size up to a
+    // maximum of maxgrowth (if given).  If datalen is greater than
+    // what the new capacity would end up as, then grow by datalen.
+    //
+    // The data parameter must not overlap with anything beyond the
+    // builder's current valid contents [0..length)
+    bool append(const uint8_t *newdata, uint32_t datalen, uint32_t maxgrowth = 0) {
+        if (length_ + datalen > capacity_) {
+            uint32_t newcap;
+            // double while under maxgrowth or if not specified
+            if (!maxgrowth || capacity_ < maxgrowth)
+                newcap = capacity_ * 2;
+            else
+                newcap = capacity_ + maxgrowth;
+
+            // but make sure there's always enough to satisfy our request
+            if (newcap < length_ + datalen)
+                newcap = length_ + datalen;
+
+            // did we overflow?
+            if (newcap < capacity_)
+                return false;
+
+            if (!setCapacity(newcap))
+                return false;
+        }
+
+        // assert that the region isn't overlapping so we can memcpy;
+        JS_ASSERT(!areOverlappingRegions(newdata, datalen, dataptr_ + length_, datalen));
+
+        memcpy(dataptr_ + length_, newdata, datalen);
+        length_ += datalen;
+
+        return true;
+    }
+
+    uint8_t *data() {
+        return dataptr_;
+    }
+
+    uint32_t length() {
+        return length_;
+    }
+
+    uint32_t capacity() {
+        return capacity_;
+    }
+
+    JSObject* getArrayBuffer(JSContext *cx) {
+        if (capacity_ > length_) {
+            if (!setCapacity(length_))
+                return NULL;
+        }
+
+        JSObject* obj = JS_NewArrayBufferWithContents(cx, rawcontents_);
+        if (!obj)
+            return NULL;
+
+        rawcontents_ = dataptr_ = NULL;
+        length_ = capacity_ = 0;
+
+        return obj;
+    }
+
+protected:
+
+    static bool areOverlappingRegions(const uint8_t *start1, uint32_t length1,
+                                      const uint8_t *start2, uint32_t length2)
+    {
+        const uint8_t *end1 = start1 + length1;
+        const uint8_t *end2 = start2 + length2;
+
+        const uint8_t *max_start = start1 > start2 ? start1 : start2;
+        const uint8_t *min_end   = end1 < end2 ? end1 : end2;
+
+        return max_start < min_end;
+    }
+};
+
 } /* namespace js */
 
 typedef js::ArrayBufferView::ViewType JSArrayBufferViewType;
@@ -983,10 +1147,9 @@ extern JS_FRIEND_API(JSObject *)
 JS_NewFloat64ArrayFromArray(JSContext *cx, JSObject *array);
 
 /*
- * Create a new typed array using the given ArrayBuffer for storage. byteOffset
- * must not exceed (signed) INT32_MAX. The length value is optional; if -1 is
- * passed, enough elements to use up the remainder of the byte array is used as
- * the default value.
+ * Create a new typed array using the given ArrayBuffer for storage.  The
+ * length value is optional; if -1 is passed, enough elements to use up the
+ * remainder of the byte array is used as the default value.
  */
 
 extern JS_FRIEND_API(JSObject *)
@@ -1453,5 +1616,8 @@ inline void assertEnteredPolicy(JSContext *cx, JSObject *obj, jsid id) {};
 extern JS_FRIEND_API(JSBool)
 js_DefineOwnProperty(JSContext *cx, JSObject *objArg, jsid idArg,
                      const js::PropertyDescriptor& descriptor, JSBool *bp);
+
+extern JS_FRIEND_API(JSBool)
+js_ReportIsNotFunction(JSContext *cx, const JS::Value& v);
 
 #endif /* jsfriendapi_h___ */

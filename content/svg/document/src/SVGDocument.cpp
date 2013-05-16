@@ -102,13 +102,9 @@ SVGDocument::Clone(nsINodeInfo *aNodeInfo, nsINode **aResult) const
 }
 
 JSObject*
-SVGDocument::WrapNode(JSContext *aCx, JSObject *aScope)
+SVGDocument::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aScope)
 {
-  JSObject* obj = SVGDocumentBinding::Wrap(aCx, aScope, this);
-  if (obj && !PostCreateWrapper(aCx, obj)) {
-    return nullptr;
-  }
-  return obj;
+  return SVGDocumentBinding::Wrap(aCx, aScope, this);
 }
 
 } // namespace dom

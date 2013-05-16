@@ -24,6 +24,8 @@
 
 #include "gfxCrashReporterUtils.h"
 
+#include "nsMathUtils.h"
+
 #include "GeckoProfiler.h"
 #include <algorithm>
 
@@ -224,12 +226,12 @@ int ShaderProgramOGL::sCurrentProgramKey = 0;
 #endif
 
 CompositorOGL::CompositorOGL(nsIWidget *aWidget, int aSurfaceWidth,
-                             int aSurfaceHeight, bool aIsRenderingToEGLSurface)
+                             int aSurfaceHeight, bool aUseExternalSurfaceSize)
   : mWidget(aWidget)
   , mWidgetSize(-1, -1)
   , mSurfaceSize(aSurfaceWidth, aSurfaceHeight)
   , mHasBGRA(0)
-  , mIsRenderingToEGLSurface(aIsRenderingToEGLSurface)
+  , mUseExternalSurfaceSize(aUseExternalSurfaceSize)
   , mFrameInProgress(false)
   , mDestroyed(false)
 {
@@ -309,6 +311,16 @@ CompositorOGL::CleanupResources()
   }
 
   mGLContext = nullptr;
+}
+
+// Impl of a a helper-runnable's "Run" method, used in Initialize()
+NS_IMETHODIMP
+CompositorOGL::ReadDrawFPSPref::Run()
+{
+  // NOTE: This must match the code in Initialize()'s NS_IsMainThread check.
+  Preferences::AddBoolVarCache(&sDrawFPS, "layers.acceleration.draw-fps");
+  Preferences::AddBoolVarCache(&sFrameCounter, "layers.acceleration.frame-counter");
+  return NS_OK;
 }
 
 bool
@@ -481,19 +493,11 @@ CompositorOGL::Initialize()
   }
 
   if (NS_IsMainThread()) {
+    // NOTE: This must match the code in ReadDrawFPSPref::Run().
     Preferences::AddBoolVarCache(&sDrawFPS, "layers.acceleration.draw-fps");
     Preferences::AddBoolVarCache(&sFrameCounter, "layers.acceleration.frame-counter");
   } else {
     // We have to dispatch an event to the main thread to read the pref.
-    class ReadDrawFPSPref : public nsRunnable {
-    public:
-      NS_IMETHOD Run()
-      {
-        Preferences::AddBoolVarCache(&sDrawFPS, "layers.acceleration.draw-fps");
-        Preferences::AddBoolVarCache(&sFrameCounter, "layers.acceleration.frame-counter");
-        return NS_OK;
-      }
-    };
     NS_DispatchToMainThread(new ReadDrawFPSPref());
   }
 
@@ -544,10 +548,10 @@ CompositorOGL::BindAndDrawQuadWithTextureRect(ShaderProgramOGL *aProg,
   // We need to convert back to actual texels here to get proper behaviour with
   // our GL helper functions. Should fix this sometime.
   // I want to vomit.
-  IntRect texCoordRect = IntRect(aTexCoordRect.x * aTexture->GetSize().width,
-                                 aTexCoordRect.y * aTexture->GetSize().height,
-                                 aTexCoordRect.width * aTexture->GetSize().width,
-                                 aTexCoordRect.height * aTexture->GetSize().height);
+  IntRect texCoordRect = IntRect(NS_roundf(aTexCoordRect.x * aTexture->GetSize().width),
+                                 NS_roundf(aTexCoordRect.y * aTexture->GetSize().height),
+                                 NS_roundf(aTexCoordRect.width * aTexture->GetSize().width),
+                                 NS_roundf(aTexCoordRect.height * aTexture->GetSize().height));
 
   // This is fairly disgusting - if the texture should be flipped it will have a
   // negative height, in which case we un-invert the texture coords and pass the
@@ -619,6 +623,9 @@ CompositorOGL::PrepareViewport(const gfx::IntSize& aSize,
   viewMatrix.Translate(-gfxPoint(1.0, -1.0));
   viewMatrix.Scale(2.0f / float(aSize.width), 2.0f / float(aSize.height));
   viewMatrix.Scale(1.0f, -1.0f);
+  if (!mTarget) {
+    viewMatrix.Translate(gfxPoint(mRenderOffset.x, mRenderOffset.y));
+  }
 
   viewMatrix = aWorldTransform * viewMatrix;
 
@@ -759,7 +766,7 @@ CompositorOGL::BeginFrame(const Rect *aClipRectIn, const gfxMatrix& aTransform,
 
   mFrameInProgress = true;
   gfxRect rect;
-  if (mIsRenderingToEGLSurface) {
+  if (mUseExternalSurfaceSize) {
     rect = gfxRect(0, 0, mSurfaceSize.width, mSurfaceSize.height);
   } else {
     rect = gfxRect(aRenderBounds.x, aRenderBounds.y, aRenderBounds.width, aRenderBounds.height);
@@ -1204,7 +1211,7 @@ CompositorOGL::EndFrame()
 #ifdef MOZ_DUMP_PAINTING
   if (gfxUtils::sDumpPainting) {
     nsIntRect rect;
-    if (mIsRenderingToEGLSurface) {
+    if (mUseExternalSurfaceSize) {
       rect = nsIntRect(0, 0, mSurfaceSize.width, mSurfaceSize.height);
     } else {
       mWidget->GetBounds(rect);
@@ -1282,7 +1289,7 @@ void
 CompositorOGL::CopyToTarget(gfxContext *aTarget, const gfxMatrix& aTransform)
 {
   nsIntRect rect;
-  if (mIsRenderingToEGLSurface) {
+  if (mUseExternalSurfaceSize) {
     rect = nsIntRect(0, 0, mSurfaceSize.width, mSurfaceSize.height);
   } else {
     rect = nsIntRect(0, 0, mWidgetSize.width, mWidgetSize.height);

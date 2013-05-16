@@ -4,7 +4,6 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-/* $Id$ */
 
 #include "loader.h"
 #include "prmem.h"
@@ -558,7 +557,7 @@ MD5_Hash(unsigned char *dest, const char *src)
 }
 
 SECStatus 
-MD5_HashBuf(unsigned char *dest, const unsigned char *src, uint32 src_length)
+MD5_HashBuf(unsigned char *dest, const unsigned char *src, PRUint32 src_length)
 {
   if (!vector && PR_SUCCESS != freebl_RunLoaderOnce())
       return SECFailure;
@@ -721,7 +720,7 @@ SHA1_Hash(unsigned char *dest, const char *src)
 }
 
 SECStatus 
-SHA1_HashBuf(unsigned char *dest, const unsigned char *src, uint32 src_length)
+SHA1_HashBuf(unsigned char *dest, const unsigned char *src, PRUint32 src_length)
 {
   if (!vector && PR_SUCCESS != freebl_RunLoaderOnce())
       return SECFailure;
@@ -919,7 +918,7 @@ SHA256_Hash(unsigned char *dest, const char *src)
 }
 
 SECStatus 
-SHA256_HashBuf(unsigned char *dest, const unsigned char *src, uint32 src_length)
+SHA256_HashBuf(unsigned char *dest, const unsigned char *src, PRUint32 src_length)
 {
   if (!vector && PR_SUCCESS != freebl_RunLoaderOnce())
       return SECFailure;
@@ -1009,7 +1008,7 @@ SHA512_Hash(unsigned char *dest, const char *src)
 }
 
 SECStatus 
-SHA512_HashBuf(unsigned char *dest, const unsigned char *src, uint32 src_length)
+SHA512_HashBuf(unsigned char *dest, const unsigned char *src, PRUint32 src_length)
 {
   if (!vector && PR_SUCCESS != freebl_RunLoaderOnce())
       return SECFailure;
@@ -1100,7 +1099,7 @@ SHA384_Hash(unsigned char *dest, const char *src)
 }
 
 SECStatus 
-SHA384_HashBuf(unsigned char *dest, const unsigned char *src, uint32 src_length)
+SHA384_HashBuf(unsigned char *dest, const unsigned char *src, PRUint32 src_length)
 {
   if (!vector && PR_SUCCESS != freebl_RunLoaderOnce())
       return SECFailure;
@@ -1745,7 +1744,7 @@ SHA224_Hash(unsigned char *dest, const char *src)
 }
 
 SECStatus
-SHA224_HashBuf(unsigned char *dest, const unsigned char *src, uint32 src_length)
+SHA224_HashBuf(unsigned char *dest, const unsigned char *src, PRUint32 src_length)
 {
   if (!vector && PR_SUCCESS != freebl_RunLoaderOnce())
       return SECFailure;

@@ -14,6 +14,7 @@
     "dom/imptests/editing/selecttest/test_addRange.html": "oom?, bug 775227",
     "dom/imptests/webapps/DOMCore/tests/approved/test_Range-insertNode.html":"oom?, bug 775227",
     "dom/imptests/webapps/DOMCore/tests/approved/test_Range-cloneContents.html":"",
+    "dom/imptests/webapps/DOMCore/tests/approved/test_Range-compareBoundaryPoints.html":"times out, bug 862196",
     "dom/imptests/webapps/DOMCore/tests/approved/test_Range-deleteContents.html":"",
     "dom/imptests/webapps/DOMCore/tests/approved/test_Range-extractContents.html":"",
     "dom/imptests/webapps/DOMCore/tests/approved/test_Range-set.html":"",
@@ -85,6 +86,7 @@
     "dom/file/test/test_request_readyState.html":"",
     "dom/file/test/test_stream_tracking.html":"",
     "dom/indexedDB/ipc/test_ipc.html":"",
+    "dom/indexedDB/test/test_lowDiskSpace.html":"",
     "dom/tests/mochitest/ajax/offline/test_noManifest.html":"",
     "dom/tests/mochitest/bugs/test_bug437361.html":"",
     "dom/tests/mochitest/general/test_bug629535.html":"",
@@ -182,7 +184,6 @@
     "dom/browser-element/mochitest/test_browserElement_inproc_CloseApp.html":"",
     "dom/browser-element/mochitest/test_browserElement_inproc_CloseFromOpener.html":"",
     "dom/browser-element/":"",
-    "dom/contacts/":"",
 
     "dom/devicestorage/test/test_basic.html":"",
     "dom/devicestorage/test/test_lastModificationFilter.html":"",
@@ -204,6 +205,7 @@
     "dom/file/test/test_write_read_data.html":"",
     "dom/imptests/editing/conformancetest/test_event.html":"",
     "dom/imptests/editing/conformancetest/test_runtest.html":"",
+    "dom/media/tests/mochitest":"",
     "dom/mobilemessage/tests/test_sms_basics.html":"",
     "dom/network/tests/test_networkstats_basics.html":"",
     "dom/permission/tests/test_permission_basics.html":"",
@@ -223,6 +225,8 @@
     "dom/tests/mochitest/ajax/offline/test_fallback.html":"",
     "dom/tests/mochitest/ajax/offline/test_foreign.html":"",
     "dom/tests/mochitest/ajax/offline/test_identicalManifest.html":"",
+    "dom/tests/mochitest/ajax/offline/test_lowDeviceStorage.html":"",
+    "dom/tests/mochitest/ajax/offline/test_lowDeviceStorageDuringUpdate.html":"",
     "dom/tests/mochitest/ajax/offline/test_missingFile.html":"",
     "dom/tests/mochitest/ajax/offline/test_missingManifest.html":"",
     "dom/tests/mochitest/ajax/offline/test_obsolete.html":"",
@@ -259,6 +263,7 @@
     "dom/tests/mochitest/general/test_windowedhistoryframes.html":"",
     "dom/tests/mochitest/general/test_idleapi_permissions.html":"",
     "dom/tests/mochitest/general/test_interfaces.html":"",
+    "dom/tests/mochitest/general/test_showModalDialog.html": "Don't run modal tests on Android",
     "dom/tests/mochitest/geolocation/test_allowCurrent.html":"",
     "dom/tests/mochitest/geolocation/test_allowWatch.html":"",
     "dom/tests/mochitest/geolocation/test_cachedPosition.html":"",
@@ -416,6 +421,11 @@
     "layout/style/test/test_visited_pref.html" : "timed out",
     "layout/style/test/test_visited_reftests.html":"",
     "layout/tables/test/test_bug541668_table_event_delivery.html":"",
-    "layout/xul" : "xml doesn't work in b2g"
+    "layout/xul" : "xml doesn't work in b2g",
+
+    "parser/htmlparser/tests/mochitest/test_bug709083.html": "bug 737020",
+
+    "Harness_sanity/test_sanityEventUtils.html": "bug 688052",
+    "Harness_sanity/test_sanitySimpletest.html": "bug 688052"
   }
 }

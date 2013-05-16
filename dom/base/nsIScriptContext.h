@@ -29,24 +29,9 @@ class nsIURI;
 
 typedef void (*nsScriptTerminationFunc)(nsISupports* aRef);
 
-#define NS_ISCRIPTCONTEXTPRINCIPAL_IID \
-  { 0xd012cdb3, 0x8f1e, 0x4440, \
-    { 0x8c, 0xbd, 0x32, 0x7f, 0x98, 0x1d, 0x37, 0xb4 } }
-
-class nsIScriptContextPrincipal : public nsISupports
-{
-public:
-  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ISCRIPTCONTEXTPRINCIPAL_IID)
-
-  virtual nsIScriptObjectPrincipal* GetObjectPrincipal() = 0;
-};
-
-NS_DEFINE_STATIC_IID_ACCESSOR(nsIScriptContextPrincipal,
-                              NS_ISCRIPTCONTEXTPRINCIPAL_IID)
-
 #define NS_ISCRIPTCONTEXT_IID \
-{ 0x5eb84406, 0x118f, 0x4eb5, \
- { 0xab, 0xd5, 0xdd, 0xc9, 0x14, 0xfe, 0xfe, 0xe4 } }
+{ 0x821c5be9, 0xbf9e, 0x4041, \
+  { 0x9f, 0xf2, 0x1f, 0xca, 0x39, 0xf7, 0x89, 0xf3 } }
 
 /* This MUST match JSVERSION_DEFAULT.  This version stuff if we don't
    know what language we have is a little silly... */
@@ -56,7 +41,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsIScriptContextPrincipal,
  * It is used by the application to initialize a runtime and run scripts.
  * A script runtime would implement this interface.
  */
-class nsIScriptContext : public nsIScriptContextPrincipal
+class nsIScriptContext : public nsISupports
 {
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ISCRIPTCONTEXT_IID)
@@ -76,7 +61,7 @@ public:
    *                  result will deoptimize your script somewhat in many cases.
    */
   virtual nsresult EvaluateString(const nsAString& aScript,
-                                  JSObject& aScopeObject,
+                                  JS::Handle<JSObject*> aScopeObject,
                                   JS::CompileOptions& aOptions,
                                   bool aCoerceToString,
                                   JS::Value* aRetValue) = 0;
@@ -145,8 +130,8 @@ public:
    * @return NS_OK if the function was successfully bound
    */
   virtual nsresult BindCompiledEventHandler(nsISupports* aTarget,
-                                            JSObject* aScope,
-                                            JSObject* aHandler,
+                                            JS::Handle<JSObject*> aScope,
+                                            JS::Handle<JSObject*> aHandler,
                                             JS::MutableHandle<JSObject*> aBoundHandler) = 0;
 
   /**
@@ -232,7 +217,8 @@ public:
 
   // SetProperty is suspect and jst believes should not be needed.  Currenly
   // used only for "arguments".
-  virtual nsresult SetProperty(JSObject* aTarget, const char* aPropName, nsISupports* aVal) = 0;
+  virtual nsresult SetProperty(JS::Handle<JSObject*> aTarget,
+                               const char* aPropName, nsISupports* aVal) = 0;
   /** 
    * Called to set/get information if the script context is
    * currently processing a script tag
@@ -251,7 +237,7 @@ public:
    * call DidInitializeContext() when a context is fully
    * (successfully) initialized.
    */
-  virtual nsresult InitClasses(JSObject* aGlobalObj) = 0;
+  virtual nsresult InitClasses(JS::Handle<JSObject*> aGlobalObj) = 0;
 
   /**
    * Tell the context we're about to be reinitialize it.

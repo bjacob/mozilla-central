@@ -10,15 +10,12 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource:///modules/devtools/shared/event-emitter.js");
 Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
-Cu.import("resource:///modules/devtools/EventEmitter.jsm");
-Cu.import("resource:///modules/devtools/ToolDefinitions.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Toolbox",
-  "resource:///modules/devtools/Toolbox.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TargetFactory",
-  "resource:///modules/devtools/Target.jsm");
+Cu.import("resource://gre/modules/devtools/Loader.jsm");
 
 const FORBIDDEN_IDS = new Set(["toolbox", ""]);
+const MAX_ORDINAL = 99;
 
 /**
  * DevTools is a class that represents a set of developer tools, it holds a
@@ -34,11 +31,6 @@ this.DevTools = function DevTools() {
   EventEmitter.decorate(this);
 
   Services.obs.addObserver(this.destroy, "quit-application", false);
-
-  // Register the set of default tools
-  for (let definition of defaultTools) {
-    this.registerTool(definition);
-  }
 }
 
 DevTools.prototype = {
@@ -53,8 +45,8 @@ DevTools.prototype = {
    *
    * Each toolDefinition has the following properties:
    * - id: Unique identifier for this tool (string|required)
-   * - killswitch: Property name to allow us to turn this tool on/off globally
-   *               (string|required) (TODO: default to devtools.{id}.enabled?)
+   * - visibilityswitch: Property name to allow us to hide this tool from the
+   *                     DevTools Toolbox.
    * - icon: URL pointing to a graphic which will be used as the src for an
    *         16x16 img tag (string|required)
    * - url: URL pointing to a XUL/XHTML document containing the user interface
@@ -72,7 +64,7 @@ DevTools.prototype = {
       throw new Error("Invalid definition.id");
     }
 
-    toolDefinition.killswitch = toolDefinition.killswitch ||
+    toolDefinition.visibilityswitch = toolDefinition.visibilityswitch ||
         "devtools." + toolId + ".enabled";
     this._tools.set(toolId, toolDefinition);
 
@@ -83,18 +75,50 @@ DevTools.prototype = {
    * Removes all tools that match the given |toolId|
    * Needed so that add-ons can remove themselves when they are deactivated
    *
-   * @param {string} toolId
-   *        id of the tool to unregister
+   * @param {string|object} tool
+   *        Definition or the id of the tool to unregister. Passing the
+   *        tool id should be avoided as it is a temporary measure.
    * @param {boolean} isQuitApplication
    *        true to indicate that the call is due to app quit, so we should not
    *        cause a cascade of costly events
    */
-  unregisterTool: function DT_unregisterTool(toolId, isQuitApplication) {
+  unregisterTool: function DT_unregisterTool(tool, isQuitApplication) {
+    let toolId = null;
+    if (typeof tool == "string") {
+      toolId = tool;
+      tool = this._tools.get(tool);
+    }
+    else {
+      toolId = tool.id;
+    }
     this._tools.delete(toolId);
 
     if (!isQuitApplication) {
-      this.emit("tool-unregistered", toolId);
+      this.emit("tool-unregistered", tool);
     }
+  },
+
+  /**
+   * Sorting function used for sorting tools based on their ordinals.
+   */
+  ordinalSort: function DT_ordinalSort(d1, d2) {
+    let o1 = (typeof d1.ordinal == "number") ? d1.ordinal : MAX_ORDINAL;
+    let o2 = (typeof d2.ordinal == "number") ? d2.ordinal : MAX_ORDINAL;
+    return o1 - o2;
+  },
+
+  getDefaultTools: function DT_getDefaultTools() {
+    return devtools.defaultTools.sort(this.ordinalSort);
+  },
+
+  getAdditionalTools: function DT_getAdditionalTools() {
+    let tools = [];
+    for (let [key, value] of this._tools) {
+      if (devtools.defaultTools.indexOf(value) == -1) {
+        tools.push(value);
+      }
+    }
+    return tools.sort(this.ordinalSort);
   },
 
   /**
@@ -111,12 +135,12 @@ DevTools.prototype = {
       let enabled;
 
       try {
-        enabled = Services.prefs.getBoolPref(value.killswitch);
+        enabled = Services.prefs.getBoolPref(value.visibilityswitch);
       } catch(e) {
         enabled = true;
       }
 
-      if (enabled) {
+      if (enabled || value.id == "options") {
         tools.set(key, value);
       }
     }
@@ -132,20 +156,12 @@ DevTools.prototype = {
    *         A sorted array of the tool definitions registered in this instance
    */
   getToolDefinitionArray: function DT_getToolDefinitionArray() {
-    const MAX_ORDINAL = 99;
-
     let definitions = [];
     for (let [id, definition] of this.getToolDefinitionMap()) {
       definitions.push(definition);
     }
 
-    definitions.sort(function(d1, d2) {
-      let o1 = (typeof d1.ordinal == "number") ? d1.ordinal : MAX_ORDINAL;
-      let o2 = (typeof d2.ordinal == "number") ? d2.ordinal : MAX_ORDINAL;
-      return o1 - o2;
-    });
-
-    return definitions;
+    return definitions.sort(this.ordinalSort);
   },
 
   /**
@@ -189,7 +205,7 @@ DevTools.prototype = {
     }
     else {
       // No toolbox for target, create one
-      toolbox = new Toolbox(target, toolId, hostType);
+      toolbox = new devtools.Toolbox(target, toolId, hostType);
 
       this._toolboxes.set(target, toolbox);
 
@@ -243,12 +259,21 @@ DevTools.prototype = {
   },
 
   /**
+   * Called to tear down a tools provider.
+   */
+  _teardown: function DT_teardown() {
+    for (let [target, toolbox] of this._toolboxes) {
+      toolbox.destroy();
+    }
+  },
+
+  /**
    * All browser windows have been closed, tidy up remaining objects.
    */
   destroy: function() {
     Services.obs.removeObserver(this.destroy, "quit-application");
 
-    for (let [key, tool] of this._tools) {
+    for (let [key, tool] of this.getToolDefinitionMap()) {
       this.unregisterTool(key, true);
     }
 
@@ -284,10 +309,18 @@ let gDevToolsBrowser = {
    * of there
    */
   toggleToolboxCommand: function(gBrowser) {
-    let target = TargetFactory.forTab(gBrowser.selectedTab);
+    let target = devtools.TargetFactory.forTab(gBrowser.selectedTab);
     let toolbox = gDevTools.getToolbox(target);
 
     toolbox ? toolbox.destroy() : gDevTools.showToolbox(target);
+  },
+
+  toggleBrowserToolboxCommand: function(gBrowser) {
+    let target = devtools.TargetFactory.forWindow(gBrowser.ownerDocument.defaultView);
+    let toolbox = gDevTools.getToolbox(target);
+
+    toolbox ? toolbox.destroy()
+     : gDevTools.showToolbox(target, "inspector", Toolbox.HostType.WINDOW);
   },
 
   /**
@@ -305,11 +338,11 @@ let gDevToolsBrowser = {
    *   and the host is a window, we raise the toolbox window
    */
   selectToolCommand: function(gBrowser, toolId) {
-    let target = TargetFactory.forTab(gBrowser.selectedTab);
+    let target = devtools.TargetFactory.forTab(gBrowser.selectedTab);
     let toolbox = gDevTools.getToolbox(target);
 
     if (toolbox && toolbox.currentToolId == toolId) {
-      if (toolbox.hostType == Toolbox.HostType.WINDOW) {
+      if (toolbox.hostType == devtools.Toolbox.HostType.WINDOW) {
         toolbox.raise();
       } else {
         toolbox.destroy();
@@ -370,6 +403,18 @@ let gDevToolsBrowser = {
    *        properties of the tool to add
    */
   _addToolToWindows: function DT_addToolToWindows(toolDefinition) {
+    // No menu item or global shortcut is required for options panel.
+    if (toolDefinition.id == "options") {
+      return;
+    }
+
+    // Skip if the tool is disabled.
+    try {
+      if (!Services.prefs.getBoolPref(toolDefinition.visibilityswitch)) {
+        return;
+      }
+    } catch(e) {}
+
     // We need to insert the new tool in the right place, which means knowing
     // the tool that comes before the tool that we're trying to add
     let allDefs = gDevTools.getToolDefinitionArray();
@@ -424,6 +469,17 @@ let gDevToolsBrowser = {
     let fragMenuItems = doc.createDocumentFragment();
 
     for (let toolDefinition of gDevTools.getToolDefinitionArray()) {
+      if (toolDefinition.id == "options") {
+        continue;
+      }
+
+      // Skip if the tool is disabled.
+      try {
+        if (!Services.prefs.getBoolPref(toolDefinition.visibilityswitch)) {
+          continue;
+        }
+      } catch(e) {}
+
       let elements = gDevToolsBrowser._createToolMenuElements(toolDefinition, doc);
 
       if (!elements) {
@@ -496,7 +552,7 @@ let gDevToolsBrowser = {
 
     let bc = doc.createElement("broadcaster");
     bc.id = "devtoolsMenuBroadcaster_" + id;
-    bc.setAttribute("label", toolDefinition.label);
+    bc.setAttribute("label", toolDefinition.menuLabel || toolDefinition.label);
     bc.setAttribute("command", cmd.id);
 
     if (key) {
@@ -532,8 +588,8 @@ let gDevToolsBrowser = {
     for (let win of gDevToolsBrowser._trackedBrowserWindows) {
 
       let hasToolbox = false;
-      if (TargetFactory.isKnownTab(win.gBrowser.selectedTab)) {
-        let target = TargetFactory.forTab(win.gBrowser.selectedTab);
+      if (devtools.TargetFactory.isKnownTab(win.gBrowser.selectedTab)) {
+        let target = devtools.TargetFactory.forTab(win.gBrowser.selectedTab);
         if (gDevTools._toolboxes.has(target)) {
           hasToolbox = true;
         }
@@ -551,7 +607,7 @@ let gDevToolsBrowser = {
   /**
    * Remove the menuitem for a tool to all open browser windows.
    *
-   * @param {object} toolId
+   * @param {string} toolId
    *        id of the tool to remove
    */
   _removeToolFromWindows: function DT_removeToolFromWindows(toolId) {
@@ -632,6 +688,9 @@ gDevTools.on("tool-registered", function(ev, toolId) {
 });
 
 gDevTools.on("tool-unregistered", function(ev, toolId) {
+  if (typeof toolId != "string") {
+    toolId = toolId.id;
+  }
   gDevToolsBrowser._removeToolFromWindows(toolId);
 });
 
@@ -639,3 +698,6 @@ gDevTools.on("toolbox-ready", gDevToolsBrowser._updateMenuCheckbox);
 gDevTools.on("toolbox-destroyed", gDevToolsBrowser._updateMenuCheckbox);
 
 Services.obs.addObserver(gDevToolsBrowser.destroy, "quit-application", false);
+
+// Load the browser devtools main module as the loader's main module.
+devtools.main("devtools/main");

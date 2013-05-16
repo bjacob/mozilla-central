@@ -8,7 +8,6 @@
 
 #include "JSONSpewer.h"
 #include "LIR.h"
-#include "TypeOracle.h"
 #include "MIR.h"
 #include "MIRGraph.h"
 #include "LinearScan.h"
@@ -177,13 +176,16 @@ JSONSpewer::init(const char *path)
 }
 
 void
-JSONSpewer::beginFunction(RawScript script)
+JSONSpewer::beginFunction(JSScript *script)
 {
     if (inFunction_)
         endFunction();
 
     beginObject();
-    stringProperty("name", "%s:%d", script->filename(), script->lineno);
+    if (script)
+        stringProperty("name", "%s:%d", script->filename(), script->lineno);
+    else
+        stringProperty("name", "asm.js compilation");
     beginListProperty("passes");
 
     inFunction_ = true;
@@ -199,6 +201,9 @@ JSONSpewer::beginPass(const char *pass)
 void
 JSONSpewer::spewMResumePoint(MResumePoint *rp)
 {
+    if (!rp)
+        return;
+
     beginObjectProperty("resumePoint");
 
     if (rp->caller())

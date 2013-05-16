@@ -385,6 +385,20 @@ CodeGeneratorX64::visitUInt32ToDouble(LUInt32ToDouble *lir)
 }
 
 bool
+CodeGeneratorX64::visitLoadTypedArrayElementStatic(LLoadTypedArrayElementStatic *ins)
+{
+    JS_NOT_REACHED("NYI");
+    return true;
+}
+
+bool
+CodeGeneratorX64::visitStoreTypedArrayElementStatic(LStoreTypedArrayElementStatic *ins)
+{
+    JS_NOT_REACHED("NYI");
+    return true;
+}
+
+bool
 CodeGeneratorX64::visitAsmJSLoadHeap(LAsmJSLoadHeap *ins)
 {
     MAsmJSLoadHeap *mir = ins->mir();
@@ -521,4 +535,16 @@ ParallelGetPropertyIC::initializeAddCacheState(LInstruction *ins, AddCacheState 
     // Can always use the scratch register on x64.
     JS_ASSERT(ins->isGetPropertyCacheV() || ins->isGetPropertyCacheT());
     addState->dispatchScratch = ScratchReg;
+}
+
+bool
+CodeGeneratorX64::visitTruncateDToInt32(LTruncateDToInt32 *ins)
+{
+    FloatRegister input = ToFloatRegister(ins->input());
+    Register output = ToRegister(ins->output());
+
+    // On x64, branchTruncateDouble uses cvttsd2sq. Unlike the x86
+    // implementation, this should handle most doubles and we can just
+    // call a stub if it fails.
+    return emitTruncateDouble(input, output);
 }

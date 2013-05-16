@@ -42,6 +42,8 @@ class LIRGeneratorARM : public LIRGeneratorShared
     bool lowerForFPU(LInstructionHelper<1, 2, 0> *ins, MDefinition *mir,
                      MDefinition *lhs, MDefinition *rhs);
 
+    bool lowerTruncateDToInt32(MTruncateToInt32 *ins);
+
     bool lowerConstantDouble(double d, MInstruction *ins);
     bool lowerDivI(MDiv *div);
     bool lowerModI(MMod *mod);
@@ -63,12 +65,14 @@ class LIRGeneratorARM : public LIRGeneratorShared
     bool visitReturn(MReturn *ret);
     bool lowerPhi(MPhi *phi);
     bool visitGuardShape(MGuardShape *ins);
+    bool visitGuardObjectType(MGuardObjectType *ins);
     bool visitStoreTypedArrayElement(MStoreTypedArrayElement *ins);
     bool visitStoreTypedArrayElementHole(MStoreTypedArrayElementHole *ins);
     bool visitAsmJSUnsignedToDouble(MAsmJSUnsignedToDouble *ins);
     bool visitAsmJSStoreHeap(MAsmJSStoreHeap *ins);
     bool visitAsmJSLoadFuncPtr(MAsmJSLoadFuncPtr *ins);
     bool visitInterruptCheck(MInterruptCheck *ins);
+    bool visitStoreTypedArrayElementStatic(MStoreTypedArrayElementStatic *ins);
 };
 
 typedef LIRGeneratorARM LIRGeneratorSpecific;

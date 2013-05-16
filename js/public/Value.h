@@ -321,6 +321,7 @@ typedef union jsval_layout
             int32_t        i32;
             uint32_t       u32;
             JSWhyMagic     why;
+            uintptr_t      word;
         } payload;
     } s;
     double asDouble;
@@ -923,13 +924,13 @@ class Value
 
     bool setNumber(double d) {
         int32_t i;
-        if (MOZ_DOUBLE_IS_INT32(d, &i)) {
+        if (mozilla::DoubleIsInt32(d, &i)) {
             setInt32(i);
             return true;
-        } else {
-            setDouble(d);
-            return false;
         }
+
+        setDouble(d);
+        return false;
     }
 
     void setObjectOrNull(JSObject *arg) {

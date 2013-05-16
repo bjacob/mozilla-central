@@ -8,6 +8,7 @@
 #include "nsContentCreatorFunctions.h"
 #include "nsContentList.h"
 #include "nsContentUtils.h"
+#include "nsCSSRenderingBorders.h"
 #include "nsFontMetrics.h"
 #include "nsFormControlFrame.h"
 #include "nsIContent.h"
@@ -25,6 +26,10 @@
 #include "prtypes.h"
 
 #include <algorithm>
+
+#ifdef ACCESSIBILITY
+#include "nsAccessibilityService.h"
+#endif
 
 #define LONG_SIDE_TO_SHORT_SIDE_RATIO 10
 
@@ -154,6 +159,59 @@ nsRangeFrame::AppendAnonymousContentTo(nsBaseContentList& aElements,
   aElements.MaybeAppendElement(mThumbDiv);
 }
 
+class nsDisplayRangeFocusRing : public nsDisplayItem
+{
+public:
+  nsDisplayRangeFocusRing(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
+    : nsDisplayItem(aBuilder, aFrame) {
+    MOZ_COUNT_CTOR(nsDisplayRangeFocusRing);
+  }
+#ifdef NS_BUILD_REFCNT_LOGGING
+  virtual ~nsDisplayRangeFocusRing() {
+    MOZ_COUNT_DTOR(nsDisplayRangeFocusRing);
+  }
+#endif
+  
+  virtual void Paint(nsDisplayListBuilder* aBuilder, nsRenderingContext* aCtx) MOZ_OVERRIDE;
+  NS_DISPLAY_DECL_NAME("RangeFocusRing", TYPE_OUTLINE)
+};
+
+void
+nsDisplayRangeFocusRing::Paint(nsDisplayListBuilder* aBuilder,
+                               nsRenderingContext* aCtx)
+{
+  nsPresContext *presContext = mFrame->PresContext();
+  nscoord appUnitsPerDevPixel = presContext->DevPixelsToAppUnits(1);
+  gfxContext* ctx = aCtx->ThebesContext();
+  nsRect r = nsRect(ToReferenceFrame(), mFrame->GetSize());
+  gfxRect pxRect(nsLayoutUtils::RectToGfxRect(r, appUnitsPerDevPixel));
+  uint8_t borderStyles[4] = { NS_STYLE_BORDER_STYLE_DOTTED,
+                              NS_STYLE_BORDER_STYLE_DOTTED,
+                              NS_STYLE_BORDER_STYLE_DOTTED,
+                              NS_STYLE_BORDER_STYLE_DOTTED };
+  gfxFloat borderWidths[4] = { 1, 1, 1, 1 };
+  gfxCornerSizes borderRadii(0);
+  nscolor borderColors[4] = { NS_RGB(0, 0, 0), NS_RGB(0, 0, 0),
+                              NS_RGB(0, 0, 0), NS_RGB(0, 0, 0) };
+  nsStyleContext* bgContext = mFrame->StyleContext();
+  nscolor bgColor =
+    bgContext->GetVisitedDependentColor(eCSSProperty_background_color);
+
+  ctx->Save();
+  nsCSSBorderRenderer br(appUnitsPerDevPixel,
+                         ctx,
+                         pxRect,
+                         borderStyles,
+                         borderWidths,
+                         borderRadii,
+                         borderColors,
+                         nullptr,
+                         0,
+                         bgColor);
+  br.DrawBorders();
+  ctx->Restore();
+}
+
 void
 nsRangeFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                const nsRect&           aDirtyRect,
@@ -175,6 +233,21 @@ nsRangeFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
   } else {
     BuildDisplayListForInline(aBuilder, aDirtyRect, aLists);
+  }
+
+  // Draw a focus outline if appropriate:
+  nsEventStates eventStates = mContent->AsElement()->State();
+  if (!eventStates.HasState(NS_EVENT_STATE_FOCUSRING) ||
+      eventStates.HasState(NS_EVENT_STATE_DISABLED)) {
+    return;
+  }
+  nsPresContext *presContext = PresContext();
+  const nsStyleDisplay *disp = StyleDisplay();
+  if ((!IsThemed(disp) ||
+       !presContext->GetTheme()->ThemeDrawsFocusForWidget(disp->mAppearance)) &&
+      IsVisibleForPainting(aBuilder)) {
+    aLists.Content()->AppendNewToTop(
+      new (aBuilder) nsDisplayRangeFocusRing(aBuilder, this));
   }
 }
 
@@ -349,6 +422,14 @@ nsRangeFrame::ReflowAnonymousContent(nsPresContext*           aPresContext,
   return NS_OK;
 }
 
+#ifdef ACCESSIBILITY
+a11y::AccType
+nsRangeFrame::AccessibleType()
+{
+  return a11y::eHTMLRangeType;
+}
+#endif
+
 double
 nsRangeFrame::GetValueAsFractionOfRange()
 {
@@ -357,13 +438,11 @@ nsRangeFrame::GetValueAsFractionOfRange()
 
   MOZ_ASSERT(input->GetType() == NS_FORM_INPUT_RANGE);
 
-  double value = input->GetValueAsDouble();
-  double minimum = input->GetMinimum();
-  double maximum = input->GetMaximum();
+  Decimal value = input->GetValueAsDecimal();
+  Decimal minimum = input->GetMinimum();
+  Decimal maximum = input->GetMaximum();
 
-  MOZ_ASSERT(MOZ_DOUBLE_IS_FINITE(value) &&
-             MOZ_DOUBLE_IS_FINITE(minimum) &&
-             MOZ_DOUBLE_IS_FINITE(maximum),
+  MOZ_ASSERT(value.isFinite() && minimum.isFinite() && maximum.isFinite(),
              "type=range should have a default maximum/minimum");
   
   if (maximum <= minimum) {
@@ -373,10 +452,10 @@ nsRangeFrame::GetValueAsFractionOfRange()
   
   MOZ_ASSERT(value >= minimum && value <= maximum, "Unsanitized value");
   
-  return (value - minimum) / (maximum - minimum);
+  return ((value - minimum) / (maximum - minimum)).toDouble();
 }
 
-double
+Decimal
 nsRangeFrame::GetValueAtEventPoint(nsGUIEvent* aEvent)
 {
   MOZ_ASSERT(aEvent->eventStructType == NS_MOUSE_EVENT ||
@@ -388,15 +467,14 @@ nsRangeFrame::GetValueAtEventPoint(nsGUIEvent* aEvent)
 
   MOZ_ASSERT(input->GetType() == NS_FORM_INPUT_RANGE);
 
-  double minimum = input->GetMinimum();
-  double maximum = input->GetMaximum();
-  MOZ_ASSERT(MOZ_DOUBLE_IS_FINITE(minimum) &&
-             MOZ_DOUBLE_IS_FINITE(maximum),
+  Decimal minimum = input->GetMinimum();
+  Decimal maximum = input->GetMaximum();
+  MOZ_ASSERT(minimum.isFinite() && maximum.isFinite(),
              "type=range should have a default maximum/minimum");
   if (maximum <= minimum) {
     return minimum;
   }
-  double range = maximum - minimum;
+  Decimal range = maximum - minimum;
 
   nsIntPoint absPoint;
   if (aEvent->eventStructType == NS_TOUCH_EVENT) {
@@ -411,7 +489,7 @@ nsRangeFrame::GetValueAtEventPoint(nsGUIEvent* aEvent)
 
   if (point == nsPoint(NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE)) {
     // We don't want to change the current value for this error state.
-    return GetValue();
+    return static_cast<dom::HTMLInputElement*>(mContent)->GetValueAsDecimal();
   }
 
   nsRect rangeContentRect = GetContentRectRelativeToSelf();
@@ -437,7 +515,7 @@ nsRangeFrame::GetValueAtEventPoint(nsGUIEvent* aEvent)
     }
   }
 
-  double fraction;
+  Decimal fraction;
   if (IsHorizontal()) {
     nscoord traversableDistance = rangeContentRect.width - thumbSize.width;
     if (traversableDistance <= 0) {
@@ -446,9 +524,9 @@ nsRangeFrame::GetValueAtEventPoint(nsGUIEvent* aEvent)
     nscoord posAtStart = rangeContentRect.x + thumbSize.width/2;
     nscoord posAtEnd = posAtStart + traversableDistance;
     nscoord posOfPoint = mozilla::clamped(point.x, posAtStart, posAtEnd);
-    fraction = (posOfPoint - posAtStart) / double(traversableDistance);
+    fraction = Decimal(posOfPoint - posAtStart) / traversableDistance;
     if (StyleVisibility()->mDirection == NS_STYLE_DIRECTION_RTL) {
-      fraction = 1.0 - fraction;
+      fraction = Decimal(1) - fraction;
     }
   } else {
     nscoord traversableDistance = rangeContentRect.height - thumbSize.height;
@@ -460,10 +538,10 @@ nsRangeFrame::GetValueAtEventPoint(nsGUIEvent* aEvent)
     nscoord posOfPoint = mozilla::clamped(point.y, posAtStart, posAtEnd);
     // For a vertical range, the top (posAtStart) is the highest value, so we
     // subtract the fraction from 1.0 to get that polarity correct.
-    fraction = 1.0 - (posOfPoint - posAtStart) / double(traversableDistance);
+    fraction = Decimal(1) - Decimal(posOfPoint - posAtStart) / traversableDistance;
   }
 
-  MOZ_ASSERT(fraction >= 0.0 && fraction <= 1.0);
+  MOZ_ASSERT(fraction >= 0 && fraction <= 1);
   return minimum + fraction * range;
 }
 
@@ -489,6 +567,14 @@ nsRangeFrame::UpdateForValueChange()
     // theming is applied, so we just repaint the entire range.
     InvalidateFrame();
   }
+
+#ifdef ACCESSIBILITY
+  nsAccessibilityService* accService = nsIPresShell::AccService();
+  if (accService) {
+    accService->RangeValueChanged(PresContext()->PresShell(), mContent);
+  }
+#endif
+
   SchedulePaint();
 }
 
@@ -703,19 +789,19 @@ nsRangeFrame::IsHorizontal(const nsSize *aFrameSizeOverride) const
 double
 nsRangeFrame::GetMin() const
 {
-  return static_cast<dom::HTMLInputElement*>(mContent)->GetMinimum();
+  return static_cast<dom::HTMLInputElement*>(mContent)->GetMinimum().toDouble();
 }
 
 double
 nsRangeFrame::GetMax() const
 {
-  return static_cast<dom::HTMLInputElement*>(mContent)->GetMaximum();
+  return static_cast<dom::HTMLInputElement*>(mContent)->GetMaximum().toDouble();
 }
 
 double
 nsRangeFrame::GetValue() const
 {
-  return static_cast<dom::HTMLInputElement*>(mContent)->GetValueAsDouble();
+  return static_cast<dom::HTMLInputElement*>(mContent)->GetValueAsDecimal().toDouble();
 }
 
 nsIAtom*

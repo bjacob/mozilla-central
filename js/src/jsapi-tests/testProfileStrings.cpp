@@ -42,7 +42,7 @@ static JSBool
 test_fn2(JSContext *cx, unsigned argc, jsval *vp)
 {
     jsval r;
-    JS::RootedObject global(cx, JS_GetGlobalObject(cx));
+    JS::RootedObject global(cx, JS_GetGlobalForScopeChain(cx));
     return JS_CallFunctionName(cx, global, "d", 0, NULL, &r);
 }
 
@@ -70,7 +70,7 @@ Prof(JSContext* cx, unsigned argc, jsval *vp)
     return JS_TRUE;
 }
 
-static JSFunctionSpec ptestFunctions[] = {
+static const JSFunctionSpec ptestFunctions[] = {
     JS_FS("test_fn", test_fn, 0, 0),
     JS_FS("test_fn2", test_fn2, 0, 0),
     JS_FS("enable", enable, 0, 0),
@@ -82,7 +82,7 @@ static JSObject*
 initialize(JSContext *cx)
 {
     js::SetRuntimeProfilingStack(cx->runtime, pstack, &psize, 10);
-    JS::RootedObject global(cx, JS_GetGlobalObject(cx));
+    JS::RootedObject global(cx, JS_GetGlobalForScopeChain(cx));
     return JS_InitClass(cx, global, NULL, &ptestClass, Prof, 0,
                         NULL, ptestFunctions, NULL, NULL);
 }

@@ -51,7 +51,7 @@ public:
   // TODO: Noone's implementing this anymore, should see if we need this.
   virtual GLenum GetTextureTarget() const { return LOCAL_GL_TEXTURE_2D; }
   virtual GLenum GetWrapMode() const = 0;// { return LOCAL_GL_CLAMP_TO_EDGE; } // default
-  virtual gfx3DMatrix GetTextureTransform() const { return gfx3DMatrix(); }
+  virtual gfx3DMatrix GetTextureTransform() { return gfx3DMatrix(); }
 };
 
 inline gl::ShaderProgramType
@@ -360,10 +360,7 @@ public:
              gfxASurface::CONTENT_COLOR;
   }
 
-  virtual gfx3DMatrix GetTextureTransform() const MOZ_OVERRIDE
-  {
-    return mTextureTransform;
-  }
+  virtual gfx3DMatrix GetTextureTransform() MOZ_OVERRIDE;
 
 #ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "SharedTextureHostOGL"; }
@@ -380,7 +377,6 @@ protected:
   gl::SharedTextureHandle mSharedHandle;
   gl::ShaderProgramType mShaderProgram;
   gl::GLContext::SharedTextureShareType mShareType;
-  gfx3DMatrix mTextureTransform;
 };
 
 class SurfaceStreamHostOGL : public TextureHost
@@ -547,6 +543,7 @@ class GrallocTextureHostOGL
 public:
   GrallocTextureHostOGL()
     : mGL(nullptr)
+    , mTextureTarget(0)
     , mGLTexture(0)
     , mEGLImage(0)
   {
@@ -575,6 +572,10 @@ public:
 
   gl::ShaderProgramType GetShaderProgram() const MOZ_OVERRIDE
   {
+    if (mTextureTarget == LOCAL_GL_TEXTURE_EXTERNAL) {
+      return gl::RGBAExternalLayerProgramType;
+    }
+    MOZ_ASSERT(mTextureTarget == LOCAL_GL_TEXTURE_2D);
     return mFormat == gfx::FORMAT_B8G8R8A8 || mFormat == gfx::FORMAT_B8G8R8X8
            ? gl::BGRALayerProgramType
            : gl::RGBALayerProgramType;
@@ -600,11 +601,32 @@ public:
     return this;
   }
 
+  // only overridden for hacky fix in gecko 23 for bug 862324
+  // see bug 865908 about fixing this.
+  virtual void SetBuffer(SurfaceDescriptor* aBuffer, ISurfaceAllocator* aAllocator) MOZ_OVERRIDE;
+
+  // used only for hacky fix in gecko 23 for bug 862324
+  virtual void ForgetBuffer()
+  {
+    if (mBuffer) {
+      // Intentionally don't destroy the actor held by mBuffer here.
+      // The point is that this is only called from GrallocBufferActor::ActorDestroy
+      // where we know that the actor is already being deleted.
+      // See bug 862324 comment 39.
+      delete mBuffer;
+      mBuffer = nullptr;
+    }
+
+    mGraphicBuffer = nullptr;
+    DeleteTextures();
+  }
+
 private:
   void DeleteTextures();
 
   RefPtr<gl::GLContext> mGL;
   android::sp<android::GraphicBuffer> mGraphicBuffer;
+  GLenum mTextureTarget;
   GLuint mGLTexture;
   EGLImage mEGLImage;
 };

@@ -24,7 +24,8 @@ class StringObject : public JSObject
      * Creates a new String object boxing the given string.  The object's
      * [[Prototype]] is determined from context.
      */
-    static inline StringObject *create(JSContext *cx, HandleString str);
+    static inline StringObject *create(JSContext *cx, HandleString str,
+                                       NewObjectKind newKind = GenericObject);
 
     JSString *unbox() const {
         return getFixedSlot(PRIMITIVE_VALUE_SLOT).toString();
@@ -59,7 +60,7 @@ class StringObject : public JSObject
      * encodes the initial length property. Return the shape after changing
      * this String object's last property to it.
      */
-    RawShape assignInitialShape(JSContext *cx);
+    Shape *assignInitialShape(JSContext *cx);
 };
 
 } // namespace js

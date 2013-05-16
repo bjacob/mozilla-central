@@ -8,7 +8,6 @@
 #define jsion_caches_h__
 
 #include "IonCode.h"
-#include "TypeOracle.h"
 #include "Registers.h"
 
 #include "vm/ForkJoin.h"
@@ -229,7 +228,7 @@ class IonCache
     LinkStatus linkCode(JSContext *cx, MacroAssembler &masm, IonScript *ion, IonCode **code);
     // Fixup variables and update jumps in the list of stubs.  Increment the
     // number of attached stubs accordingly.
-    void attachStub(MacroAssembler &masm, StubAttacher &attacher, IonCode *code);
+    void attachStub(MacroAssembler &masm, StubAttacher &attacher, Handle<IonCode *> code);
 
     // Combine both linkStub and attachStub into one function. In addition, it
     // produces a spew augmented with the attachKind string.
@@ -252,7 +251,7 @@ class IonCache
         idempotent_ = true;
     }
 
-    void setScriptedLocation(RawScript script, jsbytecode *pc) {
+    void setScriptedLocation(JSScript *script, jsbytecode *pc) {
         JS_ASSERT(!idempotent_);
         this->script = script;
         this->pc = pc;
@@ -497,6 +496,8 @@ class GetPropertyIC : public RepatchIonCache
     bool allowGetters_ : 1;
     bool hasArrayLengthStub_ : 1;
     bool hasTypedArrayLengthStub_ : 1;
+    bool hasStrictArgumentsLengthStub_ : 1;
+    bool hasNormalArgumentsLengthStub_ : 1;
 
   public:
     GetPropertyIC(RegisterSet liveRegs,
@@ -535,6 +536,9 @@ class GetPropertyIC : public RepatchIonCache
     bool hasTypedArrayLengthStub() const {
         return hasTypedArrayLengthStub_;
     }
+    bool hasArgumentsLengthStub(bool strict) const {
+        return strict ? hasStrictArgumentsLengthStub_ : hasNormalArgumentsLengthStub_;
+    }
 
     bool attachReadSlot(JSContext *cx, IonScript *ion, JSObject *obj, JSObject *holder,
                         HandleShape shape);
@@ -543,6 +547,7 @@ class GetPropertyIC : public RepatchIonCache
                           const SafepointIndex *safepointIndex, void *returnAddr);
     bool attachArrayLength(JSContext *cx, IonScript *ion, JSObject *obj);
     bool attachTypedArrayLength(JSContext *cx, IonScript *ion, JSObject *obj);
+    bool attachArgumentsLength(JSContext *cx, IonScript *ion, JSObject *obj);
 
     static bool update(JSContext *cx, size_t cacheIndex, HandleObject obj, MutableHandleValue vp);
 };
@@ -609,6 +614,8 @@ class GetElementIC : public RepatchIonCache
 
     bool monitoredResult_ : 1;
     bool hasDenseStub_ : 1;
+    bool hasStrictArgumentsStub_ : 1;
+    bool hasNormalArgumentsStub_ : 1;
 
     size_t failedUpdates_;
 
@@ -645,6 +652,9 @@ class GetElementIC : public RepatchIonCache
     bool hasDenseStub() const {
         return hasDenseStub_;
     }
+    bool hasArgumentsStub(bool strict) const {
+        return strict ? hasStrictArgumentsStub_ : hasNormalArgumentsStub_;
+    }
     void setHasDenseStub() {
         JS_ASSERT(!hasDenseStub());
         hasDenseStub_ = true;
@@ -653,6 +663,7 @@ class GetElementIC : public RepatchIonCache
     bool attachGetProp(JSContext *cx, IonScript *ion, HandleObject obj, const Value &idval, HandlePropertyName name);
     bool attachDenseElement(JSContext *cx, IonScript *ion, JSObject *obj, const Value &idval);
     bool attachTypedArrayElement(JSContext *cx, IonScript *ion, JSObject *obj, const Value &idval);
+    bool attachArgumentsElement(JSContext *cx, IonScript *ion, JSObject *obj);
 
     static bool
     update(JSContext *cx, size_t cacheIndex, HandleObject obj, HandleValue idval,

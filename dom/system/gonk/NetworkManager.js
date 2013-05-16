@@ -8,6 +8,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/FileUtils.jsm");
 
 const NETWORKMANAGER_CONTRACTID = "@mozilla.org/network/manager;1";
 const NETWORKMANAGER_CID =
@@ -31,10 +32,13 @@ const TOPIC_PREF_CHANGED             = "nsPref:changed";
 const TOPIC_XPCOM_SHUTDOWN           = "xpcom-shutdown";
 const PREF_MANAGE_OFFLINE_STATUS     = "network.gonk.manage-offline-status";
 
-// TODO, get USB RNDIS interface name automatically.(see Bug 776212)
+const POSSIBLE_USB_INTERFACE_NAME = "rndis0,usb0";
 const DEFAULT_USB_INTERFACE_NAME  = "rndis0";
 const DEFAULT_3G_INTERFACE_NAME   = "rmnet0";
 const DEFAULT_WIFI_INTERFACE_NAME = "wlan0";
+
+// The kernel's proc entry for network lists.
+const KERNEL_NETWORK_ENTRY = "/sys/class/net";
 
 const TETHERING_TYPE_WIFI = "WiFi";
 const TETHERING_TYPE_USB  = "USB";
@@ -149,6 +153,9 @@ function NetworkManager() {
   }
   Services.prefs.addObserver(PREF_MANAGE_OFFLINE_STATUS, this, false);
 
+  // Possible usb tethering interfaces for different gonk platform.
+  this.possibleInterface = POSSIBLE_USB_INTERFACE_NAME.split(",");
+
   // Default values for internal and external interfaces.
   this._tetheringInterface = Object.create(null);
   this._tetheringInterface[TETHERING_TYPE_USB] = {externalInterface: DEFAULT_3G_INTERFACE_NAME,
@@ -252,6 +259,10 @@ NetworkManager.prototype = {
                 network.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE_SUPL) {
               this.removeHostRoute(network);
             }
+            // Remove routing table in /proc/net/route
+            if (network.type == Ci.nsINetworkInterface.NETWORK_TYPE_WIFI) {
+              this.resetRoutingTable(this._activeInfo);
+            }
             // Abort ongoing captive portal detection on the wifi interface
             CaptivePortalDetectionHelper.notify(CaptivePortalDetectionHelper.EVENT_DISCONNECT, network);
             this.setAndConfigureActive();
@@ -347,6 +358,9 @@ NetworkManager.prototype = {
   active: null,
   _overriddenActive: null,
 
+  // Clone network info so we can still get information when network is disconnected
+  _activeInfo: null,
+
   overrideActive: function overrideActive(network) {
     this._overriddenActive = network;
     this.setAndConfigureActive();
@@ -394,6 +408,10 @@ NetworkManager.prototype = {
     debug("NetworkManager received message from worker: " + JSON.stringify(e.data));
     let response = e.data;
     let id = response.id;
+    if (id == 'broadcast') {
+      Services.obs.notifyObservers(null, response.topic, response.reason);
+      return;
+    }
     let callback = this.controlCallbacks[id];
     if (callback) {
       callback.call(this, response);
@@ -431,6 +449,7 @@ NetworkManager.prototype = {
 
     // Find a suitable network interface to activate.
     this.active = null;
+    this._activeInfo = Object.create(null);
     for each (let network in this.networkInterfaces) {
       if (network.state != Ci.nsINetworkInterface.NETWORK_STATE_CONNECTED) {
         continue;
@@ -439,6 +458,7 @@ NetworkManager.prototype = {
         defaultDataNetwork = network;
       }
       this.active = network;
+      this._activeInfo = {name:network.name, ip:network.ip, netmask:network.netmask};
       if (network.type == this.preferredNetworkType) {
         debug("Found our preferred type of network: " + network.name);
         break;
@@ -463,6 +483,16 @@ NetworkManager.prototype = {
     if (this._manageOfflineStatus) {
       Services.io.offline = !this.active;
     }
+  },
+
+  resetRoutingTable: function resetRoutingTable(network) {
+    let options = {
+      cmd: "removeNetworkRoute",
+      ifname: network.name,
+      ip : network.ip,
+      netmask: network.netmask,
+    };
+    this.worker.postMessage(options);
   },
 
   setDefaultRouteAndDNS: function setDefaultRouteAndDNS(oldInterface) {
@@ -838,10 +868,28 @@ NetworkManager.prototype = {
     this.controlMessage(params, this.usbTetheringResultReport);
   },
 
+  getUsbInterface: function getUsbInterface() {
+    // Find the rndis interface.
+    for (let i = 0; i < this.possibleInterface.length; i++) {
+      try {
+        let file = new FileUtils.File(KERNEL_NETWORK_ENTRY + "/" +
+                                      this.possibleInterface[i]);
+        if (file.IsDirectory()) {
+          return this.possibleInterface[i];
+        }
+      } catch (e) {
+        debug("Not " + this.possibleInterface[i] + " interface.");
+      }
+    }
+    debug("Can't find rndis interface in possible lists.");
+    return DEFAULT_USB_INTERFACE_NAME;
+  },
+
   enableUsbRndisResult: function enableUsbRndisResult(data) {
     let result = data.result;
     let enable = data.enable;
     if (result) {
+      this._tetheringInterface[TETHERING_TYPE_USB].internalInterface = this.getUsbInterface();
       this.setUSBTethering(enable, this._tetheringInterface[TETHERING_TYPE_USB]);
     } else {
       let params = {

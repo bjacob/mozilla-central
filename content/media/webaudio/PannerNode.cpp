@@ -15,14 +15,30 @@ namespace dom {
 
 using namespace std;
 
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(PannerNode)
+  if (tmp->Context()) {
+    tmp->Context()->UnregisterPannerNode(tmp);
+  }
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END_INHERITED(AudioNode)
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(PannerNode, AudioNode)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(PannerNode)
+NS_INTERFACE_MAP_END_INHERITING(AudioNode)
+
+NS_IMPL_ADDREF_INHERITED(PannerNode, AudioNode)
+NS_IMPL_RELEASE_INHERITED(PannerNode, AudioNode)
+
 class PannerNodeEngine : public AudioNodeEngine
 {
 public:
-  PannerNodeEngine()
+  explicit PannerNodeEngine(AudioNode* aNode)
+    : AudioNodeEngine(aNode)
     // Please keep these default values consistent with PannerNode::PannerNode below.
-    : mPanningModel(PanningModelTypeValues::HRTF)
+    , mPanningModel(PanningModelType::HRTF)
     , mPanningModelFunction(&PannerNodeEngine::HRTFPanningFunction)
-    , mDistanceModel(DistanceModelTypeValues::Inverse)
+    , mDistanceModel(DistanceModelType::Inverse)
     , mDistanceModelFunction(&PannerNodeEngine::InverseGainFunction)
     , mPosition()
     , mOrientation(1., 0., 0.)
@@ -46,27 +62,24 @@ public:
     case PannerNode::PANNING_MODEL:
       mPanningModel = PanningModelType(aParam);
       switch (mPanningModel) {
-        case PanningModelTypeValues::Equalpower:
+        case PanningModelType::Equalpower:
           mPanningModelFunction = &PannerNodeEngine::EqualPowerPanningFunction;
           break;
-        case PanningModelTypeValues::HRTF:
+        case PanningModelType::HRTF:
           mPanningModelFunction = &PannerNodeEngine::HRTFPanningFunction;
-          break;
-        case PanningModelTypeValues::Soundfield:
-          mPanningModelFunction = &PannerNodeEngine::SoundfieldPanningFunction;
           break;
       }
       break;
     case PannerNode::DISTANCE_MODEL:
       mDistanceModel = DistanceModelType(aParam);
       switch (mDistanceModel) {
-        case DistanceModelTypeValues::Inverse:
+        case DistanceModelType::Inverse:
           mDistanceModelFunction = &PannerNodeEngine::InverseGainFunction;
           break;
-        case DistanceModelTypeValues::Linear:
+        case DistanceModelType::Linear:
           mDistanceModelFunction = &PannerNodeEngine::LinearGainFunction;
           break;
-        case DistanceModelTypeValues::Exponential:
+        case DistanceModelType::Exponential:
           mDistanceModelFunction = &PannerNodeEngine::ExponentialGainFunction;
           break;
       }
@@ -128,7 +141,6 @@ public:
 
   void EqualPowerPanningFunction(const AudioChunk& aInput, AudioChunk* aOutput);
   void HRTFPanningFunction(const AudioChunk& aInput, AudioChunk* aOutput);
-  void SoundfieldPanningFunction(const AudioChunk& aInput, AudioChunk* aOutput);
 
   float LinearGainFunction(float aDistance);
   float InverseGainFunction(float aDistance);
@@ -158,10 +170,13 @@ public:
 };
 
 PannerNode::PannerNode(AudioContext* aContext)
-  : AudioNode(aContext)
+  : AudioNode(aContext,
+              2,
+              ChannelCountMode::Clamped_max,
+              ChannelInterpretation::Speakers)
   // Please keep these default values consistent with PannerNodeEngine::PannerNodeEngine above.
-  , mPanningModel(PanningModelTypeValues::HRTF)
-  , mDistanceModel(DistanceModelTypeValues::Inverse)
+  , mPanningModel(PanningModelType::HRTF)
+  , mDistanceModel(DistanceModelType::Inverse)
   , mPosition()
   , mOrientation(1., 0., 0.)
   , mVelocity()
@@ -172,7 +187,7 @@ PannerNode::PannerNode(AudioContext* aContext)
   , mConeOuterAngle(360.)
   , mConeOuterGain(0.)
 {
-  mStream = aContext->Graph()->CreateAudioNodeStream(new PannerNodeEngine(),
+  mStream = aContext->Graph()->CreateAudioNodeStream(new PannerNodeEngine(this),
                                                      MediaStreamGraph::INTERNAL_STREAM);
   // We should register once we have set up our stream and engine.
   Context()->Listener()->RegisterPannerNode(this);
@@ -183,11 +198,10 @@ PannerNode::~PannerNode()
   if (Context()) {
     Context()->UnregisterPannerNode(this);
   }
-  DestroyMediaStream();
 }
 
 JSObject*
-PannerNode::WrapObject(JSContext* aCx, JSObject* aScope)
+PannerNode::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
 {
   return PannerNodeBinding::Wrap(aCx, aScope, this);
 }
@@ -209,14 +223,6 @@ float
 PannerNodeEngine::ExponentialGainFunction(float aDistance)
 {
   return pow(aDistance / mRefDistance, -mRolloffFactor);
-}
-
-void
-PannerNodeEngine::SoundfieldPanningFunction(const AudioChunk& aInput,
-                                            AudioChunk* aOutput)
-{
-  // not implemented: noop
-  *aOutput = aInput;
 }
 
 void
@@ -278,8 +284,8 @@ PannerNodeEngine::EqualPowerPanningFunction(const AudioChunk& aInput,
   distanceGain = (this->*mDistanceModelFunction)(distance);
 
   // Actually compute the left and right gain.
-  gainL = cos(0.5 * M_PI * normalizedAzimuth);
-  gainR = sin(0.5 * M_PI * normalizedAzimuth);
+  gainL = cos(0.5 * M_PI * normalizedAzimuth) * aInput.mVolume;
+  gainR = sin(0.5 * M_PI * normalizedAzimuth) * aInput.mVolume;
 
   // Compute the output.
   if (inputChannels == 1) {
@@ -464,9 +470,6 @@ PannerNode::FindConnectedSources()
   mSources.Clear();
   std::set<AudioNode*> cycleSet;
   FindConnectedSources(this, mSources, cycleSet);
-  for (unsigned i = 0; i < mSources.Length(); i++) {
-    mSources[i]->RegisterPannerNode(this);
-  }
 }
 
 void

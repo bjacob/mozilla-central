@@ -371,6 +371,8 @@ private:
     transferMultipleByRunsImpl(FloatRegisterSet set, LoadStore ls,
                                Register rm, DTMMode mode, int32_t sign)
     {
+        JS_ASSERT(sign == 1 || sign == -1);
+
         int32_t delta = sign * sizeof(double);
         int32_t offset = 0;
         RegisterIterator iter(set);
@@ -384,7 +386,7 @@ private:
             finishFloatTransfer();
         }
 
-        JS_ASSERT(offset == set.size() * sizeof(double) * sign);
+        JS_ASSERT(offset == static_cast<int32_t>(set.size() * sizeof(double)) * sign);
         return offset;
     }
 };
@@ -640,11 +642,19 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     Condition testPrimitive(Condition cond, const Register &tag);
 
     Condition testGCThing(Condition cond, const Address &address);
-    Condition testGCThing(Condition cond, const BaseIndex &address);
     Condition testMagic(Condition cond, const Address &address);
-    Condition testMagic(Condition cond, const BaseIndex &address);
     Condition testInt32(Condition cond, const Address &address);
     Condition testDouble(Condition cond, const Address &address);
+
+    Condition testUndefined(Condition cond, const BaseIndex &src);
+    Condition testNull(Condition cond, const BaseIndex &src);
+    Condition testBoolean(Condition cond, const BaseIndex &src);
+    Condition testString(Condition cond, const BaseIndex &src);
+    Condition testInt32(Condition cond, const BaseIndex &src);
+    Condition testObject(Condition cond, const BaseIndex &src);
+    Condition testDouble(Condition cond, const BaseIndex &src);
+    Condition testMagic(Condition cond, const BaseIndex &src);
+    Condition testGCThing(Condition cond, const BaseIndex &src);
 
     template <typename T>
     void branchTestGCThing(Condition cond, const T &t, Label *label) {
@@ -804,6 +814,17 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         cond = testMagic(cond, t);
         ma_b(label, cond);
     }
+    void branchTestMagicValue(Condition cond, const ValueOperand &val, JSWhyMagic why,
+                              Label *label) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        // Test for magic
+        Label notmagic;
+        Condition testCond = testMagic(cond, val);
+        ma_b(&notmagic, InvertCondition(testCond));
+        // Test magic value
+        branch32(cond, val.payloadReg(), Imm32(static_cast<int32_t>(why)), label);
+        bind(&notmagic);
+    }
     template<typename T>
     void branchTestBooleanTruthy(bool b, const T & t, Label *label) {
         Condition c = testBooleanTruthy(b, t);
@@ -831,6 +852,9 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     }
     void branchTestPtr(Condition cond, const Register &lhs, const Imm32 rhs, Label *label) {
         branchTest32(cond, lhs, rhs, label);
+    }
+    void branchTestPtr(Condition cond, const Address &lhs, Imm32 imm, Label *label) {
+        branchTest32(cond, lhs, imm, label);
     }
     void branchPtr(Condition cond, Register lhs, Register rhs, Label *label) {
         branch32(cond, lhs, rhs, label);
@@ -876,6 +900,11 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
         ma_b(label, cond);
     }
     void branch32(Condition cond, const AbsoluteAddress &lhs, Imm32 rhs, Label *label) {
+        loadPtr(lhs, secondScratchReg_); // ma_cmp will use the scratch register.
+        ma_cmp(secondScratchReg_, rhs);
+        ma_b(label, cond);
+    }
+    void branch32(Condition cond, const AbsoluteAddress &lhs, const Register &rhs, Label *label) {
         loadPtr(lhs, secondScratchReg_); // ma_cmp will use the scratch register.
         ma_cmp(secondScratchReg_, rhs);
         ma_b(label, cond);

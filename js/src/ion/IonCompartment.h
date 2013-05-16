@@ -197,6 +197,14 @@ class IonCompartment
     // Allocated space for optimized baseline stubs.
     OptimizedICStubSpace optimizedStubSpace_;
 
+    // Stub to concatenate two strings inline. Note that it can't be
+    // stored in IonRuntime because masm.newGCString bakes in zone-specific
+    // pointers. This has to be a weak pointer to avoid keeping the whole
+    // compartment alive.
+    ReadBarriered<IonCode> stringConcatStub_;
+
+    IonCode *generateStringConcatStub(JSContext *cx);
+
   public:
     IonCode *getVMWrapper(const VMFunction &f);
 
@@ -234,6 +242,9 @@ class IonCompartment
     ~IonCompartment();
 
     bool initialize(JSContext *cx);
+
+    // Initialize code stubs only used by Ion, not Baseline.
+    bool ensureIonStubsExist(JSContext *cx);
 
     void mark(JSTracer *trc, JSCompartment *compartment);
     void sweep(FreeOp *fop);
@@ -284,6 +295,10 @@ class IonCompartment
         return rt->debugTrapHandler(cx);
     }
 
+    IonCode *stringConcatStub() {
+        return stringConcatStub_;
+    }
+
     AutoFlushCache *flusher() {
         return rt->flusher();
     }
@@ -309,7 +324,7 @@ class IonActivation
     JSContext *prevIonJSContext_;
 
     // When creating an activation without a StackFrame, this field is used
-    // to communicate the calling pc for StackIter.
+    // to communicate the calling pc for ScriptFrameIter.
     jsbytecode *prevpc_;
 
   public:
@@ -374,7 +389,7 @@ class IonActivation
 
 // Called from JSCompartment::discardJitCode().
 void InvalidateAll(FreeOp *fop, JS::Zone *zone);
-void FinishInvalidation(FreeOp *fop, RawScript script);
+void FinishInvalidation(FreeOp *fop, JSScript *script);
 
 } // namespace ion
 } // namespace js

@@ -202,9 +202,7 @@ gfxFontEntry::FindOrMakeFont(const gfxFontStyle *aStyle, bool aNeedsBold)
         font = newFont;
         gfxFontCache::GetCache()->AddNew(font);
     }
-    gfxFont *f = nullptr;
-    font.swap(f);
-    return f;
+    return font.forget();
 }
 
 bool
@@ -1255,9 +1253,8 @@ gfxFontCache::Lookup(const gfxFontEntry *aFontEntry,
     if (!entry)
         return nullptr;
 
-    gfxFont *font = entry->mFont;
-    NS_ADDREF(font);
-    return font;
+    nsRefPtr<gfxFont> font = entry->mFont;
+    return font.forget();
 }
 
 void
@@ -1375,17 +1372,111 @@ gfxFontCache::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
     SizeOfExcludingThis(aMallocSizeOf, aSizes);
 }
 
+#define MAX_SSXX_VALUE 99
+#define MAX_CVXX_VALUE 99
+
+static void
+LookupAlternateValues(gfxFontFeatureValueSet *featureLookup,
+                      const nsAString& aFamily,
+                      const nsTArray<gfxAlternateValue>& altValue,
+                      nsTArray<gfxFontFeature>& aFontFeatures)
+{
+    uint32_t numAlternates = altValue.Length();
+    for (uint32_t i = 0; i < numAlternates; i++) {
+        const gfxAlternateValue& av = altValue.ElementAt(i);
+        nsAutoTArray<uint32_t,4> values;
+
+        // map <family, name, feature> ==> <values>
+        bool found =
+            featureLookup->GetFontFeatureValuesFor(aFamily, av.alternate,
+                                                   av.value, values);
+        uint32_t numValues = values.Length();
+
+        // nothing defined, skip
+        if (!found || numValues == 0) {
+            continue;
+        }
+
+        gfxFontFeature feature;
+        if (av.alternate == NS_FONT_VARIANT_ALTERNATES_CHARACTER_VARIANT) {
+            NS_ASSERTION(numValues <= 2,
+                         "too many values allowed for character-variant");
+            // character-variant(12 3) ==> 'cv12' = 3
+            uint32_t nn = values.ElementAt(0);
+            // ignore values greater than 99
+            if (nn == 0 || nn > MAX_CVXX_VALUE) {
+                continue;
+            }
+            feature.mValue = 1;
+            if (numValues > 1) {
+                feature.mValue = values.ElementAt(1);
+            }
+            feature.mTag = HB_TAG('c','v',('0' + nn / 10), ('0' + nn % 10));
+            aFontFeatures.AppendElement(feature);
+
+        } else if (av.alternate == NS_FONT_VARIANT_ALTERNATES_STYLESET) {
+            // styleset(1 2 7) ==> 'ss01' = 1, 'ss02' = 1, 'ss07' = 1
+            feature.mValue = 1;
+            for (uint32_t v = 0; v < numValues; v++) {
+                uint32_t nn = values.ElementAt(v);
+                if (nn == 0 || nn > MAX_SSXX_VALUE) {
+                    continue;
+                }
+                feature.mTag = HB_TAG('s','s',('0' + nn / 10), ('0' + nn % 10));
+                aFontFeatures.AppendElement(feature);
+            }
+
+        } else {
+            NS_ASSERTION(numValues == 1,
+                   "too many values for font-specific font-variant-alternates");
+            feature.mValue = values.ElementAt(0);
+
+            switch (av.alternate) {
+                case NS_FONT_VARIANT_ALTERNATES_STYLISTIC:  // salt
+                    feature.mTag = HB_TAG('s','a','l','t');
+                    break;
+                case NS_FONT_VARIANT_ALTERNATES_SWASH:  // swsh, cswh
+                    feature.mTag = HB_TAG('s','w','s','h');
+                    aFontFeatures.AppendElement(feature);
+                    feature.mTag = HB_TAG('c','s','w','h');
+                    break;
+                case NS_FONT_VARIANT_ALTERNATES_ORNAMENTS: // ornm
+                    feature.mTag = HB_TAG('o','r','n','m');
+                    break;
+                case NS_FONT_VARIANT_ALTERNATES_ANNOTATION: // nalt
+                    feature.mTag = HB_TAG('n','a','l','t');
+                    break;
+                default:
+                    feature.mTag = 0;
+                    break;
+            }
+
+            NS_ASSERTION(feature.mTag, "unsupported alternate type");
+            if (!feature.mTag) {
+                continue;
+            }
+            aFontFeatures.AppendElement(feature);
+        }
+    }
+}
+
 /* static */ bool
 gfxFontShaper::MergeFontFeatures(
-    const nsTArray<gfxFontFeature>& aStyleRuleFeatures,
+    const gfxFontStyle *aStyle,
     const nsTArray<gfxFontFeature>& aFontFeatures,
     bool aDisableLigatures,
+    const nsAString& aFamilyName,
     nsDataHashtable<nsUint32HashKey,uint32_t>& aMergedFeatures)
 {
+    uint32_t numAlts = aStyle->alternateValues.Length();
+    const nsTArray<gfxFontFeature>& styleRuleFeatures =
+        aStyle->featureSettings;
+
     // bail immediately if nothing to do
-    if (aStyleRuleFeatures.IsEmpty() &&
+    if (styleRuleFeatures.IsEmpty() &&
         aFontFeatures.IsEmpty() &&
-        !aDisableLigatures) {
+        !aDisableLigatures &&
+        numAlts == 0) {
         return false;
     }
 
@@ -1407,10 +1498,25 @@ gfxFontShaper::MergeFontFeatures(
         aMergedFeatures.Put(feature.mTag, feature.mValue);
     }
 
+    // add font-specific feature values from style rules
+    if (aStyle->featureValueLookup && numAlts > 0) {
+        nsAutoTArray<gfxFontFeature,4> featureList;
+
+        // insert list of alternate feature settings
+        LookupAlternateValues(aStyle->featureValueLookup, aFamilyName,
+                              aStyle->alternateValues, featureList);
+
+        count = featureList.Length();
+        for (i = 0; i < count; i++) {
+            const gfxFontFeature& feature = featureList.ElementAt(i);
+            aMergedFeatures.Put(feature.mTag, feature.mValue);
+        }
+    }
+
     // add feature values from style rules
-    count = aStyleRuleFeatures.Length();
+    count = styleRuleFeatures.Length();
     for (i = 0; i < count; i++) {
-        const gfxFontFeature& feature = aStyleRuleFeatures.ElementAt(i);
+        const gfxFontFeature& feature = styleRuleFeatures.ElementAt(i);
         aMergedFeatures.Put(feature.mTag, feature.mValue);
     }
 
@@ -4395,11 +4501,10 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh,
     bool isVarSelector = gfxFontUtils::IsVarSelector(aCh);
 
     if (!isJoinControl && !wasJoinCauser && !isVarSelector) {
-        gfxFont *firstFont = mFonts[0].Font();
+        nsRefPtr<gfxFont> firstFont = mFonts[0].Font();
         if (firstFont->HasCharacter(aCh)) {
             *aMatchType = gfxTextRange::kFontGroup;
-            firstFont->AddRef();
-            return firstFont;
+            return firstFont.forget();
         }
         // It's possible that another font in the family (e.g. regular face,
         // where the requested style was italic) will support the character
@@ -4418,16 +4523,16 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh,
         // actually be rendered (see bug 716229)
         uint8_t category = GetGeneralCategory(aCh);
         if (category == HB_UNICODE_GENERAL_CATEGORY_CONTROL) {
-            aPrevMatchedFont->AddRef();
-            return aPrevMatchedFont;
+            nsRefPtr<gfxFont> ret = aPrevMatchedFont;
+            return ret.forget();
         }
 
         // if this character is a join-control or the previous is a join-causer,
         // use the same font as the previous range if we can
         if (isJoinControl || wasJoinCauser) {
             if (aPrevMatchedFont->HasCharacter(aCh)) {
-                aPrevMatchedFont->AddRef();
-                return aPrevMatchedFont;
+                nsRefPtr<gfxFont> ret = aPrevMatchedFont;
+                return ret.forget();
             }
         }
     }
@@ -4437,8 +4542,8 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh,
     // otherwise the text run will be divided.
     if (isVarSelector) {
         if (aPrevMatchedFont) {
-            aPrevMatchedFont->AddRef();
-            return aPrevMatchedFont;
+            nsRefPtr<gfxFont> ret = aPrevMatchedFont;
+            return ret.forget();
         }
         // VS alone. it's meaningless to search different fonts
         return nullptr;
@@ -4475,8 +4580,8 @@ gfxFontGroup::FindFontForChar(uint32_t aCh, uint32_t aPrevCh,
     // -- before searching for something else check the font used for the previous character
     if (aPrevMatchedFont && aPrevMatchedFont->HasCharacter(aCh)) {
         *aMatchType = gfxTextRange::kSystemFallback;
-        aPrevMatchedFont->AddRef();
-        return aPrevMatchedFont;
+        nsRefPtr<gfxFont> ret = aPrevMatchedFont;
+        return ret.forget();
     }
 
     // never fall back for characters from unknown scripts
@@ -4637,7 +4742,7 @@ struct PrefFontCallbackData {
 already_AddRefed<gfxFont>
 gfxFontGroup::WhichPrefFontSupportsChar(uint32_t aCh)
 {
-    gfxFont *font;
+    nsRefPtr<gfxFont> font;
 
     // get the pref font list if it hasn't been set up already
     uint32_t unicodeRange = FindCharUnicodeRange(aCh);
@@ -4647,8 +4752,7 @@ gfxFontGroup::WhichPrefFontSupportsChar(uint32_t aCh)
     if (mLastPrefFont && charLang == mLastPrefLang &&
         mLastPrefFirstFont && mLastPrefFont->HasCharacter(aCh)) {
         font = mLastPrefFont;
-        NS_ADDREF(font);
-        return font;
+        return font.forget();
     }
 
     // based on char lang and page lang, set up list of pref lang fonts to check
@@ -4686,8 +4790,7 @@ gfxFontGroup::WhichPrefFontSupportsChar(uint32_t aCh)
             // pref font lookups
             if (family == mLastPrefFamily && mLastPrefFont->HasCharacter(aCh)) {
                 font = mLastPrefFont;
-                NS_ADDREF(font);
-                return font;
+                return font.forget();
             }
 
             bool needsBold;
@@ -4778,8 +4881,8 @@ gfxFontStyle::gfxFontStyle(uint8_t aStyle, uint16_t aWeight, int16_t aStretch,
     systemFont(aSystemFont), printerFont(aPrinterFont),
     style(aStyle)
 {
-    MOZ_ASSERT(!MOZ_DOUBLE_IS_NaN(size));
-    MOZ_ASSERT(!MOZ_DOUBLE_IS_NaN(sizeAdjust));
+    MOZ_ASSERT(!mozilla::IsNaN(size));
+    MOZ_ASSERT(!mozilla::IsNaN(sizeAdjust));
 
     if (weight > 900)
         weight = 900;
@@ -4802,6 +4905,7 @@ gfxFontStyle::gfxFontStyle(uint8_t aStyle, uint16_t aWeight, int16_t aStretch,
 
 gfxFontStyle::gfxFontStyle(const gfxFontStyle& aStyle) :
     language(aStyle.language),
+    featureValueLookup(aStyle.featureValueLookup),
     size(aStyle.size), sizeAdjust(aStyle.sizeAdjust),
     languageOverride(aStyle.languageOverride),
     weight(aStyle.weight), stretch(aStyle.stretch),
@@ -4809,6 +4913,7 @@ gfxFontStyle::gfxFontStyle(const gfxFontStyle& aStyle) :
     style(aStyle.style)
 {
     featureSettings.AppendElements(aStyle.featureSettings);
+    alternateValues.AppendElements(aStyle.alternateValues);
 }
 
 int8_t

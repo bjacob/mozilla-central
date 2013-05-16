@@ -52,4 +52,10 @@ python/psutil/*.so
 python/psutil/*.pyd
 python/psutil/build/
 
+<<<<<<< HEAD
 .gdb_history
+=======
+# Ignore chrome.manifest files from the devtools loader
+browser/devtools/chrome.manifest
+toolkit/devtools/chrome.manifest
+>>>>>>> adc73cab7eb6aaca9b275e6127497f02a2bd34c2

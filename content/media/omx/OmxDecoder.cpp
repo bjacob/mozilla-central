@@ -12,6 +12,7 @@
 #include <stagefright/MetaData.h>
 #include <stagefright/OMXClient.h>
 #include <stagefright/OMXCodec.h>
+#include <OMX.h>
 
 #include "mozilla/Preferences.h"
 #include "mozilla/Types.h"
@@ -39,8 +40,8 @@ VideoGraphicBuffer::VideoGraphicBuffer(const android::wp<android::OmxDecoder> aO
                                        android::MediaBuffer *aBuffer,
                                        SurfaceDescriptor *aDescriptor)
   : GraphicBufferLocked(*aDescriptor),
-    mOmxDecoder(aOmxDecoder),
-    mMediaBuffer(aBuffer)
+    mMediaBuffer(aBuffer),
+    mOmxDecoder(aOmxDecoder)
 {
   mMediaBuffer->add_ref();
 }
@@ -74,7 +75,7 @@ namespace android {
 
 MediaStreamSource::MediaStreamSource(MediaResource *aResource,
                                      AbstractMediaDecoder *aDecoder) :
-  mDecoder(aDecoder), mResource(aResource)
+  mResource(aResource), mDecoder(aDecoder)
 {
 }
 
@@ -127,8 +128,8 @@ using namespace android;
 
 OmxDecoder::OmxDecoder(MediaResource *aResource,
                        AbstractMediaDecoder *aDecoder) :
-  mResource(aResource),
   mDecoder(aDecoder),
+  mResource(aResource),
   mVideoWidth(0),
   mVideoHeight(0),
   mVideoColorFormat(0),
@@ -141,8 +142,8 @@ OmxDecoder::OmxDecoder(MediaResource *aResource,
   mVideoBuffer(nullptr),
   mAudioBuffer(nullptr),
   mIsVideoSeeking(false),
-  mPaused(false),
-  mAudioMetadataRead(false)
+  mAudioMetadataRead(false),
+  mPaused(false)
 {
 }
 
@@ -170,6 +171,14 @@ public:
     mMediaSource->stop();
   }
 };
+
+static sp<IOMX> sOMX = nullptr;
+static sp<IOMX> GetOMX() {
+  if(sOMX.get() == nullptr) {
+    sOMX = new OMX;
+    }
+  return sOMX;
+}
 
 bool OmxDecoder::Init() {
 #ifdef PR_LOGGING
@@ -234,7 +243,7 @@ bool OmxDecoder::Init() {
   // OMXClient::connect() always returns OK and abort's fatally if
   // it can't connect.
   OMXClient client;
-  status_t err = client.connect();
+  DebugOnly<status_t> err = client.connect();
   NS_ASSERTION(err == OK, "Failed to connect to OMX in mediaserver.");
   sp<IOMX> omx = client.interface();
 
@@ -247,6 +256,13 @@ bool OmxDecoder::Init() {
     // for (h.264).  So if we don't get a hardware decoder, just give
     // up.
     int flags = kHardwareCodecsOnly;
+
+    char propQemu[PROPERTY_VALUE_MAX];
+    property_get("ro.kernel.qemu", propQemu, "");
+    if (!strncmp(propQemu, "1", 1)) {
+      // If we are in emulator, allow to fall back to software.
+      flags = 0;
+    }
     videoSource = OMXCodec::Create(omx,
                                    videoTrack->getFormat(),
                                    false, // decoder
@@ -297,14 +313,28 @@ bool OmxDecoder::Init() {
     if (!strcasecmp(audioMime, "audio/raw")) {
       audioSource = audioTrack;
     } else {
+      // try to load hardware codec in mediaserver process.
+      int flags = kHardwareCodecsOnly;
       audioSource = OMXCodec::Create(omx,
                                      audioTrack->getFormat(),
                                      false, // decoder
-                                     audioTrack);
+                                     audioTrack,
+                                     nullptr,
+                                     flags);
     }
     if (audioSource == nullptr) {
-      NS_WARNING("Couldn't create OMX audio source");
-      return false;
+      // try to load software codec in this process.
+      int flags = kSoftwareCodecsOnly;
+      audioSource = OMXCodec::Create(GetOMX(),
+                                     audioTrack->getFormat(),
+                                     false, // decoder
+                                     audioTrack,
+                                     nullptr,
+                                     flags);
+      if (audioSource == nullptr) {
+        NS_WARNING("Couldn't create OMX audio source");
+        return false;
+      }
     }
     if (audioSource->start() != OK) {
       NS_WARNING("Couldn't start OMX audio source");
@@ -512,7 +542,6 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
 
   if (err == OK && mVideoBuffer->range_length() > 0) {
     int64_t timeUs;
-    int64_t durationUs;
     int32_t unreadable;
     int32_t keyFrame;
 
@@ -545,7 +574,6 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
       aFrame->mGraphicBuffer = new mozilla::layers::VideoGraphicBuffer(this, mVideoBuffer, &newDescriptor);
       aFrame->mRotation = mVideoRotation;
       aFrame->mTimeUs = timeUs;
-      aFrame->mEndTimeUs = timeUs + durationUs;
       aFrame->mKeyFrame = keyFrame;
       aFrame->Y.mWidth = mVideoWidth;
       aFrame->Y.mHeight = mVideoHeight;
@@ -560,8 +588,6 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
       if (!ToVideoFrame(aFrame, timeUs, data, length, keyFrame)) {
         return false;
       }
-
-      aFrame->mEndTimeUs = timeUs + durationUs;
     }
 
     if (aKeyframeSkip && timeUs < aTimeUs) {
@@ -583,6 +609,9 @@ bool OmxDecoder::ReadVideo(VideoFrame *aFrame, int64_t aTimeUs,
   else if (err == UNKNOWN_ERROR) {
     // This sometimes is used to mean "out of memory", but regardless,
     // don't keep trying to decode if the decoder doesn't want to.
+    return false;
+  }
+  else if (err != OK && err != -ETIMEDOUT) {
     return false;
   }
 
@@ -636,6 +665,9 @@ bool OmxDecoder::ReadAudio(AudioFrame *aFrame, int64_t aSeekTimeUs)
     }
   }
   else if (err == UNKNOWN_ERROR) {
+    return false;
+  }
+  else if (err != OK && err != -ETIMEDOUT) {
     return false;
   }
 
@@ -696,3 +728,4 @@ void OmxDecoder::Pause() {
   }
   mPaused = true;
 }
+

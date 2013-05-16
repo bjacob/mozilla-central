@@ -11,11 +11,11 @@
 
 #include "nsCSSFrameConstructor.h"
 
+#include "mozilla/AutoRestore.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/dom/HTMLSelectElement.h"
 #include "mozilla/Likely.h"
 #include "mozilla/LinkedList.h"
-
 #include "nsAbsoluteContainingBlock.h"
 #include "nsCRT.h"
 #include "nsIAtom.h"
@@ -92,6 +92,7 @@
 #include "nsAnimationManager.h"
 #include "nsTransitionManager.h"
 #include "nsSVGIntegrationUtils.h"
+#include "nsViewportFrame.h"
 #include <algorithm>
 
 #ifdef MOZ_XUL
@@ -791,7 +792,12 @@ public:
   // logic in GetAbsoluteContainingBlock.
   // Also makes aNewAbsoluteContainingBlock the containing block for
   // fixed-pos elements if necessary.
+  // aPositionedFrame is the frame whose style actually makes
+  // aNewAbsoluteContainingBlock a containing block. E.g. for a scrollable element
+  // aPositionedFrame is the element's primary frame and
+  // aNewAbsoluteContainingBlock is the scrolled frame.
   void PushAbsoluteContainingBlock(nsIFrame* aNewAbsoluteContainingBlock,
+                                   nsIFrame* aPositionedFrame,
                                    nsFrameConstructorSaveState& aSaveState);
 
   // Function to push the existing float containing block state and
@@ -1029,6 +1035,7 @@ AdjustAbsoluteContainingBlock(nsIFrame* aContainingBlockIn)
 
 void
 nsFrameConstructorState::PushAbsoluteContainingBlock(nsIFrame* aNewAbsoluteContainingBlock,
+                                                     nsIFrame* aPositionedFrame,
                                                      nsFrameConstructorSaveState& aSaveState)
 {
   aSaveState.mItems = &mAbsoluteItems;
@@ -1044,14 +1051,14 @@ nsFrameConstructorState::PushAbsoluteContainingBlock(nsIFrame* aNewAbsoluteConta
     mFixedItems = mAbsoluteItems;
   }
 
-  mAbsoluteItems = 
+  mAbsoluteItems =
     nsAbsoluteItems(AdjustAbsoluteContainingBlock(aNewAbsoluteContainingBlock));
 
   /* See if we're wiring the fixed-pos and abs-pos lists together.  This happens iff
    * we're a transformed element.
    */
-  mFixedPosIsAbsPos = aNewAbsoluteContainingBlock &&
-    aNewAbsoluteContainingBlock->StyleDisplay()->HasTransform(aNewAbsoluteContainingBlock);
+  mFixedPosIsAbsPos = aPositionedFrame &&
+      aPositionedFrame->StyleDisplay()->HasTransform(aPositionedFrame);
 
   if (aNewAbsoluteContainingBlock) {
     aNewAbsoluteContainingBlock->MarkAsAbsoluteContainingBlock();
@@ -1409,6 +1416,7 @@ nsCSSFrameConstructor::nsCSSFrameConstructor(nsIDocument *aDocument,
   , mDocElementContainingBlock(nullptr)
   , mGfxScrollFrame(nullptr)
   , mPageSequenceFrame(nullptr)
+  , mCurrentDepth(0)
   , mUpdateCount(0)
   , mQuotesDirty(false)
   , mCountersDirty(false)
@@ -1421,13 +1429,12 @@ nsCSSFrameConstructor::nsCSSFrameConstructor(nsIDocument *aDocument,
   , mRebuildAllExtraHint(nsChangeHint(0))
   , mAnimationGeneration(0)
   , mPendingRestyles(ELEMENT_HAS_PENDING_RESTYLE |
-                     ELEMENT_IS_POTENTIAL_RESTYLE_ROOT, this)
+                     ELEMENT_IS_POTENTIAL_RESTYLE_ROOT)
   , mPendingAnimationRestyles(ELEMENT_HAS_PENDING_ANIMATION_RESTYLE |
-                              ELEMENT_IS_POTENTIAL_ANIMATION_RESTYLE_ROOT, this)
+                              ELEMENT_IS_POTENTIAL_ANIMATION_RESTYLE_ROOT)
 {
-  // XXXbz this should be in Init() or something!
-  mPendingRestyles.Init();
-  mPendingAnimationRestyles.Init();
+  mPendingRestyles.Init(this);
+  mPendingAnimationRestyles.Init(this);
 
 #ifdef DEBUG
   static bool gFirstTime = true;
@@ -1590,7 +1597,7 @@ nsCSSFrameConstructor::CreateGeneratedContent(nsFrameConstructorState& aState,
         nsAutoString  nameSpaceVal;
         contentString.Left(nameSpaceVal, barIndex);
         nsresult error;
-        attrNameSpace = nameSpaceVal.ToInteger(&error, 10);
+        attrNameSpace = nameSpaceVal.ToInteger(&error);
         contentString.Cut(0, barIndex + 1);
         if (contentString.Length()) {
           if (mDocument->IsHTML() && aParentContent->IsHTML()) {
@@ -1955,7 +1962,7 @@ nsCSSFrameConstructor::ConstructTable(nsFrameConstructorState& aState,
        (display->HasTransformStyle() &&
         aParentFrame->IsFrameOfType(nsIFrame::eSupportsCSSTransforms))) &&
       !aParentFrame->IsSVGText()) {
-    aState.PushAbsoluteContainingBlock(newFrame, absoluteSaveState);
+    aState.PushAbsoluteContainingBlock(newFrame, newFrame, absoluteSaveState);
   }
   if (aItem.mFCData->mBits & FCDATA_USE_CHILD_ITEMS) {
     ConstructFramesFromItemList(aState, aItem.mChildItems,
@@ -2357,6 +2364,7 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
     // the root element
     mDocElementContainingBlock->AddStateBits(NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN);
     state.PushAbsoluteContainingBlock(mDocElementContainingBlock,
+                                      mDocElementContainingBlock,
                                       absoluteSaveState);
   }
 
@@ -2443,7 +2451,8 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
                                               mDocElementContainingBlock),
                      mDocElementContainingBlock, styleContext,
                      &contentFrame, frameItems,
-                     display->IsPositioned(contentFrame), nullptr);
+                     display->IsPositioned(contentFrame) ? contentFrame : nullptr,
+                     nullptr);
       newFrame = frameItems.FirstChild();
       NS_ASSERTION(frameItems.OnlyChild(), "multiple root element frames");
     }
@@ -3064,7 +3073,7 @@ nsCSSFrameConstructor::ConstructFieldSetFrame(nsFrameConstructorState& aState,
 
   newFrame->AddStateBits(NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN);
   if (newFrame->IsPositioned()) {
-    aState.PushAbsoluteContainingBlock(newFrame, absoluteSaveState);
+    aState.PushAbsoluteContainingBlock(newFrame, newFrame, absoluteSaveState);
   }
 
   ProcessChildren(aState, content, styleContext, blockFrame, true,
@@ -3615,7 +3624,7 @@ nsCSSFrameConstructor::ConstructFrameFromItemInternal(FrameConstructionItem& aIt
     nsFrameConstructorSaveState absoluteSaveState;
 
     if (bits & FCDATA_FORCE_NULL_ABSPOS_CONTAINER) {
-      aState.PushAbsoluteContainingBlock(nullptr, absoluteSaveState);
+      aState.PushAbsoluteContainingBlock(nullptr, nullptr, absoluteSaveState);
     } else if (!(bits & FCDATA_SKIP_ABSPOS_PUSH)) {
       nsIFrame* cb = maybeAbsoluteContainingBlock;
       cb->AddStateBits(NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN);
@@ -3624,7 +3633,7 @@ nsCSSFrameConstructor::ConstructFrameFromItemInternal(FrameConstructionItem& aIt
            (maybeAbsoluteContainingBlockDisplay->HasTransformStyle() &&
             cb->IsFrameOfType(nsIFrame::eSupportsCSSTransforms))) &&
           !cb->IsSVGText()) {
-        aState.PushAbsoluteContainingBlock(cb, absoluteSaveState);
+        aState.PushAbsoluteContainingBlock(cb, primaryFrame, absoluteSaveState);
       }
     }
 
@@ -4135,14 +4144,14 @@ nsCSSFrameConstructor::BeginBuildingScrollFrame(nsFrameConstructorState& aState,
 
   // we used the style that was passed in. So resolve another one.
   nsStyleSet *styleSet = mPresShell->StyleSet();
-  nsStyleContext* aScrolledChildStyle =
-    styleSet->ResolveAnonymousBoxStyle(aScrolledPseudo, contentStyle).get();
+  nsRefPtr<nsStyleContext> scrolledChildStyle =
+    styleSet->ResolveAnonymousBoxStyle(aScrolledPseudo, contentStyle);
 
   if (gfxScrollFrame) {
      gfxScrollFrame->SetInitialChildList(kPrincipalList, anonymousItems);
   }
 
-  return aScrolledChildStyle;
+  return scrolledChildStyle.forget();
 }
 
 void
@@ -4359,7 +4368,7 @@ nsCSSFrameConstructor::ConstructScrollableBlock(nsFrameConstructorState& aState,
   ConstructBlock(aState, scrolledContentStyle->StyleDisplay(), content,
                  newFrame, newFrame, scrolledContentStyle,
                  &scrolledFrame, blockItem,
-                 aDisplay->IsPositioned(scrolledFrame),
+                 aDisplay->IsPositioned(newFrame) ? newFrame : nullptr,
                  aItem.mPendingBinding);
 
   NS_ASSERTION(blockItem.FirstChild() == scrolledFrame,
@@ -4402,7 +4411,8 @@ nsCSSFrameConstructor::ConstructNonScrollableBlock(nsFrameConstructorState& aSta
   ConstructBlock(aState, aDisplay, aItem.mContent,
                  aState.GetGeometricParent(aDisplay, aParentFrame),
                  aParentFrame, styleContext, &newFrame,
-                 aFrameItems, aDisplay->IsPositioned(newFrame),
+                 aFrameItems,
+                 aDisplay->IsPositioned(newFrame) ? newFrame : nullptr,
                  aItem.mPendingBinding);
   return newFrame;
 }
@@ -4568,6 +4578,8 @@ nsCSSFrameConstructor::FindMathMLData(Element* aElement,
       
 
   static const FrameConstructionDataByTag sMathMLData[] = {
+    SIMPLE_MATHML_CREATE(annotation_, NS_NewMathMLTokenFrame),
+    SIMPLE_MATHML_CREATE(annotation_xml_, NS_NewMathMLmrowFrame),
     SIMPLE_MATHML_CREATE(mi_, NS_NewMathMLTokenFrame),
     SIMPLE_MATHML_CREATE(mn_, NS_NewMathMLTokenFrame),
     SIMPLE_MATHML_CREATE(ms_, NS_NewMathMLTokenFrame),
@@ -7713,21 +7725,18 @@ DoApplyRenderingChangeToTree(nsIFrame* aFrame,
 
     // if frame has view, will already be invalidated
     if (aChange & nsChangeHint_RepaintFrame) {
-      if (aFrame->IsFrameOfType(nsIFrame::eSVG) &&
+      // Note that this whole block will be skipped when painting is suppressed
+      // (due to our caller ApplyRendingChangeToTree() discarding the
+      // nsChangeHint_RepaintFrame hint).  If you add handling for any other
+      // hints within this block, be sure that they too should be ignored when
+      // painting is suppressed.
+      needInvalidatingPaint = true;
+      aFrame->InvalidateFrameSubtree();
+      if (aChange & nsChangeHint_UpdateEffects &&
+          aFrame->IsFrameOfType(nsIFrame::eSVG) &&
           !(aFrame->GetStateBits() & NS_STATE_IS_OUTER_SVG)) {
-        if (aChange & nsChangeHint_UpdateEffects) {
-          needInvalidatingPaint = true;
-          // Invalidate and update our area:
-          nsSVGUtils::InvalidateBounds(aFrame, false);
-          nsSVGUtils::ScheduleReflowSVG(aFrame);
-        } else {
-          needInvalidatingPaint = true;
-          // Just invalidate our area:
-          nsSVGUtils::InvalidateBounds(aFrame);
-        }
-      } else {
-        needInvalidatingPaint = true;
-        aFrame->InvalidateFrameSubtree();
+        // Need to update our overflow rects:
+        nsSVGUtils::ScheduleReflowSVG(aFrame);
       }
     }
     if (aChange & nsChangeHint_UpdateTextPath) {
@@ -8775,11 +8784,15 @@ nsCSSFrameConstructor::CreateContinuingFrame(nsPresContext* aPresContext,
     // Create a continuing area frame
     // XXXbz we really shouldn't have to do this by hand!
     nsIFrame* blockFrame = GetFieldSetBlockFrame(aFrame);
-    nsIFrame* continuingBlockFrame =
-      CreateContinuingFrame(aPresContext, blockFrame, newFrame);
-
-    // Set the fieldset's initial child list
-    SetInitialSingleChild(newFrame, continuingBlockFrame);
+    if (blockFrame) {
+      nsIFrame* continuingBlockFrame =
+        CreateContinuingFrame(aPresContext, blockFrame, newFrame);
+      // Set the fieldset's initial child list
+      SetInitialSingleChild(newFrame, continuingBlockFrame);
+    } else {
+      MOZ_ASSERT(aFrame->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER,
+                 "FieldSet block may only be null for overflow containers");
+    }
   } else if (nsGkAtoms::legendFrame == frameType) {
     newFrame = NS_NewLegendFrame(shell, styleContext);
     newFrame->Init(content, aParentFrame, aFrame);
@@ -9832,6 +9845,12 @@ nsCSSFrameConstructor::ProcessChildren(nsFrameConstructorState& aState,
   NS_PRECONDITION(aFrame->GetContentInsertionFrame() == aFrame,
                   "Parent frame in ProcessChildren should be its own "
                   "content insertion frame");
+  const uint32_t kMaxDepth = 2 * MAX_REFLOW_DEPTH;
+  MOZ_STATIC_ASSERT(kMaxDepth <= UINT16_MAX, "mCurrentDepth type is too narrow");
+  AutoRestore<uint16_t> savedDepth(mCurrentDepth);
+  if (mCurrentDepth != UINT16_MAX) {
+    ++mCurrentDepth;
+  }
 
   if (!aPossiblyLeafFrame) {
     aPossiblyLeafFrame = aFrame;
@@ -9929,6 +9948,11 @@ nsCSSFrameConstructor::ProcessChildren(nsFrameConstructorState& aState,
                                  itemsToConstruct);
     }
 
+    const bool addChildItems = MOZ_LIKELY(mCurrentDepth < kMaxDepth);
+    if (!addChildItems) {
+      NS_WARNING("ProcessChildren max depth exceeded");
+    }
+
     ChildIterator iter, last;
     for (ChildIterator::Init(aContent, &iter, &last);
          iter != last;
@@ -9939,8 +9963,12 @@ nsCSSFrameConstructor::ProcessChildren(nsFrameConstructorState& aState,
       if (child->IsElement()) {
         child->UnsetFlags(ELEMENT_ALL_RESTYLE_FLAGS);
       }
-      AddFrameConstructionItems(aState, child, iter.XBLInvolved(), aFrame,
-                                itemsToConstruct);
+      if (addChildItems) {
+        AddFrameConstructionItems(aState, child, iter.XBLInvolved(), aFrame,
+                                  itemsToConstruct);
+      } else {
+        ClearLazyBits(child, child->GetNextSibling());
+      }
     }
     itemsToConstruct.SetParentHasNoXBLChildren(!iter.XBLInvolved());
 
@@ -9981,19 +10009,22 @@ nsCSSFrameConstructor::ProcessChildren(nsFrameConstructorState& aState,
     // XXXbz we could do this on the FrameConstructionItemList level,
     // no?  And if we cared we could look through the item list
     // instead of groveling through the framelist here..
-    nsIContent *badKid = AnyKidsNeedBlockParent(aFrameItems.FirstChild());
-    nsDependentAtomString parentTag(aContent->Tag()), kidTag(badKid->Tag());
-    const PRUnichar* params[] = { parentTag.get(), kidTag.get() };
     nsStyleContext *frameStyleContext = aFrame->StyleContext();
-    const nsStyleDisplay *display = frameStyleContext->StyleDisplay();
-    const char *message =
-      (display->mDisplay == NS_STYLE_DISPLAY_INLINE_BOX)
-        ? "NeededToWrapXULInlineBox" : "NeededToWrapXUL";
-    nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                    "FrameConstructor", mDocument,
-                                    nsContentUtils::eXUL_PROPERTIES,
-                                    message,
-                                    params, ArrayLength(params));
+    // Report a warning for non-GC frames:
+    if (!aFrame->IsGeneratedContentFrame()) {
+      nsIContent *badKid = AnyKidsNeedBlockParent(aFrameItems.FirstChild());
+      nsDependentAtomString parentTag(aContent->Tag()), kidTag(badKid->Tag());
+      const PRUnichar* params[] = { parentTag.get(), kidTag.get() };
+      const nsStyleDisplay *display = frameStyleContext->StyleDisplay();
+      const char *message =
+        (display->mDisplay == NS_STYLE_DISPLAY_INLINE_BOX)
+          ? "NeededToWrapXULInlineBox" : "NeededToWrapXUL";
+      nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                      "FrameConstructor", mDocument,
+                                      nsContentUtils::eXUL_PROPERTIES,
+                                      message,
+                                      params, ArrayLength(params));
+    }
 
     nsRefPtr<nsStyleContext> blockSC = mPresShell->StyleSet()->
       ResolveAnonymousBoxStyle(nsCSSAnonBoxes::mozXULAnonymousBlock,
@@ -10894,7 +10925,7 @@ nsCSSFrameConstructor::ConstructBlock(nsFrameConstructorState& aState,
                                       nsStyleContext*          aStyleContext,
                                       nsIFrame**               aNewFrame,
                                       nsFrameItems&            aFrameItems,
-                                      bool                     aAbsPosContainer,
+                                      nsIFrame*                aPositionedFrameForAbsPosContainer,
                                       PendingBinding*          aPendingBinding)
 {
   // Create column wrapper if necessary
@@ -10939,9 +10970,9 @@ nsCSSFrameConstructor::ConstructBlock(nsFrameConstructorState& aState,
   // in nsBlockFrame::CalculateContainingBlockSizeForAbsolutes.
   nsFrameConstructorSaveState absoluteSaveState;
   (*aNewFrame)->AddStateBits(NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN);
-  if (aAbsPosContainer) {
+  if (aPositionedFrameForAbsPosContainer) {
     //    NS_ASSERTION(aRelPos, "should have made area frame for this");
-    aState.PushAbsoluteContainingBlock(*aNewFrame, absoluteSaveState);
+    aState.PushAbsoluteContainingBlock(*aNewFrame, aPositionedFrameForAbsPosContainer, absoluteSaveState);
   }
 
   // Process the child content
@@ -11040,7 +11071,7 @@ nsCSSFrameConstructor::ConstructInline(nsFrameConstructorState& aState,
   if (positioned) {
     // Relatively positioned frames becomes a container for child
     // frames that are positioned
-    aState.PushAbsoluteContainingBlock(newFrame, absoluteSaveState);
+    aState.PushAbsoluteContainingBlock(newFrame, newFrame, absoluteSaveState);
   }
 
   // Process the child content
@@ -12427,7 +12458,7 @@ nsCSSFrameConstructor::RecomputePosition(nsIFrame* aFrame)
 
     // Construct a bogus parent reflow state so that there's a usable
     // containing block reflow state.
-    nsIFrame *parentFrame = aFrame->GetParent();
+    nsIFrame* parentFrame = aFrame->GetParent();
     nsSize parentSize = parentFrame->GetSize();
 
     nsFrameState savedState = parentFrame->GetStateBits();
@@ -12451,7 +12482,10 @@ nsCSSFrameConstructor::RecomputePosition(nsIFrame* aFrame)
     nsSize availSize(parentSize.width, NS_INTRINSICSIZE);
 
     nsSize size = aFrame->GetSize();
-    nsSize cbSize = aFrame->GetContainingBlock()->GetSize();
+    ViewportFrame* viewport = do_QueryFrame(parentFrame);
+    nsSize cbSize = viewport ?
+      viewport->AdjustReflowStateAsContainingBlock(&parentReflowState).Size()
+      : aFrame->GetContainingBlock()->GetSize();
     const nsMargin& parentBorder =
       parentReflowState.mStyleBorder->GetComputedBorder();
     cbSize -= nsSize(parentBorder.LeftRight(), parentBorder.TopBottom());

@@ -271,7 +271,9 @@ GARBAGE += $(addsuffix .log,$(MOCHITESTS) reftest crashtest jstestbrowser)
 # Usage: |make [TEST_PATH=...] [EXTRA_TEST_ARGS=...] xpcshell-tests|.
 xpcshell-tests:
 	$(PYTHON) -u $(topsrcdir)/config/pythonpath.py \
-	  -I$(topsrcdir)/build -I$(DEPTH)/_tests/mozbase/mozinfo \
+	  -I$(DEPTH)/build \
+	  -I$(topsrcdir)/build \
+	  -I$(DEPTH)/_tests/mozbase/mozinfo \
 	  $(topsrcdir)/testing/xpcshell/runxpcshelltests.py \
 	  --manifest=$(DEPTH)/_tests/xpcshell/xpcshell.ini \
 	  --build-info-json=$(DEPTH)/mozinfo.json \
@@ -287,6 +289,7 @@ xpcshell-tests:
 B2G_XPCSHELL = \
 	rm -f ./@.log && \
 	$(PYTHON) -u $(topsrcdir)/config/pythonpath.py \
+	  -I$(DEPTH)/build \
 	  -I$(topsrcdir)/build \
 	  $(topsrcdir)/testing/xpcshell/runtestsb2g.py \
 	  --manifest=$(DEPTH)/_tests/xpcshell/xpcshell.ini \
@@ -454,6 +457,10 @@ stage-jstests: make-stage-dir
 	$(MAKE) -C $(DEPTH)/js/src/tests stage-package
 
 stage-android: make-stage-dir
+ifdef MOZ_ENABLE_SZIP
+# Tinderbox scripts are not unzipping everything, so the file needs to be in a directory it unzips
+	$(NSINSTALL) $(DIST)/host/bin/szip $(PKG_STAGE)/bin/host
+endif
 	$(NSINSTALL) $(DEPTH)/build/mobile/sutagent/android/sutAgentAndroid.apk $(PKG_STAGE)/bin
 	$(NSINSTALL) $(DEPTH)/build/mobile/sutagent/android/watcher/Watcher.apk $(PKG_STAGE)/bin
 	$(NSINSTALL) $(DEPTH)/build/mobile/sutagent/android/fencp/FenCP.apk $(PKG_STAGE)/bin

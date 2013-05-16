@@ -94,6 +94,13 @@
   display: none;
 }
 
+.hidden-message {
+  display: block;
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+}
+
 /* WebConsole colored drops */
 
 .webconsole-filter-button[checked] {
@@ -243,4 +250,13 @@
 #webconsole-sidebar > tabs {
   height: 0;
   border: none;
+}
+
+.webconsole-msg-security > .webconsole-msg-icon-container {
+  -moz-border-start: solid red 6px;
+}
+
+.webconsole-filter-button[category="security"] > .toolbarbutton-menubutton-button:before {
+  background-image: linear-gradient(#FF3030, #FF7D7D);
+  border-color: #D12C2C;
 }

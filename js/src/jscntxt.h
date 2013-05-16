@@ -29,6 +29,7 @@
 #include "prmjtime.h"
 
 #include "ds/LifoAlloc.h"
+#include "gc/Nursery.h"
 #include "gc/Statistics.h"
 #include "gc/StoreBuffer.h"
 #include "js/HashTable.h"
@@ -70,7 +71,7 @@ struct CallsiteCloneKey {
     /* The offset of the call. */
     uint32_t offset;
 
-    CallsiteCloneKey() { mozilla::PodZero(this); }
+    CallsiteCloneKey(JSFunction *f, JSScript *s, uint32_t o) : original(f), script(s), offset(o) {}
 
     typedef CallsiteCloneKey Lookup;
 
@@ -88,7 +89,7 @@ typedef HashMap<CallsiteCloneKey,
                 CallsiteCloneKey,
                 SystemAllocPolicy> CallsiteCloneTable;
 
-RawFunction CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun,
+JSFunction *CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun,
                                     HandleScript script, jsbytecode *pc);
 
 typedef HashSet<JSObject *> ObjectSet;
@@ -122,10 +123,6 @@ class AutoCycleDetector
 /* Updates references in the cycle detection set if the GC moves them. */
 extern void
 TraceCycleDetectionSet(JSTracer *trc, ObjectSet &set);
-
-namespace mjit {
-class JaegerRuntime;
-}
 
 class MathCache;
 
@@ -485,35 +482,7 @@ class PerThreadData : public js::PerThreadDataFriendFields
     JSContext           *ionJSContext;
     uintptr_t            ionStackLimit;
 
-# ifdef JS_THREADSAFE
-    /*
-     * Synchronizes setting of ionStackLimit so signals by triggerOperationCallback don't
-     * get lost.
-     */
-    PRLock *ionStackLimitLock_;
-
-    class IonStackLimitLock {
-        PerThreadData &data_;
-      public:
-        IonStackLimitLock(PerThreadData &data) : data_(data) {
-            JS_ASSERT(data_.ionStackLimitLock_);
-            PR_Lock(data_.ionStackLimitLock_);
-        }
-        ~IonStackLimitLock() {
-            JS_ASSERT(data_.ionStackLimitLock_);
-            PR_Unlock(data_.ionStackLimitLock_);
-        }
-    };
-#else
-    class IonStackLimitLock {
-      public:
-        IonStackLimitLock(PerThreadData &data) {}
-    };
-# endif
-    void setIonStackLimit(uintptr_t limit) {
-        IonStackLimitLock lock(*this);
-        ionStackLimit = limit;
-    }
+    inline void setIonStackLimit(uintptr_t limit);
 
     /*
      * This points to the most recent Ion activation running on the thread.
@@ -526,39 +495,18 @@ class PerThreadData : public js::PerThreadDataFriendFields
      * running asm.js without requiring dynamic polling operations in the
      * generated code. Since triggerOperationCallback may run on a separate
      * thread than the JSRuntime's owner thread all reads/writes must be
-     * synchronized (by asmJSActivationStackLock_).
+     * synchronized (by rt->operationCallbackLock).
      */
   private:
     friend class js::AsmJSActivation;
 
-    /* See AsmJSActivation comment. */
+    /* See AsmJSActivation comment. Protected by rt->operationCallbackLock. */
     js::AsmJSActivation *asmJSActivationStack_;
-
-# ifdef JS_THREADSAFE
-    /* Synchronizes pushing/popping with triggerOperationCallback. */
-    PRLock *asmJSActivationStackLock_;
-# endif
 
   public:
     static unsigned offsetOfAsmJSActivationStackReadOnly() {
         return offsetof(PerThreadData, asmJSActivationStack_);
     }
-
-    class AsmJSActivationStackLock {
-# ifdef JS_THREADSAFE
-        PerThreadData &data_;
-      public:
-        AsmJSActivationStackLock(PerThreadData &data) : data_(data) {
-            PR_Lock(data_.asmJSActivationStackLock_);
-        }
-        ~AsmJSActivationStackLock() {
-            PR_Unlock(data_.asmJSActivationStackLock_);
-        }
-# else
-      public:
-        AsmJSActivationStackLock(PerThreadData &) {}
-# endif
-    };
 
     js::AsmJSActivation *asmJSActivationStackFromAnyThread() const {
         return asmJSActivationStack_;
@@ -578,8 +526,6 @@ class PerThreadData : public js::PerThreadDataFriendFields
     int32_t             suppressGC;
 
     PerThreadData(JSRuntime *runtime);
-    ~PerThreadData();
-    bool init();
 
     bool associatedWith(const JSRuntime *rt) { return runtime_ == rt; }
 };
@@ -603,8 +549,12 @@ struct MallocProvider
 
     void *realloc_(void *p, size_t oldBytes, size_t newBytes) {
         Client *client = static_cast<Client *>(this);
-        JS_ASSERT(oldBytes < newBytes);
-        client->updateMallocCounter(newBytes - oldBytes);
+        /*
+         * For compatibility we do not account for realloc that decreases
+         * previously allocated memory.
+         */
+        if (newBytes > oldBytes)
+            client->updateMallocCounter(newBytes - oldBytes);
         void *p2 = js_realloc(p, newBytes);
         return JS_LIKELY(!!p2) ? p2 : client->onOutOfMemory(p, newBytes);
     }
@@ -664,7 +614,7 @@ typedef Vector<JS::Zone *, 1, SystemAllocPolicy> ZoneVector;
 
 } // namespace js
 
-struct JSRuntime : private JS::shadow::Runtime,
+struct JSRuntime : public JS::shadow::Runtime,
                    public js::MallocProvider<JSRuntime>
 {
     /*
@@ -684,6 +634,55 @@ struct JSRuntime : private JS::shadow::Runtime,
      * as possible.
      */
     volatile int32_t    interrupt;
+
+#ifdef JS_THREADSAFE
+  private:
+    /*
+     * Lock taken when triggering the operation callback from another thread.
+     * Protects all data that is touched in this process.
+     */
+    PRLock *operationCallbackLock;
+#ifdef DEBUG
+    PRThread *operationCallbackOwner;
+#endif
+  public:
+#endif // JS_THREADSAFE
+
+    class AutoLockForOperationCallback {
+#ifdef JS_THREADSAFE
+        JSRuntime *rt;
+      public:
+        AutoLockForOperationCallback(JSRuntime *rt MOZ_GUARD_OBJECT_NOTIFIER_PARAM) : rt(rt) {
+            MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+            PR_Lock(rt->operationCallbackLock);
+#ifdef DEBUG
+            rt->operationCallbackOwner = PR_GetCurrentThread();
+#endif
+        }
+        ~AutoLockForOperationCallback() {
+            JS_ASSERT(rt->operationCallbackOwner == PR_GetCurrentThread());
+#ifdef DEBUG
+            rt->operationCallbackOwner = NULL;
+#endif
+            PR_Unlock(rt->operationCallbackLock);
+        }
+#else // JS_THREADSAFE
+      public:
+        AutoLockForOperationCallback(JSRuntime *rt MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
+            MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+        }
+#endif // JS_THREADSAFE
+
+        MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+    };
+
+    bool currentThreadOwnsOperationCallbackLock() {
+#if defined(JS_THREADSAFE) && defined(DEBUG)
+        return operationCallbackOwner == PR_GetCurrentThread();
+#else
+        return true;
+#endif
+    }
 
     /* Default compartment. */
     JSCompartment       *atomsCompartment;
@@ -744,16 +743,12 @@ struct JSRuntime : private JS::shadow::Runtime,
      */
     JSC::ExecutableAllocator *execAlloc_;
     WTF::BumpPointerAllocator *bumpAlloc_;
-#ifdef JS_METHODJIT
-    js::mjit::JaegerRuntime *jaegerRuntime_;
-#endif
     js::ion::IonRuntime *ionRuntime_;
 
     JSObject *selfHostingGlobal_;
 
     JSC::ExecutableAllocator *createExecutableAllocator(JSContext *cx);
     WTF::BumpPointerAllocator *createBumpPointerAllocator(JSContext *cx);
-    js::mjit::JaegerRuntime *createJaegerRuntime(JSContext *cx);
     js::ion::IonRuntime *createIonRuntime(JSContext *cx);
 
   public:
@@ -770,18 +765,6 @@ struct JSRuntime : private JS::shadow::Runtime,
     WTF::BumpPointerAllocator *getBumpPointerAllocator(JSContext *cx) {
         return bumpAlloc_ ? bumpAlloc_ : createBumpPointerAllocator(cx);
     }
-#ifdef JS_METHODJIT
-    js::mjit::JaegerRuntime *getJaegerRuntime(JSContext *cx) {
-        return jaegerRuntime_ ? jaegerRuntime_ : createJaegerRuntime(cx);
-    }
-    bool hasJaegerRuntime() const {
-        return jaegerRuntime_;
-    }
-    js::mjit::JaegerRuntime &jaegerRuntime() {
-        JS_ASSERT(hasJaegerRuntime());
-        return *jaegerRuntime_;
-    }
-#endif
     js::ion::IonRuntime *getIonRuntime(JSContext *cx) {
         return ionRuntime_ ? ionRuntime_ : createIonRuntime(cx);
     }
@@ -937,7 +920,7 @@ struct JSRuntime : private JS::shadow::Runtime,
     uint64_t            gcStartNumber;
 
     /* Whether the currently running GC can finish in multiple slices. */
-    int                 gcIsIncremental;
+    bool                gcIsIncremental;
 
     /* Whether all compartments are being collected in first GC slice. */
     bool                gcIsFull;
@@ -951,6 +934,7 @@ struct JSRuntime : private JS::shadow::Runtime,
      */
     bool                gcStrictCompartmentChecking;
 
+#ifdef DEBUG
     /*
      * If this is 0, all cross-compartment proxies must be registered in the
      * wrapper map. This checking must be disabled temporarily while creating
@@ -958,6 +942,9 @@ struct JSRuntime : private JS::shadow::Runtime,
      * creation.
      */
     uintptr_t           gcDisableStrictProxyCheckingCount;
+#else
+    uintptr_t           unused1;
+#endif
 
     /*
      * The current incremental GC phase. This is also used internally in
@@ -1042,13 +1029,15 @@ struct JSRuntime : private JS::shadow::Runtime,
     volatile js::HeapState heapState;
 
     bool isHeapBusy() { return heapState != js::Idle; }
-
-    bool isHeapCollecting() { return heapState == js::Collecting; }
+    bool isHeapMajorCollecting() { return heapState == js::MajorCollecting; }
+    bool isHeapMinorCollecting() { return heapState == js::MinorCollecting; }
+    bool isHeapCollecting() { return isHeapMajorCollecting() || isHeapMinorCollecting(); }
 
 #ifdef JSGC_GENERATIONAL
 # ifdef JS_GC_ZEAL
     js::gc::VerifierNursery      gcVerifierNursery;
 # endif
+    js::Nursery                  gcNursery;
     js::gc::StoreBuffer          gcStoreBuffer;
 #endif
 
@@ -1307,6 +1296,7 @@ struct JSRuntime : private JS::shadow::Runtime,
     // Used to reset stack limit after a signaled interrupt (i.e. ionStackLimit_ = -1)
     // has been noticed by Ion/Baseline.
     void resetIonStackLimit() {
+        AutoLockForOperationCallback lock(this);
         mainThread.setIonStackLimit(mainThread.nativeStackLimit);
     }
 
@@ -1734,11 +1724,7 @@ struct JSContext : js::ContextFriendFields,
     /* Location to stash the iteration value between JSOP_MOREITER and JSOP_ITERNEXT. */
     js::Value           iterValue;
 
-#ifdef JS_METHODJIT
-    bool                 methodJitEnabled;
-
-    js::mjit::JaegerRuntime &jaegerRuntime() { return runtime->jaegerRuntime(); }
-#endif
+    bool jitIsBroken;
 
     inline bool typeInferenceEnabled() const;
 
@@ -1930,7 +1916,7 @@ class AutoUnlockGC
     ~AutoUnlockGC() { JS_LOCK_GC(rt); }
 };
 
-class AutoKeepAtoms
+class MOZ_STACK_CLASS AutoKeepAtoms
 {
     JSRuntime *rt;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
@@ -2023,6 +2009,13 @@ enum ErrorArgumentsType {
     ArgumentsAreUnicode,
     ArgumentsAreASCII
 };
+
+inline void
+PerThreadData::setIonStackLimit(uintptr_t limit)
+{
+    JS_ASSERT(runtime_->currentThreadOwnsOperationCallbackLock());
+    ionStackLimit = limit;
+}
 
 } /* namespace js */
 
@@ -2138,16 +2131,6 @@ JS_CHECK_OPERATION_LIMIT(JSContext *cx)
 
 namespace js {
 
-#ifdef JS_METHODJIT
-namespace mjit {
-void ExpandInlineFrames(JS::Zone *zone);
-}
-#endif
-
-} /* namespace js */
-
-namespace js {
-
 /************************************************************************/
 
 static JS_ALWAYS_INLINE void
@@ -2213,25 +2196,12 @@ SetValueRangeToNull(Value *vec, size_t len)
     SetValueRangeToNull(vec, vec + len);
 }
 
-class AutoObjectVector : public AutoVectorRooter<RawObject>
-{
-  public:
-    explicit AutoObjectVector(JSContext *cx
-                              MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-        : AutoVectorRooter<RawObject>(cx, OBJVECTOR)
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-    }
-
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-};
-
-class AutoStringVector : public AutoVectorRooter<RawString>
+class AutoStringVector : public AutoVectorRooter<JSString *>
 {
   public:
     explicit AutoStringVector(JSContext *cx
                               MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-        : AutoVectorRooter<RawString>(cx, STRINGVECTOR)
+        : AutoVectorRooter<JSString *>(cx, STRINGVECTOR)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
@@ -2239,12 +2209,12 @@ class AutoStringVector : public AutoVectorRooter<RawString>
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
-class AutoShapeVector : public AutoVectorRooter<RawShape>
+class AutoShapeVector : public AutoVectorRooter<Shape *>
 {
   public:
     explicit AutoShapeVector(JSContext *cx
                              MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-        : AutoVectorRooter<RawShape>(cx, SHAPEVECTOR)
+        : AutoVectorRooter<Shape *>(cx, SHAPEVECTOR)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
@@ -2254,19 +2224,19 @@ class AutoShapeVector : public AutoVectorRooter<RawShape>
 
 class AutoValueArray : public AutoGCRooter
 {
-    RawValue *start_;
+    Value *start_;
     unsigned length_;
     SkipRoot skip;
 
   public:
-    AutoValueArray(JSContext *cx, RawValue *start, unsigned length
+    AutoValueArray(JSContext *cx, Value *start, unsigned length
                    MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : AutoGCRooter(cx, VALARRAY), start_(start), length_(length), skip(cx, start, length)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
 
-    RawValue *start() { return start_; }
+    Value *start() { return start_; }
     unsigned length() const { return length_; }
 
     MutableHandleValue handleAt(unsigned i)
@@ -2283,12 +2253,12 @@ class AutoValueArray : public AutoGCRooter
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
-class AutoObjectObjectHashMap : public AutoHashMapRooter<RawObject, RawObject>
+class AutoObjectObjectHashMap : public AutoHashMapRooter<JSObject *, JSObject *>
 {
   public:
     explicit AutoObjectObjectHashMap(JSContext *cx
                                      MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : AutoHashMapRooter<RawObject, RawObject>(cx, OBJOBJHASHMAP)
+      : AutoHashMapRooter<JSObject *, JSObject *>(cx, OBJOBJHASHMAP)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
@@ -2296,12 +2266,12 @@ class AutoObjectObjectHashMap : public AutoHashMapRooter<RawObject, RawObject>
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
-class AutoObjectUnsigned32HashMap : public AutoHashMapRooter<RawObject, uint32_t>
+class AutoObjectUnsigned32HashMap : public AutoHashMapRooter<JSObject *, uint32_t>
 {
   public:
     explicit AutoObjectUnsigned32HashMap(JSContext *cx
                                          MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : AutoHashMapRooter<RawObject, uint32_t>(cx, OBJU32HASHMAP)
+      : AutoHashMapRooter<JSObject *, uint32_t>(cx, OBJU32HASHMAP)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
@@ -2309,12 +2279,12 @@ class AutoObjectUnsigned32HashMap : public AutoHashMapRooter<RawObject, uint32_t
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
-class AutoObjectHashSet : public AutoHashSetRooter<RawObject>
+class AutoObjectHashSet : public AutoHashSetRooter<JSObject *>
 {
   public:
     explicit AutoObjectHashSet(JSContext *cx
                                MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : AutoHashSetRooter<RawObject>(cx, OBJHASHSET)
+      : AutoHashSetRooter<JSObject *>(cx, OBJHASHSET)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
@@ -2386,6 +2356,8 @@ class ContextAllocPolicy
     void reportAllocOverflow() const { js_ReportAllocationOverflow(cx_); }
 };
 
+JSBool intrinsic_ToObject(JSContext *cx, unsigned argc, Value *vp);
+JSBool intrinsic_IsCallable(JSContext *cx, unsigned argc, Value *vp);
 JSBool intrinsic_ThrowError(JSContext *cx, unsigned argc, Value *vp);
 JSBool intrinsic_NewDenseArray(JSContext *cx, unsigned argc, Value *vp);
 JSBool intrinsic_UnsafeSetElement(JSContext *cx, unsigned argc, Value *vp);

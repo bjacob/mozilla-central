@@ -28,7 +28,7 @@ Bindings::Bindings()
 {}
 
 inline
-AliasedFormalIter::AliasedFormalIter(js::RawScript script)
+AliasedFormalIter::AliasedFormalIter(JSScript *script)
   : begin_(script->bindings.bindingArray()),
     p_(begin_),
     end_(begin_ + (script->funHasAnyAliasedFormal ? script->bindings.numArgs() : 0)),
@@ -157,26 +157,8 @@ JSScript::global() const
     return *compartment()->maybeGlobal();
 }
 
-#ifdef JS_METHODJIT
-inline bool
-JSScript::ensureHasMJITInfo(JSContext *cx)
-{
-    if (mJITInfo)
-        return true;
-    mJITInfo = cx->new_<JITScriptSet>();
-    return mJITInfo != NULL;
-}
-
 inline void
-JSScript::destroyMJITInfo(js::FreeOp *fop)
-{
-    fop->delete_(mJITInfo);
-    mJITInfo = NULL;
-}
-#endif /* JS_METHODJIT */
-
-inline void
-JSScript::writeBarrierPre(js::RawScript script)
+JSScript::writeBarrierPre(JSScript *script)
 {
 #ifdef JSGC_INCREMENTAL
     if (!script || !script->runtime()->needsBarrier())
@@ -185,7 +167,7 @@ JSScript::writeBarrierPre(js::RawScript script)
     JS::Zone *zone = script->zone();
     if (zone->needsBarrier()) {
         JS_ASSERT(!zone->rt->isHeapBusy());
-        js::RawScript tmp = script;
+        JSScript *tmp = script;
         MarkScriptUnbarriered(zone->barrierTracer(), &tmp, "write barrier");
         JS_ASSERT(tmp == script);
     }
@@ -193,7 +175,7 @@ JSScript::writeBarrierPre(js::RawScript script)
 }
 
 inline void
-JSScript::writeBarrierPost(js::RawScript script, void *addr)
+JSScript::writeBarrierPost(JSScript *script, void *addr)
 {
 }
 

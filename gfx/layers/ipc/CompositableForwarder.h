@@ -58,11 +58,14 @@ public:
    */
   virtual void CreatedSingleBuffer(CompositableClient* aCompositable,
                                    const SurfaceDescriptor& aDescriptor,
-                                   const TextureInfo& aTextureInfo) = 0;
+                                   const TextureInfo& aTextureInfo,
+                                   const SurfaceDescriptor* aDescriptorOnWhite = nullptr) = 0;
   virtual void CreatedDoubleBuffer(CompositableClient* aCompositable,
                                    const SurfaceDescriptor& aFrontDescriptor,
                                    const SurfaceDescriptor& aBackDescriptor,
-                                   const TextureInfo& aTextureInfo) = 0;
+                                   const TextureInfo& aTextureInfo,
+                                   const SurfaceDescriptor* aFrontDescriptorOnWhite = nullptr,
+                                   const SurfaceDescriptor* aBackDescriptorOnWhite = nullptr) = 0;
 
   /**
    * Tell the compositor that a Compositable is killing its buffer(s),
@@ -80,6 +83,13 @@ public:
   virtual void UpdateTexture(CompositableClient* aCompositable,
                              TextureIdentifier aTextureId,
                              SurfaceDescriptor* aDescriptor) = 0;
+
+  /**
+   * Same as UpdateTexture, but performs an asynchronous layer transaction (if possible)
+   */
+  virtual void UpdateTextureNoSwap(CompositableClient* aCompositable,
+                                   TextureIdentifier aTextureId,
+                                   SurfaceDescriptor* aDescriptor) = 0;
 
   /**
    * Communicate to the compositor that aRegion in the texture identified by

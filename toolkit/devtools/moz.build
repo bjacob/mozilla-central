@@ -6,6 +6,8 @@
 
 PARALLEL_DIRS += [
     'debugger',
+    'gcli',
     'sourcemap',
     'webconsole',
+    'styleeditor'
 ]

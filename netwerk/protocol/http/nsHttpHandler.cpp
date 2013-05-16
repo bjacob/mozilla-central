@@ -188,10 +188,9 @@ nsHttpHandler::nsHttpHandler()
     , mSpdyPingThreshold(PR_SecondsToInterval(58))
     , mSpdyPingTimeout(PR_SecondsToInterval(8))
     , mConnectTimeout(90000)
+    , mBypassCacheLockThreshold(250.0)
     , mParallelSpeculativeConnectLimit(6)
-    , mRequestTokenBucketEnabled(false)
-    , mRequestTokenBucketABTestEnabled(false)
-    , mRequestTokenBucketABTestProfile(0)
+    , mRequestTokenBucketEnabled(true)
     , mRequestTokenBucketMinParallelism(6)
     , mRequestTokenBucketHz(100)
     , mRequestTokenBucketBurst(32)
@@ -777,53 +776,6 @@ nsHttpHandler::MaxSocketCount()
     return maxCount;
 }
 
-// Different profiles for when the Token Bucket ABTest is enabled
-static const uint32_t sNumberTokenBucketProfiles = 7;
-static const uint32_t sTokenBucketProfiles[sNumberTokenBucketProfiles][4] = {
-    // burst, hz, min-parallelism
-    { 32, 100, 6, Telemetry::HTTP_PLT_RATE_PACING_0 }, // balanced
-    { 16, 100, 6, Telemetry::HTTP_PLT_RATE_PACING_1 }, // start earlier
-    { 32, 200, 6, Telemetry::HTTP_PLT_RATE_PACING_2 }, // run faster
-    { 32, 50, 6, Telemetry::HTTP_PLT_RATE_PACING_3 },  // run slower
-    { 32, 1, 8, Telemetry::HTTP_PLT_RATE_PACING_4 },   // allow only min-parallelism
-    { 32, 1, 16, Telemetry::HTTP_PLT_RATE_PACING_5 },  // allow only min-parallelism (larger)
-    { 1000, 1000, 1000, Telemetry::HTTP_PLT_RATE_PACING_6 }, // unlimited
-};
-
-uint32_t
-nsHttpHandler::RequestTokenBucketBurst()
-{
-    return AllowExperiments() && mRequestTokenBucketABTestEnabled ?
-        sTokenBucketProfiles[mRequestTokenBucketABTestProfile][0] :
-        mRequestTokenBucketBurst;
-}
-
-uint32_t
-nsHttpHandler::RequestTokenBucketHz()
-{
-    return AllowExperiments() && mRequestTokenBucketABTestEnabled ?
-        sTokenBucketProfiles[mRequestTokenBucketABTestProfile][1] :
-        mRequestTokenBucketHz;
-}
-
-uint16_t
-nsHttpHandler::RequestTokenBucketMinParallelism()
-{
-    uint32_t rv =
-        AllowExperiments() && mRequestTokenBucketABTestEnabled ?
-        sTokenBucketProfiles[mRequestTokenBucketABTestProfile][2] :
-        mRequestTokenBucketMinParallelism;
-    return static_cast<uint16_t>(rv);
-}
-
-uint32_t
-nsHttpHandler::PacingTelemetryID()
-{
-    if (!mRequestTokenBucketEnabled || !mRequestTokenBucketABTestEnabled)
-        return 0;
-    return sTokenBucketProfiles[mRequestTokenBucketABTestProfile][3];
-}
-
 void
 nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
 {
@@ -1224,6 +1176,16 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
             mConnectTimeout = clamped(val, 1, 0xffff) * PR_MSEC_PER_SEC;
     }
 
+    // The maximum amount of time the cache session lock can be held
+    // before a new transaction bypasses the cache. In milliseconds.
+    if (PREF_CHANGED(HTTP_PREF("bypass-cachelock-threshold"))) {
+        rv = prefs->GetIntPref(HTTP_PREF("bypass-cachelock-threshold"), &val);
+        if (NS_SUCCEEDED(rv))
+            // the pref and variable are both in milliseconds
+            mBypassCacheLockThreshold =
+                static_cast<double>(clamped(val, 0, 0x7ffffff));
+    }
+
     // The maximum number of current global half open sockets allowable
     // for starting a new speculative connection.
     if (PREF_CHANGED(HTTP_PREF("speculative-parallel-limit"))) {
@@ -1354,20 +1316,6 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         if (NS_SUCCEEDED(rv)){
             requestTokenBucketUpdated = true;
             mRequestTokenBucketEnabled = cVar;
-        }
-    }
-
-    if (PREF_CHANGED(HTTP_PREF("pacing.requests.abtest"))) {
-        rv = prefs->GetBoolPref(HTTP_PREF("pacing.requests.abtest"),
-                                &cVar);
-        if (NS_SUCCEEDED(rv)) {
-            mRequestTokenBucketABTestEnabled = cVar;
-            requestTokenBucketUpdated = true;
-            if (mRequestTokenBucketABTestEnabled) {
-                // just taking the remainder is not perfectly uniform but it doesn't
-                // matter here.
-                mRequestTokenBucketABTestProfile = rand() % sNumberTokenBucketProfiles;
-            }
         }
     }
 

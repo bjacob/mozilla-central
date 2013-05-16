@@ -32,17 +32,6 @@ function ThreadActor(aHooks, aGlobal)
   this._hooks = aHooks;
   this.global = aGlobal;
 
-  // A cache of prototype chains for objects that have received a
-  // prototypeAndProperties request. Due to the way the debugger frontend works,
-  // this corresponds to a cache of prototype chains that the user has been
-  // inspecting in the variables tree view. This allows the debugger to evaluate
-  // native getter methods for WebIDL attributes that are meant to be called on
-  // the instace and not on the prototype.
-  //
-  // The map keys are Debugger.Object instances requested by the client and the
-  // values are arrays of Debugger.Objects that make up their prototype chain.
-  this._protoChains = new Map();
-
   this.findGlobals = this.globalManager.findGlobals.bind(this);
   this.onNewGlobal = this.globalManager.onNewGlobal.bind(this);
   this.onNewSource = this.onNewSource.bind(this);
@@ -179,13 +168,13 @@ ThreadActor.prototype = {
   },
 
   disconnect: function TA_disconnect() {
+    dumpn("in ThreadActor.prototype.disconnect");
     if (this._state == "paused") {
       this.onResume();
     }
 
     this._state = "exited";
 
-    this._protoChains.clear();
     this.clearDebuggees();
 
     if (!this.dbg) {
@@ -248,9 +237,22 @@ ThreadActor.prototype = {
 
   onDetach: function TA_onDetach(aRequest) {
     this.disconnect();
+    dumpn("ThreadActor.prototype.onDetach: returning 'detached' packet");
     return {
       type: "detached"
     };
+  },
+
+  onReconfigure: function TA_onReconfigure(aRequest) {
+    if (this.state == "exited") {
+      return { error: "wrongState" };
+    }
+
+    update(this._options, aRequest.options || {});
+    // Clear existing sources, so they can be recreated on next access.
+    this._sources = null;
+
+    return {};
   },
 
   /**
@@ -481,7 +483,7 @@ ThreadActor.prototype = {
       promises.push(promise);
     }
 
-    return resolveAll(promises).then(function () {
+    return all(promises).then(function () {
       return { frames: frames };
     });
   },
@@ -550,7 +552,7 @@ ThreadActor.prototype = {
       let originalLocation = this.sources.getOriginalLocation(aLocation.url,
                                                               aLocation.line);
 
-      return resolveAll([response, originalLocation])
+      return all([response, originalLocation])
         .then(([aResponse, {url, line}]) => {
           if (aResponse.actualLocation) {
             let actualOrigLocation = this.sources.getOriginalLocation(
@@ -585,6 +587,7 @@ ThreadActor.prototype = {
   _setBreakpoint: function TA__setBreakpoint(aLocation) {
     let breakpoints = this._breakpointStore[aLocation.url];
 
+    // Get or create the breakpoint actor for the given location
     let actor;
     if (breakpoints[aLocation.line].actor) {
       actor = breakpoints[aLocation.line].actor;
@@ -596,6 +599,7 @@ ThreadActor.prototype = {
       this._hooks.addToParentPool(actor);
     }
 
+    // Find all scripts matching the given location
     let scripts = this.dbg.findScripts(aLocation);
     if (scripts.length == 0) {
       return {
@@ -604,6 +608,10 @@ ThreadActor.prototype = {
       };
     }
 
+   /**
+     * For each script, if the given line has at least one entry point, set
+     * breakpoint on the bytecode offet for each of them.
+     */
     let found = false;
     for (let script of scripts) {
       let offsets = script.getLineOffsets(aLocation.line);
@@ -621,12 +629,25 @@ ThreadActor.prototype = {
       };
     }
 
+   /**
+     * If we get here, no breakpoint was set. This is because the given line
+     * has no entry points, for example because it is empty. As a fallback
+     * strategy, we try to set the breakpoint on the smallest line greater
+     * than or equal to the given line that as at least one entry point.
+     */
+
+    // Find all innermost scripts matching the given location
     let scripts = this.dbg.findScripts({
       url: aLocation.url,
       line: aLocation.line,
       innermost: true
     });
 
+    /**
+     * For each innermost script, look for the smallest line greater than or
+     * equal to the given line that has one or more entry points. If found, set
+     * a breakpoint on the bytecode offset for each of its entry points.
+     */
     let actualLocation;
     let found = false;
     for (let script of scripts) {
@@ -641,7 +662,7 @@ ThreadActor.prototype = {
             actualLocation = {
               url: aLocation.url,
               line: line,
-              column: aLocation.column
+              column: 0
             };
           }
           found = true;
@@ -652,6 +673,11 @@ ThreadActor.prototype = {
     if (found) {
       if (breakpoints[actualLocation.line] &&
           breakpoints[actualLocation.line].actor) {
+        /**
+         * We already have a breakpoint actor for the actual location, so
+         * actor we created earlier is now redundant. Delete it, update the
+         * breakpoint store, and return the actor for the actual location.
+         */
         actor.onDelete();
         delete breakpoints[aLocation.line];
         return {
@@ -659,10 +685,16 @@ ThreadActor.prototype = {
           actualLocation: actualLocation
         };
       } else {
+        /**
+         * We don't have a breakpoint actor for the actual location yet.
+         * Instead or creating a new actor, reuse the actor we created earlier,
+         * and update the breakpoint store.
+         */
         actor.location = actualLocation;
         breakpoints[actualLocation.line] = breakpoints[aLocation.line];
-        breakpoints[actualLocation.line].line = actualLocation.line;
         delete breakpoints[aLocation.line];
+        // WARNING: This overwrites aLocation.line
+        breakpoints[actualLocation.line].line = actualLocation.line;
         return {
           actor: actor.actorID,
           actualLocation: actualLocation
@@ -670,6 +702,10 @@ ThreadActor.prototype = {
       }
     }
 
+    /**
+     * If we get here, no line matching the given line was found, so just
+     * epically.
+     */
     return {
       error: "noCodeAtLineColumn",
       actor: actor.actorID
@@ -680,8 +716,8 @@ ThreadActor.prototype = {
    * Get the script and source lists from the debugger.
    */
   _discoverScriptsAndSources: function TA__discoverScriptsAndSources() {
-    return resolveAll([this._addScript(s)
-                       for (s of this.dbg.findScripts())]);
+    return all([this._addScript(s)
+                for (s of this.dbg.findScripts())]);
   },
 
   onSources: function TA_onSources(aRequest) {
@@ -690,6 +726,22 @@ ThreadActor.prototype = {
         sources: [s.form() for (s of this.sources.iter())]
       };
     });
+  },
+
+  /**
+   * Disassociate all breakpoint actors from their scripts and clear the
+   * breakpoint handlers. This method can be used when the thread actor intends
+   * to keep the breakpoint store, but needs to clear any actual breakpoints,
+   * e.g. due to a page navigation. This way the breakpoint actors' script
+   * caches won't hold on to the Debugger.Script objects leaking memory.
+   */
+  disableAllBreakpoints: function () {
+    for (let url in this._breakpointStore) {
+      for (let line in this._breakpointStore[url]) {
+        let bp = this._breakpointStore[url][line];
+        bp.actor.removeScripts();
+      }
+    }
   },
 
   /**
@@ -1220,8 +1272,11 @@ ThreadActor.prototype = {
         // affect the loop.
         for (let line = existing.length - 1; line >= 0; line--) {
           let bp = existing[line];
-          // Limit search to the line numbers contained in the new script.
-          if (bp && line >= aScript.startLine && line <= endLine) {
+          // Only consider breakpoints that are not already associated with
+          // scripts, and limit search to the line numbers contained in the new
+          // script.
+          if (bp && !bp.actor.scripts.length &&
+              line >= aScript.startLine && line <= endLine) {
             this._setBreakpoint(bp);
           }
         }
@@ -1230,57 +1285,12 @@ ThreadActor.prototype = {
       return true;
     });
   },
-
-  /**
-   * Finds the prototype chain cache for the provided object and returns the
-   * full cache entry, or null if the object is not found in the cache.
-   *
-   * @param aObject Debugger.Object
-   *        The object to look up.
-   * @returns the array of objects that correspond to the found cache entry.
-   */
-  _findProtoChain: function TA__findProtoChain(aObject) {
-    if (this._protoChains.has(aObject)) {
-      return this._protoChains.get(aObject);
-    }
-    for (let [obj, chain] of this._protoChains) {
-      if (chain.indexOf(aObject) != -1) {
-        return chain;
-      }
-    }
-    return null;
-  },
-
-  /**
-   * Removes the specified object and its prototype chain from the prototype
-   * chain cache. Returns true if the removal was successful and false if the
-   * object was not found in the cache.
-   *
-   * @param aObject Debugger.Object
-   *        The object to remove from the cache.
-   * @returns true if the object was removed, false if it was not found.
-   */
-  _removeFromProtoChain:function TA__removeFromProtoChain(aObject) {
-    let retval = false;
-    if (this._protoChains.has(aObject)) {
-      this._protoChains.delete(aObject);
-      retval = true;
-    }
-    for (let [obj, chain] of this._protoChains) {
-      let index = chain.indexOf(aObject);
-      if (index != -1) {
-        chain.splice(index);
-        retval = true;
-      }
-    }
-    return retval;
-  },
-
 };
 
 ThreadActor.prototype.requestTypes = {
   "attach": ThreadActor.prototype.onAttach,
   "detach": ThreadActor.prototype.onDetach,
+  "reconfigure": ThreadActor.prototype.onReconfigure,
   "resume": ThreadActor.prototype.onResume,
   "clientEvaluate": ThreadActor.prototype.onClientEvaluate,
   "frames": ThreadActor.prototype.onFrames,
@@ -1483,11 +1493,6 @@ ObjectActor.prototype = {
       this.registeredPool.objectActors.delete(this.obj);
     }
     this.registeredPool.removeActor(this);
-    this.disconnect();
-  },
-
-  disconnect: function OA_disconnect() {
-    this.threadActor._removeFromProtoChain(this.obj);
   },
 
   /**
@@ -1510,31 +1515,119 @@ ObjectActor.prototype = {
    *        The protocol request object.
    */
   onPrototypeAndProperties: function OA_onPrototypeAndProperties(aRequest) {
-    if (this.obj.proto) {
-      // Store the object and its prototype to the prototype chain cache, so that
-      // we can evaluate native getter methods for WebIDL attributes that are
-      // meant to be called on the instace and not on the prototype.
-      //
-      // TODO: after bug 801084, we could restrict the cache to objects where
-      // this.obj.hostAnnotations.isWebIDLObject == true
-      let chain = this.threadActor._findProtoChain(this.obj);
-      if (!chain) {
-        chain = [];
-        this.threadActor._protoChains.set(this.obj, chain);
-        chain.push(this.obj);
-      }
-      if (chain.indexOf(this.obj.proto) == -1) {
-        chain.push(this.obj.proto);
-      }
-    }
-
-    let ownProperties = {};
+    let ownProperties = Object.create(null);
     for (let name of this.obj.getOwnPropertyNames()) {
       ownProperties[name] = this._propertyDescriptor(name);
     }
     return { from: this.actorID,
              prototype: this.threadActor.createValueGrip(this.obj.proto),
-             ownProperties: ownProperties };
+             ownProperties: ownProperties,
+             safeGetterValues: this._findSafeGetterValues(ownProperties) };
+  },
+
+  /**
+   * Find the safe getter values for the current Debugger.Object, |this.obj|.
+   *
+   * @private
+   * @param object aOwnProperties
+   *        The object that holds the list of known ownProperties for
+   *        |this.obj|.
+   * @return object
+   *         An object that maps property names to safe getter descriptors as
+   *         defined by the remote debugging protocol.
+   */
+  _findSafeGetterValues: function OA__findSafeGetterValues(aOwnProperties)
+  {
+    let safeGetterValues = Object.create(null);
+    let obj = this.obj;
+    let level = 0;
+
+    while (obj) {
+      let getters = this._findSafeGetters(obj);
+      for (let name of getters) {
+        // Avoid overwriting properties from prototypes closer to this.obj. Also
+        // avoid providing safeGetterValues from prototypes if property |name|
+        // is already defined as an own property.
+        if (name in safeGetterValues ||
+            (obj != this.obj && name in aOwnProperties)) {
+          continue;
+        }
+
+        let desc = null, getter = null;
+        try {
+          desc = obj.getOwnPropertyDescriptor(name);
+          getter = desc.get;
+        } catch (ex) {
+          // The above can throw if the cache becomes stale.
+        }
+        if (!getter) {
+          obj._safeGetters = null;
+          continue;
+        }
+
+        let result = getter.call(this.obj);
+        if (result && !("throw" in result)) {
+          let getterValue = undefined;
+          if ("return" in result) {
+            getterValue = result.return;
+          } else if ("yield" in result) {
+            getterValue = result.yield;
+          }
+          safeGetterValues[name] = {
+            getterValue: this.threadActor.createValueGrip(getterValue),
+            getterPrototypeLevel: level,
+            enumerable: desc.enumerable,
+            writable: level == 0 ? desc.writable : true,
+          };
+        }
+      }
+
+      obj = obj.proto;
+      level++;
+    }
+
+    return safeGetterValues;
+  },
+
+  /**
+   * Find the safe getters for a given Debugger.Object. Safe getters are native
+   * getters which are safe to execute.
+   *
+   * @private
+   * @param Debugger.Object aObject
+   *        The Debugger.Object where you want to find safe getters.
+   * @return Set
+   *         A Set of names of safe getters. This result is cached for each
+   *         Debugger.Object.
+   */
+  _findSafeGetters: function OA__findSafeGetters(aObject)
+  {
+    if (aObject._safeGetters) {
+      return aObject._safeGetters;
+    }
+
+    let getters = new Set();
+    for (let name of aObject.getOwnPropertyNames()) {
+      let desc = null;
+      try {
+        desc = aObject.getOwnPropertyDescriptor(name);
+      } catch (e) {
+        // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
+        // allowed (bug 560072).
+      }
+      if (!desc || desc.value !== undefined || !("get" in desc)) {
+        continue;
+      }
+
+      let fn = desc.get;
+      if (fn && fn.callable && fn.class == "Function" &&
+          fn.script === undefined) {
+        getters.add(name);
+      }
+    }
+
+    aObject._safeGetters = getters;
+    return getters;
   },
 
   /**
@@ -1597,48 +1690,10 @@ ObjectActor.prototype = {
       retval.writable = desc.writable;
       retval.value = this.threadActor.createValueGrip(desc.value);
     } else {
-
       if ("get" in desc) {
-        let fn = desc.get;
-        if (fn && fn.callable && fn.class == "Function" &&
-            fn.script === undefined) {
-          // Maybe this is a DOM getter. Try calling it on every object in the
-          // prototype chain, until it doesn't throw.
-          let rv, chain = this.threadActor._findProtoChain(this.obj);
-          let index = chain.indexOf(this.obj);
-          for (let i = index; i >= 0; i--) {
-            // If we had hostAnnotations (bug 801084) we would have been able to
-            // filter on chain[i].hostAnnotations.isWebIDLObject or similar.
-            rv = fn.call(chain[i]);
-            // If the error D.O. wasn't completely opaque (bug 812764?), we
-            // could perhaps treat other errors differently.
-            if (rv && !("throw" in rv)) {
-              // If calling the getter produced a return value, create a data
-              // property descriptor.
-              if ("return" in rv) {
-                retval.value = this.threadActor.createValueGrip(rv.return);
-              } else if ("yield" in rv) {
-                retval.value = this.threadActor.createValueGrip(rv.yield);
-              }
-              break;
-            }
-          }
-
-          // If calling the getter didn't produce a data property descriptor,
-          // use the original accessor property descriptor.
-          if (!("value" in retval)) {
-            retval.get = this.threadActor.createValueGrip(fn);
-          }
-        } else {
-          // It doesn't look like a WebIDL attribute getter, just use the getter
-          // from the original accessor property descriptor.
-          retval.get = this.threadActor.createValueGrip(fn);
-        }
+        retval.get = this.threadActor.createValueGrip(desc.get);
       }
-
-      // If we couldn't convert it to a data property and there is a setter in
-      // the original property descriptor, use it.
-      if ("set" in desc && !("value" in retval)) {
+      if ("set" in desc) {
         retval.set = this.threadActor.createValueGrip(desc.set);
       }
     }
@@ -2002,6 +2057,16 @@ BreakpointActor.prototype = {
   },
 
   /**
+   * Remove the breakpoints from associated scripts and clear the script cache.
+   */
+  removeScripts: function () {
+    for (let script of this.scripts) {
+      script.clearBreakpoint(this);
+    }
+    this.scripts = [];
+  },
+
+  /**
    * A function that the engine calls when a breakpoint has been hit.
    *
    * @param aFrame Debugger.Frame
@@ -2030,12 +2095,9 @@ BreakpointActor.prototype = {
     // Remove from the breakpoint store.
     let scriptBreakpoints = this.threadActor._breakpointStore[this.location.url];
     delete scriptBreakpoints[this.location.line];
-    // Remove the actual breakpoint.
     this.threadActor._hooks.removeFromParentPool(this);
-    for (let script of this.scripts) {
-      script.clearBreakpoint(this);
-    }
-    this.scripts = null;
+    // Remove the actual breakpoint from the associated scripts.
+    this.removeScripts();
 
     return { from: this.actorID };
   }

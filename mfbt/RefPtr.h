@@ -11,6 +11,7 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/RefgraphInstrumentation.h"
+#include "mozilla/TypeTraits.h"
 
 namespace mozilla {
 
@@ -54,7 +55,11 @@ class RefCounted
 
   protected:
     RefCounted() : refCnt(0) { }
-    ~RefCounted() { MOZ_ASSERT(refCnt == detail::DEAD); }
+    ~RefCounted() {
+      MOZ_ASSERT(refCnt == detail::DEAD);
+      MOZ_STATIC_ASSERT((IsBaseOf<RefCounted<T>, T>::value),
+                        "T must derive from RefCounted<T>");
+    }
 
   public:
     // Compatibility with nsRefPtr.

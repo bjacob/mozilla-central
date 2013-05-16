@@ -37,6 +37,8 @@ public:
 #ifdef MOZ_DUMP_PAINTING
   virtual already_AddRefed<gfxImageSurface> Dump() { return nullptr; }
 #endif
+  
+  virtual void SetPaintWillResample(bool aResample) { }
 
 protected:
   ContentHost(const TextureInfo& aTextureInfo)
@@ -99,7 +101,7 @@ public:
 
   virtual TextureHost* GetTextureHost() MOZ_OVERRIDE;
 
-  void SetPaintWillResample(bool aResample) { mPaintWillResample = aResample; }
+  virtual void SetPaintWillResample(bool aResample) { mPaintWillResample = aResample; }
   // The client has destroyed its texture clients and we should destroy our
   // texture hosts and SurfaceDescriptors. Note that we don't immediately
   // destroy our front buffer so that we can continue to composite.
@@ -125,6 +127,7 @@ protected:
   // the old one which might still be used for compositing. So we store it
   // here and move it to mTextureHost once we do the first buffer swap.
   RefPtr<TextureHost> mNewFrontHost;
+  RefPtr<TextureHost> mNewFrontHostOnWhite;
   bool mPaintWillResample;
   bool mInitialised;
 };
@@ -148,7 +151,7 @@ public:
                             const nsIntRegion& aOldValidRegionBack,
                             nsIntRegion* aUpdatedRegionBack);
 
-  virtual bool EnsureTextureHost(TextureIdentifier aTextureId,
+  virtual void EnsureTextureHost(TextureIdentifier aTextureId,
                                  const SurfaceDescriptor& aSurface,
                                  ISurfaceAllocator* aAllocator,
                                  const TextureInfo& aTextureInfo) MOZ_OVERRIDE;
@@ -163,6 +166,7 @@ protected:
   // only swap it with the front buffer (mTextureHost) when we are told by the
   // content thread.
   RefPtr<TextureHost> mBackHost;
+  RefPtr<TextureHost> mBackHostOnWhite;
 };
 
 /**
@@ -184,7 +188,7 @@ public:
                             const nsIntRegion& aOldValidRegionBack,
                             nsIntRegion* aUpdatedRegionBack);
 
-  virtual bool EnsureTextureHost(TextureIdentifier aTextureId,
+  virtual void EnsureTextureHost(TextureIdentifier aTextureId,
                                  const SurfaceDescriptor& aSurface,
                                  ISurfaceAllocator* aAllocator,
                                  const TextureInfo& aTextureInfo) MOZ_OVERRIDE;

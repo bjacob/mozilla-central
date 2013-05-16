@@ -11,6 +11,7 @@
 #include "mozilla/dom/HTMLOptionElement.h"
 #include "mozilla/dom/HTMLSelectElementBinding.h"
 #include "mozilla/Util.h"
+#include "base/compiler_specific.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsError.h"
 #include "nsEventDispatcher.h"
@@ -20,7 +21,6 @@
 #include "nsGUIEvent.h"
 #include "nsIComboboxControlFrame.h"
 #include "nsIDocument.h"
-#include "nsIDOMEventTarget.h"
 #include "nsIFormControlFrame.h"
 #include "nsIForm.h"
 #include "nsIFormProcessor.h"
@@ -104,7 +104,7 @@ SafeOptionListMutation::~SafeOptionListMutation()
 HTMLSelectElement::HTMLSelectElement(already_AddRefed<nsINodeInfo> aNodeInfo,
                                      FromParser aFromParser)
   : nsGenericHTMLFormElement(aNodeInfo),
-    mOptions(new HTMLOptionsCollection(this)),
+    ALLOW_THIS_IN_INITIALIZER_LIST(mOptions(new HTMLOptionsCollection(this))),
     mIsDoneAddingChildren(!aFromParser),
     mDisabledChanged(false),
     mMutating(false),
@@ -630,7 +630,7 @@ HTMLSelectElement::Add(nsGenericHTMLElement& aElement,
   // Just in case we're not the parent, get the parent of the reference
   // element
   nsINode* parent = aBefore->GetParentNode();
-  if (!nsContentUtils::ContentIsDescendantOf(parent, this)) {
+  if (!parent || !nsContentUtils::ContentIsDescendantOf(parent, this)) {
     // NOT_FOUND_ERR: Raised if before is not a descendant of the SELECT
     // element.
     aError.Throw(NS_ERROR_DOM_NOT_FOUND_ERR);
@@ -1964,7 +1964,7 @@ HTMLSelectElement::SetSelectionChanged(bool aValue, bool aNotify)
 }
 
 JSObject*
-HTMLSelectElement::WrapNode(JSContext* aCx, JSObject* aScope)
+HTMLSelectElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
 {
   return HTMLSelectElementBinding::Wrap(aCx, aScope, this);
 }

@@ -52,8 +52,8 @@ public class AppConstants {
     null;
 #endif
 
-    public static final boolean MOZ_PROFILING =
-#ifdef MOZ_PROFILING
+    public static final boolean MOZ_SERVICES_HEALTHREPORT =
+#ifdef MOZ_SERVICES_HEALTHREPORT
     true;
 #else
     false;
@@ -73,6 +73,20 @@ public class AppConstants {
     false;
 #endif
 
+    public static final boolean MOZ_CRASHREPORTER =
+#if MOZ_CRASHREPORTER
+    true;
+#else
+    false;
+#endif
+
+    public static final boolean MOZ_DATA_REPORTING =
+#ifdef MOZ_DATA_REPORTING
+      true;
+#else
+    false;
+#endif
+
     public static final boolean MOZ_UPDATER =
 #ifdef MOZ_UPDATER
     true;
@@ -82,6 +96,13 @@ public class AppConstants {
 
     public static final boolean MOZ_WEBSMS_BACKEND =
 #ifdef MOZ_WEBSMS_BACKEND
+    true;
+#else
+    false;
+#endif
+
+    public static final boolean MOZ_ANDROID_BEAM =
+#ifdef MOZ_ANDROID_BEAM
     true;
 #else
     false;

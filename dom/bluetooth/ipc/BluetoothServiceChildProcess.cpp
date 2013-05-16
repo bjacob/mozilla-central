@@ -77,7 +77,7 @@ BluetoothServiceChildProcess::RegisterBluetoothSignalHandler(
                                               const nsAString& aNodeName,
                                               BluetoothSignalObserver* aHandler)
 {
-  if (gBluetoothChild) {
+  if (gBluetoothChild && !IsSignalRegistered(aNodeName)) {
     gBluetoothChild->SendRegisterSignalHandler(nsString(aNodeName));
   }
   BluetoothService::RegisterBluetoothSignalHandler(aNodeName, aHandler);
@@ -88,10 +88,10 @@ BluetoothServiceChildProcess::UnregisterBluetoothSignalHandler(
                                               const nsAString& aNodeName,
                                               BluetoothSignalObserver* aHandler)
 {
-  if (gBluetoothChild) {
+  BluetoothService::UnregisterBluetoothSignalHandler(aNodeName, aHandler);
+  if (gBluetoothChild && !IsSignalRegistered(aNodeName)) {
     gBluetoothChild->SendUnregisterSignalHandler(nsString(aNodeName));
   }
-  BluetoothService::UnregisterBluetoothSignalHandler(aNodeName, aHandler);
 }
 
 nsresult
@@ -111,11 +111,19 @@ BluetoothServiceChildProcess::GetDevicePropertiesInternal(
 }
 
 nsresult
+BluetoothServiceChildProcess::GetConnectedDevicePropertiesInternal(
+                                              uint16_t aProfileId,
+                                              BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable, ConnectedDevicePropertiesRequest(aProfileId));
+  return NS_OK;
+}
+nsresult
 BluetoothServiceChildProcess::GetPairedDevicePropertiesInternal(
                                      const nsTArray<nsString>& aDeviceAddresses,
                                      BluetoothReplyRunnable* aRunnable)
 {
-  DevicePropertiesRequest request;
+  PairedDevicePropertiesRequest request;
   request.addresses().AppendElements(aDeviceAddresses);
 
   SendRequest(aRunnable, request);
@@ -199,14 +207,9 @@ BluetoothServiceChildProcess::GetScoSocket(
 }
 
 nsresult
-BluetoothServiceChildProcess::GetSocketViaService(
-                                       const nsAString& aObjectPath,
-                                       const nsAString& aService,
-                                       BluetoothSocketType aType,
-                                       bool aAuth,
-                                       bool aEncrypt,
-                                       mozilla::ipc::UnixSocketConsumer* aConsumer,
-                                       BluetoothReplyRunnable* aRunnable)
+BluetoothServiceChildProcess::GetServiceChannel(const nsAString& aObjectPath,
+                                                const nsAString& aServiceUuid,
+                                                BluetoothProfileManagerBase* aManager)
 {
   MOZ_NOT_REACHED("This should never be called!");
   return NS_ERROR_FAILURE;
@@ -326,6 +329,24 @@ BluetoothServiceChildProcess::ConfirmReceivingFile(
   
   SendRequest(aRunnable,
               DenyReceivingFileRequest(nsString(aDeviceAddress)));
+}
+
+void
+BluetoothServiceChildProcess::ConnectSco(BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable, ConnectScoRequest());
+}
+
+void
+BluetoothServiceChildProcess::DisconnectSco(BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable, DisconnectScoRequest());
+}
+
+void
+BluetoothServiceChildProcess::IsScoConnected(BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable, IsScoConnectedRequest());
 }
 
 nsresult

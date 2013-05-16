@@ -46,8 +46,8 @@ class IonCode : public gc::Cell
     uint32_t jumpRelocTableBytes_;    // Size of the jump relocation table.
     uint32_t dataRelocTableBytes_;    // Size of the data relocation table.
     uint32_t preBarrierTableBytes_;   // Size of the prebarrier table.
-    JSBool invalidated_;            // Whether the code object has been invalidated.
-                                    // This is necessary to prevent GC tracing.
+    JSBool invalidated_;              // Whether the code object has been invalidated.
+                                      // This is necessary to prevent GC tracing.
 
 #if JS_BITS_PER_WORD == 32
     // Ensure IonCode is gc::Cell aligned.
@@ -149,16 +149,19 @@ struct IonScript
 {
   private:
     // Code pointer containing the actual method.
-    HeapPtr<IonCode> method_;
+    EncapsulatedPtr<IonCode> method_;
 
     // Deoptimization table used by this method.
-    HeapPtr<IonCode> deoptTable_;
+    EncapsulatedPtr<IonCode> deoptTable_;
 
     // Entrypoint for OSR, or NULL.
     jsbytecode *osrPc_;
 
     // Offset to OSR entrypoint from method_->raw(), or 0.
     uint32_t osrEntryOffset_;
+
+    // Offset to entrypoint skipping type arg check from method_->raw().
+    uint32_t skipArgCheckEntryOffset_;
 
     // Offset of the invalidation epilogue (which pushes this IonScript
     // and calls the invalidation thunk).
@@ -170,8 +173,8 @@ struct IonScript
     // per-platform if we want.
     uint32_t invalidateEpilogueDataOffset_;
 
-    // Flag set when we bailout, to avoid frequent bailouts.
-    uint32_t bailoutExpected_;
+    // Number of times this script bailed out without invalidation.
+    uint32_t numBailouts_;
 
     // Flag set when we bailed out in parallel execution and should ensure its
     // call targets are compiled.
@@ -249,14 +252,11 @@ struct IonScript
     }
 
   public:
-    // Number of times this function has tried to call a non-IM compileable function
-    uint32_t slowCallCount;
-
     SnapshotOffset *bailoutTable() {
         return (SnapshotOffset *) &bottomBuffer()[bailoutTable_];
     }
-    HeapValue *constants() {
-        return (HeapValue *) &bottomBuffer()[constantTable_];
+    EncapsulatedValue *constants() {
+        return (EncapsulatedValue *) &bottomBuffer()[constantTable_];
     }
     const SafepointIndex *safepointIndices() const {
         return const_cast<IonScript *>(this)->safepointIndices();
@@ -305,8 +305,8 @@ struct IonScript
     static inline size_t offsetOfOsrEntryOffset() {
         return offsetof(IonScript, osrEntryOffset_);
     }
-    static size_t offsetOfBailoutExpected() {
-        return offsetof(IonScript, bailoutExpected_);
+    static inline size_t offsetOfSkipArgCheckEntryOffset() {
+        return offsetof(IonScript, skipArgCheckEntryOffset_);
     }
 
   public:
@@ -333,6 +333,13 @@ struct IonScript
     uint32_t osrEntryOffset() const {
         return osrEntryOffset_;
     }
+    void setSkipArgCheckEntryOffset(uint32_t offset) {
+        JS_ASSERT(!skipArgCheckEntryOffset_);
+        skipArgCheckEntryOffset_ = offset;
+    }
+    uint32_t getSkipArgCheckEntryOffset() const {
+        return skipArgCheckEntryOffset_;
+    }
     bool containsCodeAddress(uint8_t *addr) const {
         return method()->raw() <= addr && addr <= method()->raw() + method()->instructionsSize();
     }
@@ -357,11 +364,14 @@ struct IonScript
         JS_ASSERT(invalidateEpilogueDataOffset_);
         return invalidateEpilogueDataOffset_;
     }
-    void setBailoutExpected() {
-        bailoutExpected_ = 1;
+    void incNumBailouts() {
+        numBailouts_++;
+    }
+    uint32_t numBailouts() const {
+        return numBailouts_;
     }
     bool bailoutExpected() const {
-        return bailoutExpected_ ? true : false;
+        return numBailouts_ > 0;
     }
     void setHasInvalidatedCallTarget() {
         hasInvalidatedCallTarget_ = true;
@@ -384,7 +394,7 @@ struct IonScript
     size_t safepointsSize() const {
         return safepointsSize_;
     }
-    RawScript getScript(size_t i) const {
+    JSScript *getScript(size_t i) const {
         JS_ASSERT(i < scriptEntries_);
         return scriptList()[i];
     }
@@ -397,7 +407,7 @@ struct IonScript
     size_t sizeOfIncludingThis(JSMallocSizeOfFun mallocSizeOf) const {
         return mallocSizeOf(this);
     }
-    HeapValue &getConstant(size_t index) {
+    EncapsulatedValue &getConstant(size_t index) {
         JS_ASSERT(index < numConstants());
         return constants()[index];
     }
@@ -438,7 +448,7 @@ struct IonScript
     void destroyCaches();
     void copySnapshots(const SnapshotWriter *writer);
     void copyBailoutTable(const SnapshotOffset *table);
-    void copyConstants(const HeapValue *vp);
+    void copyConstants(const Value *vp);
     void copySafepointIndices(const SafepointIndex *firstSafepointIndex, MacroAssembler &masm);
     void copyOsiIndices(const OsiIndex *firstOsiIndex, MacroAssembler &masm);
     void copyRuntimeData(const uint8_t *data);

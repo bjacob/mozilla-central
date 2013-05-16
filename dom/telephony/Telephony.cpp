@@ -296,14 +296,14 @@ Telephony::GetActive(JS::Value* aActive)
   nsresult rv;
   nsIScriptContext* sc = GetContextForEventHandlers(&rv);
   NS_ENSURE_SUCCESS(rv, rv);
-  AutoPushJSContext cx(sc ? sc->GetNativeContext() : nullptr);
-  if (sc) {
-    rv =
-      nsContentUtils::WrapNative(cx, sc->GetNativeGlobal(),
-                                 mActiveCall->ToISupports(), aActive);
-    NS_ENSURE_SUCCESS(rv, rv);
+  if (!sc) {
+    return NS_OK;
   }
-  return NS_OK;
+
+  AutoPushJSContext cx(sc->GetNativeContext());
+  JS::Rooted<JSObject*> global(cx, sc->GetNativeGlobal());
+  return nsContentUtils::WrapNative(cx, global, mActiveCall->ToISupports(),
+                                    aActive);
 }
 
 NS_IMETHODIMP
@@ -366,7 +366,8 @@ NS_IMPL_EVENT_HANDLER(Telephony, callschanged)
 
 NS_IMETHODIMP
 Telephony::CallStateChanged(uint32_t aCallIndex, uint16_t aCallState,
-                            const nsAString& aNumber, bool aIsActive)
+                            const nsAString& aNumber, bool aIsActive,
+                            bool aIsOutgoing, bool aIsEmergency)
 {
   NS_ASSERTION(aCallIndex != kOutgoingPlaceholderCallIndex,
                "This should never happen!");
@@ -399,6 +400,7 @@ Telephony::CallStateChanged(uint32_t aCallIndex, uint16_t aCallState,
       aCallState != nsITelephonyProvider::CALL_STATE_INCOMING &&
       outgoingCall) {
     outgoingCall->UpdateCallIndex(aCallIndex);
+    outgoingCall->UpdateEmergency(aIsEmergency);
     modifiedCall.swap(outgoingCall);
   }
 
@@ -425,7 +427,7 @@ Telephony::CallStateChanged(uint32_t aCallIndex, uint16_t aCallState,
   }
 
   nsRefPtr<TelephonyCall> call =
-    TelephonyCall::Create(this, aNumber, aCallState, aCallIndex);
+    TelephonyCall::Create(this, aNumber, aCallState, aCallIndex, aIsEmergency);
   NS_ASSERTION(call, "This should never fail!");
 
   NS_ASSERTION(mCalls.Contains(call), "Should have auto-added new call!");
@@ -441,6 +443,7 @@ Telephony::CallStateChanged(uint32_t aCallIndex, uint16_t aCallState,
 NS_IMETHODIMP
 Telephony::EnumerateCallState(uint32_t aCallIndex, uint16_t aCallState,
                               const nsAString& aNumber, bool aIsActive,
+                              bool aIsOutgoing, bool aIsEmergency,
                               bool* aContinue)
 {
   // Make sure we don't somehow add duplicates.
@@ -454,7 +457,7 @@ Telephony::EnumerateCallState(uint32_t aCallIndex, uint16_t aCallState,
   }
 
   nsRefPtr<TelephonyCall> call =
-    TelephonyCall::Create(this, aNumber, aCallState, aCallIndex);
+    TelephonyCall::Create(this, aNumber, aCallState, aCallIndex, aIsEmergency);
   NS_ASSERTION(call, "This should never fail!");
 
   NS_ASSERTION(mCalls.Contains(call), "Should have auto-added new call!");

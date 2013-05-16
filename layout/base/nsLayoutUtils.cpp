@@ -114,6 +114,7 @@ typedef FrameMetrics::ViewID ViewID;
 /* static */ uint32_t nsLayoutUtils::sFontSizeInflationMaxRatio;
 /* static */ bool nsLayoutUtils::sFontSizeInflationForceEnabled;
 /* static */ bool nsLayoutUtils::sFontSizeInflationDisabledInMasterProcess;
+/* static */ bool nsLayoutUtils::sInvalidationDebuggingIsEnabled;
 
 static ViewID sScrollIdCounter = FrameMetrics::START_SCROLL_ID;
 
@@ -1077,12 +1078,9 @@ nsLayoutUtils::GetActiveScrolledRootFor(nsDisplayItem* aItem,
                                         nsDisplayListBuilder* aBuilder,
                                         bool* aShouldFixToViewport)
 {
-  nsIFrame* f = aItem->GetUnderlyingFrame();
+  nsIFrame* f = aItem->Frame();
   if (aShouldFixToViewport) {
     *aShouldFixToViewport = false;
-  }
-  if (!f) {
-    return nullptr;
   }
   if (aItem->ShouldFixToViewport(aBuilder)) {
     if (aShouldFixToViewport) {
@@ -4657,6 +4655,9 @@ nsLayoutUtils::SurfaceFromElement(HTMLCanvasElement* aElement,
       surf = gfxPlatform::GetPlatform()->CreateOffscreenSurface(size, gfxASurface::CONTENT_COLOR_ALPHA);
     }
 
+    if (!surf)
+      return result;
+
     nsRefPtr<gfxContext> ctx = new gfxContext(surf);
     // XXX shouldn't use the external interface, but maybe we can layerify this
     uint32_t flags = premultAlpha ? HTMLCanvasElement::RenderFlagPremultAlpha : 0;
@@ -4979,6 +4980,8 @@ nsLayoutUtils::Initialize()
                                "font.size.inflation.forceEnabled");
   Preferences::AddBoolVarCache(&sFontSizeInflationDisabledInMasterProcess,
                                "font.size.inflation.disabledInMasterProcess");
+  Preferences::AddBoolVarCache(&sInvalidationDebuggingIsEnabled,
+                               "nglayout.debug.invalidation");
 
 #ifdef MOZ_FLEXBOX
   Preferences::RegisterCallback(FlexboxEnabledPrefChangeCallback,

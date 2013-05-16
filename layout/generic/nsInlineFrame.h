@@ -184,7 +184,7 @@ public:
   friend nsIFrame* NS_NewFirstLineFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
 #ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const;
+  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
 #endif
   virtual nsIAtom* GetType() const MOZ_OVERRIDE;
   NS_IMETHOD Reflow(nsPresContext* aPresContext,
@@ -192,6 +192,8 @@ public:
                     const nsHTMLReflowState& aReflowState,
                     nsReflowStatus& aStatus) MOZ_OVERRIDE;
 
+  virtual void Init(nsIContent* aContent, nsIFrame* aParent,
+                    nsIFrame* aPrevInFlow) MOZ_OVERRIDE;
   virtual void PullOverflowsFromPrevInFlow() MOZ_OVERRIDE;
 
 protected:

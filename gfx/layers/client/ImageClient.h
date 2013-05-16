@@ -82,7 +82,12 @@ public:
 
   virtual bool UpdateImage(ImageContainer* aContainer, uint32_t aContentFlags);
 
-  void EnsureTextureClient(TextureClientType aType);
+  /**
+   * Creates a texture client of the requested type.
+   * Returns true if the texture client was created succesfully,
+   * false otherwise.
+   */
+  bool EnsureTextureClient(TextureClientType aType);
 
   virtual void Updated();
 

@@ -35,7 +35,9 @@ RegExpObjectBuilder::getOrCreate()
     if (reobj_)
         return true;
 
-    JSObject *obj = NewBuiltinClassInstance(cx, &RegExpClass);
+    // Note: RegExp objects are always allocated in the tenured heap. This is
+    // not strictly required, but simplifies embedding them in jitcode.
+    JSObject *obj = NewBuiltinClassInstance(cx, &RegExpClass, TenuredObject);
     if (!obj)
         return false;
     obj->initPrivate(NULL);
@@ -49,7 +51,10 @@ RegExpObjectBuilder::getOrCreateClone(RegExpObject *proto)
 {
     JS_ASSERT(!reobj_);
 
-    JSObject *clone = NewObjectWithGivenProto(cx, &RegExpClass, proto, proto->getParent());
+    // Note: RegExp objects are always allocated in the tenured heap. This is
+    // not strictly required, but simplifies embedding them in jitcode.
+    JSObject *clone = NewObjectWithGivenProto(cx, &RegExpClass, proto, proto->getParent(),
+                                              TenuredObject);
     if (!clone)
         return false;
     clone->initPrivate(NULL);
@@ -169,7 +174,7 @@ ScopedMatchPairs::allocOrExpandArray(size_t pairCount)
     }
 
     JS_ASSERT(!pairs_);
-    pairs_ = (MatchPair *)lifoAlloc_->alloc(sizeof(MatchPair) * pairCount);
+    pairs_ = (MatchPair *)lifoScope_.alloc().alloc(sizeof(MatchPair) * pairCount);
     if (!pairs_)
         return false;
 
@@ -191,7 +196,7 @@ VectorMatchPairs::allocOrExpandArray(size_t pairCount)
 /* RegExpObject */
 
 static void
-regexp_trace(JSTracer *trc, RawObject obj)
+regexp_trace(JSTracer *trc, JSObject *obj)
 {
      /*
       * We have to check both conditions, since:
@@ -265,7 +270,7 @@ RegExpObject::createShared(JSContext *cx, RegExpGuard *g)
     return true;
 }
 
-RawShape
+Shape *
 RegExpObject::assignInitialShape(JSContext *cx)
 {
     JS_ASSERT(isRegExp());

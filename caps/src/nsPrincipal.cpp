@@ -402,7 +402,9 @@ nsPrincipal::CheckMayLoad(nsIURI* aURI, bool aReport, bool aAllowIfInheritsPrinc
           NS_FAILED(codebaseFileURL->GetFile(getter_AddRefs(codebaseFile))) ||
           !targetFile || !codebaseFile ||
           NS_FAILED(targetFile->Normalize()) ||
+#ifndef MOZ_WIDGET_ANDROID
           NS_FAILED(codebaseFile->Normalize()) ||
+#endif
           NS_FAILED(targetFile->IsDirectory(&targetIsDir)) ||
           targetIsDir) {
         if (aReport) {
@@ -491,7 +493,7 @@ nsPrincipal::SetDomain(nsIURI* aDomain)
 
   // Recompute all wrappers between compartments using this principal and other
   // non-chrome compartments.
-  SafeAutoJSContext cx;
+  AutoSafeJSContext cx;
   JSPrincipals *principals = nsJSPrincipals::get(static_cast<nsIPrincipal*>(this));
   bool success = js::RecomputeWrappers(cx, js::ContentCompartmentsOnly(),
                                        js::CompartmentsWithPrincipals(principals));

@@ -15,6 +15,10 @@ namespace layers {
 TemporaryRef<TextureHost> CreateTextureHostOGL(SurfaceDescriptorType aDescriptorType,
                                                uint32_t aTextureHostFlags,
                                                uint32_t aTextureFlags);
+// implemented in BasicCompositor.cpp
+TemporaryRef<TextureHost> CreateBasicTextureHost(SurfaceDescriptorType aDescriptorType,
+                                                 uint32_t aTextureHostFlags,
+                                                 uint32_t aTextureFlags);
 
 TemporaryRef<TextureHost> CreateTextureHostD3D9(SurfaceDescriptorType aDescriptorType,
                                                 uint32_t aTextureHostFlags,
@@ -24,19 +28,39 @@ TemporaryRef<TextureHost> CreateTextureHostD3D9(SurfaceDescriptorType aDescripto
   return nullptr;
 }
 
+#ifdef XP_WIN
+TemporaryRef<TextureHost> CreateTextureHostD3D11(SurfaceDescriptorType aDescriptorType,
+                                                 uint32_t aTextureHostFlags,
+                                                 uint32_t aTextureFlags);
+#endif
+
 /* static */ TemporaryRef<TextureHost>
 TextureHost::CreateTextureHost(SurfaceDescriptorType aDescriptorType,
                                uint32_t aTextureHostFlags,
                                uint32_t aTextureFlags)
 {
   switch (Compositor::GetBackend()) {
-    case LAYERS_OPENGL : return CreateTextureHostOGL(aDescriptorType,
-                                                     aTextureHostFlags,
-                                                     aTextureFlags);
-    case LAYERS_D3D9 : return CreateTextureHostD3D9(aDescriptorType,
-                                                    aTextureHostFlags,
-                                                    aTextureFlags);
-    default : return nullptr;
+    case LAYERS_OPENGL:
+      return CreateTextureHostOGL(aDescriptorType,
+                                  aTextureHostFlags,
+                                  aTextureFlags);
+    case LAYERS_D3D9:
+      return CreateTextureHostD3D9(aDescriptorType,
+                                   aTextureHostFlags,
+                                   aTextureFlags);
+#ifdef XP_WIN
+    case LAYERS_D3D11:
+      return CreateTextureHostD3D11(aDescriptorType,
+                                    aTextureHostFlags,
+                                    aTextureFlags);
+#endif
+    case LAYERS_BASIC:
+      return CreateBasicTextureHost(aDescriptorType,
+                                    aTextureHostFlags,
+                                    aTextureFlags);
+    default:
+      MOZ_NOT_REACHED("Couldn't create texture host");
+      return nullptr;
   }
 }
 

@@ -60,6 +60,7 @@ CPPSRCS += \
   UeventPoller.cpp \
   GonkSwitch.cpp \
   GonkFMRadio.cpp \
+  GonkDiskSpaceWatcher.cpp \
   $(NULL)
 else ifeq (Linux,$(OS_TARGET))
 CPPSRCS += \
@@ -134,6 +135,7 @@ CPPSRCS += \
   FallbackProcessPriority.cpp \
   FallbackFMRadio.cpp \
   FallbackFactoryReset.cpp \
+  FallbackDiskSpaceWatcher.cpp \
   $(NULL)
 endif #}
 
@@ -153,4 +155,5 @@ ifeq (gonk,$(MOZ_WIDGET_TOOLKIT))
 # So that we can call nsScreenManagerGonk::GetConfiguration().
 LOCAL_INCLUDES += -I$(topsrcdir)/widget/gonk
 LOCAL_INCLUDES += -I$(topsrcdir)/widget/xpwidgets
+LOCAL_INCLUDES += -I$(ANDROID_SOURCE)/hardware/libhardware_legacy/include
 endif

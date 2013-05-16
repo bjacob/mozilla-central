@@ -25,11 +25,7 @@ Cu.import("resource://gre/modules/jsdebugger.jsm");
 addDebuggerToGlobal(this);
 
 Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
-const { defer, resolve, reject } = Promise;
-let promisedArray = Promise.promised(Array);
-function resolveAll(aPromises) {
-  return promisedArray.apply(null, aPromises);
-};
+const { defer, resolve, reject, all } = Promise;
 
 Cu.import("resource://gre/modules/devtools/SourceMap.jsm");
 
@@ -45,17 +41,6 @@ function dbg_assert(cond, e) {
   }
 }
 
-/* Turn the error e into a string, without fail. */
-function safeErrorString(aError) {
-  try {
-    var s = aError.toString();
-    if (typeof s === "string")
-      return s;
-  } catch (ee) { }
-
-  return "<failed trying to find error description>";
-}
-
 loadSubScript.call(this, "chrome://global/content/devtools/dbg-transport.js");
 
 // XPCOM constructors
@@ -68,14 +53,15 @@ const ServerSocket = CC("@mozilla.org/network/server-socket;1",
  */
 var DebuggerServer = {
   _listener: null,
+  _initialized: false,
   _transportInitialized: false,
   xpcInspector: null,
   // Number of currently open TCP connections.
   _socketConnections: 0,
   // Map of global actor names to actor constructors provided by extensions.
-  globalActorFactories: null,
+  globalActorFactories: {},
   // Map of tab actor names to actor constructors provided by extensions.
-  tabActorFactories: null,
+  tabActorFactories: {},
 
   LONG_STRING_LENGTH: 10000,
   LONG_STRING_INITIAL_LENGTH: 1000,
@@ -130,8 +116,7 @@ var DebuggerServer = {
     this.initTransport(aAllowConnectionCallback);
     this.addActors("chrome://global/content/devtools/dbg-script-actors.js");
 
-    this.globalActorFactories = {};
-    this.tabActorFactories = {};
+    this._initialized = true;
   },
 
   /**
@@ -155,7 +140,7 @@ var DebuggerServer = {
                             this._defaultAllowConnection;
   },
 
-  get initialized() { return !!this.globalActorFactories; },
+  get initialized() this._initialized,
 
   /**
    * Performs cleanup tasks before shutting down the debugger server, if no
@@ -167,10 +152,11 @@ var DebuggerServer = {
   destroy: function DS_destroy() {
     if (Object.keys(this._connections).length == 0) {
       this.closeListener();
-      delete this.globalActorFactories;
-      delete this.tabActorFactories;
+      this.globalActorFactories = {};
+      this.tabActorFactories = {};
       delete this._allowConnection;
       this._transportInitialized = false;
+      this._initialized = false;
       dumpn("Debugger server is shut down.");
     }
   },
@@ -196,9 +182,16 @@ var DebuggerServer = {
     this.addActors("chrome://global/content/devtools/dbg-webconsole-actors.js");
     this.addTabActor(this.WebConsoleActor, "consoleActor");
     this.addGlobalActor(this.WebConsoleActor, "consoleActor");
+
+    this.addActors("chrome://global/content/devtools/dbg-gcli-actors.js");
+    this.addTabActor(this.GcliActor, "gcliActor");
+    this.addGlobalActor(this.GcliActor, "gcliActor");
 #endif
     if ("nsIProfiler" in Ci)
       this.addActors("chrome://global/content/devtools/dbg-profiler-actors.js");
+
+    this.addActors("chrome://global/content/devtools/dbg-styleeditor-actors.js");
+    this.addTabActor(this.StyleEditorActor, "styleEditorActor");
   },
 
   /**
@@ -282,21 +275,18 @@ var DebuggerServer = {
 
   // nsIServerSocketListener implementation
 
-  onSocketAccepted: function DS_onSocketAccepted(aSocket, aTransport) {
+  onSocketAccepted:
+  makeInfallible(function DS_onSocketAccepted(aSocket, aTransport) {
     if (!this._allowConnection()) {
       return;
     }
     dumpn("New debugging connection on " + aTransport.host + ":" + aTransport.port);
 
-    try {
-      let input = aTransport.openInputStream(0, 0, 0);
-      let output = aTransport.openOutputStream(0, 0, 0);
-      let transport = new DebuggerTransport(input, output);
-      DebuggerServer._onConnection(transport);
-    } catch (e) {
-      dumpn("Couldn't initialize connection: " + e + " - " + e.stack);
-    }
-  },
+    let input = aTransport.openInputStream(0, 0, 0);
+    let output = aTransport.openOutputStream(0, 0, 0);
+    let transport = new DebuggerTransport(input, output);
+    DebuggerServer._onConnection(transport);
+  }, "DebuggerServer.onSocketAccepted"),
 
   onStopListening: function DS_onStopListening(aSocket, status) {
     dumpn("onStopListening, status: " + status);

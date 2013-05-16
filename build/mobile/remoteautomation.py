@@ -74,7 +74,7 @@ class RemoteAutomation(Automation):
         status = proc.wait(timeout = maxTime)
         self.lastTestSeen = proc.getLastTestSeen
 
-        if (status == 1 and self._devicemanager.processExist(proc.procName)):
+        if (status == 1 and self._devicemanager.getTopActivity() == proc.procName):
             # Then we timed out, make sure Fennec is dead
             if maxTime:
                 print "TEST-UNEXPECTED-FAIL | %s | application ran for longer than " \
@@ -89,7 +89,7 @@ class RemoteAutomation(Automation):
     def checkForJavaException(self, logcat):
         found_exception = False
         for i, line in enumerate(logcat):
-            if "REPORTING UNCAUGHT EXCEPTION" in line:
+            if "REPORTING UNCAUGHT EXCEPTION" in line or "FATAL EXCEPTION" in line:
                 # Strip away the date, time, logcat tag and pid from the next two lines and
                 # concatenate the remainder to form a concise summary of the exception. 
                 #
@@ -121,13 +121,20 @@ class RemoteAutomation(Automation):
         javaException = self.checkForJavaException(logcat)
         if javaException:
             return True
+
+        # If crash reporting is disabled (MOZ_CRASHREPORTER!=1), we can't say
+        # anything.
+        if not self.CRASHREPORTER:
+            return False
+
         try:
             dumpDir = tempfile.mkdtemp()
             remoteCrashDir = self._remoteProfile + '/minidumps/'
             if not self._devicemanager.dirExists(remoteCrashDir):
-                # As of this writing, the minidumps directory is automatically
-                # created when fennec (first) starts, so its lack of presence
-                # is a hint that something went wrong.
+                # If crash reporting is enabled (MOZ_CRASHREPORTER=1), the
+                # minidumps directory is automatically created when Fennec
+                # (first) starts, so its lack of presence is a hint that
+                # something went wrong.
                 print "Automation Error: No crash directory (%s) found on remote device" % remoteCrashDir
                 # Whilst no crash was found, the run should still display as a failure
                 return True
@@ -262,7 +269,7 @@ class RemoteAutomation(Automation):
             if timeout == None:
                 timeout = self.timeout
 
-            while (self.dm.processExist(self.procName)):
+            while (self.dm.getTopActivity() == self.procName):
                 t = self.stdout
                 if t != '': print t
                 time.sleep(interval)

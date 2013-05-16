@@ -42,6 +42,8 @@ var gDebug;
 var gCurrentTestStartTime;
 var gClearingForAssertionCheck = false;
 
+const TYPE_LOAD = 'load';  // test without a reference (just test that it does
+                           // not assert, crash, hang, or leak)
 const TYPE_SCRIPT = 'script'; // test contains individual test results
 
 function markupDocumentViewer() {
@@ -234,6 +236,10 @@ function shouldWaitForReftestWaitRemoval(contentRootElement) {
                              .indexOf("reftest-wait") != -1;
 }
 
+function getNoPaintElements(contentRootElement) {
+  return contentRootElement.getElementsByClassName('reftest-no-paint');
+}
+
 // Initial state. When the document has loaded and all MozAfterPaint events and
 // all explicit paint waits are flushed, we can fire the MozReftestInvalidate
 // event and move to the next state.
@@ -360,6 +366,10 @@ function WaitForTestEnd(contentRootElement, inPrintMode) {
             // Notify the test document that now is a good time to test some invalidation
             LogInfo("MakeProgress: dispatching MozReftestInvalidate");
             if (contentRootElement) {
+                var elements = getNoPaintElements(contentRootElement);
+                for (var i = 0; i < elements.length; ++i) {
+                  windowUtils().checkAndClearPaintedState(elements[i]);
+                }
                 var notification = content.document.createEvent("Events");
                 notification.initEvent("MozReftestInvalidate", true, false);
                 contentRootElement.dispatchEvent(notification);
@@ -407,6 +417,14 @@ function WaitForTestEnd(contentRootElement, inPrintMode) {
                     LogInfo("MakeProgress: waiting for MozAfterPaint");
                 }
                 return;
+            }
+            if (contentRootElement) {
+              var elements = getNoPaintElements(contentRootElement);
+              for (var i = 0; i < elements.length; ++i) {
+                  if (windowUtils().checkAndClearPaintedState(elements[i])) {
+                      LogError("REFTEST TEST-UNEXPECTED-FAIL | element marked as reftest-no-paint got repainted!");
+                  }
+              }
             }
             LogInfo("MakeProgress: Completed");
             state = STATE_COMPLETED;
@@ -622,6 +640,12 @@ const SYNC_DEFAULT = 0x0;
 const SYNC_ALLOW_DISABLE = 0x1;
 function SynchronizeForSnapshot(flags)
 {
+    if (gCurrentTestType == TYPE_SCRIPT ||
+        gCurrentTestType == TYPE_LOAD) {
+        // Script tests or load-only tests do not need any snapshotting
+        return;
+    }
+
     if (flags & SYNC_ALLOW_DISABLE) {
         var docElt = content.document.documentElement;
         if (docElt && docElt.hasAttribute("reftest-no-sync-layers")) {

@@ -27,10 +27,6 @@
 #include "vm/RegExpObject-inl.h"
 #include "vm/RegExpStatics-inl.h"
 
-#ifdef JS_METHODJIT
-#include "methodjit/Retcon.h"
-#endif
-
 using namespace js;
 
 JSObject *
@@ -205,7 +201,7 @@ GlobalObject::initFunctionAndObjectClasses(JSContext *cx)
     /* Create |Function.prototype| next so we can create other functions. */
     RootedFunction functionProto(cx);
     {
-        RawObject functionProto_ = NewObjectWithGivenProto(cx, &FunctionClass, objectProto, self,
+        JSObject *functionProto_ = NewObjectWithGivenProto(cx, &FunctionClass, objectProto, self,
                                                            SingletonObject);
         if (!functionProto_)
             return NULL;
@@ -216,7 +212,7 @@ GlobalObject::initFunctionAndObjectClasses(JSContext *cx)
          * give it the guts to be one.
          */
         {
-            RawObject proto = NewFunction(cx, functionProto, NULL, 0, JSFunction::INTERPRETED,
+            JSObject *proto = NewFunction(cx, functionProto, NULL, 0, JSFunction::INTERPRETED,
                                           self, NullPtr());
             if (!proto)
                 return NULL;
@@ -365,7 +361,7 @@ GlobalObject::initFunctionAndObjectClasses(JSContext *cx)
 
     /* ES5 15.1.2.1. */
     RootedId evalId(cx, NameToId(cx->names().eval));
-    RawObject evalobj = DefineFunction(cx, self, evalId, IndirectEval, 1, JSFUN_STUB_GSOPS);
+    JSObject *evalobj = DefineFunction(cx, self, evalId, IndirectEval, 1, JSFUN_STUB_GSOPS);
     if (!evalobj)
         return NULL;
     self->setOriginalEval(evalobj);
@@ -559,15 +555,15 @@ js::DefinePropertiesAndBrand(JSContext *cx, JSObject *obj_,
 {
     RootedObject obj(cx, obj_);
 
-    if (ps && !JS_DefineProperties(cx, obj, const_cast<JSPropertySpec*>(ps)))
+    if (ps && !JS_DefineProperties(cx, obj, ps))
         return false;
-    if (fs && !JS_DefineFunctions(cx, obj, const_cast<JSFunctionSpec*>(fs)))
+    if (fs && !JS_DefineFunctions(cx, obj, fs))
         return false;
     return true;
 }
 
 static void
-GlobalDebuggees_finalize(FreeOp *fop, RawObject obj)
+GlobalDebuggees_finalize(FreeOp *fop, JSObject *obj)
 {
     fop->delete_((GlobalObject::DebuggerVector *) obj->getPrivate());
 }

@@ -25,6 +25,7 @@
     if (error_count == 7) {
       finish();
     }
+    throw new Error("window.onerror may throw");
     return false;
   }
 
@@ -63,11 +64,11 @@
       }, getFail(new Error));
       throw new Error("Expected");
     });
-  }, 1);
+  });
 
   function finish() {
     window.onerror = oldOnError;
-    ok(error_count == 7, "Seven expected errors verified.");
+    is(error_count, 7, "Seven expected errors verified.");
     SimpleTest.finish();
   }
 

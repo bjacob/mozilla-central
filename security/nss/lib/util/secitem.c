@@ -4,18 +4,15 @@
 
 /*
  * Support routines for SECItem data structure.
- *
- * $Id$
  */
 
 #include "seccomon.h"
 #include "secitem.h"
-#include "base64.h"
 #include "secerr.h"
 #include "secport.h"
 
 SECItem *
-SECITEM_AllocItem(PRArenaPool *arena, SECItem *item, unsigned int len)
+SECITEM_AllocItem(PLArenaPool *arena, SECItem *item, unsigned int len)
 {
     SECItem *result = NULL;
     void *mark = NULL;
@@ -79,7 +76,7 @@ loser:
 }
 
 SECStatus
-SECITEM_ReallocItem(PRArenaPool *arena, SECItem *item, unsigned int oldlen,
+SECITEM_ReallocItem(PLArenaPool *arena, SECItem *item, unsigned int oldlen,
 		    unsigned int newlen)
 {
     PORT_Assert(item != NULL);
@@ -167,7 +164,7 @@ SECITEM_DupItem(const SECItem *from)
 }
 
 SECItem *
-SECITEM_ArenaDupItem(PRArenaPool *arena, const SECItem *from)
+SECITEM_ArenaDupItem(PLArenaPool *arena, const SECItem *from)
 {
     SECItem *to;
     
@@ -204,7 +201,7 @@ SECITEM_ArenaDupItem(PRArenaPool *arena, const SECItem *from)
 }
 
 SECStatus
-SECITEM_CopyItem(PRArenaPool *arena, SECItem *to, const SECItem *from)
+SECITEM_CopyItem(PLArenaPool *arena, SECItem *to, const SECItem *from)
 {
     to->type = from->type;
     if (from->data && from->len) {
@@ -302,6 +299,12 @@ SECITEM_AllocArray(PLArenaPool *arena, SECItemArray *array, unsigned int len)
     SECItemArray *result = NULL;
     void *mark = NULL;
 
+    if (array != NULL && array->items != NULL) {
+        PORT_Assert(0);
+        PORT_SetError(SEC_ERROR_INVALID_ARGS);
+        return NULL;
+    }
+
     if (arena != NULL) {
         mark = PORT_ArenaMark(arena);
     }
@@ -316,7 +319,6 @@ SECITEM_AllocArray(PLArenaPool *arena, SECItemArray *array, unsigned int len)
             goto loser;
         }
     } else {
-        PORT_Assert(array->items == NULL);
         result = array;
     }
 
@@ -337,30 +339,27 @@ SECITEM_AllocArray(PLArenaPool *arena, SECItemArray *array, unsigned int len)
     if (mark) {
         PORT_ArenaUnmark(arena, mark);
     }
-    return(result);
+    return result;
 
 loser:
     if ( arena != NULL ) {
         if (mark) {
             PORT_ArenaRelease(arena, mark);
         }
-        if (array != NULL) {
-            array->items = NULL;
-            array->len = 0;
-        }
     } else {
         if (result != NULL && array == NULL) {
             PORT_Free(result);
         }
-        /*
-         * If array is not NULL, the above has set array->data and
-         * array->len to 0.
-         */
     }
-    return(NULL);
+    if (array != NULL) {
+        array->items = NULL;
+        array->len = 0;
+    }
+    return NULL;
 }
 
-void secitem_FreeArray(SECItemArray *array, PRBool zero_items, PRBool freeit)
+static void
+secitem_FreeArray(SECItemArray *array, PRBool zero_items, PRBool freeit)
 {
     unsigned int i;
 
@@ -378,6 +377,9 @@ void secitem_FreeArray(SECItemArray *array, PRBool zero_items, PRBool freeit)
             }
         }
     }
+    PORT_Free(array->items);
+    array->items = NULL;
+    array->len = 0;
 
     if (freeit)
         PORT_Free(array);

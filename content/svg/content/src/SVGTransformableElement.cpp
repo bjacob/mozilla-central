@@ -24,7 +24,7 @@ SVGTransformableElement::Transform()
   // We're creating a DOM wrapper, so we must tell GetAnimatedTransformList
   // to allocate the SVGAnimatedTransformList if it hasn't already done so:
   return SVGAnimatedTransformList::GetDOMWrapper(
-           GetAnimatedTransformList(DO_ALLOCATE), this).get();
+           GetAnimatedTransformList(DO_ALLOCATE), this);
 
 }
 
@@ -173,9 +173,7 @@ SVGTransformableElement::GetBBox(ErrorResult& rv)
     return nullptr;
   }
 
-  nsRefPtr<SVGRect> rect;
-  rv = NS_NewSVGRect(getter_AddRefs(rect), nsSVGUtils::GetBBox(frame));
-  return rect.forget();
+  return NS_NewSVGRect(this, nsSVGUtils::GetBBox(frame));
 }
 
 already_AddRefed<SVGMatrix>

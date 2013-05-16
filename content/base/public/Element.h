@@ -17,8 +17,6 @@
 #include "nsChangeHint.h"                  // for enum
 #include "nsEventStates.h"                 // for member
 #include "mozilla/dom/DirectionalityUtils.h"
-#include "nsCOMPtr.h"
-#include "nsAutoPtr.h"
 #include "nsIDOMElement.h"
 #include "nsIDOMDocumentFragment.h"
 #include "nsILinkHandler.h"
@@ -26,20 +24,13 @@
 #include "nsAttrAndChildArray.h"
 #include "mozFlushType.h"
 #include "nsDOMAttributeMap.h"
-#include "nsIWeakReference.h"
-#include "nsCycleCollectionParticipant.h"
-#include "nsIDocument.h"
-#include "nsIDOMNodeSelector.h"
 #include "nsIDOMXPathNSResolver.h"
 #include "nsPresContext.h"
 #include "nsDOMClassInfoID.h" // DOMCI_DATA
-#include "nsIDOMTouchEvent.h"
 #include "nsIInlineEventHandlers.h"
 #include "mozilla/CORSMode.h"
 #include "mozilla/Attributes.h"
 #include "nsContentUtils.h"
-#include "nsINodeList.h"
-#include "mozilla/ErrorResult.h"
 #include "nsIScrollableFrame.h"
 #include "mozilla/dom/Attr.h"
 #include "nsISMILAttr.h"
@@ -512,7 +503,7 @@ private:
 
 protected:
   inline bool GetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                      mozilla::dom::DOMString& aResult) const
+                      DOMString& aResult) const
   {
     NS_ASSERTION(nullptr != aName, "must have attribute name");
     NS_ASSERTION(aNameSpaceID != kNameSpaceID_Unknown,
@@ -522,12 +513,26 @@ protected:
     const nsAttrValue* val = mAttrsAndChildren.GetAttr(aName, aNameSpaceID);
     if (val) {
       val->ToString(aResult);
+      return true;
     }
     // else DOMString comes pre-emptied.
-    return val != nullptr;
+    return false;
   }
 
 public:
+  inline bool GetAttr(const nsAString& aName, DOMString& aResult) const
+  {
+    MOZ_ASSERT(aResult.HasStringBuffer() && aResult.StringBufferLength() == 0,
+               "Should have empty string coming in");
+    const nsAttrValue* val = mAttrsAndChildren.GetAttr(aName);
+    if (val) {
+      val->ToString(aResult);
+      return true;
+    }
+    // else DOMString comes pre-emptied.
+    return false;
+  }
+
   void GetTagName(nsAString& aTagName) const
   {
     aTagName = NodeName();
@@ -536,7 +541,7 @@ public:
   {
     GetAttr(kNameSpaceID_None, nsGkAtoms::id, aId);
   }
-  void GetId(mozilla::dom::DOMString& aId) const
+  void GetId(DOMString& aId) const
   {
     GetAttr(kNameSpaceID_None, nsGkAtoms::id, aId);
   }
@@ -557,12 +562,12 @@ public:
   }
   void GetAttribute(const nsAString& aName, nsString& aReturn)
   {
-    mozilla::dom::DOMString str;
+    DOMString str;
     GetAttribute(aName, str);
     str.ToString(aReturn);
   }
 
-  void GetAttribute(const nsAString& aName, mozilla::dom::DOMString& aReturn);
+  void GetAttribute(const nsAString& aName, DOMString& aReturn);
   void GetAttributeNS(const nsAString& aNamespaceURI,
                       const nsAString& aLocalName,
                       nsAString& aReturn);
@@ -716,7 +721,7 @@ public:
            0;
   }
 
-  virtual already_AddRefed<mozilla::dom::UndoManager> GetUndoManager()
+  virtual already_AddRefed<UndoManager> GetUndoManager()
   {
     return nullptr;
   }
@@ -726,18 +731,16 @@ public:
     return false;
   }
 
-  virtual void SetUndoScope(bool aUndoScope, mozilla::ErrorResult& aError)
+  virtual void SetUndoScope(bool aUndoScope, ErrorResult& aError)
   {
   }
 
-  virtual void GetInnerHTML(nsAString& aInnerHTML,
-                            mozilla::ErrorResult& aError);
-  virtual void SetInnerHTML(const nsAString& aInnerHTML,
-                            mozilla::ErrorResult& aError);
-  void GetOuterHTML(nsAString& aOuterHTML, mozilla::ErrorResult& aError);
-  void SetOuterHTML(const nsAString& aOuterHTML, mozilla::ErrorResult& aError);
+  virtual void GetInnerHTML(nsAString& aInnerHTML, ErrorResult& aError);
+  virtual void SetInnerHTML(const nsAString& aInnerHTML, ErrorResult& aError);
+  void GetOuterHTML(nsAString& aOuterHTML, ErrorResult& aError);
+  void SetOuterHTML(const nsAString& aOuterHTML, ErrorResult& aError);
   void InsertAdjacentHTML(const nsAString& aPosition, const nsAString& aText,
-                          mozilla::ErrorResult& aError);
+                          ErrorResult& aError);
 
   //----------------------------------------
 
@@ -773,7 +776,7 @@ public:
                                      nsInputEvent* aSourceEvent,
                                      nsIContent* aTarget,
                                      bool aFullDispatch,
-                                     const mozilla::widget::EventFlags* aFlags,
+                                     const widget::EventFlags* aFlags,
                                      nsEventStatus* aStatus);
 
   /**
@@ -885,7 +888,7 @@ public:
   void GetClassList(nsISupports** aClassList);
 
   virtual JSObject* WrapObject(JSContext *aCx,
-                               JSObject *aScope) MOZ_FINAL MOZ_OVERRIDE;
+                               JS::Handle<JSObject*> aScope) MOZ_FINAL MOZ_OVERRIDE;
 
   /**
    * Locate an nsIEditor rooted at this content node, if there is one.

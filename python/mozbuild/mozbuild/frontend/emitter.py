@@ -9,9 +9,11 @@ import os
 from .data import (
     ConfigFileSubstitution,
     DirectoryTraversal,
-    VariablePassthru,
     Exports,
+    Program,
     ReaderSummary,
+    VariablePassthru,
+    XpcshellManifests,
 )
 
 from .reader import MozbuildSandbox
@@ -75,14 +77,17 @@ class TreeMetadataEmitter(object):
         # them. We should aim to keep this set small because it violates the
         # desired abstraction of the build definition away from makefiles.
         passthru = VariablePassthru(sandbox)
-        if sandbox['MODULE']:
-            passthru.variables['MODULE'] = sandbox['MODULE']
-        if sandbox['XPIDL_SOURCES']:
-            passthru.variables['XPIDLSRCS'] = sandbox['XPIDL_SOURCES']
-        if sandbox['XPIDL_MODULE']:
-            passthru.variables['XPIDL_MODULE'] = sandbox['XPIDL_MODULE']
-        if sandbox['XPIDL_FLAGS']:
-            passthru.variables['XPIDL_FLAGS'] = sandbox['XPIDL_FLAGS']
+        varmap = dict(
+            # Makefile.in : moz.build
+            ASFILES='ASFILES',
+            MODULE='MODULE',
+            XPIDL_FLAGS='XPIDL_FLAGS',
+            XPIDL_MODULE='XPIDL_MODULE',
+            XPIDLSRCS='XPIDL_SOURCES',
+            )
+        for mak, moz in varmap.items():
+            if sandbox[moz]:
+                passthru.variables[mak] = sandbox[moz]
 
         if passthru.variables:
             yield passthru
@@ -90,6 +95,13 @@ class TreeMetadataEmitter(object):
         exports = sandbox.get('EXPORTS')
         if exports:
             yield Exports(sandbox, exports)
+
+        program = sandbox.get('PROGRAM')
+        if program:
+            yield Program(sandbox, program, sandbox['CONFIG']['BIN_SUFFIX'])
+
+        for manifest in sandbox.get('XPCSHELL_TESTS_MANIFESTS', []):
+            yield XpcshellManifests(sandbox, manifest)
 
     def _emit_directory_traversal_from_sandbox(self, sandbox):
         o = DirectoryTraversal(sandbox)
@@ -107,4 +119,3 @@ class TreeMetadataEmitter(object):
                 o.tier_static_dirs[tier] = sandbox['TIERS'][tier]['static']
 
         yield o
-

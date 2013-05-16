@@ -1071,12 +1071,13 @@ private:
  *****************************************************************************/
 nsCacheService *   nsCacheService::gService = nullptr;
 
-NS_IMPL_THREADSAFE_ISUPPORTS1(nsCacheService, nsICacheService)
+NS_IMPL_THREADSAFE_ISUPPORTS2(nsCacheService, nsICacheService, nsICacheServiceInternal)
 
 nsCacheService::nsCacheService()
     : mObserver(nullptr),
       mLock("nsCacheService.mLock"),
       mCondVar(mLock, "nsCacheService.mCondVar"),
+      mTimeStampLock("nsCacheService.mTimeStampLock"),
       mInitialized(false),
       mClearingEntries(false),
       mEnableMemoryDevice(true),
@@ -1528,6 +1529,24 @@ NS_IMETHODIMP nsCacheService::GetCacheIOTarget(nsIEventTarget * *aCacheIOTarget)
     return rv;
 }
 
+/* nsICacheServiceInternal
+ * readonly attribute double lockHeldTime;
+*/
+NS_IMETHODIMP nsCacheService::GetLockHeldTime(double *aLockHeldTime)
+{
+    MutexAutoLock lock(mTimeStampLock);
+
+    if (mLockAcquiredTimeStamp.IsNull()) {
+        *aLockHeldTime = 0.0;
+    }
+    else {
+        *aLockHeldTime = 
+            (TimeStamp::Now() - mLockAcquiredTimeStamp).ToMilliseconds();
+    }
+
+    return NS_OK;
+}
+
 /**
  * Internal Methods
  */
@@ -1610,7 +1629,9 @@ public:
             return rv;
         }
 
-        nsCacheService::SetDiskSmartSize();
+        // It is safe to call SetDiskSmartSize_Locked() without holding the lock
+        // when we are on main thread and nsCacheService is initialized.
+        nsCacheService::gService->SetDiskSmartSize_Locked();
 
         if (nsCacheService::gService->mObserver->PermittedToSmartSize(branch, false)) {
             rv = branch->SetIntPref(DISK_CACHE_CAPACITY_PREF, MAX_CACHE_SIZE);
@@ -2596,6 +2617,20 @@ nsCacheService::OnDataSizeChange(nsCacheEntry * entry, int32_t deltaSize)
 }
 
 void
+nsCacheService::LockAcquired()
+{
+    MutexAutoLock lock(mTimeStampLock);
+    mLockAcquiredTimeStamp = TimeStamp::Now();
+}
+
+void
+nsCacheService::LockReleased()
+{
+    MutexAutoLock lock(mTimeStampLock);
+    mLockAcquiredTimeStamp = TimeStamp();
+}
+
+void
 nsCacheService::Lock(mozilla::Telemetry::ID mainThreadLockerID)
 {
     mozilla::Telemetry::ID lockerID;
@@ -2613,6 +2648,7 @@ nsCacheService::Lock(mozilla::Telemetry::ID mainThreadLockerID)
     MOZ_EVENT_TRACER_WAIT(nsCacheService::gService, "net::cache::lock");
 
     gService->mLock.Lock();
+    gService->LockAcquired();
 
     TimeStamp stop(TimeStamp::Now());
     MOZ_EVENT_TRACER_EXEC(nsCacheService::gService, "net::cache::lock");
@@ -2633,6 +2669,7 @@ nsCacheService::Unlock()
     nsTArray<nsISupports*> doomed;
     doomed.SwapElements(gService->mDoomedObjects);
 
+    gService->LockReleased();
     gService->mLock.Unlock();
 
     MOZ_EVENT_TRACER_DONE(nsCacheService::gService, "net::cache::lock");

@@ -196,7 +196,8 @@ public:
     NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(WebGLContext,
                                                            nsIDOMWebGLRenderingContext)
 
-    virtual JSObject* WrapObject(JSContext *cx, JSObject *scope) MOZ_OVERRIDE;
+    virtual JSObject* WrapObject(JSContext *cx,
+                                 JS::Handle<JSObject*> scope) MOZ_OVERRIDE;
 
     NS_DECL_NSIDOMWEBGLRENDERINGCONTEXT
 
@@ -911,6 +912,7 @@ protected:
     // extensions
     enum WebGLExtensionID {
         EXT_texture_filter_anisotropic,
+        OES_element_index_uint,
         OES_standard_derivatives,
         OES_texture_float,
         WEBGL_compressed_texture_atc,
@@ -1200,7 +1202,7 @@ public:
         retval = mName;
     }
 
-    virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+    JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
     NS_DECL_ISUPPORTS
 

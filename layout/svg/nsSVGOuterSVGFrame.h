@@ -6,6 +6,7 @@
 #ifndef __NS_SVGOUTERSVGFRAME_H__
 #define __NS_SVGOUTERSVGFRAME_H__
 
+#include "mozilla/Attributes.h"
 #include "gfxMatrix.h"
 #include "nsISVGSVGFrame.h"
 #include "nsSVGContainerFrame.h"
@@ -96,13 +97,14 @@ public:
 
   virtual bool IsSVGTransformed(gfxMatrix *aOwnTransform,
                                 gfxMatrix *aFromParentTransform) const {
-    // Outer-<svg> can transform its children with viewBox, currentScale and
-    // currentTranslate, but it itself is not transformed by SVG transforms.
-    return false;
+    // Our anonymous wrapper performs the transforms. We simply
+    // return whether we are transformed here but don't apply the transforms
+    // themselves.
+    return GetFirstPrincipalChild()->IsSVGTransformed();
   }
 
   // nsISVGSVGFrame interface:
-  virtual void NotifyViewportOrTransformChanged(uint32_t aFlags);
+  virtual void NotifyViewportOrTransformChanged(uint32_t aFlags) MOZ_OVERRIDE;
 
   // nsISVGChildFrame methods:
   NS_IMETHOD PaintSVG(nsRenderingContext* aContext,
@@ -254,13 +256,6 @@ public:
    * @see nsGkAtoms::svgOuterSVGAnonChildFrame
    */
   virtual nsIAtom* GetType() const;
-
-  virtual bool IsSVGTransformed(gfxMatrix *aOwnTransform,
-                                gfxMatrix *aFromParentTransform) const {
-    // Outer-<svg> can transform its children with viewBox, currentScale and
-    // currentTranslate, but it itself is not transformed by _SVG_ transforms.
-    return false;
-  }
 
   // nsSVGContainerFrame methods:
   virtual gfxMatrix GetCanvasTM(uint32_t aFor) {

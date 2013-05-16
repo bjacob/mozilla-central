@@ -111,31 +111,58 @@ function getUserMedia(constraints, onSuccess, onError) {
  *
  * @param {Function} aCallback
  *        Test method to execute after initialization
- * @param {Boolean} desktopSupportedOnly
- *        Specifies if the test currently is known to work on desktop only
  */
-function runTest(aCallback, desktopSupportedOnly) {
+function runTest(aCallback) {
   SimpleTest.waitForExplicitFinish();
+  SpecialPowers.pushPrefEnv({'set': [
+    ['media.peerconnection.enabled', true],
+    ['media.navigator.permission.disabled', true]]
+  }, function () {
+    try {
+      aCallback();
+    }
+    catch (err) {
+      unexpectedCallbackAndFinish(new Error)(err);
+    }
+  });
+}
 
-  // If this is a desktop supported test and we're on android or b2g,
-  // indicate that the test is not supported and skip the test
-  if(desktopSupportedOnly && (navigator.userAgent.indexOf('Android') > -1 ||
-     navigator.platform === '')) {
-    ok(true, navigator.userAgent + ' currently not supported');
-    SimpleTest.finish();
+/**
+ * Checks that the media stream tracks have the expected amount of tracks
+ * with the correct kind and id based on the type and constraints given.
+ *
+ * @param {Object} constraints specifies whether the stream should have
+ *                             audio, video, or both
+ * @param {String} type the type of media stream tracks being checked
+ * @param {sequence<MediaStreamTrack>} mediaStreamTracks the media stream
+ *                                     tracks being checked
+ */
+function checkMediaStreamTracksByType(constraints, type, mediaStreamTracks) {
+  if(constraints[type]) {
+    is(mediaStreamTracks.length, 1, 'One ' + type + ' track shall be present');
+
+    if(mediaStreamTracks.length) {
+      is(mediaStreamTracks[0].kind, type, 'Track kind should be ' + type);
+      ok(mediaStreamTracks[0].id, 'Track id should be defined');
+    }
   } else {
-    SpecialPowers.pushPrefEnv({'set': [
-        ['media.peerconnection.enabled', true],
-        ['media.navigator.permission.denied', true]]
-      }, function () {
-      try {
-        aCallback();
-      }
-      catch (err) {
-        unexpectedCallbackAndFinish(new Error)(err);
-      }
-    });
+    is(mediaStreamTracks.length, 0, 'No ' + type + ' tracks shall be present');
   }
+}
+
+/**
+ * Check that the given media stream contains the expected media stream
+ * tracks given the associated audio & video constraints provided.
+ *
+ * @param {Object} constraints specifies whether the stream should have
+ *                             audio, video, or both
+ * @param {MediaStream} mediaStream the media stream being checked
+ */
+function checkMediaStreamTracks(constraints, mediaStream) {
+  checkMediaStreamTracksByType(constraints, 'audio',
+    mediaStream.getAudioTracks());
+  checkMediaStreamTracksByType(constraints, 'video',
+    mediaStream.getVideoTracks());
 }
 
 /**

@@ -16,7 +16,6 @@ let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
                .getService(Ci.mozIJSSubScriptLoader);
 loader.loadSubScript("chrome://marionette/content/marionette-simpletest.js");
 loader.loadSubScript("chrome://marionette/content/marionette-log-obj.js");
-loader.loadSubScript("chrome://marionette/content/marionette-perf.js");
 Cu.import("chrome://marionette/content/marionette-elements.js");
 let utils = {};
 loader.loadSubScript("chrome://marionette/content/EventUtils.js", utils);
@@ -49,9 +48,11 @@ try {
     return libcutils;
   });
   if (libcutils) {
+    let qemu = libcutils.property_get("ro.kernel.qemu");
+    logger.info("B2G emulator: " + (qemu == "1" ? "yes" : "no"));
     let platform = libcutils.property_get("ro.product.device");
     logger.info("Platform detected is " + platform);
-    bypassOffline = (platform == "generic" || platform == "panda");
+    bypassOffline = (qemu == "1" || platform == "panda");
   }
 }
 catch(e) {}
@@ -189,10 +190,10 @@ function MarionetteDriverActor(aConnection)
   this.curBrowser = null; // points to current browser
   this.context = "content";
   this.scriptTimeout = null;
+  this.searchTimeout = null;
   this.pageTimeout = null;
   this.timer = null;
   this.marionetteLog = new MarionetteLogObj();
-  this.marionettePerf = new MarionettePerfData();
   this.command_id = null;
   this.mainFrame = null; //topmost chrome frame
   this.curFrame = null; //subframe that currently has focus
@@ -262,7 +263,7 @@ MarionetteDriverActor.prototype = {
             default:
               break;
           }
-          code = error.hasOwnProperty('code') ? e.code : 500;
+          let code = error.hasOwnProperty('code') ? e.code : 500;
           this.sendError(error.toString(), code, error.stack, commandId);
         }
       }
@@ -652,23 +653,6 @@ MarionetteDriverActor.prototype = {
     this.command_id = this.getCommandId();
     this.sendResponse(this.marionetteLog.getLogs(), this.command_id);
   },
-  
-  /**
-   * Log some performance data
-   */
-  addPerfData: function MDA_addPerfData(aRequest) {
-    this.command_id = this.getCommandId();
-    this.marionettePerf.addPerfData(aRequest.suite, aRequest.name, aRequest.value);
-    this.sendOk(this.command_id);
-  },
-
-  /**
-   * Retrieve the performance data
-   */
-  getPerfData: function MDA_getPerfData() {
-    this.command_id = this.getCommandId();
-    this.sendResponse(this.marionettePerf.getPerfData(), this.command_id);
-  },
 
   /**
    * Sets the context of the subsequent commands to be either 'chrome' or 'content'
@@ -820,7 +804,7 @@ MarionetteDriverActor.prototype = {
 
     let curWindow = this.getCurrentWindow();
     let marionette = new Marionette(this, curWindow, "chrome",
-                                    this.marionetteLog, this.marionettePerf,
+                                    this.marionetteLog,
                                     timeout, this.testName);
     let _chromeSandbox = this.createExecuteSandbox(curWindow,
                                                    marionette,
@@ -954,7 +938,7 @@ MarionetteDriverActor.prototype = {
     let that = this;
     that.timeout = timeout;
     let marionette = new Marionette(this, curWindow, "chrome",
-                                    this.marionetteLog, this.marionettePerf,
+                                    this.marionetteLog,
                                     timeout, this.testName);
     marionette.command_id = this.command_id;
 
@@ -1308,21 +1292,32 @@ MarionetteDriverActor.prototype = {
    */
   setSearchTimeout: function MDA_setSearchTimeout(aRequest) {
     this.command_id = this.getCommandId();
-    if (this.context == "chrome") {
-      try {
-        this.curBrowser.elementManager.setSearchTimeout(aRequest.value);
-        this.sendOk(this.command_id);
-      }
-      catch (e) {
-        this.sendError(e.message, e.code, e.stack, this.command_id);
-      }
+    let timeout = parseInt(aRequest.value);
+    if (isNaN(timeout)) {
+      this.sendError("Not a Number", 500, null, this.command_id);
     }
     else {
-      this.sendAsync("setSearchTimeout",
-                     { value: aRequest.value },
-                     this.command_id);
+      this.searchTimeout = timeout;
+      this.sendOk(this.command_id);
     }
   },
+
+/**
+ * Set a value to decide if sending mouse event
+ *
+ * @param object aRequest
+ *        'value' holds the boolean value
+ */
+ sendMouseEvent: function MDA_sendMouseEvent(aRequest) {
+   this.command_id = this.getCommandId();
+   if (this.context == "chrome") {
+     this.sendError("Not in Chrome", 500, null, this.command_id);
+    }
+    else {
+      this.sendAsync("sendMouseEvent", {value: aRequest.value,
+                                        command_id: this.command_id});
+    }
+ },
 
   /**
    * Set timeout for page loading, searching and scripts
@@ -1373,106 +1368,6 @@ MarionetteDriverActor.prototype = {
       this.sendAsync("singleTap",
                      {
                        value: serId,
-                       corx: x,
-                       cory: y
-                     },
-                     this.command_id);
-    }
-  },
-
-  /**
-   * Double Tap
-   *
-   * @param object aRequest
-   *        'element' represents the ID of the element to double tap on
-   */
-  doubleTap: function MDA_doubleTap(aRequest) {
-    this.command_id = this.getCommandId();
-    let serId = aRequest.element;
-    let x = aRequest.x;
-    let y = aRequest.y;
-    if (this.context == "chrome") {
-      this.sendError("Not in Chrome", 500, null, this.command_id);
-    }
-    else {
-      this.sendAsync("doubleTap",
-                     {
-                       value: serId,
-                       corx: x,
-                       cory: y
-                     },
-                     this.command_id);
-    }
-  },
-
-  /**
-   * Start touch
-   *
-   * @param object aRequest
-   *        'element' represents the ID of the element to touch
-   */
-  press: function MDA_press(aRequest) {
-    this.command_id = this.getCommandId();
-    let element = aRequest.element;
-    let x = aRequest.x;
-    let y = aRequest.y;
-    if (this.context == "chrome") {
-      this.sendError("Not in Chrome", 500, null, this.command_id);
-    }
-    else {
-      this.sendAsync("press",
-                     {
-                       value: element,
-                       corx: x,
-                       cory: y
-                     },
-                     this.command_id);
-    }
-  },
-
-  /**
-   * Cancel touch
-   *
-   * @param object aRequest
-   *        'element' represents the ID of the element to touch
-   */
-  cancelTouch: function MDA_cancelTouch(aRequest) {
-    this.command_id = this.getCommandId();
-    let element = aRequest.element;
-    let touchId = aRequest.touchId;
-    if (this.context == "chrome") {
-      this.sendError("Not in Chrome", 500, null, this.command_id);
-    }
-    else {
-      this.sendAsync("cancelTouch",
-                     {
-                       value: element,
-                       touchId: touchId
-                     },
-                     this.command_id);
-    }
-  },
-
-  /**
-   * End touch
-   *
-   * @param object aRequest
-   *        'element' represents the ID of the element to end the touch
-   */
-  release: function MDA_release(aRequest) {
-    this.command_id = this.getCommandId();
-    let element = aRequest.element;
-    let touchId = aRequest.touchId;
-    let x = aRequest.x;
-    let y = aRequest.y;
-    if (this.context == "chrome") {
-      this.sendError("Not in Chrome", 500, null, this.command_id);
-    }
-    else {
-      this.sendAsync("release",
-                     {
-                       value: element,
-                       touchId: touchId,
                        corx: x,
                        cory: y
                      },
@@ -1542,6 +1437,7 @@ MarionetteDriverActor.prototype = {
         id = this.curBrowser.elementManager.find(
                               this.getCurrentWindow(),
                               aRequest,
+                              this.searchTimeout,
                               on_success,
                               on_error,
                               false,
@@ -1557,7 +1453,8 @@ MarionetteDriverActor.prototype = {
                      {
                        value: aRequest.value,
                        using: aRequest.using,
-                       element: aRequest.element
+                       element: aRequest.element,
+                       searchTimeout: this.searchTimeout
                      },
                      command_id);
     }
@@ -1579,6 +1476,7 @@ MarionetteDriverActor.prototype = {
         let on_error = this.sendError.bind(this);
         id = this.curBrowser.elementManager.find(this.getCurrentWindow(),
                                                  aRequest,
+                                                 this.searchTimeout,
                                                  on_success,
                                                  on_error,
                                                  true,
@@ -1594,7 +1492,8 @@ MarionetteDriverActor.prototype = {
                      {
                        value: aRequest.value,
                        using: aRequest.using,
-                       element: aRequest.element
+                       element: aRequest.element,
+                       searchTimeout: this.searchTimeout
                      },
                      command_id);
     }
@@ -1759,6 +1658,21 @@ MarionetteDriverActor.prototype = {
                      { element:aRequest.element },
                      command_id);
     }
+  },
+
+  /**
+   * Return the property of the computed style of an element
+   *
+   * @param object aRequest
+   *               'element' member holds the reference id to
+   *               the element that will be checked
+   *               'propertyName' is the CSS rule that is being requested
+   */
+  getElementValueOfCssProperty: function MDA_getElementValueOfCssProperty(aRequest){
+    let command_id = this.command_id = this.getCommandId();
+    this.sendAsync("getElementValueOfCssProperty",
+                   {element: aRequest.element, propertyName: aRequest.propertyName},
+                   command_id);
   },
 
   /**
@@ -2187,19 +2101,13 @@ MarionetteDriverActor.prototype = {
         if (message.json.log) {
           this.marionetteLog.addLogs(message.json.log);
         }
-        if (message.json.perf) {
-          this.marionettePerf.appendPerfData(message.json.perf);
-        }
         break;
       case "Marionette:runEmulatorCmd":
         this.sendToClient(message.json, -1);
         break;
       case "Marionette:switchToFrame":
         // Switch to a remote frame.
-        let thisWin = this.getCurrentWindow();
-        let frameWindow = thisWin.QueryInterface(Ci.nsIInterfaceRequestor)
-                                 .getInterface(Ci.nsIDOMWindowUtils)
-                                 .getOuterWindowWithId(message.json.win);
+        let frameWindow = Services.wm.getOuterWindowWithId(message.json.win);
         let thisFrame = frameWindow.document.getElementsByTagName("iframe")[message.json.frame];
         let mm = thisFrame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader.messageManager;
 
@@ -2232,10 +2140,8 @@ MarionetteDriverActor.prototype = {
         // This code processes the content listener's registration information
         // and either accepts the listener, or ignores it
         let nullPrevious = (this.curBrowser.curFrameId == null);
-        let curWin = this.getCurrentWindow();
-        let listenerWindow = curWin.QueryInterface(Ci.nsIInterfaceRequestor)
-                                   .getInterface(Ci.nsIDOMWindowUtils)
-                                   .getOuterWindowWithId(message.json.value);
+        let listenerWindow =
+          Services.wm.getOuterWindowWithId(message.json.value);
 
         if (!listenerWindow || (listenerWindow.location.href != message.json.href) &&
             (this.currentRemoteFrame !== null)) {
@@ -2249,12 +2155,7 @@ MarionetteDriverActor.prototype = {
           // XXX: Should have a better way of determining that this message
           // is from a remote frame.
           this.currentRemoteFrame.targetFrameId = this.generateFrameId(message.json.value);
-          this.sendAsync("setState",
-                         {
-                           scriptTimeout: this.scriptTimeout,
-                           searchTimeout: this.curBrowser.elementManager.searchTimeout
-                         },
-                         this.currentRemoteFrame.command_id);
+          this.sendOk(this.currentRemoteFrame.command_id);
         }
 
         let browserType;
@@ -2292,22 +2193,17 @@ MarionetteDriverActor.prototype.requestTypes = {
   "getStatus": MarionetteDriverActor.prototype.getStatus,
   "log": MarionetteDriverActor.prototype.log,
   "getLogs": MarionetteDriverActor.prototype.getLogs,
-  "addPerfData": MarionetteDriverActor.prototype.addPerfData,
-  "getPerfData": MarionetteDriverActor.prototype.getPerfData,
   "setContext": MarionetteDriverActor.prototype.setContext,
   "executeScript": MarionetteDriverActor.prototype.execute,
   "setScriptTimeout": MarionetteDriverActor.prototype.setScriptTimeout,
   "timeouts": MarionetteDriverActor.prototype.timeouts,
   "singleTap": MarionetteDriverActor.prototype.singleTap,
-  "doubleTap": MarionetteDriverActor.prototype.doubleTap,
-  "press": MarionetteDriverActor.prototype.press,
-  "release": MarionetteDriverActor.prototype.release,
-  "cancelTouch": MarionetteDriverActor.prototype.cancelTouch,
   "actionChain": MarionetteDriverActor.prototype.actionChain,
   "multiAction": MarionetteDriverActor.prototype.multiAction,
   "executeAsyncScript": MarionetteDriverActor.prototype.executeWithCallback,
   "executeJSScript": MarionetteDriverActor.prototype.executeJSScript,
   "setSearchTimeout": MarionetteDriverActor.prototype.setSearchTimeout,
+  "sendMouseEvent": MarionetteDriverActor.prototype.sendMouseEvent,
   "findElement": MarionetteDriverActor.prototype.findElement,
   "findElements": MarionetteDriverActor.prototype.findElements,
   "clickElement": MarionetteDriverActor.prototype.clickElement,
@@ -2315,6 +2211,7 @@ MarionetteDriverActor.prototype.requestTypes = {
   "getElementText": MarionetteDriverActor.prototype.getElementText,
   "getElementTagName": MarionetteDriverActor.prototype.getElementTagName,
   "isElementDisplayed": MarionetteDriverActor.prototype.isElementDisplayed,
+  "getElementValueOfCssProperty": MarionetteDriverActor.prototype.getElementValueOfCssProperty,
   "getElementSize": MarionetteDriverActor.prototype.getElementSize,
   "isElementEnabled": MarionetteDriverActor.prototype.isElementEnabled,
   "isElementSelected": MarionetteDriverActor.prototype.isElementSelected,

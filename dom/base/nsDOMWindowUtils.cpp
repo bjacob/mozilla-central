@@ -71,6 +71,7 @@
 #include "nsPrintfCString.h"
 #include "nsViewportInfo.h"
 #include "nsIFormControl.h"
+#include "nsIScriptError.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -188,14 +189,14 @@ nsDOMWindowUtils::GetDocumentMetadata(const nsAString& aName,
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   if (window) {
-    nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+    nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
     if (doc) {
       nsCOMPtr<nsIAtom> name = do_GetAtom(aName);
       doc->GetHeaderData(name, aValue);
       return NS_OK;
     }
   }
-  
+
   aValue.Truncate();
   return NS_OK;
 }
@@ -266,7 +267,7 @@ nsDOMWindowUtils::GetViewportInfo(uint32_t aDisplayWidth,
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   NS_ENSURE_STATE(doc);
 
   nsViewportInfo info = nsContentUtils::GetViewportInfo(doc, aDisplayWidth, aDisplayHeight);
@@ -1247,7 +1248,7 @@ nsDOMWindowUtils::ElementFromPoint(float aX, float aY,
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   NS_ENSURE_STATE(doc);
 
   Element* el =
@@ -1272,7 +1273,7 @@ nsDOMWindowUtils::NodesFromRect(float aX, float aY,
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   NS_ENSURE_STATE(doc);
 
   return doc->NodesFromRectHelper(aX, aY, aTopSize, aRightSize, aBottomSize, aLeftSize, 
@@ -1293,7 +1294,7 @@ CanvasToImageSurface(nsIDOMHTMLCanvasElement* aCanvas)
   nsLayoutUtils::SurfaceFromElementResult result =
     nsLayoutUtils::SurfaceFromElement(node->AsElement(),
                                       nsLayoutUtils::SFE_WANT_IMAGE_SURFACE);
-  return static_cast<gfxImageSurface*>(result.mSurface.forget().get());
+  return result.mSurface.forget().downcast<gfxImageSurface>();
 }
 
 NS_IMETHODIMP
@@ -1424,7 +1425,7 @@ nsDOMWindowUtils::SuppressEventHandling(bool aSuppress)
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
   if (aSuppress) {
@@ -1446,7 +1447,7 @@ nsDOMWindowUtils::GetScrollXY(bool aFlushLayout, int32_t* aScrollX, int32_t* aSc
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   NS_ENSURE_STATE(doc);
 
   if (aFlushLayout) {
@@ -2460,15 +2461,15 @@ nsDOMWindowUtils::GetCursorType(int16_t *aCursor)
   NS_ENSURE_ARG_POINTER(aCursor);
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
-  NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);  
+  NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
 
   bool isSameDoc = false;
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
 
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
   do {
-    if (nsEventStateManager::sMouseOverDocument == doc.get()) {
+    if (nsEventStateManager::sMouseOverDocument == doc) {
       isSameDoc = true;
       break;
     }
@@ -2513,6 +2514,13 @@ nsDOMWindowUtils::GetOuterWindowWithId(uint64_t aWindowID,
   if (!nsContentUtils::IsCallerChrome()) {
     return NS_ERROR_DOM_SECURITY_ERR;
   }
+
+  // XXX This method is deprecated.  See bug 865664.
+  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                  "DOM",
+                                  nsContentUtils::GetDocumentFromCaller(),
+                                  nsContentUtils::eDOM_PROPERTIES,
+                                  "GetWindowWithOuterIdWarning");
 
   *aWindow = nsGlobalWindow::GetOuterWindowWithId(aWindowID);
   NS_IF_ADDREF(*aWindow);
@@ -2937,17 +2945,13 @@ nsDOMWindowUtils::GetPlugins(JSContext* cx, JS::Value* aPlugins)
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsIDOMDocument* ddoc = window->GetExtantDocument();
-
-  nsresult rv;
-  nsCOMPtr<nsIDocument> doc = do_QueryInterface(ddoc, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
 
   nsTArray<nsIObjectLoadingContent*> plugins;
   doc->GetPlugins(plugins);
 
-  JSObject* jsPlugins = nullptr;
-  rv = nsTArrayToJSArray(cx, plugins, &jsPlugins);
+  JS::Rooted<JSObject*> jsPlugins(cx);
+  nsresult rv = nsTArrayToJSArray(cx, plugins, jsPlugins.address());
   NS_ENSURE_SUCCESS(rv, rv);
 
   *aPlugins = OBJECT_TO_JSVAL(jsPlugins);
@@ -3014,7 +3018,7 @@ nsDOMWindowUtils::RemoteFrameFullscreenChanged(nsIDOMElement* aFrameElement,
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   NS_ENSURE_STATE(doc);
 
   doc->RemoteFrameFullscreenChanged(aFrameElement, aNewOrigin);
@@ -3031,7 +3035,7 @@ nsDOMWindowUtils::RemoteFrameFullscreenReverted()
   nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(mWindow);
   NS_ENSURE_STATE(window);
 
-  nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+  nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   NS_ENSURE_STATE(doc);
 
   doc->RemoteFrameFullscreenReverted();
@@ -3084,6 +3088,8 @@ nsDOMWindowUtils::SelectAtPoint(float aX, float aY, uint32_t aSelectBehavior,
     case nsIDOMWindowUtils::SELECT_WORDNOSPACE:
       amount = eSelectWordNoSpace;
     break;
+    default:
+      return NS_ERROR_INVALID_ARG;
   }
 
   nsIPresShell* presShell = GetPresShell();

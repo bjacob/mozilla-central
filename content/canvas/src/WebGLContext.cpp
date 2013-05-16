@@ -45,13 +45,12 @@
 #include "mozilla/Services.h"
 #include "mozilla/dom/WebGLRenderingContextBinding.h"
 #include "mozilla/dom/BindingUtils.h"
-#include "mozilla/dom/ipc/ProcessPriorityManager.h"
+#include "mozilla/ProcessPriorityManager.h"
 
 #include "Layers.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-using namespace mozilla::dom::ipc;
 using namespace mozilla::gfx;
 using namespace mozilla::gl;
 using namespace mozilla::layers;
@@ -66,7 +65,8 @@ WebGLMemoryPressureObserver::Observe(nsISupports* aSubject,
 
     bool wantToLoseContext = true;
 
-    if (!mContext->mCanLoseContextInForeground && CurrentProcessIsForeground())
+    if (!mContext->mCanLoseContextInForeground &&
+        ProcessPriorityManager::CurrentProcessIsForeground())
         wantToLoseContext = false;
     else if (!nsCRT::strcmp(aSomeData,
                             NS_LITERAL_STRING("heap-minimize").get()))
@@ -207,7 +207,7 @@ WebGLContext::~WebGLContext()
 }
 
 JSObject*
-WebGLContext::WrapObject(JSContext *cx, JSObject *scope)
+WebGLContext::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return dom::WebGLRenderingContextBinding::Wrap(cx, scope, this);
 }
@@ -837,8 +837,8 @@ WebGLContext::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
 
     if (!mResetLayer && aOldLayer &&
         aOldLayer->HasUserData(&gWebGLLayerUserData)) {
-        NS_ADDREF(aOldLayer);
-        return aOldLayer;
+        nsRefPtr<layers::CanvasLayer> ret = aOldLayer;
+        return ret.forget();
     }
 
     nsRefPtr<CanvasLayer> canvasLayer = aManager->CreateCanvasLayer();
@@ -880,7 +880,7 @@ WebGLContext::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
 
     mResetLayer = false;
 
-    return canvasLayer.forget().get();
+    return canvasLayer.forget();
 }
 
 void
@@ -943,6 +943,8 @@ bool WebGLContext::IsExtensionSupported(JSContext *cx, WebGLExtensionID ext) con
     }
 
     switch (ext) {
+        case OES_element_index_uint:
+            return !gl->IsGLES2() || gl->IsExtensionSupported(GLContext::OES_element_index_uint);
         case OES_standard_derivatives:
         case WEBGL_lose_context:
             // We always support these extensions.
@@ -1013,7 +1015,11 @@ WebGLContext::GetExtension(JSContext *cx, const nsAString& aName, ErrorResult& r
     WebGLExtensionID ext = WebGLExtensionID_unknown_extension;
 
     // step 1: figure what extension is wanted
-    if (CompareWebGLExtensionName(name, "OES_texture_float"))
+    if (CompareWebGLExtensionName(name, "OES_element_index_uint"))
+    {
+        ext = OES_element_index_uint;
+    }
+    else if (CompareWebGLExtensionName(name, "OES_texture_float"))
     {
         ext = OES_texture_float;
     }
@@ -1075,6 +1081,9 @@ WebGLContext::GetExtension(JSContext *cx, const nsAString& aName, ErrorResult& r
     if (!IsExtensionEnabled(ext)) {
         WebGLExtensionBase *obj = nullptr;
         switch (ext) {
+            case OES_element_index_uint:
+                obj = new WebGLExtensionElementIndexUint(this);
+                break;
             case OES_standard_derivatives:
                 obj = new WebGLExtensionStandardDerivatives(this);
                 break;
@@ -1439,6 +1448,8 @@ WebGLContext::GetSupportedExtensions(JSContext *cx, Nullable< nsTArray<nsString>
 
     nsTArray<nsString>& arr = retval.SetValue();
 
+    if (IsExtensionSupported(cx, OES_element_index_uint))
+        arr.AppendElement(NS_LITERAL_STRING("OES_element_index_uint"));
     if (IsExtensionSupported(cx, OES_texture_float))
         arr.AppendElement(NS_LITERAL_STRING("OES_texture_float"));
     if (IsExtensionSupported(cx, OES_standard_derivatives))

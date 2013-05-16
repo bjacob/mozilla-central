@@ -74,7 +74,7 @@ NS_IMPL_ADDREF_INHERITED(DOMRequest, nsDOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(DOMRequest, nsDOMEventTargetHelper)
 
 /* virtual */ JSObject*
-DOMRequest::WrapObject(JSContext* aCx, JSObject* aScope)
+DOMRequest::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
 {
   return DOMRequestBinding::Wrap(aCx, aScope, this);
 }
@@ -87,10 +87,10 @@ DOMRequest::GetReadyState(nsAString& aReadyState)
 {
   DOMRequestReadyState readyState = ReadyState();
   switch (readyState) {
-    case DOMRequestReadyStateValues::Pending:
+    case DOMRequestReadyState::Pending:
       aReadyState.AssignLiteral("pending");
       break;
-    case DOMRequestReadyStateValues::Done:
+    case DOMRequestReadyState::Done:
       aReadyState.AssignLiteral("done");
       break;
     default:

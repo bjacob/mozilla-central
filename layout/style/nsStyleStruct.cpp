@@ -192,6 +192,16 @@ nsChangeHint nsStyleFont::CalcFontDifference(const nsFont& aFont1, const nsFont&
       (aFont1.weight == aFont2.weight) &&
       (aFont1.stretch == aFont2.stretch) &&
       (aFont1.name == aFont2.name) &&
+      (aFont1.kerning == aFont2.kerning) &&
+      (aFont1.synthesis == aFont2.synthesis) &&
+      (aFont1.variantAlternates == aFont2.variantAlternates) &&
+      (aFont1.alternateValues == aFont2.alternateValues) &&
+      (aFont1.featureValueLookup == aFont2.featureValueLookup) &&
+      (aFont1.variantCaps == aFont2.variantCaps) &&
+      (aFont1.variantEastAsian == aFont2.variantEastAsian) &&
+      (aFont1.variantLigatures == aFont2.variantLigatures) &&
+      (aFont1.variantNumeric == aFont2.variantNumeric) &&
+      (aFont1.variantPosition == aFont2.variantPosition) &&
       (aFont1.fontFeatureSettings == aFont2.fontFeatureSettings) &&
       (aFont1.languageOverride == aFont2.languageOverride)) {
     if ((aFont1.decorations == aFont2.decorations)) {
@@ -1992,11 +2002,11 @@ void nsTimingFunction::AssignFromKeyword(int32_t aTimingFunctionType)
                     "transition timing function constants not as expected");
 
   static const float timingFunctionValues[5][4] = {
-    { 0.25, 0.10, 0.25, 1.00 }, // ease
-    { 0.00, 0.00, 1.00, 1.00 }, // linear
-    { 0.42, 0.00, 1.00, 1.00 }, // ease-in
-    { 0.00, 0.00, 0.58, 1.00 }, // ease-out
-    { 0.42, 0.00, 0.58, 1.00 }  // ease-in-out
+    { 0.25f, 0.10f, 0.25f, 1.00f }, // ease
+    { 0.00f, 0.00f, 1.00f, 1.00f }, // linear
+    { 0.42f, 0.00f, 1.00f, 1.00f }, // ease-in
+    { 0.00f, 0.00f, 0.58f, 1.00f }, // ease-out
+    { 0.42f, 0.00f, 0.58f, 1.00f }  // ease-in-out
   };
 
   NS_ABORT_IF_FALSE(0 <= aTimingFunctionType && aTimingFunctionType < 5,

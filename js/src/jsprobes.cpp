@@ -4,21 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jsapi.h"
-#include "jsutil.h"
-#include "jsatom.h"
-#include "jscntxt.h"
-#include "jsdbgapi.h"
-#include "jsfun.h"
-#include "jsinterp.h"
-#include "jsobj.h"
 #include "jsprobes.h"
+
+#include "jscntxt.h"
 #include "jsscript.h"
-#include "jsstr.h"
 
-#include "methodjit/Compiler.h"
+#ifdef INCLUDE_MOZILLA_DTRACE
+#include "jsscriptinlines.h" 
+#endif
 
-#include "jsobjinlines.h"
+#include "vm/Stack-inl.h"
 
 #define TYPEOF(cx,v)    (JSVAL_IS_NULL(v) ? JSTYPE_NULL : JS_TypeOfValue(cx,v))
 
@@ -37,43 +32,6 @@ Probes::JITGranularityRequested(JSContext *cx)
     return JITREPORT_GRANULARITY_NONE;
 }
 
-#ifdef JS_METHODJIT
-
-bool
-Probes::registerMJITCode(JSContext *cx, js::mjit::JITChunk *chunk,
-                         js::mjit::JSActiveFrame *outerFrame,
-                         js::mjit::JSActiveFrame **inlineFrames)
-{
-    if (cx->runtime->spsProfiler.enabled() &&
-        !cx->runtime->spsProfiler.registerMJITCode(chunk, outerFrame, inlineFrames))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-void
-Probes::discardMJITCode(FreeOp *fop, mjit::JITScript *jscr, mjit::JITChunk *chunk, void* address)
-{
-    if (fop->runtime()->spsProfiler.enabled())
-        fop->runtime()->spsProfiler.discardMJITCode(jscr, chunk, address);
-}
-
-bool
-Probes::registerICCode(JSContext *cx,
-                       mjit::JITChunk *chunk, RawScript script, jsbytecode* pc,
-                       void *start, size_t size)
-{
-    if (cx->runtime->spsProfiler.enabled() &&
-        !cx->runtime->spsProfiler.registerICCode(chunk, script, pc, start, size))
-    {
-        return false;
-    }
-    return true;
-}
-#endif
-
 /* ICs are unregistered in a batch */
 void
 Probes::discardExecutableRegion(void *start, size_t size)
@@ -86,7 +44,7 @@ Probes::discardExecutableRegion(void *start, size_t size)
 
 #ifdef INCLUDE_MOZILLA_DTRACE
 static const char *
-ScriptFilename(const RawScript script)
+ScriptFilename(const JSScript *script)
 {
     if (!script)
         return Probes::nullName;
@@ -96,7 +54,7 @@ ScriptFilename(const RawScript script)
 }
 
 static const char *
-FunctionName(JSContext *cx, RawFunction fun, JSAutoByteString* bytes)
+FunctionName(JSContext *cx, JSFunction *fun, JSAutoByteString* bytes)
 {
     if (!fun)
         return Probes::nullName;
@@ -113,7 +71,7 @@ FunctionName(JSContext *cx, RawFunction fun, JSAutoByteString* bytes)
  * a number of usually unused lines of code would cause.
  */
 void
-Probes::DTraceEnterJSFun(JSContext *cx, RawFunction fun, RawScript script)
+Probes::DTraceEnterJSFun(JSContext *cx, JSFunction *fun, JSScript *script)
 {
     JSAutoByteString funNameBytes;
     JAVASCRIPT_FUNCTION_ENTRY(ScriptFilename(script), Probes::nullName,
@@ -121,7 +79,7 @@ Probes::DTraceEnterJSFun(JSContext *cx, RawFunction fun, RawScript script)
 }
 
 void
-Probes::DTraceExitJSFun(JSContext *cx, RawFunction fun, RawScript script)
+Probes::DTraceExitJSFun(JSContext *cx, JSFunction *fun, JSScript *script)
 {
     JSAutoByteString funNameBytes;
     JAVASCRIPT_FUNCTION_RETURN(ScriptFilename(script), Probes::nullName,

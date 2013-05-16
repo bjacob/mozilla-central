@@ -324,7 +324,6 @@ public:
     bool CanUploadNonPowerOfTwo();
 
     bool WantsSmallTiles();
-    virtual bool HasLockSurface() { return false; }
 
     /**
      * If this context wraps a double-buffered target, swap the back
@@ -359,6 +358,7 @@ public:
 #ifdef MOZ_WIDGET_GONK
     virtual EGLImage CreateEGLImageForNativeBuffer(void* buffer) = 0;
     virtual void DestroyEGLImage(EGLImage image) = 0;
+    virtual EGLImage GetNullEGLImage() = 0;
 #endif
 
     virtual already_AddRefed<TextureImage>
@@ -1016,6 +1016,7 @@ public:
         OES_EGL_sync,
         OES_EGL_image_external,
         EXT_packed_depth_stencil,
+        OES_element_index_uint,
         Extensions_Max
     };
 
@@ -1195,7 +1196,10 @@ public:
         fViewport(0, 0, size.width, size.height);
 
         mCaps = mScreen->Caps();
-        UpdateGLFormats(caps);
+        if (mCaps.any)
+            DetermineCaps();
+
+        UpdateGLFormats(mCaps);
         UpdatePixelFormat();
 
         return true;

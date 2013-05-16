@@ -40,6 +40,9 @@
 
 using namespace js;
 
+using mozilla::IsFinite;
+using mozilla::IsNegativeZero;
+
 #if ENABLE_INTL_API
 using icu::Locale;
 using icu::NumberingSystem;
@@ -193,11 +196,16 @@ enum UNumberFormatStyle {
     UNUM_CURRENCY_PLURAL,
 };
 
+enum UNumberFormatRoundingMode {
+    UNUM_ROUND_HALFUP,
+};
+
 enum UNumberFormatAttribute {
   UNUM_GROUPING_USED,
   UNUM_MIN_INTEGER_DIGITS,
   UNUM_MAX_FRACTION_DIGITS,
   UNUM_MIN_FRACTION_DIGITS,
+  UNUM_ROUNDING_MODE,
   UNUM_SIGNIFICANT_DIGITS_USED,
   UNUM_MIN_SIGNIFICANT_DIGITS,
   UNUM_MAX_SIGNIFICANT_DIGITS,
@@ -600,12 +608,12 @@ collator_toSource(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
-static JSFunctionSpec collator_static_methods[] = {
+static const JSFunctionSpec collator_static_methods[] = {
     {"supportedLocalesOf", JSOP_NULLWRAPPER, 1, JSFunction::INTERPRETED, "Intl_Collator_supportedLocalesOf"},
     JS_FS_END
 };
 
-static JSFunctionSpec collator_methods[] = {
+static const JSFunctionSpec collator_methods[] = {
     {"resolvedOptions", JSOP_NULLWRAPPER, 0, JSFunction::INTERPRETED, "Intl_Collator_resolvedOptions"},
 #if JS_HAS_TOSOURCE
     JS_FN(js_toSource_str, collator_toSource, 0, 0),
@@ -1078,12 +1086,12 @@ numberFormat_toSource(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
-static JSFunctionSpec numberFormat_static_methods[] = {
+static const JSFunctionSpec numberFormat_static_methods[] = {
     {"supportedLocalesOf", JSOP_NULLWRAPPER, 1, JSFunction::INTERPRETED, "Intl_NumberFormat_supportedLocalesOf"},
     JS_FS_END
 };
 
-static JSFunctionSpec numberFormat_methods[] = {
+static const JSFunctionSpec numberFormat_methods[] = {
     {"resolvedOptions", JSOP_NULLWRAPPER, 0, JSFunction::INTERPRETED, "Intl_NumberFormat_resolvedOptions"},
 #if JS_HAS_TOSOURCE
     JS_FN(js_toSource_str, numberFormat_toSource, 0, 0),
@@ -1415,6 +1423,7 @@ NewUNumberFormat(JSContext *cx, HandleObject numberFormat)
         unum_setAttribute(nf, UNUM_MAX_FRACTION_DIGITS, uMaximumFractionDigits);
     }
     unum_setAttribute(nf, UNUM_GROUPING_USED, uUseGrouping);
+    unum_setAttribute(nf, UNUM_ROUNDING_MODE, UNUM_ROUND_HALFUP);
 
     return toClose.forget();
 }
@@ -1423,7 +1432,7 @@ static bool
 intl_FormatNumber(JSContext *cx, UNumberFormat *nf, double x, MutableHandleValue result)
 {
     // FormatNumber doesn't consider -0.0 to be negative.
-    if (MOZ_DOUBLE_IS_NEGATIVE_ZERO(x))
+    if (IsNegativeZero(x))
         x = 0.0;
 
     StringBuffer chars(cx);
@@ -1527,12 +1536,12 @@ dateTimeFormat_toSource(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
-static JSFunctionSpec dateTimeFormat_static_methods[] = {
+static const JSFunctionSpec dateTimeFormat_static_methods[] = {
     {"supportedLocalesOf", JSOP_NULLWRAPPER, 1, JSFunction::INTERPRETED, "Intl_DateTimeFormat_supportedLocalesOf"},
     JS_FS_END
 };
 
-static JSFunctionSpec dateTimeFormat_methods[] = {
+static const JSFunctionSpec dateTimeFormat_methods[] = {
     {"resolvedOptions", JSOP_NULLWRAPPER, 0, JSFunction::INTERPRETED, "Intl_DateTimeFormat_resolvedOptions"},
 #if JS_HAS_TOSOURCE
     JS_FN(js_toSource_str, dateTimeFormat_toSource, 0, 0),
@@ -1902,7 +1911,7 @@ NewUDateFormat(JSContext *cx, HandleObject dateTimeFormat)
 static bool
 intl_FormatDateTime(JSContext *cx, UDateFormat *df, double x, MutableHandleValue result)
 {
-    if (!MOZ_DOUBLE_IS_FINITE(x)) {
+    if (!IsFinite(x)) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DATE_NOT_FINITE);
         return false;
     }
@@ -2002,7 +2011,7 @@ intl_toSource(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
-static JSFunctionSpec intl_static_methods[] = {
+static const JSFunctionSpec intl_static_methods[] = {
 #if JS_HAS_TOSOURCE
     JS_FN(js_toSource_str,  intl_toSource,        0, 0),
 #endif

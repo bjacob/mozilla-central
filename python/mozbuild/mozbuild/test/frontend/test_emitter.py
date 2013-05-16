@@ -15,6 +15,8 @@ from mozbuild.frontend.data import (
     ReaderSummary,
     VariablePassthru,
     Exports,
+    Program,
+    XpcshellManifests,
 )
 from mozbuild.frontend.emitter import TreeMetadataEmitter
 from mozbuild.frontend.reader import BuildReader
@@ -30,6 +32,7 @@ class TestEmitterBasic(unittest.TestCase):
     def reader(self, name):
         config = MockConfig(os.path.join(data_path, name))
         config.substs['ENABLE_TESTS'] = '1'
+        config.substs['BIN_SUFFIX'] = '.prog'
 
         return BuildReader(config)
 
@@ -121,16 +124,20 @@ class TestEmitterBasic(unittest.TestCase):
         self.assertIsInstance(objs[0], DirectoryTraversal)
         self.assertIsInstance(objs[1], VariablePassthru)
 
+        wanted = dict(
+            ASFILES=['tans.s', 'fans.asm'],
+            XPIDLSRCS=['foo.idl', 'bar.idl', 'biz.idl'],
+            XPIDL_MODULE='module_name',
+            XPIDL_FLAGS=['-Idir1', '-Idir2', '-Idir3'],
+            )
+
         variables = objs[1].variables
-        self.assertEqual(len(variables), 3)
-        self.assertIn('XPIDLSRCS', variables)
-        self.assertEqual(variables['XPIDLSRCS'],
-            ['foo.idl', 'bar.idl', 'biz.idl'])
-        self.assertIn('XPIDL_MODULE', variables)
-        self.assertEqual(variables['XPIDL_MODULE'], 'module_name')
-        self.assertIn('XPIDL_FLAGS', variables)
-        self.assertEqual(variables['XPIDL_FLAGS'],
-            ['-Idir1', '-Idir2', '-Idir3'])
+        self.assertEqual(len(variables), len(wanted))
+
+        for var, val in wanted.items():
+            # print("test_variable_passthru[%s]" % var)
+            self.assertIn(var, variables)
+            self.assertEqual(variables[var], val)
 
     def test_exports(self):
         reader = self.reader('exports')
@@ -168,6 +175,35 @@ class TestEmitterBasic(unittest.TestCase):
         self.assertIn('overwrite', exports._children)
         overwrite = exports._children['overwrite']
         self.assertEqual(overwrite.get_strings(), ['new.h'])
+
+    def test_program(self):
+        reader = self.reader('program')
+        objs = self.read_topsrcdir(reader)
+
+        self.assertEqual(len(objs), 2)
+        self.assertIsInstance(objs[0], DirectoryTraversal)
+        self.assertIsInstance(objs[1], Program)
+
+        program = objs[1].program
+        self.assertEqual(program, 'test_program.prog')
+
+    def test_xpcshell_manifests(self):
+        reader = self.reader('xpcshell_manifests')
+        objs = self.read_topsrcdir(reader)
+
+        inis = []
+        for o in objs:
+            if isinstance(o, XpcshellManifests):
+                inis.append(o.xpcshell_manifests)
+
+        iniByDir = [
+            'bar/xpcshell.ini',
+            'enabled_var/xpcshell.ini',
+            'foo/xpcshell.ini',
+            'tans/xpcshell.ini',
+            ]
+
+        self.assertEqual(sorted(inis), iniByDir)
 
 if __name__ == '__main__':
     main()

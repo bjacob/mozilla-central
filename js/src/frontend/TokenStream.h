@@ -436,7 +436,7 @@ class StrictModeGetter {
 //
 // The methods seek() and tell() allow to rescan from a previous visited
 // location of the buffer.
-class TokenStream
+class MOZ_STACK_CLASS TokenStream
 {
     /* Unicode separators that are treated as line terminators, in addition to \n, \r */
     enum {
@@ -453,7 +453,8 @@ class TokenStream
     typedef Vector<jschar, 32> CharBuffer;
 
     TokenStream(JSContext *cx, const CompileOptions &options,
-                const jschar *base, size_t length, StrictModeGetter *smg);
+                const jschar *base, size_t length, StrictModeGetter *smg,
+                AutoKeepAtoms& keepAtoms);
 
     ~TokenStream();
 
@@ -634,7 +635,20 @@ class TokenStream
         JS_ALWAYS_TRUE(matchToken(tt));
     }
 
-    class Position {
+    class MOZ_STACK_CLASS Position {
+      public:
+        /*
+         * The Token fields may contain pointers to atoms, so for correct
+         * rooting we must ensure collection of atoms is disabled while objects
+         * of this class are live.  Do this by requiring a dummy AutoKeepAtoms
+         * reference in the constructor.
+         *
+         * This class is explicity ignored by the analysis, so don't add any
+         * more pointers to GC things here!
+         */
+        Position(AutoKeepAtoms&) { }
+      private:
+        Position(const Position&) MOZ_DELETE;
         friend class TokenStream;
         const jschar *buf;
         unsigned flags;

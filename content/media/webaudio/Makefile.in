@@ -24,14 +24,19 @@ CPPSRCS := \
   AudioListener.cpp \
   AudioNode.cpp \
   AudioParam.cpp \
+  AudioProcessingEvent.cpp \
   BiquadFilterNode.cpp \
+  ChannelMergerNode.cpp \
+  ChannelSplitterNode.cpp \
   DelayNode.cpp \
   DynamicsCompressorNode.cpp \
   EnableWebAudioCheck.cpp \
   GainNode.cpp \
   MediaBufferDecoder.cpp \
   PannerNode.cpp \
+  ScriptProcessorNode.cpp \
   ThreeDPoint.cpp \
+  WaveShaperNode.cpp \
   WebAudioUtils.cpp \
   $(NULL)
 

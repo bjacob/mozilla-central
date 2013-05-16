@@ -22,7 +22,7 @@ namespace {
 class Navigator
 {
   static JSClass sClass;
-  static JSPropertySpec sProperties[];
+  static const JSPropertySpec sProperties[];
 
   enum SLOT {
     SLOT_appName = 0,
@@ -50,7 +50,7 @@ public:
     const RuntimeService::NavigatorStrings& strings =
       rts->GetNavigatorStrings();
 
-    JSString* appName, *version, *platform, *userAgent;
+    JS::Rooted<JSString*> appName(aCx), version(aCx), platform(aCx), userAgent(aCx);
 
 #define COPY_STRING(_jsstr, _str)                                              \
   if (strings. _str .IsEmpty()) {                                              \
@@ -142,7 +142,7 @@ JSClass Navigator::sClass = {
   JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub, Finalize
 };
 
-JSPropertySpec Navigator::sProperties[] = {
+const JSPropertySpec Navigator::sProperties[] = {
   { "appName", SLOT_appName, PROPERTY_FLAGS, JSOP_WRAPPER(GetProperty),
     JSOP_WRAPPER(js_GetterOnlyPropertyStub) },
   { "appVersion", SLOT_appVersion, PROPERTY_FLAGS, JSOP_WRAPPER(GetProperty),

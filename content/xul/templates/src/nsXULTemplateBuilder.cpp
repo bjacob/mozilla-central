@@ -1074,8 +1074,7 @@ nsXULTemplateBuilder::Observe(nsISupports* aSubject,
     if (!strcmp(aTopic, DOM_WINDOW_DESTROYED_TOPIC)) {
         nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aSubject);
         if (window) {
-            nsCOMPtr<nsIDocument> doc =
-                do_QueryInterface(window->GetExtantDocument());
+            nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
             if (doc && doc == mObservedDocument)
                 NodeWillBeDestroyed(doc);
         }
@@ -1375,8 +1374,6 @@ nsXULTemplateBuilder::InitHTMLTemplateRoot()
     if (! global)
         return NS_ERROR_UNEXPECTED;
 
-    JSObject *scope = global->GetGlobalJSObject();
-
     nsIScriptContext *context = global->GetContext();
     if (! context)
         return NS_ERROR_UNEXPECTED;
@@ -1386,26 +1383,28 @@ nsXULTemplateBuilder::InitHTMLTemplateRoot()
     if (! jscontext)
         return NS_ERROR_UNEXPECTED;
 
+    JS::Rooted<JSObject*> scope(jscontext, global->GetGlobalJSObject());
+
     JSAutoRequest ar(jscontext);
 
-    JS::Value v;
+    JS::Rooted<JS::Value> v(jscontext);
     nsCOMPtr<nsIXPConnectJSObjectHolder> wrapper;
-    rv = nsContentUtils::WrapNative(jscontext, scope, mRoot, mRoot, &v,
+    rv = nsContentUtils::WrapNative(jscontext, scope, mRoot, mRoot, v.address(),
                                     getter_AddRefs(wrapper));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    JSObject* jselement = JSVAL_TO_OBJECT(v);
+    JS::Rooted<JSObject*> jselement(jscontext, JSVAL_TO_OBJECT(v));
 
     if (mDB) {
         // database
-        JS::Value jsdatabase;
+        JS::Rooted<JS::Value> jsdatabase(jscontext);
         rv = nsContentUtils::WrapNative(jscontext, scope, mDB,
                                         &NS_GET_IID(nsIRDFCompositeDataSource),
-                                        &jsdatabase, getter_AddRefs(wrapper));
+                                        jsdatabase.address(), getter_AddRefs(wrapper));
         NS_ENSURE_SUCCESS(rv, rv);
 
         bool ok;
-        ok = JS_SetProperty(jscontext, jselement, "database", &jsdatabase);
+        ok = JS_SetProperty(jscontext, jselement, "database", jsdatabase.address());
         NS_ASSERTION(ok, "unable to set database property");
         if (! ok)
             return NS_ERROR_FAILURE;
@@ -1413,16 +1412,16 @@ nsXULTemplateBuilder::InitHTMLTemplateRoot()
 
     {
         // builder
-        JS::Value jsbuilder;
+        JS::Rooted<JS::Value> jsbuilder(jscontext);
         nsCOMPtr<nsIXPConnectJSObjectHolder> wrapper;
         rv = nsContentUtils::WrapNative(jscontext, jselement,
                                         static_cast<nsIXULTemplateBuilder*>(this),
                                         &NS_GET_IID(nsIXULTemplateBuilder),
-                                        &jsbuilder, getter_AddRefs(wrapper));
+                                        jsbuilder.address(), getter_AddRefs(wrapper));
         NS_ENSURE_SUCCESS(rv, rv);
 
         bool ok;
-        ok = JS_SetProperty(jscontext, jselement, "builder", &jsbuilder);
+        ok = JS_SetProperty(jscontext, jselement, "builder", jsbuilder.address());
         if (! ok)
             return NS_ERROR_FAILURE;
     }
@@ -2139,7 +2138,7 @@ nsXULTemplateBuilder::DetermineRDFQueryRef(nsIContent* aQueryElement, nsIAtom** 
         content->GetAttr(kNameSpaceID_None, nsGkAtoms::tag, tag);
 
         if (!tag.IsEmpty())
-            *aTag = NS_NewAtom(tag);
+            *aTag = NS_NewAtom(tag).get();
     }
 }
 

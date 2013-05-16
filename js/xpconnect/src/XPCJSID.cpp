@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* vim: set ts=8 sts=4 et sw=4 tw=99: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -409,8 +409,8 @@ nsJSIID::NewResolve(nsIXPConnectWrappedNative *wrapper,
 
     XPCNativeMember* member = iface->FindMember(id);
     if (member && member->IsConstant()) {
-        jsval val;
-        if (!member->GetConstantValue(ccx, iface, &val))
+        RootedValue val(cx);
+        if (!member->GetConstantValue(ccx, iface, val.address()))
             return NS_ERROR_OUT_OF_MEMORY;
 
         *objp = obj;
@@ -476,13 +476,15 @@ nsJSIID::Enumerate(nsIXPConnectWrappedNative *wrapper,
 static JSObject *
 FindObjectForHasInstance(JSContext *cx, HandleObject objArg)
 {
-    RootedObject obj(cx, objArg);
-    while (obj && !IS_WRAPPER_CLASS(js::GetObjectClass(obj)) && !IsDOMObject(obj))
-    {
-        if (js::IsWrapper(obj))
+    RootedObject obj(cx, objArg), proto(cx);
+    while (obj && !IS_WRAPPER_CLASS(js::GetObjectClass(obj)) && !IsDOMObject(obj)) {
+        if (js::IsWrapper(obj)) {
             obj = js::CheckedUnwrap(obj, /* stopAtOuter = */ false);
-        else if (!js::GetObjectProto(cx, obj, obj.address()))
+            continue;
+        }
+        if (!js::GetObjectProto(cx, obj, &proto))
             return nullptr;
+        obj = proto;
     }
     return obj;
 }
@@ -491,7 +493,7 @@ FindObjectForHasInstance(JSContext *cx, HandleObject objArg)
 /* bool hasInstance (in nsIXPConnectWrappedNative wrapper, in JSContextPtr cx, in JSObjectPtr obj, in jsval val, out bool bp); */
 NS_IMETHODIMP
 nsJSIID::HasInstance(nsIXPConnectWrappedNative *wrapper,
-                     JSContext * cx, JSObject * obj,
+                     JSContext * cx, JSObject * /* unused */,
                      const jsval &val, bool *bp, bool *_retval)
 {
     *bp = false;
@@ -828,8 +830,7 @@ nsJSCID::GetService(const JS::Value& iidval, JSContext* cx,
 NS_IMETHODIMP
 nsJSCID::Construct(nsIXPConnectWrappedNative *wrapper,
                    JSContext * cx, JSObject * objArg,
-                   uint32_t argc, jsval * argv, jsval * vp,
-                   bool *_retval)
+                   const CallArgs &args, bool *_retval)
 {
     RootedObject obj(cx, objArg);
     XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
@@ -837,9 +838,9 @@ nsJSCID::Construct(nsIXPConnectWrappedNative *wrapper,
         return NS_ERROR_FAILURE;
 
     // 'push' a call context and call on it
-    XPCCallContext ccx(JS_CALLER, cx, obj, nullptr,
-                       rt->GetStringID(XPCJSRuntime::IDX_CREATE_INSTANCE),
-                       argc, argv, vp);
+    RootedId name(cx, rt->GetStringID(XPCJSRuntime::IDX_CREATE_INSTANCE));
+    XPCCallContext ccx(JS_CALLER, cx, obj, NullPtr(), name, args.length(), args.array(),
+                       args.rval().address());
 
     *_retval = XPCWrappedNative::CallMethod(ccx);
     return NS_OK;
@@ -848,7 +849,7 @@ nsJSCID::Construct(nsIXPConnectWrappedNative *wrapper,
 /* bool hasInstance (in nsIXPConnectWrappedNative wrapper, in JSContextPtr cx, in JSObjectPtr obj, in jsval val, out bool bp); */
 NS_IMETHODIMP
 nsJSCID::HasInstance(nsIXPConnectWrappedNative *wrapper,
-                     JSContext * cx, JSObject * obj,
+                     JSContext * cx, JSObject * /* unused */,
                      const jsval &val, bool *bp, bool *_retval)
 {
     *bp = false;
@@ -887,7 +888,7 @@ nsJSCID::HasInstance(nsIXPConnectWrappedNative *wrapper,
 JSObject *
 xpc_NewIDObject(JSContext *cx, HandleObject jsobj, const nsID& aID)
 {
-    JSObject *obj = nullptr;
+    RootedObject obj(cx);
 
     nsCOMPtr<nsIJSID> iid =
             dont_AddRef(static_cast<nsIJSID*>(nsJSID::NewID(aID)));
@@ -900,7 +901,7 @@ xpc_NewIDObject(JSContext *cx, HandleObject jsobj, const nsID& aID)
                                           NS_GET_IID(nsIJSID),
                                           getter_AddRefs(holder));
             if (NS_SUCCEEDED(rv) && holder) {
-                holder->GetJSObject(&obj);
+                holder->GetJSObject(obj.address());
             }
         }
     }

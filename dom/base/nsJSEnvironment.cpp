@@ -14,7 +14,6 @@
 #include "nsDOMCID.h"
 #include "nsIServiceManager.h"
 #include "nsIXPConnect.h"
-#include "nsIJSContextStack.h"
 #include "nsIJSRuntimeService.h"
 #include "nsCOMPtr.h"
 #include "nsISupportsPrimitives.h"
@@ -240,6 +239,12 @@ nsJSEnvironmentObserver::Observe(nsISupports* aSubject, const char* aTopic,
                                  const PRUnichar* aData)
 {
   if (sGCOnMemoryPressure && !nsCRT::strcmp(aTopic, "memory-pressure")) {
+    if(StringBeginsWith(nsDependentString(aData),
+                        NS_LITERAL_STRING("low-memory-ongoing"))) {
+      // Don't GC/CC if we are in an ongoing low-memory state since its very
+      // slow and it likely won't help us anyway.
+      return NS_OK;
+    }
     nsJSContext::GarbageCollectNow(JS::gcreason::MEM_PRESSURE,
                                    nsJSContext::NonIncrementalGC,
                                    nsJSContext::NonCompartmentGC,
@@ -620,7 +625,7 @@ PrintWinURI(nsGlobalWindow *win)
     return;
   }
 
-  nsCOMPtr<nsIDocument> doc = do_QueryInterface(win->GetExtantDocument());
+  nsCOMPtr<nsIDocument> doc = win->GetExtantDoc();
   if (!doc) {
     printf("No document in the window.\n");
     return;
@@ -679,13 +684,9 @@ GetPromptFromContext(nsJSContext* ctx)
   nsIDocShell *docShell = win->GetDocShell();
   NS_ENSURE_TRUE(docShell, nullptr);
 
-  nsCOMPtr<nsIInterfaceRequestor> ireq(do_QueryInterface(docShell));
-  NS_ENSURE_TRUE(ireq, nullptr);
-
   // Get the nsIPrompt interface from the docshell
-  nsIPrompt* prompt;
-  ireq->GetInterface(NS_GET_IID(nsIPrompt), (void**)&prompt);
-  return prompt;
+  nsCOMPtr<nsIPrompt> prompt = do_GetInterface(docShell);
+  return prompt.forget();
 }
 
 JSBool
@@ -755,9 +756,9 @@ nsJSContext::DOMOperationCallback(JSContext *cx)
   NS_ENSURE_TRUE(prompt, JS_FALSE);
 
   // Check if we should offer the option to debug
-  JSScript *script;
+  JS::RootedScript script(cx);
   unsigned lineno;
-  JSBool hasFrame = ::JS_DescribeScriptedCaller(cx, &script, &lineno);
+  JSBool hasFrame = ::JS_DescribeScriptedCaller(cx, script.address(), &lineno);
 
   bool debugPossible = hasFrame && js::CanCallContextDebugHandler(cx);
 #ifdef MOZ_JSDEBUGGER
@@ -972,7 +973,7 @@ static const char js_disable_explicit_compartment_gc[] =
 static const char js_baselinejit_content_str[] = JS_OPTIONS_DOT_STR "baselinejit.content";
 static const char js_baselinejit_chrome_str[]  = JS_OPTIONS_DOT_STR "baselinejit.chrome";
 static const char js_ion_content_str[]        = JS_OPTIONS_DOT_STR "ion.content";
-static const char js_asmjs_content_str[]      = JS_OPTIONS_DOT_STR "experimental_asmjs";
+static const char js_asmjs_content_str[]      = JS_OPTIONS_DOT_STR "asmjs";
 static const char js_ion_parallel_compilation_str[] = JS_OPTIONS_DOT_STR "ion.parallel_compilation";
 
 int
@@ -1228,7 +1229,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsJSContext)
   NS_INTERFACE_MAP_ENTRY(nsIScriptContext)
-  NS_INTERFACE_MAP_ENTRY(nsIScriptContextPrincipal)
   NS_INTERFACE_MAP_ENTRY(nsIXPCScriptNotify)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIScriptContext)
 NS_INTERFACE_MAP_END
@@ -1254,7 +1254,7 @@ nsJSContext::GetCCRefcnt()
 
 nsresult
 nsJSContext::EvaluateString(const nsAString& aScript,
-                            JSObject& aScopeObject,
+                            JS::Handle<JSObject*> aScopeObject,
                             JS::CompileOptions& aOptions,
                             bool aCoerceToString,
                             JS::Value* aRetValue)
@@ -1278,10 +1278,10 @@ nsJSContext::EvaluateString(const nsAString& aScript,
   nsCxPusher pusher;
   pusher.Push(mContext);
 
-  xpc_UnmarkGrayObject(&aScopeObject);
+  xpc_UnmarkGrayObject(aScopeObject);
   nsAutoMicroTask mt;
 
-  JSPrincipals* p = JS_GetCompartmentPrincipals(js::GetObjectCompartment(&aScopeObject));
+  JSPrincipals* p = JS_GetCompartmentPrincipals(js::GetObjectCompartment(aScopeObject));
   aOptions.setPrincipals(p);
 
   bool ok = false;
@@ -1295,11 +1295,11 @@ nsJSContext::EvaluateString(const nsAString& aScript,
   // cx and potentially call JS_RestoreFrameChain.
   XPCAutoRequest ar(mContext);
   {
-    JSAutoCompartment ac(mContext, &aScopeObject);
+    JSAutoCompartment ac(mContext, aScopeObject);
 
     ++mExecuteDepth;
 
-    JS::RootedObject rootedScope(mContext, &aScopeObject);
+    JS::RootedObject rootedScope(mContext, aScopeObject);
     ok = JS::Evaluate(mContext, rootedScope, aOptions,
                       PromiseFlatString(aScript).get(),
                       aScript.Length(), aRetValue);
@@ -1331,13 +1331,6 @@ nsJSContext::EvaluateString(const nsAString& aScript,
   return NS_OK;
 }
 
-nsIScriptObjectPrincipal*
-nsJSContext::GetObjectPrincipal()
-{
-  nsCOMPtr<nsIScriptObjectPrincipal> prin = do_QueryInterface(GetGlobalObject());
-  return prin;
-}
-
 nsresult
 nsJSContext::CompileScript(const PRUnichar* aText,
                            int32_t aTextLength,
@@ -1353,7 +1346,7 @@ nsJSContext::CompileScript(const PRUnichar* aText,
 
   NS_ENSURE_ARG_POINTER(aPrincipal);
 
-  JSObject* scopeObject = ::JS_GetGlobalObject(mContext);
+  JS::Rooted<JSObject*> scopeObject(mContext, ::JS_GetGlobalObject(mContext));
   xpc_UnmarkGrayObject(scopeObject);
 
   bool ok = false;
@@ -1396,9 +1389,11 @@ nsJSContext::CompileScript(const PRUnichar* aText,
 }
 
 nsresult
-nsJSContext::ExecuteScript(JSScript* aScriptObject,
-                           JSObject* aScopeObject)
+nsJSContext::ExecuteScript(JSScript* aScriptObject_,
+                           JSObject* aScopeObject_)
 {
+  JS::Rooted<JSObject*> aScopeObject(mContext, aScopeObject_);
+  JS::Rooted<JSScript*> aScriptObject(mContext, aScriptObject_);
   NS_ENSURE_TRUE(mIsInitialized, NS_ERROR_NOT_INITIALIZED);
 
   if (!mScriptsEnabled) {
@@ -1470,7 +1465,9 @@ AtomIsEventHandlerName(nsIAtom *aName)
 // Helper function to find the JSObject associated with a (presumably DOM)
 // interface.
 nsresult
-nsJSContext::JSObjectFromInterface(nsISupports* aTarget, JSObject* aScope, JSObject** aRet)
+nsJSContext::JSObjectFromInterface(nsISupports* aTarget,
+                                   JS::Handle<JSObject*> aScope,
+                                   JSObject** aRet)
 {
   // It is legal to specify a null target.
   if (!aTarget) {
@@ -1481,8 +1478,9 @@ nsJSContext::JSObjectFromInterface(nsISupports* aTarget, JSObject* aScope, JSObj
   // Get the jsobject associated with this target
   // We don't wrap here because we trust the JS engine to wrap the target
   // later.
-  JS::Value v;
-  nsresult rv = nsContentUtils::WrapNative(mContext, aScope, aTarget, &v);
+  JS::Rooted<JS::Value> v(mContext);
+  nsresult rv = nsContentUtils::WrapNative(mContext, aScope, aTarget,
+                                           v.address());
   NS_ENSURE_SUCCESS(rv, rv);
 
 #ifdef DEBUG
@@ -1500,8 +1498,9 @@ nsJSContext::JSObjectFromInterface(nsISupports* aTarget, JSObject* aScope, JSObj
 
 
 nsresult
-nsJSContext::BindCompiledEventHandler(nsISupports* aTarget, JSObject* aScope,
-                                      JSObject* aHandler,
+nsJSContext::BindCompiledEventHandler(nsISupports* aTarget,
+                                      JS::Handle<JSObject*> aScope,
+                                      JS::Handle<JSObject*> aHandler,
                                       JS::MutableHandle<JSObject*> aBoundHandler)
 {
   NS_ENSURE_ARG(aHandler);
@@ -1514,8 +1513,9 @@ nsJSContext::BindCompiledEventHandler(nsISupports* aTarget, JSObject* aScope,
   XPCAutoRequest ar(mContext);
 
   // Get the jsobject associated with this target
-  JSObject *target = nullptr;
-  nsresult rv = JSObjectFromInterface(aTarget, aScope, &target);
+  JS::Rooted<JSObject*> target(mContext);
+  JS::Rooted<JSObject*> scope(mContext, aScope);
+  nsresult rv = JSObjectFromInterface(aTarget, scope, target.address());
   NS_ENSURE_SUCCESS(rv, rv);
 
 #ifdef DEBUG
@@ -1560,8 +1560,9 @@ nsresult
 nsJSContext::Deserialize(nsIObjectInputStream* aStream,
                          JS::MutableHandle<JSScript*> aResult)
 {
-  JSScript *script;
-  nsresult rv = nsContentUtils::XPConnect()->ReadScript(aStream, mContext, &script);
+  JS::Rooted<JSScript*> script(mContext);
+  nsresult rv = nsContentUtils::XPConnect()->ReadScript(aStream, mContext,
+                                                        script.address());
   if (NS_FAILED(rv)) return rv;
 
   aResult.set(script);
@@ -1571,7 +1572,7 @@ nsJSContext::Deserialize(nsIObjectInputStream* aStream,
 nsIScriptGlobalObject *
 nsJSContext::GetGlobalObject()
 {
-  JSObject *global = ::JS_GetGlobalObject(mContext);
+  JS::Rooted<JSObject*> global(mContext, ::JS_GetGlobalObject(mContext));
 
   if (!global) {
     return nullptr;
@@ -1660,7 +1661,7 @@ nsJSContext::InitializeExternalClasses()
 }
 
 nsresult
-nsJSContext::SetProperty(JSObject* aTarget, const char* aPropName, nsISupports* aArgs)
+nsJSContext::SetProperty(JS::Handle<JSObject*> aTarget, const char* aPropName, nsISupports* aArgs)
 {
   uint32_t  argc;
   JS::Value *argv = nullptr;
@@ -1671,8 +1672,9 @@ nsJSContext::SetProperty(JSObject* aTarget, const char* aPropName, nsISupports* 
 
   Maybe<nsRootedJSValueArray> tempStorage;
 
+  JS::Rooted<JSObject*> global(mContext, GetNativeGlobal());
   nsresult rv =
-    ConvertSupportsTojsvals(aArgs, GetNativeGlobal(), &argc, &argv, tempStorage);
+    ConvertSupportsTojsvals(aArgs, global, &argc, &argv, tempStorage);
   NS_ENSURE_SUCCESS(rv, rv);
 
   JS::Value vargs;
@@ -1703,7 +1705,7 @@ nsJSContext::SetProperty(JSObject* aTarget, const char* aPropName, nsISupports* 
 
 nsresult
 nsJSContext::ConvertSupportsTojsvals(nsISupports *aArgs,
-                                     JSObject *aScope,
+                                     JS::Handle<JSObject*> aScope,
                                      uint32_t *aArgc,
                                      JS::Value **aArgv,
                                      Maybe<nsRootedJSValueArray> &aTempStorage)
@@ -1775,8 +1777,8 @@ nsJSContext::ConvertSupportsTojsvals(nsISupports *aArgs,
                        "Don't pass nsISupportsPrimitives - use nsIVariant!");
 #endif
           nsCOMPtr<nsIXPConnectJSObjectHolder> wrapper;
-          JS::Value v;
-          rv = nsContentUtils::WrapNative(mContext, aScope, arg, &v,
+          JS::Rooted<JS::Value> v(mContext);
+          rv = nsContentUtils::WrapNative(mContext, aScope, arg, v.address(),
                                           getter_AddRefs(wrapper));
           if (NS_SUCCEEDED(rv)) {
             *thisval = v;
@@ -1975,10 +1977,11 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
       AutoFree iidGuard(iid); // Free iid upon destruction.
 
       nsCOMPtr<nsIXPConnectJSObjectHolder> wrapper;
-      JSObject *global = xpc_UnmarkGrayObject(::JS_GetGlobalObject(cx));
-      JS::Value v;
+      JS::Rooted<JSObject*> global(cx,
+        xpc_UnmarkGrayObject(::JS_GetGlobalObject(cx)));
+      JS::Rooted<JS::Value> v(cx);
       nsresult rv = nsContentUtils::WrapNative(cx, global,
-                                               data, iid, &v,
+                                               data, iid, v.address(),
                                                getter_AddRefs(wrapper));
       NS_ENSURE_SUCCESS(rv, rv);
 
@@ -2150,7 +2153,7 @@ TraceMallocDumpAllocations(JSContext *cx, unsigned argc, JS::Value *vp)
     return JS_TRUE;
 }
 
-static JSFunctionSpec TraceMallocFunctions[] = {
+static const JSFunctionSpec TraceMallocFunctions[] = {
     JS_FS("TraceMallocDisable",         TraceMallocDisable,         0, 0),
     JS_FS("TraceMallocEnable",          TraceMallocEnable,          0, 0),
     JS_FS("TraceMallocOpenLogFile",     TraceMallocOpenLogFile,     1, 0),
@@ -2205,7 +2208,7 @@ ReportAndDump(JSContext *cx, unsigned argc, JS::Value *vp)
 } // namespace dmd
 } // namespace mozilla
 
-static JSFunctionSpec DMDFunctions[] = {
+static const JSFunctionSpec DMDFunctions[] = {
     JS_FS("DMDReportAndDump", dmd::ReportAndDump, 1, 0),
     JS_FS_END
 };
@@ -2306,7 +2309,7 @@ JProfSaveCircularJS(JSContext *cx, unsigned argc, JS::Value *vp)
   return JS_TRUE;
 }
 
-static JSFunctionSpec JProfFunctions[] = {
+static const JSFunctionSpec JProfFunctions[] = {
     JS_FS("JProfStartProfiling",        JProfStartProfilingJS,      0, 0),
     JS_FS("JProfStopProfiling",         JProfStopProfilingJS,       0, 0),
     JS_FS("JProfClearCircular",         JProfClearCircularJS,       0, 0),
@@ -2317,7 +2320,7 @@ static JSFunctionSpec JProfFunctions[] = {
 #endif /* defined(MOZ_JPROF) */
 
 nsresult
-nsJSContext::InitClasses(JSObject* aGlobalObj)
+nsJSContext::InitClasses(JS::Handle<JSObject*> aGlobalObj)
 {
   nsresult rv = InitializeExternalClasses();
   NS_ENSURE_SUCCESS(rv, rv);
@@ -2541,11 +2544,11 @@ nsJSContext::ShrinkGCBuffersNow()
   JS::ShrinkGCBuffers(nsJSRuntime::sRuntime);
 }
 
-// Return true if any JSContext has a "global object" with a gray
-// parent. The intent is to look for JS Object windows. We don't merge
+// Return true if there exists a JSContext with a default global whose current
+// inner is gray. The intent is to look for JS Object windows. We don't merge
 // system compartments, so we don't use them to trigger merging CCs.
 static bool
-AnyGrayGlobalParent()
+AnyGrayCurrentContentInnerWindows()
 {
   if (!nsJSRuntime::sRuntime) {
     return false;
@@ -2553,13 +2556,20 @@ AnyGrayGlobalParent()
   JSContext *iter = nullptr;
   JSContext *cx;
   while ((cx = JS_ContextIterator(nsJSRuntime::sRuntime, &iter))) {
-    if (JSObject *global = JS_GetGlobalObject(cx)) {
-      if (JSObject *parent = js::GetObjectParent(global)) {
-        if (JS::GCThingIsMarkedGray(parent) &&
-            !js::IsSystemCompartment(js::GetObjectCompartment(parent))) {
-          return true;
-        }
-      }
+    // Skip anything without an nsIScriptContext, as well as any scx whose
+    // NativeGlobal() is not an outer window (this happens with XUL Prototype
+    // compilation scopes, for example, which we're not interested in).
+    nsIScriptContext *scx = GetScriptContextFromJSContext(cx);
+    JS::RootedObject global(cx, scx ? scx->GetNativeGlobal() : nullptr);
+    if (!global || !js::GetObjectParent(global)) {
+      continue;
+    }
+    // Grab the inner from the outer.
+    global = JS_ObjectToInnerObject(cx, global);
+    MOZ_ASSERT(!js::GetObjectParent(global));
+    if (JS::GCThingIsMarkedGray(global) &&
+        !js::IsSystemCompartment(js::GetObjectCompartment(global))) {
+      return true;
     }
   }
   return false;
@@ -2590,7 +2600,7 @@ DoMergingCC(bool aForced)
     return false;
   }
 
-  if (!aForced && AnyGrayGlobalParent()) {
+  if (!aForced && AnyGrayCurrentContentInnerWindows()) {
     sMergedInARow++;
     return true;
   } else {
@@ -3186,7 +3196,7 @@ DOMGCSliceCallback(JSRuntime *aRt, JS::GCProgress aProgress, const JS::GCDescrip
 }
 
 static void
-DOMAnalysisPurgeCallback(JSRuntime *aRt, JSFlatString *aDesc)
+DOMAnalysisPurgeCallback(JSRuntime *aRt, JS::Handle<JSFlatString*> aDesc)
 {
   NS_ASSERTION(NS_IsMainThread(), "GCs must run on the main thread");
 
@@ -3390,9 +3400,9 @@ NS_DOMReadStructuredClone(JSContext* cx,
   if (tag == SCTAG_DOM_IMAGEDATA) {
     // Read the information out of the stream.
     uint32_t width, height;
-    JS::Value dataArray;
+    JS::Rooted<JS::Value> dataArray(cx);
     if (!JS_ReadUint32Pair(reader, &width, &height) ||
-        !JS_ReadTypedArray(reader, &dataArray)) {
+        !JS_ReadTypedArray(reader, dataArray.address())) {
       return nullptr;
     }
     MOZ_ASSERT(dataArray.isObject());
@@ -3401,7 +3411,7 @@ NS_DOMReadStructuredClone(JSContext* cx,
     nsRefPtr<ImageData> imageData = new ImageData(width, height,
                                                   dataArray.toObject());
     // Wrap it in a JS::Value.
-    JSObject* global = JS_GetGlobalForScopeChain(cx);
+    JS::Rooted<JSObject*> global(cx, JS_GetGlobalForScopeChain(cx));
     if (!global) {
       return nullptr;
     }
@@ -3416,7 +3426,7 @@ NS_DOMReadStructuredClone(JSContext* cx,
 JSBool
 NS_DOMWriteStructuredClone(JSContext* cx,
                            JSStructuredCloneWriter* writer,
-                           JSObject* obj,
+                           JS::Handle<JSObject*> obj,
                            void *closure)
 {
   ImageData* imageData;
@@ -3430,7 +3440,7 @@ NS_DOMWriteStructuredClone(JSContext* cx,
   // Prepare the ImageData internals.
   uint32_t width = imageData->Width();
   uint32_t height = imageData->Height();
-  JSObject *dataArray = imageData->GetDataObject();
+  JS::Rooted<JSObject*> dataArray(cx, imageData->GetDataObject());
 
   // Write the internals to the stream.
   JSAutoCompartment ac(cx, dataArray);

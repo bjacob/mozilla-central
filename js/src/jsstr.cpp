@@ -15,6 +15,8 @@
  * allocations in the same native method.
  */
 
+#include "jsstr.h"
+
 #include "mozilla/Attributes.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/FloatingPoint.h"
@@ -32,16 +34,12 @@
 #include "jscntxt.h"
 #include "jsgc.h"
 #include "jsinterp.h"
-#include "jslock.h"
 #include "jsnum.h"
 #include "jsobj.h"
 #include "jsopcode.h"
-#include "jsprobes.h"
-#include "jsstr.h"
 #include "jsversion.h"
 
 #include "builtin/RegExp.h"
-#include "js/HashTable.h"
 #include "vm/GlobalObject.h"
 #include "vm/NumericConversions.h"
 #include "vm/RegExpObject.h"
@@ -65,6 +63,8 @@ using namespace js::types;
 using namespace js::unicode;
 
 using mozilla::CheckedInt;
+using mozilla::IsNaN;
+using mozilla::IsNegativeZero;
 using mozilla::PodCopy;
 using mozilla::PodEqual;
 
@@ -353,7 +353,7 @@ str_uneval(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
-static JSFunctionSpec string_functions[] = {
+static const JSFunctionSpec string_functions[] = {
     JS_FN(js_escape_str,             str_escape,                1,0),
     JS_FN(js_unescape_str,           str_unescape,              1,0),
 #if JS_HAS_UNEVAL
@@ -1288,7 +1288,7 @@ str_lastIndexOf(JSContext *cx, unsigned argc, Value *vp)
             double d;
             if (!ToNumber(cx, args[1], &d))
                 return false;
-            if (!MOZ_DOUBLE_IS_NaN(d)) {
+            if (!IsNaN(d)) {
                 d = ToInteger(d);
                 if (d <= 0)
                     i = 0;
@@ -2617,7 +2617,7 @@ LambdaIsGetElem(JSObject &lambda)
     if (!fun->hasScript())
         return NULL;
 
-    RawScript script = fun->nonLazyScript();
+    JSScript *script = fun->nonLazyScript();
     jsbytecode *pc = script->code;
 
     /*
@@ -3356,7 +3356,7 @@ str_sub(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif /* JS_HAS_STR_HTML_HELPERS */
 
-static JSFunctionSpec string_methods[] = {
+static const JSFunctionSpec string_methods[] = {
 #if JS_HAS_TOSOURCE
     JS_FN("quote",             str_quote,             0,JSFUN_GENERIC_NATIVE),
     JS_FN(js_toSource_str,     str_toSource,          0,0),
@@ -3385,6 +3385,7 @@ static JSFunctionSpec string_methods[] = {
 #else
     JS_FN("localeCompare",     str_localeCompare,     1,JSFUN_GENERIC_NATIVE),
 #endif
+         {"repeat",            {NULL, NULL},          1,0, "String_repeat"},
 
     /* Perl-ish methods (search is actually Python-esque). */
     JS_FN("match",             str_match,             1,JSFUN_GENERIC_NATIVE),
@@ -3482,7 +3483,7 @@ js::str_fromCharCode(JSContext *cx, unsigned argc, Value *vp)
     return JS_TRUE;
 }
 
-static JSFunctionSpec string_static_methods[] = {
+static const JSFunctionSpec string_static_methods[] = {
     JS_FN("fromCharCode", js::str_fromCharCode, 1, 0),
 
     // This must be at the end because of bug 853075: functions listed after
@@ -3493,7 +3494,7 @@ static JSFunctionSpec string_static_methods[] = {
     JS_FS_END
 };
 
-RawShape
+Shape *
 StringObject::assignInitialShape(JSContext *cx)
 {
     JS_ASSERT(nativeEmpty());
@@ -3728,7 +3729,7 @@ js::ValueToSource(JSContext *cx, const Value &v)
         return js_QuoteString(cx, v.toString(), '"');
     if (v.isPrimitive()) {
         /* Special case to preserve negative zero, _contra_ toString. */
-        if (v.isDouble() && MOZ_DOUBLE_IS_NEGATIVE_ZERO(v.toDouble())) {
+        if (v.isDouble() && IsNegativeZero(v.toDouble())) {
             /* NB: _ucNstr rather than _ucstr to indicate non-terminated. */
             static const jschar js_negzero_ucNstr[] = {'-', '0'};
 
@@ -3739,9 +3740,8 @@ js::ValueToSource(JSContext *cx, const Value &v)
 
     RootedValue rval(cx, NullValue());
     RootedValue fval(cx);
-    RootedId id(cx, NameToId(cx->names().toSource));
-    Rooted<JSObject*> obj(cx, &v.toObject());
-    if (!GetMethod(cx, obj, id, 0, &fval))
+    RootedObject obj(cx, &v.toObject());
+    if (!JSObject::getProperty(cx, obj, obj, cx->names().toSource, &fval))
         return NULL;
     if (js_IsCallable(fval)) {
         if (!Invoke(cx, ObjectValue(*obj), fval, 0, NULL, rval.address()))
@@ -4240,7 +4240,7 @@ const bool js_isspace[] = {
 static inline bool
 TransferBufferToString(StringBuffer &sb, MutableHandleValue rval)
 {
-    RawString str = sb.finishString();
+    JSString *str = sb.finishString();
     if (!str)
         return false;
     rval.setString(str);

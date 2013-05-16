@@ -48,6 +48,7 @@ namespace layers {
 
 class Animation;
 class AnimationData;
+class AsyncPanZoomController;
 class CommonLayerAttributes;
 class Layer;
 class ThebesLayer;
@@ -59,10 +60,10 @@ class CanvasLayer;
 class ReadbackLayer;
 class ReadbackProcessor;
 class RefLayer;
-class ShadowLayer;
+class LayerComposite;
 class ShadowableLayer;
 class ShadowLayerForwarder;
-class ShadowLayerManager;
+class LayerManagerComposite;
 class SpecificLayerAttributes;
 class SurfaceDescriptor;
 class Compositor;
@@ -167,7 +168,7 @@ public:
   virtual ShadowLayerForwarder* AsShadowForwarder()
   { return nullptr; }
 
-  virtual ShadowLayerManager* AsShadowManager()
+  virtual LayerManagerComposite* AsLayerManagerComposite()
   { return nullptr; }
 
   /**
@@ -896,6 +897,11 @@ public:
   const gfx::Margin& GetFixedPositionMargins() { return mMargins; }
   Layer* GetMaskLayer() { return mMaskLayer; }
 
+  // These functions allow attaching an AsyncPanZoomController to this layer,
+  // and can be used anytime.
+  void SetAsyncPanZoomController(AsyncPanZoomController *controller);
+  AsyncPanZoomController* GetAsyncPanZoomController();
+
   // Note that all lengths in animation data are either in CSS pixels or app
   // units and must be converted to device pixels by the compositor.
   AnimationArray& GetAnimations() { return mAnimations; }
@@ -1009,22 +1015,16 @@ public:
   virtual ColorLayer* AsColorLayer() { return nullptr; }
 
   /**
-   * Dynamic cast to a ShadowLayer.  Return null if this is not a
-   * ShadowLayer.  Can be used anytime.
+   * Dynamic cast to a LayerComposite.  Return null if this is not a
+   * LayerComposite.  Can be used anytime.
    */
-  virtual ShadowLayer* AsShadowLayer() { return nullptr; }
+  virtual LayerComposite* AsLayerComposite() { return nullptr; }
 
   /**
    * Dynamic cast to a ShadowableLayer.  Return null if this is not a
    * ShadowableLayer.  Can be used anytime.
    */
   virtual ShadowableLayer* AsShadowableLayer() { return nullptr; }
-
-  /**
-   * Dynamic cast to a LayerComposite.  Return null if this is not a
-   * ShadowableLayer.  Can be used anytime.
-   */
-  virtual LayerComposite* AsLayerComposite() { return nullptr; }
 
   // These getters can be used anytime.  They return the effective
   // values that should be used when drawing this layer to screen,

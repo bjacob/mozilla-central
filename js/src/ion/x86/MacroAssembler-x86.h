@@ -281,17 +281,7 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
         cmpl(tagOf(address), ImmTag(JSVAL_LOWER_INCL_TAG_OF_GCTHING_SET));
         return cond == Equal ? AboveOrEqual : Below;
     }
-    Condition testGCThing(Condition cond, const BaseIndex &address) {
-        JS_ASSERT(cond == Equal || cond == NotEqual);
-        cmpl(tagOf(address), ImmTag(JSVAL_LOWER_INCL_TAG_OF_GCTHING_SET));
-        return cond == Equal ? AboveOrEqual : Below;
-    }
     Condition testMagic(Condition cond, const Address &address) {
-        JS_ASSERT(cond == Equal || cond == NotEqual);
-        cmpl(tagOf(address), ImmTag(JSVAL_TAG_MAGIC));
-        return cond;
-    }
-    Condition testMagic(Condition cond, const BaseIndex &address) {
         JS_ASSERT(cond == Equal || cond == NotEqual);
         cmpl(tagOf(address), ImmTag(JSVAL_TAG_MAGIC));
         return cond;
@@ -369,6 +359,56 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     Condition testPrimitive(Condition cond, const ValueOperand &value) {
         return testPrimitive(cond, value.typeReg());
     }
+
+
+    Condition testUndefined(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_UNDEFINED));
+        return cond;
+    }
+    Condition testNull(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_NULL));
+        return cond;
+    }
+    Condition testBoolean(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_BOOLEAN));
+        return cond;
+    }
+    Condition testString(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_STRING));
+        return cond;
+    }
+    Condition testInt32(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_INT32));
+        return cond;
+    }
+    Condition testObject(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_OBJECT));
+        return cond;
+    }
+    Condition testDouble(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        Condition actual = (cond == Equal) ? Below : AboveOrEqual;
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_CLEAR));
+        return actual;
+    }
+    Condition testMagic(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_TAG_MAGIC));
+        return cond;
+    }
+    Condition testGCThing(Condition cond, const BaseIndex &address) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(tagOf(address), ImmTag(JSVAL_LOWER_INCL_TAG_OF_GCTHING_SET));
+        return cond == Equal ? AboveOrEqual : Below;
+    }
+
+
 
     void branchTestValue(Condition cond, const ValueOperand &value, const Value &v, Label *label);
     void branchTestValue(Condition cond, const Address &valaddr, const ValueOperand &value,
@@ -456,6 +496,10 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
         cmpl(Operand(lhs), rhs);
         j(cond, label);
     }
+    void branch32(Condition cond, const AbsoluteAddress &lhs, Register rhs, Label *label) {
+        cmpl(Operand(lhs), rhs);
+        j(cond, label);
+    }
 
     template <typename T, typename S>
     void branchPtr(Condition cond, T lhs, S ptr, Label *label) {
@@ -502,6 +546,10 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     }
     void branchTestPtr(Condition cond, Register lhs, Imm32 imm, Label *label) {
         testl(lhs, imm);
+        j(cond, label);
+    }
+    void branchTestPtr(Condition cond, const Address &lhs, Imm32 imm, Label *label) {
+        testl(Operand(lhs), imm);
         j(cond, label);
     }
     void decBranchPtr(Condition cond, const Register &lhs, Imm32 imm, Label *label) {
@@ -606,6 +654,24 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     void branchTestMagic(Condition cond, const T &t, Label *label) {
         cond = testMagic(cond, t);
         j(cond, label);
+    }
+    void branchTestMagicValue(Condition cond, const ValueOperand &val, JSWhyMagic why,
+                              Label *label)
+    {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        if (cond == Equal) {
+            // Test for magic
+            Label notmagic;
+            Condition testCond = testMagic(Equal, val);
+            j(InvertCondition(testCond), &notmagic);
+            // Test magic value
+            branch32(NotEqual, val.payloadReg(), Imm32(static_cast<int32_t>(why)), label);
+            bind(&notmagic);
+        } else {
+            Condition testCond = testMagic(NotEqual, val);
+            j(testCond, label);
+            branch32(NotEqual, val.payloadReg(), Imm32(static_cast<int32_t>(why)), label);
+        }
     }
 
     // Note: this function clobbers the source register.
@@ -718,6 +784,13 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     void loadConstantDouble(double d, const FloatRegister &dest);
     void loadStaticDouble(const double *dp, const FloatRegister &dest) {
         movsd(dp, dest);
+    }
+
+    void branchTruncateDouble(const FloatRegister &src, const Register &dest, Label *fail) {
+        const uint32_t IndefiniteIntegerValue = 0x80000000;
+        cvttsd2si(src, dest);
+        cmpl(dest, Imm32(IndefiniteIntegerValue));
+        j(Assembler::Equal, fail);
     }
 
     Condition testInt32Truthy(bool truthy, const ValueOperand &operand) {

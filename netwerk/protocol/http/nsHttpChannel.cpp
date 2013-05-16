@@ -371,12 +371,12 @@ nsHttpChannel::Connect()
         uint32_t flags = mPrivateBrowsing ? nsISocketProvider::NO_PERMANENT_STORAGE : 0;
         rv = stss->IsStsURI(mURI, flags, &isStsHost);
 
-        // if STS fails, there's no reason to cancel the load, but it's
-        // worrisome.
-        NS_ASSERTION(NS_SUCCEEDED(rv),
-                     "Something is wrong with STS: IsStsURI failed.");
+        // if the URI check fails, it's likely because this load is on a
+        // malformed URI or something else in the setup is wrong, so any error
+        // should be reported.
+        NS_ENSURE_SUCCESS(rv, rv);
 
-        if (NS_SUCCEEDED(rv) && isStsHost) {
+        if (isStsHost) {
             LOG(("nsHttpChannel::Connect() STS permissions found\n"));
             return AsyncCall(&nsHttpChannel::HandleAsyncRedirectChannelToHttps);
         }
@@ -407,7 +407,7 @@ nsHttpChannel::Connect()
         return NS_ERROR_DOCUMENT_NOT_CACHED;
     }
 
-    if (!gHttpHandler->UseCache())
+    if (ShouldSkipCache())
         return ContinueConnect();
 
     // open a cache entry for this channel...
@@ -1929,7 +1929,7 @@ nsHttpChannel::EnsureAssocReq()
         return NS_OK;
     
     // check the method
-    int32_t methodlen = PL_strlen(mRequestHead.Method().get());
+    int32_t methodlen = strlen(mRequestHead.Method().get());
     if ((methodlen != (endofmethod - method)) ||
         PL_strncmp(method,
                    mRequestHead.Method().get(),
@@ -4515,8 +4515,7 @@ nsHttpChannel::BeginConnect()
     if (mLoadFlags & LOAD_FRESH_CONNECTION) {
         // just the initial document resets the whole pool
         if (mLoadFlags & LOAD_INITIAL_DOCUMENT_URI) {
-            gHttpHandler->ConnMgr()->ClosePersistentConnections();
-            gHttpHandler->ConnMgr()->ResetIPFamillyPreference(mConnectionInfo);
+            gHttpHandler->ConnMgr()->DoShiftReloadConnectionCleanup(mConnectionInfo);
         }
         // each sub resource gets a fresh connection
         mCaps &= ~(NS_HTTP_ALLOW_KEEPALIVE | NS_HTTP_ALLOW_PIPELINING);
@@ -5997,6 +5996,52 @@ nsHttpChannel::UpdateAggregateCallbacks()
                                            NS_GetCurrentThread(),
                                            getter_AddRefs(callbacks));
     mTransaction->SetSecurityCallbacks(callbacks);
+}
+
+bool
+nsHttpChannel::ShouldSkipCache()
+{
+    if (!gHttpHandler->UseCache())
+        return true;
+
+    if (mLoadFlags & LOAD_ONLY_FROM_CACHE)
+        return false;
+    
+    if (mChooseApplicationCache || (mLoadFlags & LOAD_CHECK_OFFLINE_CACHE))
+        return false;
+
+    TimeStamp cacheSkippedUntil = gHttpHandler->GetCacheSkippedUntil();
+    if (!cacheSkippedUntil.IsNull()) {
+        TimeStamp now = TimeStamp::Now();
+        if (now < cacheSkippedUntil) {
+            LOG(("channel=%p Cache bypassed because of dampener\n", this));
+            return true;
+        }
+        LOG(("channel=%p Cache dampener released\n", this));
+        gHttpHandler->ClearCacheSkippedUntil();
+    }
+
+    // If the cache lock has been held for a long time then just
+    // bypass the cache instead of getting in that queue.
+    nsCOMPtr<nsICacheService> cacheService =
+        do_GetService(NS_CACHESERVICE_CONTRACTID);
+    nsCOMPtr<nsICacheServiceInternal> internalCacheService =
+        do_QueryInterface(cacheService);
+    if (!internalCacheService)
+        return false;
+    
+    double timeLocked;
+    if (NS_FAILED(internalCacheService->GetLockHeldTime(&timeLocked)))
+        return false;
+    
+    if (timeLocked <= gHttpHandler->BypassCacheLockThreshold())
+        return false;
+
+    LOG(("Cache dampener installed because service lock held too long [%fms]\n",
+         timeLocked));
+    cacheSkippedUntil = TimeStamp::Now() + TimeDuration::FromSeconds(60);
+    gHttpHandler->SetCacheSkippedUntil(cacheSkippedUntil);
+    return true;
 }
 
 NS_IMETHODIMP

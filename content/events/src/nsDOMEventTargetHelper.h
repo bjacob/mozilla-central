@@ -25,7 +25,21 @@ class nsDOMEvent;
 class nsDOMEventTargetHelper : public mozilla::dom::EventTarget
 {
 public:
-  nsDOMEventTargetHelper() : mParentObject(nullptr), mOwnerWindow(nullptr), mHasOrHasHadOwnerWindow(false) {}
+  nsDOMEventTargetHelper()
+    : mParentObject(nullptr)
+    , mOwnerWindow(nullptr)
+    , mHasOrHasHadOwnerWindow(false)
+  {}
+  nsDOMEventTargetHelper(nsPIDOMWindow* aWindow)
+    : mParentObject(nullptr)
+    , mOwnerWindow(nullptr)
+    , mHasOrHasHadOwnerWindow(false)
+  {
+    BindToOwner(aWindow);
+    // All objects coming through here are WebIDL objects
+    SetIsDOMBinding();
+  }
+
   virtual ~nsDOMEventTargetHelper();
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS(nsDOMEventTargetHelper)
@@ -68,8 +82,6 @@ public:
     return static_cast<nsDOMEventTargetHelper*>(target);
   }
 
-  void Init(JSContext* aCx = nullptr);
-
   bool HasListenersFor(nsIAtom* aTypeWithOn)
   {
     return mListenerManager && mListenerManager->HasListenersFor(aTypeWithOn);
@@ -78,20 +90,11 @@ public:
   nsresult SetEventHandler(nsIAtom* aType,
                            JSContext* aCx,
                            const JS::Value& aValue);
-  void SetEventHandler(nsIAtom* aType,
-                       mozilla::dom::EventHandlerNonNull* aHandler,
-                       mozilla::ErrorResult& rv)
-  {
-    rv = GetListenerManager(true)->SetEventHandler(aType, aHandler);
-  }
+  using mozilla::dom::EventTarget::SetEventHandler;
   void GetEventHandler(nsIAtom* aType,
                        JSContext* aCx,
                        JS::Value* aValue);
-  mozilla::dom::EventHandlerNonNull* GetEventHandler(nsIAtom* aType)
-  {
-    nsEventListenerManager* elm = GetListenerManager(false);
-    return elm ? elm->GetEventHandler(aType) : nullptr;
-  }
+  using mozilla::dom::EventTarget::GetEventHandler;
 
   nsresult CheckInnerWindowCorrectness()
   {

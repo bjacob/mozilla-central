@@ -54,10 +54,9 @@ public:
   virtual void ResetToURI(nsIURI* aURI, nsILoadGroup* aLoadGroup,
                           nsIPrincipal* aPrincipal);
 
-  virtual nsresult CreateShell(nsPresContext* aContext,
-                               nsViewManager* aViewManager,
-                               nsStyleSet* aStyleSet,
-                               nsIPresShell** aInstancePtrResult);
+  virtual already_AddRefed<nsIPresShell> CreateShell(nsPresContext* aContext,
+                                                     nsViewManager* aViewManager,
+                                                     nsStyleSet* aStyleSet) MOZ_OVERRIDE;
 
   virtual nsresult StartDocumentLoad(const char* aCommand,
                                      nsIChannel* aChannel,
@@ -99,11 +98,6 @@ public:
 
   // nsIDOMHTMLDocument interface
   NS_DECL_NSIDOMHTMLDOCUMENT
-
-  void RouteEvent(nsDOMEvent& aEvent)
-  {
-    RouteEvent(&aEvent);
-  }
 
   /**
    * Returns the result of document.all[aID] which can either be a node
@@ -181,6 +175,8 @@ public:
   virtual bool WillIgnoreCharsetOverride();
 
   // WebIDL API
+  virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
+    MOZ_OVERRIDE;
   void GetDomain(nsAString& aDomain, mozilla::ErrorResult& rv);
   void SetDomain(const nsAString& aDomain, mozilla::ErrorResult& rv);
   void GetCookie(nsAString& aCookie, mozilla::ErrorResult& rv);
@@ -247,13 +243,12 @@ public:
     // Deprecated
   }
   already_AddRefed<nsISelection> GetSelection(mozilla::ErrorResult& rv);
-  // The XPCOM CaptureEvents works fine for us.
-  // The XPCOM ReleaseEvents works fine for us.
-  // The XPCOM RouteEvent works fine for us.
   // We're picking up GetLocation from Document
   already_AddRefed<nsIDOMLocation> GetLocation() const {
     return nsIDocument::GetLocation();
   }
+
+  virtual nsHTMLDocument* AsHTMLDocument() { return this; }
 
 protected:
   nsresult GetBodySize(int32_t* aWidth,

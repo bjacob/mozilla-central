@@ -110,6 +110,7 @@ nsStyleSet::nsStyleSet()
     mInShutdown(false),
     mAuthorStyleDisabled(false),
     mInReconstruct(false),
+    mInitFontFeatureValuesLookup(true),
     mDirty(0),
     mUnusedRuleNodeCount(0)
 {
@@ -1104,7 +1105,7 @@ nsStyleSet::WalkRuleProcessors(nsIStyleRuleProcessor::EnumFunc aFunc,
 
   if (mRuleProcessors[ePresHintSheet])
     (*aFunc)(mRuleProcessors[ePresHintSheet], aData);
-  
+
   bool cutOffInheritance = false;
   if (mBindingManager) {
     // We can supply additional document-level sheets that should be walked.
@@ -1321,13 +1322,15 @@ nsStyleSet::ResolvePseudoElementStyle(Element* aParentElement,
 
   // For pseudos, |data.IsLink()| being true means that
   // our parent node is a link.
-  // Also: Flex containers shouldn't have pseudo-elements, so given that we're
-  // looking up pseudo-element style, make sure we're not treating our node as
-  // a flex item.
-  uint32_t flags = eSkipFlexItemStyleFixup;
+  uint32_t flags = eNoFlags;
   if (aType == nsCSSPseudoElements::ePseudo_before ||
       aType == nsCSSPseudoElements::ePseudo_after) {
     flags |= eDoAnimation;
+  } else {
+    // Flex containers don't expect to have any pseudo-element children aside
+    // from ::before and ::after.  So if we have such a child, we're not
+    // actually in a flex container, and we should skip flex-item style fixup.
+    flags |= eSkipFlexItemStyleFixup;
   }
 
   return GetContext(aParentContext, ruleNode, visitedRuleNode,
@@ -1387,13 +1390,15 @@ nsStyleSet::ProbePseudoElementStyle(Element* aParentElement,
 
   // For pseudos, |data.IsLink()| being true means that
   // our parent node is a link.
-  // Also: Flex containers shouldn't have pseudo-elements, so given that we're
-  // looking up pseudo-element style, make sure we're not treating our node as
-  // a flex item.
-  uint32_t flags = eSkipFlexItemStyleFixup;
+  uint32_t flags = eNoFlags;
   if (aType == nsCSSPseudoElements::ePseudo_before ||
       aType == nsCSSPseudoElements::ePseudo_after) {
     flags |= eDoAnimation;
+  } else {
+    // Flex containers don't expect to have any pseudo-element children aside
+    // from ::before and ::after.  So if we have such a child, we're not
+    // actually in a flex container, and we should skip flex-item style fixup.
+    flags |= eSkipFlexItemStyleFixup;
   }
 
   nsRefPtr<nsStyleContext> result =
@@ -1537,6 +1542,59 @@ nsStyleSet::AppendKeyframesRules(nsPresContext* aPresContext,
 }
 
 bool
+nsStyleSet::AppendFontFeatureValuesRules(nsPresContext* aPresContext,
+                                 nsTArray<nsCSSFontFeatureValuesRule*>& aArray)
+{
+  NS_ENSURE_FALSE(mInShutdown, false);
+
+  for (uint32_t i = 0; i < NS_ARRAY_LENGTH(gCSSSheetTypes); ++i) {
+    nsCSSRuleProcessor *ruleProc = static_cast<nsCSSRuleProcessor*>
+                                    (mRuleProcessors[gCSSSheetTypes[i]].get());
+    if (ruleProc &&
+        !ruleProc->AppendFontFeatureValuesRules(aPresContext, aArray))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+already_AddRefed<gfxFontFeatureValueSet>
+nsStyleSet::GetFontFeatureValuesLookup()
+{
+  if (mInitFontFeatureValuesLookup) {
+    mInitFontFeatureValuesLookup = false;
+
+    nsTArray<nsCSSFontFeatureValuesRule*> rules;
+    AppendFontFeatureValuesRules(PresContext(), rules);
+
+    mFontFeatureValuesLookup = new gfxFontFeatureValueSet();
+
+    uint32_t i, numRules = rules.Length();
+    for (i = 0; i < numRules; i++) {
+      nsCSSFontFeatureValuesRule *rule = rules[i];
+
+      const nsTArray<nsString>& familyList = rule->GetFamilyList();
+      const nsTArray<gfxFontFeatureValueSet::FeatureValues>&
+        featureValues = rule->GetFeatureValues();
+
+      // for each family
+      uint32_t f, numFam;
+
+      numFam = familyList.Length();
+      for (f = 0; f < numFam; f++) {
+        const nsString& family = familyList.ElementAt(f);
+        nsAutoString silly(family);
+        mFontFeatureValuesLookup->AddFontFeatureValues(silly, featureValues);
+      }
+    }
+  }
+
+  nsRefPtr<gfxFontFeatureValueSet> lookup = mFontFeatureValuesLookup;
+  return lookup.forget();
+}
+
+bool
 nsStyleSet::AppendPageRules(nsPresContext* aPresContext,
                             nsTArray<nsCSSPageRule*>& aArray)
 {
@@ -1664,8 +1722,8 @@ nsStyleSet::ReparentStyleContext(nsStyleContext* aStyleContext,
   // This short-circuit is OK because we don't call TryStartingTransition
   // during style reresolution if the style context pointer hasn't changed.
   if (aStyleContext->GetParent() == aNewParentContext) {
-    aStyleContext->AddRef();
-    return aStyleContext;
+    nsRefPtr<nsStyleContext> ret = aStyleContext;
+    return ret.forget();
   }
 
   nsIAtom* pseudoTag = aStyleContext->GetPseudo();
@@ -1808,7 +1866,7 @@ struct MOZ_STACK_CLASS AttributeData : public AttributeRuleProcessorData {
       mHint(nsRestyleHint(0))
   {}
   nsRestyleHint   mHint;
-}; 
+};
 
 static bool
 SheetHasAttributeStyle(nsIStyleRuleProcessor* aProcessor, void *aData)

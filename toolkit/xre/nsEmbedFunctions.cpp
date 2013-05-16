@@ -424,6 +424,7 @@ XRE_InitChildProcess(int aArgc,
 
   nsresult rv = XRE_InitCommandLine(aArgc, aArgv);
   if (NS_FAILED(rv)) {
+    profiler_shutdown();
     NS_LogTerm();
     return NS_ERROR_FAILURE;
   }
@@ -486,6 +487,7 @@ XRE_InitChildProcess(int aArgc,
       }
 
       if (!process->Init()) {
+        profiler_shutdown();
         NS_LogTerm();
         return NS_ERROR_FAILURE;
       }
@@ -500,6 +502,7 @@ XRE_InitChildProcess(int aArgc,
     }
   }
 
+  profiler_shutdown();
   NS_LogTerm();
   return XRE_DeinitCommandLine();
 }
@@ -713,11 +716,12 @@ XRE_SendTestShellCommand(JSContext* aCx,
                          JSString* aCommand,
                          void* aCallback)
 {
+    JS::RootedString cmd(aCx, aCommand);
     TestShellParent* tsp = GetOrCreateTestShellParent();
     NS_ENSURE_TRUE(tsp, false);
 
     nsDependentJSString command;
-    NS_ENSURE_TRUE(command.init(aCx, aCommand), false);
+    NS_ENSURE_TRUE(command.init(aCx, cmd), false);
 
     if (!aCallback) {
         return tsp->SendExecuteCommand(command);

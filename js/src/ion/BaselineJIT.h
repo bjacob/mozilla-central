@@ -211,9 +211,11 @@ struct BaselineScript
     }
 
     ICEntry &icEntry(size_t index);
+    ICEntry *maybeICEntryFromReturnOffset(CodeOffsetLabel returnOffset);
     ICEntry &icEntryFromReturnOffset(CodeOffsetLabel returnOffset);
     ICEntry &icEntryFromPCOffset(uint32_t pcOffset);
     ICEntry &icEntryFromPCOffset(uint32_t pcOffset, ICEntry *prevLookedUpEntry);
+    ICEntry *maybeICEntryFromReturnAddress(uint8_t *returnAddr);
     ICEntry &icEntryFromReturnAddress(uint8_t *returnAddr);
     uint8_t *returnAddressForIC(const ICEntry &ent);
 
@@ -235,13 +237,17 @@ struct BaselineScript
 
     void copyPCMappingEntries(const CompactBufferWriter &entries);
     uint8_t *nativeCodeForPC(JSScript *script, jsbytecode *pc, PCMappingSlotInfo *slotInfo = NULL);
+    jsbytecode *pcForReturnOffset(JSScript *script, uint32_t nativeOffset);
+    jsbytecode *pcForReturnAddress(JSScript *script, uint8_t *nativeAddress);
 
     // Toggle debug traps (used for breakpoints and step mode) in the script.
     // If |pc| is NULL, toggle traps for all ops in the script. Else, only
     // toggle traps at |pc|.
-    void toggleDebugTraps(RawScript script, jsbytecode *pc);
+    void toggleDebugTraps(JSScript *script, jsbytecode *pc);
 
     void toggleSPS(bool enable);
+
+    void noteAccessedGetter(uint32_t pcOffset);
 
     static size_t offsetOfFlags() {
         return offsetof(BaselineScript, flags_);
@@ -264,7 +270,7 @@ IonExecStatus
 EnterBaselineAtBranch(JSContext *cx, StackFrame *fp, jsbytecode *pc);
 
 void
-FinishDiscardBaselineScript(FreeOp *fop, RawScript script);
+FinishDiscardBaselineScript(FreeOp *fop, JSScript *script);
 
 void
 SizeOfBaselineData(JSScript *script, JSMallocSizeOfFun mallocSizeOf, size_t *data,

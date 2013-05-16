@@ -51,19 +51,26 @@ CreateTextureHostOGL(SurfaceDescriptorType aDescriptorType,
 }
 
 static void
-MakeTextureIfNeeded(gl::GLContext* gl, GLuint& aTexture)
+MakeTextureIfNeeded(gl::GLContext* gl, GLenum aTarget, GLuint& aTexture)
 {
   if (aTexture != 0)
     return;
 
+  GLenum target = aTarget;
+  // GL_TEXTURE_EXTERNAL requires us to initialize the texture
+  // using the GL_TEXTURE_2D attachment.
+  if (target == LOCAL_GL_TEXTURE_EXTERNAL) {
+    target = LOCAL_GL_TEXTURE_2D;
+  }
+
   gl->fGenTextures(1, &aTexture);
 
-  gl->fBindTexture(LOCAL_GL_TEXTURE_2D, aTexture);
+  gl->fBindTexture(target, aTexture);
 
-  gl->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_MIN_FILTER, LOCAL_GL_LINEAR);
-  gl->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_MAG_FILTER, LOCAL_GL_LINEAR);
-  gl->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_S, LOCAL_GL_CLAMP_TO_EDGE);
-  gl->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_T, LOCAL_GL_CLAMP_TO_EDGE);
+  gl->fTexParameteri(target, LOCAL_GL_TEXTURE_MIN_FILTER, LOCAL_GL_LINEAR);
+  gl->fTexParameteri(target, LOCAL_GL_TEXTURE_MAG_FILTER, LOCAL_GL_LINEAR);
+  gl->fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_S, LOCAL_GL_CLAMP_TO_EDGE);
+  gl->fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_T, LOCAL_GL_CLAMP_TO_EDGE);
 }
 
 static gl::TextureImage::Flags
@@ -263,14 +270,13 @@ SharedTextureHostOGL::SwapTexturesImpl(const SurfaceDescriptor& aImage,
     mTextureTarget = handleDetails.mTarget;
     mShaderProgram = handleDetails.mProgramType;
     mFormat = FormatFromShaderType(mShaderProgram);
-    mTextureTransform = handleDetails.mTextureTransform;
   }
 }
 
 bool
 SharedTextureHostOGL::Lock()
 {
-  MakeTextureIfNeeded(mGL, mTextureHandle);
+  MakeTextureIfNeeded(mGL, mTextureTarget, mTextureHandle);
 
   mGL->fActiveTexture(LOCAL_GL_TEXTURE0);
   mGL->fBindTexture(mTextureTarget, mTextureHandle);
@@ -288,6 +294,20 @@ SharedTextureHostOGL::Unlock()
   mGL->DetachSharedHandle(mShareType, mSharedHandle);
   mGL->fBindTexture(LOCAL_GL_TEXTURE_2D, 0);
 }
+
+
+gfx3DMatrix
+SharedTextureHostOGL::GetTextureTransform()
+{
+  GLContext::SharedHandleDetails handleDetails;
+  // GetSharedHandleDetails can call into Java which we'd
+  // rather not do from the compositor
+  if (mSharedHandle) {
+    mGL->GetSharedHandleDetails(mShareType, mSharedHandle, handleDetails);
+  }
+  return handleDetails.mTextureTransform;
+}
+
 
 void
 SurfaceStreamHostOGL::SetCompositor(Compositor* aCompositor)
@@ -593,9 +613,54 @@ SurfaceFormatForAndroidPixelFormat(android::PixelFormat aFormat)
     return FORMAT_R5G6B5;
   case android::PIXEL_FORMAT_A_8:
     return FORMAT_A8;
+  case HAL_PIXEL_FORMAT_YCbCr_422_SP:
+  case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+  case HAL_PIXEL_FORMAT_YCbCr_422_I:
+  case HAL_PIXEL_FORMAT_YV12:
+    return FORMAT_B8G8R8A8; // yup, use FORMAT_B8G8R8A8 even though it's a YUV texture. This is an external texture.
   default:
-    MOZ_NOT_REACHED("Unknown Android pixel format");
-    return FORMAT_B8G8R8A8;
+    if (aFormat >= 0x100 && aFormat <= 0x1FF) {
+      // Reserved range for HAL specific formats.
+      return FORMAT_B8G8R8A8;
+    } else {
+      // This is not super-unreachable, there's a bunch of hypothetical pixel
+      // formats we don't deal with.
+      // We only want to abort in debug builds here, since if we crash here
+      // we'll take down the compositor process and thus the phone. This seems
+      // like undesirable behaviour. We'd rather have a subtle artifact.
+      MOZ_ASSERT(false, "Unknown Android pixel format.");
+      return FORMAT_UNKNOWN;
+    }
+  }
+}
+
+static GLenum
+TextureTargetForAndroidPixelFormat(android::PixelFormat aFormat)
+{
+  switch (aFormat) {
+  case HAL_PIXEL_FORMAT_YCbCr_422_SP:
+  case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+  case HAL_PIXEL_FORMAT_YCbCr_422_I:
+  case HAL_PIXEL_FORMAT_YV12:
+    return LOCAL_GL_TEXTURE_EXTERNAL;
+  case android::PIXEL_FORMAT_RGBA_8888:
+  case android::PIXEL_FORMAT_RGBX_8888:
+  case android::PIXEL_FORMAT_RGB_565:
+  case android::PIXEL_FORMAT_A_8:
+    return LOCAL_GL_TEXTURE_2D;
+  default:
+    if (aFormat >= 0x100 && aFormat <= 0x1FF) {
+      // Reserved range for HAL specific formats.
+      return LOCAL_GL_TEXTURE_EXTERNAL;
+    } else {
+      // This is not super-unreachable, there's a bunch of hypothetical pixel
+      // formats we don't deal with.
+      // We only want to abort in debug builds here, since if we crash here
+      // we'll take down the compositor process and thus the phone. This seems
+      // like undesirable behaviour. We'd rather have a subtle artifact.
+      MOZ_ASSERT(false, "Unknown Android pixel format.");
+      return LOCAL_GL_TEXTURE_EXTERNAL;
+    }
   }
 }
 
@@ -615,12 +680,22 @@ GrallocTextureHostOGL::DeleteTextures()
     mGL->MakeCurrent();
     if (mGLTexture) {
       mGL->fDeleteTextures(1, &mGLTexture);
-      mGLTexture= 0;
+      mGLTexture = 0;
     }
     if (mEGLImage) {
       mGL->DestroyEGLImage(mEGLImage);
       mEGLImage = 0;
     }
+  }
+}
+
+// only used for hacky fix in gecko 23 for bug 862324
+static void
+RegisterTextureHostAtGrallocBufferActor(TextureHost* aTextureHost, const SurfaceDescriptor& aSurfaceDescriptor)
+{
+  if (IsSurfaceDescriptorValid(aSurfaceDescriptor)) {
+    GrallocBufferActor* actor = static_cast<GrallocBufferActor*>(aSurfaceDescriptor.get_SurfaceDescriptorGralloc().bufferParent());
+    actor->SetTextureHost(aTextureHost);
   }
 }
 
@@ -635,14 +710,24 @@ void
 GrallocTextureHostOGL::SwapTexturesImpl(const SurfaceDescriptor& aImage,
                                         nsIntRegion*)
 {
-  android::sp<android::GraphicBuffer> buffer = GrallocBufferActor::GetFrom(aImage);
   MOZ_ASSERT(aImage.type() == SurfaceDescriptor::TSurfaceDescriptorGralloc);
+
+  if (mBuffer) {
+    // only done for hacky fix in gecko 23 for bug 862324.
+    RegisterTextureHostAtGrallocBufferActor(nullptr, *mBuffer);
+  }
 
   const SurfaceDescriptorGralloc& desc = aImage.get_SurfaceDescriptorGralloc();
   mGraphicBuffer = GrallocBufferActor::GetFrom(desc);
   mFormat = SurfaceFormatForAndroidPixelFormat(mGraphicBuffer->getPixelFormat());
+  mTextureTarget = TextureTargetForAndroidPixelFormat(mGraphicBuffer->getPixelFormat());
 
   DeleteTextures();
+
+  // only done for hacky fix in gecko 23 for bug 862324.
+  // Doing this in SetBuffer is not enough, as ImageHostBuffered::SwapTextures can
+  // change the value of *mBuffer without calling SetBuffer again.
+  RegisterTextureHostAtGrallocBufferActor(this, aImage);
 }
 
 void GrallocTextureHostOGL::BindTexture(GLenum aTextureUnit)
@@ -651,7 +736,7 @@ void GrallocTextureHostOGL::BindTexture(GLenum aTextureUnit)
 
   mGL->MakeCurrent();
   mGL->fActiveTexture(aTextureUnit);
-  mGL->fBindTexture(LOCAL_GL_TEXTURE_2D, mGLTexture);
+  mGL->fBindTexture(mTextureTarget, mGLTexture);
   mGL->fActiveTexture(LOCAL_GL_TEXTURE0);
 }
 
@@ -664,6 +749,13 @@ GrallocTextureHostOGL::IsValid() const
 GrallocTextureHostOGL::~GrallocTextureHostOGL()
 {
   DeleteTextures();
+
+  // only done for hacky fix in gecko 23 for bug 862324.
+  if (mBuffer) {
+    // make sure that if the GrallocBufferActor survives us, it doesn't keep a dangling
+    // pointer to us.
+    RegisterTextureHostAtGrallocBufferActor(nullptr, *mBuffer);
+  }
 }
 
 bool
@@ -688,11 +780,11 @@ GrallocTextureHostOGL::Lock()
     mGL->fGenTextures(1, &mGLTexture);
   }
   mGL->fActiveTexture(LOCAL_GL_TEXTURE0);
-  mGL->fBindTexture(LOCAL_GL_TEXTURE_2D, mGLTexture);
+  mGL->fBindTexture(mTextureTarget, mGLTexture);
   if (!mEGLImage) {
     mEGLImage = mGL->CreateEGLImageForNativeBuffer(mGraphicBuffer->getNativeBuffer());
   }
-  mGL->fEGLImageTargetTexture2D(LOCAL_GL_TEXTURE_2D, mEGLImage);
+  mGL->fEGLImageTargetTexture2D(mTextureTarget, mEGLImage);
   return true;
 }
 
@@ -707,20 +799,11 @@ GrallocTextureHostOGL::Unlock()
    * the GL may place read locks on it. We must ensure that we release them early enough,
    * i.e. before the next time that we will try to acquire a write lock on the same buffer,
    * because read and write locks on gralloc buffers are mutually exclusive.
-   *
-   * Unfortunately there does not seem to exist an EGL function to dissociate a gralloc
-   * buffer from a texture that it was tied to. Failing that, we achieve the same result
-   * by uploading a 1x1 dummy texture image to the same texture, replacing the existing
-   * gralloc buffer attachment.
    */
   mGL->MakeCurrent();
   mGL->fActiveTexture(LOCAL_GL_TEXTURE0);
-  mGL->fBindTexture(LOCAL_GL_TEXTURE_2D, mGLTexture);
-  mGL->fTexImage2D(LOCAL_GL_TEXTURE_2D, 0,
-                   LOCAL_GL_RGBA,
-                   1, 1, 0,
-                   LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE,
-                   nullptr);
+  mGL->fBindTexture(mTextureTarget, mGLTexture);
+  mGL->fEGLImageTargetTexture2D(mTextureTarget, mGL->GetNullEGLImage());
 }
 
 gfx::SurfaceFormat
@@ -729,6 +812,17 @@ GrallocTextureHostOGL::GetFormat() const
   return mFormat;
 }
 
+void
+GrallocTextureHostOGL::SetBuffer(SurfaceDescriptor* aBuffer, ISurfaceAllocator* aAllocator) MOZ_OVERRIDE
+{
+  MOZ_ASSERT(!mBuffer, "Will leak the old mBuffer");
+  mBuffer = aBuffer;
+  mDeAllocator = aAllocator;
+
+  // only done for hacky fix in gecko 23 for bug 862324.
+  // Doing this in SwapTextures is not enough, as the crash could occur right after SetBuffer.
+  RegisterTextureHostAtGrallocBufferActor(this, *mBuffer);
+}
 
 #endif
 

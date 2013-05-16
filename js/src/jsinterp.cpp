@@ -8,30 +8,25 @@
  * JavaScript bytecode interpreter.
  */
 
+#include "jsinterp.h"
+
 #include "mozilla/DebugOnly.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/PodOperations.h"
 
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 #include "jstypes.h"
-#include "jsutil.h"
 #include "jsprf.h"
 #include "jsapi.h"
 #include "jsarray.h"
 #include "jsatom.h"
-#include "jsbool.h"
 #include "jscntxt.h"
-#include "jsdate.h"
 #include "jsversion.h"
 #include "jsdbgapi.h"
 #include "jsfun.h"
 #include "jsgc.h"
-#include "jsinterp.h"
 #include "jsiter.h"
-#include "jslibmath.h"
-#include "jslock.h"
 #include "jsnum.h"
 #include "jsobj.h"
 #include "jsopcode.h"
@@ -40,15 +35,9 @@
 #include "jsstr.h"
 
 #include "builtin/Eval.h"
-#include "gc/Marking.h"
-#include "ion/AsmJS.h"
 #include "vm/Debugger.h"
 #include "vm/Shape.h"
 
-#ifdef JS_METHODJIT
-#include "methodjit/MethodJIT.h"
-#include "methodjit/Logging.h"
-#endif
 #include "ion/Ion.h"
 #include "ion/BaselineJIT.h"
 
@@ -63,20 +52,12 @@
 #include "jsobjinlines.h"
 #include "jsopcodeinlines.h"
 #include "jsprobes.h"
-#include "jspropertycacheinlines.h"
 #include "jsscriptinlines.h"
-#include "jstypedarrayinlines.h"
 
 #include "builtin/Iterator-inl.h"
-#include "vm/Shape-inl.h"
 #include "vm/Stack-inl.h"
-#include "vm/String-inl.h"
 
 #include "jsautooplen.h"
-
-#if defined(JS_METHODJIT) && defined(JS_MONOIC)
-#include "methodjit/MonoIC.h"
-#endif
 
 #if JS_TRACE_LOGGING
 #include "TraceLogging.h"
@@ -98,6 +79,42 @@ CallThisObjectHook(JSContext *cx, HandleObject obj, Value *argv)
         return NULL;
     argv[-1].setObject(*thisp);
     return thisp;
+}
+
+/*
+ * Note: when Clang 3.2 (32-bit) inlines the two functions below in Interpret,
+ * the conservative stack scanner leaks a ton of memory and this negatively
+ * influences performance. The JS_NEVER_INLINE is a temporary workaround until
+ * we can remove the conservative scanner. See bug 849526 for more info.
+ */
+#if defined(__clang__) && defined(JS_CPU_X86)
+static JS_NEVER_INLINE bool
+#else
+static bool
+#endif
+ToBooleanOp(JSContext *cx)
+{
+    return ToBoolean(cx->regs().sp[-1]);
+}
+
+template <bool Eq>
+#if defined(__clang__) && defined(JS_CPU_X86)
+static JS_NEVER_INLINE bool
+#else
+static bool
+#endif
+LooseEqualityOp(JSContext *cx)
+{
+    FrameRegs &regs = cx->regs();
+    Value rval = regs.sp[-1];
+    Value lval = regs.sp[-2];
+    bool cond;
+    if (!LooselyEqual(cx, lval, rval, &cond))
+        return false;
+    cond = (cond == Eq);
+    regs.sp--;
+    regs.sp[-1].setBoolean(cond);
+    return true;
 }
 
 bool
@@ -199,10 +216,10 @@ js::OnUnknownMethod(JSContext *cx, HandleObject obj, Value idval_, MutableHandle
 {
     RootedValue idval(cx, idval_);
 
-    RootedId id(cx, NameToId(cx->names().noSuchMethod));
     RootedValue value(cx);
-    if (!GetMethod(cx, obj, id, 0, &value))
+    if (!JSObject::getProperty(cx, obj, obj, cx->names().noSuchMethod, &value))
         return false;
+
     TypeScript::MonitorUnknown(cx);
 
     if (value.get().isPrimitive()) {
@@ -277,9 +294,6 @@ js::RunScript(JSContext *cx, StackFrame *fp)
 
     JS_ASSERT_IF(!fp->isGeneratorFrame(), cx->regs().pc == script->code);
     JS_ASSERT_IF(fp->isEvalFrame(), script->isActiveEval);
-#ifdef JS_METHODJIT_SPEW
-    JMCheckLogging();
-#endif
 
     JS_CHECK_RECURSION(cx, return false);
 
@@ -287,15 +301,13 @@ js::RunScript(JSContext *cx, StackFrame *fp)
     if (fp->isFunctionFrame() && fp->isConstructing() && !fp->isGeneratorFrame() &&
         cx->typeInferenceEnabled())
     {
-        StackIter iter(cx);
+        ScriptFrameIter iter(cx);
         if (!iter.done()) {
             ++iter;
-            if (iter.isScript()) {
-                RawScript script = iter.script();
-                jsbytecode *pc = iter.pc();
-                if (UseNewType(cx, script, pc))
-                    fp->setUseNewType();
-            }
+            JSScript *script = iter.script();
+            jsbytecode *pc = iter.pc();
+            if (UseNewType(cx, script, pc))
+                fp->setUseNewType();
         }
     }
 
@@ -350,17 +362,6 @@ js::RunScript(JSContext *cx, StackFrame *fp)
     }
 #endif
 
-#ifdef JS_METHODJIT
-    mjit::CompileStatus status;
-    status = mjit::CanMethodJIT(cx, script, script->code, fp->isConstructing(),
-                                mjit::CompileRequest_Interpreter, fp);
-    if (status == mjit::Compile_Error)
-        return false;
-
-    if (status == mjit::Compile_Okay)
-        return mjit::JaegerStatusToSuccess(mjit::JaegerShot(cx, false));
-#endif
-
     return Interpret(cx, fp) != Interpret_Error;
 }
 
@@ -371,7 +372,7 @@ js::RunScript(JSContext *cx, StackFrame *fp)
  * when done.  Then push the return value.
  */
 bool
-js::InvokeKernel(JSContext *cx, CallArgs args, MaybeConstruct construct)
+js::Invoke(JSContext *cx, CallArgs args, MaybeConstruct construct)
 {
     JS_ASSERT(args.length() <= StackSpace::ARGS_LENGTH_MAX);
     JS_ASSERT(!cx->compartment->activeAnalysis);
@@ -459,7 +460,7 @@ js::Invoke(JSContext *cx, const Value &thisv, const Value &fval, unsigned argc, 
 }
 
 bool
-js::InvokeConstructorKernel(JSContext *cx, CallArgs args)
+js::InvokeConstructor(JSContext *cx, CallArgs args)
 {
     JS_ASSERT(!FunctionClass.construct);
 
@@ -480,7 +481,7 @@ js::InvokeConstructorKernel(JSContext *cx, CallArgs args)
         if (!fun->isInterpretedConstructor())
             return ReportIsNotFunction(cx, args.calleev().get(), args.length() + 1, CONSTRUCT);
 
-        if (!InvokeKernel(cx, args, CONSTRUCT))
+        if (!Invoke(cx, args, CONSTRUCT))
             return false;
 
         JS_ASSERT(args.rval().isObject());
@@ -544,7 +545,7 @@ js::ExecuteKernel(JSContext *cx, HandleScript script, JSObject &scopeChainArg, c
     if (!cx->stack.pushExecuteFrame(cx, script, thisv, scopeChain, type, evalInFrame, &efg))
         return false;
 
-    if (!script->ensureRanAnalysis(cx))
+    if (!script->ensureHasTypes(cx))
         return false;
     TypeScript::SetThis(cx, script, efg.fp()->thisValue());
 
@@ -569,7 +570,7 @@ js::Execute(JSContext *cx, HandleScript script, JSObject &scopeChainArg, Value *
 
     /* Ensure the scope chain is all same-compartment and terminates in a global. */
 #ifdef DEBUG
-    RawObject s = scopeChain;
+    JSObject *s = scopeChain;
     do {
         assertSameCompartment(cx, s);
         JS_ASSERT_IF(!s->enclosingScope(), s->isGlobal());
@@ -708,13 +709,13 @@ js::StrictlyEqual(JSContext *cx, const Value &lref, const Value &rref, bool *equ
 static inline bool
 IsNegativeZero(const Value &v)
 {
-    return v.isDouble() && MOZ_DOUBLE_IS_NEGATIVE_ZERO(v.toDouble());
+    return v.isDouble() && mozilla::IsNegativeZero(v.toDouble());
 }
 
 static inline bool
 IsNaN(const Value &v)
 {
-    return v.isDouble() && MOZ_DOUBLE_IS_NaN(v.toDouble());
+    return v.isDouble() && mozilla::IsNaN(v.toDouble());
 }
 
 bool
@@ -901,7 +902,7 @@ TryNoteIter::settle()
 #define FETCH_OBJECT(cx, n, obj)                                              \
     JS_BEGIN_MACRO                                                            \
         HandleValue val = HandleValue::fromMarkedLocation(&regs.sp[n]);       \
-        obj = ToObject(cx, (val));                                            \
+        obj = ToObjectFromStack(cx, (val));                                   \
         if (!obj)                                                             \
             goto error;                                                       \
     JS_END_MACRO
@@ -1012,19 +1013,6 @@ js::IteratorNext(JSContext *cx, HandleObject iterobj, MutableHandleValue rval)
     return js_IteratorNext(cx, iterobj, rval);
 }
 
-/*
- * For bytecodes which push values and then fall through, make sure the
- * types of the pushed values are consistent with type inference information.
- */
-static inline void
-TypeCheckNextBytecode(JSContext *cx, HandleScript script, unsigned n, const FrameRegs &regs)
-{
-#ifdef DEBUG
-    if (cx->typeInferenceEnabled() && n == GetBytecodeLength(regs.pc))
-        TypeScript::CheckBytecode(cx, script, regs.pc, regs.sp);
-#endif
-}
-
 JS_NEVER_INLINE InterpretStatus
 js::Interpret(JSContext *cx, StackFrame *entryFrame, InterpMode interpMode, bool useNewType)
 {
@@ -1076,25 +1064,6 @@ js::Interpret(JSContext *cx, StackFrame *entryFrame, InterpMode interpMode, bool
 #define LOAD_DOUBLE(PCOFF, dbl)                                               \
     (dbl = script->getConst(GET_UINT32_INDEX(regs.pc + (PCOFF))).toDouble())
 
-#ifdef JS_METHODJIT
-
-#define CHECK_PARTIAL_METHODJIT(status)                                       \
-    JS_BEGIN_MACRO                                                            \
-        switch (status) {                                                     \
-          case mjit::Jaeger_UnfinishedAtTrap:                                 \
-            interpMode = JSINTERP_SKIP_TRAP;                                  \
-            /* FALLTHROUGH */                                                 \
-          case mjit::Jaeger_Unfinished:                                       \
-            op = (JSOp) *regs.pc;                                             \
-            SET_SCRIPT(regs.fp()->script());                                  \
-            if (cx->isExceptionPending())                                     \
-                goto error;                                                   \
-            DO_OP();                                                          \
-          default:;                                                           \
-        }                                                                     \
-    JS_END_MACRO
-#endif
-
     /*
      * Prepare to call a user-supplied branch handler, and abort the script
      * if it returns false.
@@ -1137,11 +1106,6 @@ js::Interpret(JSContext *cx, StackFrame *entryFrame, InterpMode interpMode, bool
     JSRuntime *const rt = cx->runtime;
     RootedScript script(cx);
     SET_SCRIPT(regs.fp()->script());
-
-#ifdef JS_METHODJIT
-    /* Reset the loop count on the script we're entering. */
-    script->resetLoopCount();
-#endif
 
 #if JS_TRACE_LOGGING
     AutoTraceLog logger(TraceLogging::defaultLogger(),
@@ -1247,7 +1211,6 @@ js::Interpret(JSContext *cx, StackFrame *entryFrame, InterpMode interpMode, bool
         JS_ASSERT(js_CodeSpec[op].length == 1);
         len = 1;
       advance_pc:
-        TypeCheckNextBytecode(cx, script, len, regs);
         js::gc::MaybeVerifyBarriers(cx);
         regs.pc += len;
         op = (JSOp) *regs.pc;
@@ -1376,10 +1339,6 @@ ADD_EMPTY_CASE(JSOP_TRY)
 END_EMPTY_CASES
 
 BEGIN_CASE(JSOP_LOOPHEAD)
-
-#ifdef JS_METHODJIT
-    script->incrLoopCount();
-#endif
 END_CASE(JSOP_LOOPHEAD)
 
 BEGIN_CASE(JSOP_LABEL)
@@ -1388,35 +1347,6 @@ END_CASE(JSOP_LABEL)
 check_backedge:
 {
     CHECK_BRANCH();
-    if (op != JSOP_LOOPHEAD)
-        DO_OP();
-
-#ifdef JS_METHODJIT
-    // Attempt on-stack replacement with JaegerMonkey code, which is keyed to
-    // the interpreter state at the JSOP_LOOPHEAD at the start of the loop.
-    // Unlike IonMonkey, this requires two different code fragments to perform
-    // hoisting.
-    mjit::CompileStatus status =
-        mjit::CanMethodJIT(cx, script, regs.pc, regs.fp()->isConstructing(),
-                           mjit::CompileRequest_Interpreter, regs.fp());
-    if (status == mjit::Compile_Error)
-        goto error;
-    if (status == mjit::Compile_Okay) {
-        void *ncode =
-            script->nativeCodeForPC(regs.fp()->isConstructing(), regs.pc);
-        JS_ASSERT(ncode);
-        mjit::JaegerStatus status = mjit::JaegerShotAtSafePoint(cx, ncode, true);
-        if (status == mjit::Jaeger_ThrowBeforeEnter)
-            goto error;
-        CHECK_PARTIAL_METHODJIT(status);
-        interpReturnOK = (status == mjit::Jaeger_Returned);
-        if (entryFrame != regs.fp())
-            goto jit_return;
-        regs.fp()->setFinishedInInterpreter();
-        goto leave_on_safe_point;
-    }
-#endif /* JS_METHODJIT */
-
     DO_OP();
 }
 
@@ -1560,13 +1490,11 @@ BEGIN_CASE(JSOP_STOP)
             Probes::exitScript(cx, script, script->function(), regs.fp());
 
         /* The JIT inlines the epilogue. */
-#if defined(JS_METHODJIT) || defined(JS_ION)
+#if defined(JS_ION)
   jit_return:
 #endif
 
         /* The results of lowered call/apply frames need to be shifted. */
-        bool shiftResult = regs.fp()->loweredCallOrApply();
-
         cx->stack.popInlineFrame(regs);
         SET_SCRIPT(regs.fp()->script());
 
@@ -1575,11 +1503,6 @@ BEGIN_CASE(JSOP_STOP)
         /* Resume execution in the calling frame. */
         if (JS_LIKELY(interpReturnOK)) {
             TypeScript::Monitor(cx, script, regs.pc, regs.sp[-1]);
-
-            if (shiftResult) {
-                regs.sp[-2] = regs.sp[-1];
-                regs.sp--;
-            }
 
             len = JSOP_CALL_LENGTH;
             DO_NEXT_OP(len);
@@ -1607,7 +1530,7 @@ END_CASE(JSOP_GOTO)
 
 BEGIN_CASE(JSOP_IFEQ)
 {
-    bool cond = ToBoolean(regs.sp[-1]);
+    bool cond = ToBooleanOp(cx);
     regs.sp--;
     if (cond == false) {
         len = GET_JUMP_OFFSET(regs.pc);
@@ -1618,7 +1541,7 @@ END_CASE(JSOP_IFEQ)
 
 BEGIN_CASE(JSOP_IFNE)
 {
-    bool cond = ToBoolean(regs.sp[-1]);
+    bool cond = ToBooleanOp(cx);
     regs.sp--;
     if (cond != false) {
         len = GET_JUMP_OFFSET(regs.pc);
@@ -1629,7 +1552,7 @@ END_CASE(JSOP_IFNE)
 
 BEGIN_CASE(JSOP_OR)
 {
-    bool cond = ToBoolean(regs.sp[-1]);
+    bool cond = ToBooleanOp(cx);
     if (cond == true) {
         len = GET_JUMP_OFFSET(regs.pc);
         DO_NEXT_OP(len);
@@ -1639,7 +1562,7 @@ END_CASE(JSOP_OR)
 
 BEGIN_CASE(JSOP_AND)
 {
-    bool cond = ToBoolean(regs.sp[-1]);
+    bool cond = ToBooleanOp(cx);
     if (cond == false) {
         len = GET_JUMP_OFFSET(regs.pc);
         DO_NEXT_OP(len);
@@ -1865,28 +1788,15 @@ END_CASE(JSOP_BITAND)
 
 #undef BITWISE_OP
 
-#define EQUALITY_OP(OP)                                                       \
-    JS_BEGIN_MACRO                                                            \
-        Value rval = regs.sp[-1];                                             \
-        Value lval = regs.sp[-2];                                             \
-        bool cond;                                                            \
-        if (!LooselyEqual(cx, lval, rval, &cond))                             \
-            goto error;                                                       \
-        cond = cond OP JS_TRUE;                                               \
-        TRY_BRANCH_AFTER_COND(cond, 2);                                       \
-        regs.sp--;                                                            \
-        regs.sp[-1].setBoolean(cond);                                         \
-    JS_END_MACRO
-
 BEGIN_CASE(JSOP_EQ)
-    EQUALITY_OP(==);
+    if (!LooseEqualityOp<true>(cx))
+        goto error;
 END_CASE(JSOP_EQ)
 
 BEGIN_CASE(JSOP_NE)
-    EQUALITY_OP(!=);
+    if (!LooseEqualityOp<false>(cx))
+        goto error;
 END_CASE(JSOP_NE)
-
-#undef EQUALITY_OP
 
 #define STRICT_EQUALITY_OP(OP, COND)                                          \
     JS_BEGIN_MACRO                                                            \
@@ -2069,7 +1979,7 @@ END_CASE(JSOP_MOD)
 
 BEGIN_CASE(JSOP_NOT)
 {
-    bool cond = ToBoolean(regs.sp[-1]);
+    bool cond = ToBooleanOp(cx);
     regs.sp--;
     PUSH_BOOLEAN(!cond);
 }
@@ -2357,7 +2267,7 @@ BEGIN_CASE(JSOP_EVAL)
         if (!DirectEval(cx, args))
             goto error;
     } else {
-        if (!InvokeKernel(cx, args))
+        if (!Invoke(cx, args))
             goto error;
     }
     regs.sp = args.spAfterCall();
@@ -2404,10 +2314,10 @@ BEGIN_CASE(JSOP_FUNCALL)
     /* Don't bother trying to fast-path calls to scripted non-constructors. */
     if (!isFunction || !fun->isInterpretedConstructor()) {
         if (construct) {
-            if (!InvokeConstructorKernel(cx, args))
+            if (!InvokeConstructor(cx, args))
                 goto error;
         } else {
-            if (!InvokeKernel(cx, args))
+            if (!Invoke(cx, args))
                 goto error;
         }
         Value *newsp = args.spAfterCall();
@@ -2430,9 +2340,6 @@ BEGIN_CASE(JSOP_FUNCALL)
         regs.fp()->setUseNewType();
 
     SET_SCRIPT(regs.fp()->script());
-#ifdef JS_METHODJIT
-    script->resetLoopCount();
-#endif
 
 #ifdef JS_ION
     if (!newType && ion::IsEnabled(cx)) {
@@ -2468,24 +2375,6 @@ BEGIN_CASE(JSOP_FUNCALL)
             JS_ASSERT(exec != ion::IonExec_Bailout);
 
             interpReturnOK = !IsErrorStatus(exec);
-            goto jit_return;
-        }
-    }
-#endif
-
-#ifdef JS_METHODJIT
-    if (!newType && cx->methodJitEnabled) {
-        /* Try to ensure methods are method JIT'd.  */
-        mjit::CompileStatus status = mjit::CanMethodJIT(cx, script, script->code,
-                                                        construct,
-                                                        mjit::CompileRequest_Interpreter,
-                                                        regs.fp());
-        if (status == mjit::Compile_Error)
-            goto error;
-        if (status == mjit::Compile_Okay) {
-            mjit::JaegerStatus status = mjit::JaegerShot(cx, true);
-            CHECK_PARTIAL_METHODJIT(status);
-            interpReturnOK = mjit::JaegerStatusToSuccess(status);
             goto jit_return;
         }
     }
@@ -2653,7 +2542,7 @@ BEGIN_CASE(JSOP_TABLESWITCH)
         i = rref.toInt32();
     } else {
         double d;
-        /* Don't use MOZ_DOUBLE_IS_INT32; treat -0 (double) as 0. */
+        /* Don't use mozilla::DoubleIsInt32; treat -0 (double) as 0. */
         if (!rref.isDouble() || (d = rref.toDouble()) != (i = int32_t(rref.toDouble())))
             DO_NEXT_OP(len);
     }
@@ -3372,7 +3261,11 @@ END_CASE(JSOP_ARRAYPUSH)
                 regs.sp -= 1;
                 if (!ok)
                     goto error;
+                break;
               }
+
+              case JSTRY_LOOP:
+                break;
            }
         }
 
@@ -3412,7 +3305,7 @@ END_CASE(JSOP_ARRAYPUSH)
 
     gc::MaybeVerifyBarriers(cx, true);
 
-#ifdef JS_METHODJIT
+#ifdef JS_ION
     /*
      * This path is used when it's guaranteed the method can be finished
      * inside the JIT.
@@ -3715,6 +3608,12 @@ js::SetObjectElement(JSContext *cx, HandleObject obj, HandleValue index, HandleV
     if (!ValueToId<CanGC>(cx, index, &id))
         return false;
     return SetObjectElementOperation(cx, obj, id, value, strict, script, pc);
+}
+
+bool
+js::InitElementArray(JSContext *cx, jsbytecode *pc, HandleObject obj, uint32_t index, HandleValue value)
+{
+    return InitArrayElemOperation(cx, pc, obj, index, value);
 }
 
 bool

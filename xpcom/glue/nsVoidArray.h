@@ -91,8 +91,8 @@ public:
   }
 
   bool RemoveElement(void* aElement);
-  bool RemoveElementsAt(int32_t aIndex, int32_t aCount);
-  bool RemoveElementAt(int32_t aIndex) { return RemoveElementsAt(aIndex,1); }
+  void RemoveElementsAt(int32_t aIndex, int32_t aCount);
+  void RemoveElementAt(int32_t aIndex) { return RemoveElementsAt(aIndex,1); }
 
   void   Clear();
 
@@ -214,8 +214,8 @@ public:
     return InsertElementsAt(aElements, Count());
   }
   bool RemoveElement(void* aElement);
-  bool RemoveElementsAt(int32_t aIndex, int32_t aCount);
-  bool RemoveElementAt(int32_t aIndex);
+  void RemoveElementsAt(int32_t aIndex, int32_t aCount);
+  void RemoveElementAt(int32_t aIndex);
 
   void Clear();
   bool SizeTo(int32_t aMin);

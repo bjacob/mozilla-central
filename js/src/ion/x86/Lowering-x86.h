@@ -29,12 +29,6 @@ class LIRGeneratorX86 : public LIRGeneratorX86Shared
     void lowerUntypedPhiInput(MPhi *phi, uint32_t inputPosition, LBlock *block, size_t lirIndex);
     bool defineUntypedPhi(MPhi *phi, size_t lirIndex);
 
-    bool lowerForShift(LInstructionHelper<1, 2, 0> *ins, MDefinition *mir, MDefinition *lhs,
-                       MDefinition *rhs);
-
-    bool lowerForALU(LInstructionHelper<1, 1, 0> *ins, MDefinition *mir, MDefinition *input);
-    bool lowerForALU(LInstructionHelper<1, 2, 0> *ins, MDefinition *mir, MDefinition *lhs,
-                     MDefinition *rhs);
     bool lowerForFPU(LInstructionHelper<1, 2, 0> *ins, MDefinition *mir, MDefinition *lhs,
                      MDefinition *rhs);
 
@@ -49,9 +43,14 @@ class LIRGeneratorX86 : public LIRGeneratorX86Shared
     bool visitAsmJSUnsignedToDouble(MAsmJSUnsignedToDouble *ins);
     bool visitAsmJSStoreHeap(MAsmJSStoreHeap *ins);
     bool visitAsmJSLoadFuncPtr(MAsmJSLoadFuncPtr *ins);
+    bool visitStoreTypedArrayElementStatic(MStoreTypedArrayElementStatic *ins);
     bool lowerPhi(MPhi *phi);
 
     static bool allowTypedElementHoleCheck() {
+        return true;
+    }
+
+    static bool allowStaticTypedArrayAccesses() {
         return true;
     }
 };

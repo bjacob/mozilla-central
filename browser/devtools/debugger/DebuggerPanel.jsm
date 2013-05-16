@@ -10,7 +10,7 @@ const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 this.EXPORTED_SYMBOLS = ["DebuggerPanel"];
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource:///modules/devtools/EventEmitter.jsm");
+Cu.import("resource:///modules/devtools/shared/event-emitter.js");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
   "resource://gre/modules/commonjs/sdk/core/promise.js");
@@ -18,7 +18,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Promise",
 XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
   "resource://gre/modules/devtools/dbg-server.jsm");
 
-function DebuggerPanel(iframeWindow, toolbox) {
+this.DebuggerPanel = function DebuggerPanel(iframeWindow, toolbox) {
   this.panelWin = iframeWindow;
   this._toolbox = toolbox;
 
@@ -85,5 +85,5 @@ DebuggerPanel.prototype = {
 
   getAllBreakpoints: function() {
     return this._bkp.store;
-  },
+  }
 };

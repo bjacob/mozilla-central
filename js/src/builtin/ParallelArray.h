@@ -20,7 +20,7 @@ namespace js {
 class ParallelArrayObject : public JSObject
 {
     static Class protoClass;
-    static JSFunctionSpec methods[];
+    static const JSFunctionSpec methods[];
     static const uint32_t NumFixedSlots = 4;
     static const uint32_t NumCtors = 4;
     static FixedHeapPtr<PropertyName> ctorNames[NumCtors];
@@ -43,7 +43,7 @@ class ParallelArrayObject : public JSObject
     // object for you, since ParallelArray type objects must be setup
     // in a rather particular way to interact well with the
     // self-hosted code.  See constructHelper() for details.
-    static JSObject *newInstance(JSContext *cx);
+    static JSObject *newInstance(JSContext *cx, NewObjectKind newKind = GenericObject);
 
     // Get the constructor function for argc number of arguments.
     static JSFunction *getConstructor(JSContext *cx, unsigned argc);

@@ -478,7 +478,13 @@ public:
    * destructors are called as soon as the item is no longer used.
    */
   void* Allocate(size_t aSize);
-  
+
+  /**
+   * Allocate a new DisplayListClip in the arena. Will be cleaned up
+   * automatically when the arena goes away.
+   */
+  const DisplayItemClip* AllocateDisplayItemClip(const DisplayItemClip& aOriginal);
+
   /**
    * A helper class to temporarily set the value of
    * mIsAtRootOfPseudoStackingContext and mIsInFixedPosition, and temporarily
@@ -646,6 +652,7 @@ private:
   nsRegion                       mExcludedGlassRegion;
   // The display item for the Windows window glass background, if any
   nsDisplayItem*                 mGlassDisplayItem;
+  nsTArray<DisplayItemClip*>     mDisplayItemClipsToDestroy;
   Mode                           mMode;
   bool                           mBuildCaret;
   bool                           mIgnoreSuppression;
@@ -746,12 +753,7 @@ public:
 #endif
   {
   }
-  virtual ~nsDisplayItem()
-  {
-    if (mClip) {
-      mClip->MaybeDestroy();
-    }
-  }
+  virtual ~nsDisplayItem() {}
   
   void* operator new(size_t aSize,
                      nsDisplayListBuilder* aBuilder) CPP_THROW_NEW {
@@ -813,7 +815,7 @@ public:
    * items by z-index and content order and for some other uses. Never
    * returns null.
    */
-  inline nsIFrame* GetUnderlyingFrame() const { return mFrame; }
+  inline nsIFrame* Frame() const { return mFrame; }
   /**
    * The default bounds is the frame border rect.
    * @param aSnap *aSnap is set to true if the returned rect will be
@@ -828,7 +830,7 @@ public:
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
   {
     *aSnap = false;
-    return nsRect(ToReferenceFrame(), GetUnderlyingFrame()->GetSize());
+    return nsRect(ToReferenceFrame(), Frame()->GetSize());
   }
   /**
    * Returns the result of GetBounds intersected with the item's clip.
@@ -837,13 +839,13 @@ public:
    */
   nsRect GetClippedBounds(nsDisplayListBuilder* aBuilder);
   nsRect GetBorderRect() {
-    return nsRect(ToReferenceFrame(), GetUnderlyingFrame()->GetSize());
+    return nsRect(ToReferenceFrame(), Frame()->GetSize());
   }
   nsRect GetPaddingRect() {
-    return GetUnderlyingFrame()->GetPaddingRectRelativeToSelf() + ToReferenceFrame();
+    return Frame()->GetPaddingRectRelativeToSelf() + ToReferenceFrame();
   }
   nsRect GetContentRect() {
-    return GetUnderlyingFrame()->GetContentRectRelativeToSelf() + ToReferenceFrame();
+    return Frame()->GetContentRectRelativeToSelf() + ToReferenceFrame();
   }
 
   /**
@@ -916,7 +918,7 @@ public:
     if (!aGeometry->mBounds.IsEqualInterior(bounds)) {
       nscoord radii[8];
       if (aGeometry->mHasRoundedCorners ||
-          GetUnderlyingFrame()->GetBorderRadii(radii)) {
+          Frame()->GetBorderRadii(radii)) {
         aInvalidRegion->Or(aGeometry->mBounds, bounds);
       } else {
         aInvalidRegion->Xor(aGeometry->mBounds, bounds);
@@ -1193,17 +1195,11 @@ public:
   }
   void SetClip(nsDisplayListBuilder* aBuilder, const DisplayItemClip& aClip)
   {
-    if (mClip) {
-      mClip->MaybeDestroy();
-    }
     if (!aClip.HasClip()) {
       mClip = nullptr;
       return;
     }
-    void* mem = aBuilder->Allocate(sizeof(DisplayItemClip));
-    DisplayItemClip* clip = new (mem) DisplayItemClip();
-    *clip = aClip;
-    mClip = clip;
+    mClip = aBuilder->AllocateDisplayItemClip(aClip);
   }
 
 protected:
@@ -1665,7 +1661,7 @@ public:
                                                         nsDisplayListBuilder* aBuilder) = 0;
   virtual void ConfigureLayer(ImageLayer* aLayer, const nsIntPoint& aOffset) = 0;
 
-  virtual bool SupportsOptimizingToImage() { return true; }
+  virtual bool SupportsOptimizingToImage() MOZ_OVERRIDE { return true; }
 };
 
 /**
@@ -1850,7 +1846,7 @@ public:
 
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion* aInvalidRegion);
+                                         nsRegion* aInvalidRegion) MOZ_OVERRIDE;
 };
 
 /**
@@ -1906,7 +1902,7 @@ public:
 
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion* aInvalidRegion)
+                                         nsRegion* aInvalidRegion) MOZ_OVERRIDE
   {
     const nsDisplayItemBoundsGeometry* geometry = static_cast<const nsDisplayItemBoundsGeometry*>(aGeometry);
     ComputeInvalidationRegionDifference(aBuilder, geometry, aInvalidRegion);
@@ -2005,7 +2001,7 @@ public:
                                       const nsRect& aRect, bool* aSnap);
 
 #ifdef MOZ_DUMP_PAINTING
-  virtual void WriteDebugInfo(FILE *aOutput);
+  virtual void WriteDebugInfo(FILE *aOutput) MOZ_OVERRIDE;
 #endif
 protected:
   typedef class mozilla::layers::ImageContainer ImageContainer;
@@ -2059,7 +2055,7 @@ public:
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
   {
     *aSnap = true;
-    return nsRect(ToReferenceFrame(), GetUnderlyingFrame()->GetSize());
+    return nsRect(ToReferenceFrame(), Frame()->GetSize());
   }
 
   virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE
@@ -2069,7 +2065,7 @@ public:
 
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion* aInvalidRegion)
+                                         nsRegion* aInvalidRegion) MOZ_OVERRIDE
   {
     const nsDisplayItemBoundsGeometry* geometry = static_cast<const nsDisplayItemBoundsGeometry*>(aGeometry);
     ComputeInvalidationRegionDifference(aBuilder, geometry, aInvalidRegion);
@@ -2163,7 +2159,7 @@ public:
 
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion* aInvalidRegion)
+                                         nsRegion* aInvalidRegion) MOZ_OVERRIDE
   {
     const nsDisplayBoxShadowInnerGeometry* geometry = static_cast<const nsDisplayBoxShadowInnerGeometry*>(aGeometry);
     if (!geometry->mPaddingRect.IsEqualInterior(GetPaddingRect())) {
@@ -2279,7 +2275,7 @@ public:
   {
     aFrames->AppendElements(mMergedFrames);
   }
-  virtual bool IsInvalid(nsRect& aRect)
+  virtual bool IsInvalid(nsRect& aRect) MOZ_OVERRIDE
   {
     if (mFrame->IsInvalid(aRect) && aRect.IsEmpty()) {
       return true;
@@ -2417,7 +2413,7 @@ public:
   }
 #endif
 
-  bool CanUseAsyncAnimations(nsDisplayListBuilder* aBuilder);
+  bool CanUseAsyncAnimations(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE;
 };
 
 /**
@@ -2957,7 +2953,7 @@ public:
   struct ClipEdges {
     ClipEdges(const nsDisplayItem& aItem,
               nscoord aLeftEdge, nscoord aRightEdge) {
-      nsRect r = aItem.GetUnderlyingFrame()->GetScrollableOverflowRect() +
+      nsRect r = aItem.Frame()->GetScrollableOverflowRect() +
                  aItem.ToReferenceFrame();
       mX = aLeftEdge > 0 ? r.x + aLeftEdge : nscoord_MIN;
       mXMost = aRightEdge > 0 ? std::max(r.XMost() - aRightEdge, mX) : nscoord_MAX;

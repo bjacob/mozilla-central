@@ -464,6 +464,12 @@ MacroAssembler::newGCString(const Register &result, Label *fail)
 }
 
 void
+MacroAssembler::newGCShortString(const Register &result, Label *fail)
+{
+    newGCThing(result, js::gc::FINALIZE_SHORT_STRING, fail);
+}
+
+void
 MacroAssembler::parNewGCThing(const Register &result,
                               const Register &threadContextReg,
                               const Register &tempReg1,
@@ -847,7 +853,8 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
         load32(Address(temp, BaselineFrame::reverseOffsetOfFrameSize()), temp);
         makeFrameDescriptor(temp, IonFrame_BaselineJS);
         push(temp);
-        push(Imm32(0)); // Fake return address.
+        loadPtr(Address(bailoutInfo, offsetof(BaselineBailoutInfo, resumeAddr)), temp);
+        push(temp);
         enterFakeExitFrame();
 
         // If monitorStub is non-null, handle resumeAddr appropriately.
@@ -940,47 +947,52 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
 }
 
 void
-MacroAssembler::loadBaselineOrIonCode(Register script, Register scratch, Label *failure)
+MacroAssembler::loadBaselineOrIonRaw(Register script, Register dest, ExecutionMode mode,
+                                     Label *failure)
 {
-    bool baselineEnabled = ion::IsBaselineEnabled(GetIonContext()->cx);
+    if (mode == SequentialExecution) {
+        loadPtr(Address(script, JSScript::offsetOfBaselineOrIonRaw()), dest);
+        if (failure)
+            branchTestPtr(Assembler::Zero, dest, dest, failure);
+    } else {
+        loadPtr(Address(script, JSScript::offsetOfParallelIonScript()), dest);
+        if (failure)
+            branchPtr(Assembler::BelowOrEqual, dest, ImmWord(ION_COMPILING_SCRIPT), failure);
+        loadPtr(Address(dest, IonScript::offsetOfMethod()), dest);
+        loadPtr(Address(dest, IonCode::offsetOfCode()), dest);
+    }
+}
 
-    Label noIonScript, done;
-    Address scriptIon(script, JSScript::offsetOfIonScript());
-    branchPtr(Assembler::BelowOrEqual, scriptIon, ImmWord(ION_COMPILING_SCRIPT),
-              &noIonScript);
-    {
-        // Load IonScript method.
-        loadPtr(scriptIon, scratch);
-
-        // Check bailoutExpected flag
-        if (baselineEnabled || failure) {
-            Address bailoutExpected(scratch, IonScript::offsetOfBailoutExpected());
-            branch32(Assembler::NotEqual, bailoutExpected, Imm32(0), &noIonScript);
+void
+MacroAssembler::loadBaselineOrIonNoArgCheck(Register script, Register dest, ExecutionMode mode,
+                                            Label *failure)
+{
+    if (mode == SequentialExecution) {
+        loadPtr(Address(script, JSScript::offsetOfBaselineOrIonSkipArgCheck()), dest);
+        if (failure)
+            branchTestPtr(Assembler::Zero, dest, dest, failure);
+    } else {
+        // Find second register to get the offset to skip argument check
+        Register offset = script;
+        if (script == dest) {
+            GeneralRegisterSet regs(GeneralRegisterSet::All());
+            regs.take(dest);
+            offset = regs.takeAny();
         }
 
-        loadPtr(Address(scratch, IonScript::offsetOfMethod()), script);
-        jump(&done);
-    }
-    bind(&noIonScript);
-    {
-        // The script does not have an IonScript. If |failure| is NULL,
-        // assume the script has a baseline script.
-        if (baselineEnabled) {
-            loadPtr(Address(script, JSScript::offsetOfBaselineScript()), script);
-            if (failure)
-                branchPtr(Assembler::BelowOrEqual, script, ImmWord(BASELINE_DISABLED_SCRIPT), failure);
-            loadPtr(Address(script, BaselineScript::offsetOfMethod()), script);
-        } else if (failure) {
-            jump(failure);
-        } else {
-#ifdef DEBUG
-            breakpoint();
-            breakpoint();
-#endif
-        }
-    }
+        loadPtr(Address(script, JSScript::offsetOfParallelIonScript()), dest);
+        if (failure)
+            branchPtr(Assembler::BelowOrEqual, dest, ImmWord(ION_COMPILING_SCRIPT), failure);
 
-    bind(&done);
+        Push(offset);
+        load32(Address(script, IonScript::offsetOfSkipArgCheckEntryOffset()), offset);
+
+        loadPtr(Address(dest, IonScript::offsetOfMethod()), dest);
+        loadPtr(Address(dest, IonCode::offsetOfCode()), dest);
+        addPtr(offset, dest);
+
+        Pop(offset);
+    }
 }
 
 void

@@ -121,10 +121,10 @@ typedef struct CapturingContentInfo {
   nsIContent* mContent;
 } CapturingContentInfo;
 
-// bf539e0a-c314-4ea7-ba7c-ebd34e8a4065
+// fac033dd-938d-45bc-aaa5-dc2fa7ef5a40
 #define NS_IPRESSHELL_IID \
-{ 0xbf539e0a, 0xc314, 0x4ea7, \
-  { 0xba, 0x7c, 0xeb, 0xd3, 0x4e, 0x8a, 0x40, 0x65 } }
+{ 0xfac033dd, 0x938d, 0x45bc, \
+  { 0xaa, 0xa5, 0xdc, 0x2f, 0xa7, 0xef, 0x5a, 0x40 } }
 
 // debug VerifyReflow flags
 #define VERIFY_REFLOW_ON                    0x01
@@ -177,12 +177,6 @@ protected:
   typedef uint8_t RenderFlags; // for storing the above flags
 
 public:
-  virtual NS_HIDDEN_(nsresult) Init(nsIDocument* aDocument,
-                                   nsPresContext* aPresContext,
-                                   nsViewManager* aViewManager,
-                                   nsStyleSet* aStyleSet,
-                                   nsCompatibility aCompatMode) = 0;
-
   /**
    * All callers are responsible for calling |Destroy| after calling
    * |EndObservingDocument|.  It needs to be separate only because form
@@ -416,11 +410,6 @@ public:
    * Return true if the presshell expects layout flush.
    */
   virtual bool IsLayoutFlushObserver() = 0;
-
-  /**
-   * Reflow the frame model with a reflow reason of eReflowReason_StyleChange
-   */
-  virtual NS_HIDDEN_(void) StyleChangeReflow() = 0;
 
   /**
    * This calls through to the frame manager to get the root frame.
@@ -1402,6 +1391,26 @@ public:
 
   void SetMaxLineBoxWidth(nscoord aMaxLineBoxWidth);
 
+  /**
+   * Returns whether or not there is a reflow on zoom event pending. A reflow
+   * on zoom event is a change to the max line box width, followed by a reflow.
+   * This subsequent reflow event should treat all frames as though they resized
+   * horizontally (and thus reflow all their descendants), rather than marking
+   * all frames dirty from the root. This is the way the pres shell indicates
+   * that an hresize reflow should take place during reflow state construction.
+   */
+  bool IsReflowOnZoomPending() {
+    return mReflowOnZoomPending;
+  }
+
+  /**
+   * Clear the flag indicating whether a reflow on zoom event is pending. This
+   * is performed at the very end of DoReflow().
+   */
+  void ClearReflowOnZoomPending() {
+    mReflowOnZoomPending = false;
+  }
+
 protected:
   friend class nsRefreshDriver;
 
@@ -1509,6 +1518,10 @@ protected:
   uint32_t mFontSizeInflationLineThreshold;
   bool mFontSizeInflationForceEnabled;
   bool mFontSizeInflationDisabledInMasterProcess;
+
+  // Flag to indicate whether or not there is a reflow on zoom event pending.
+  // See IsReflowOnZoomPending() for more information.
+  bool mReflowOnZoomPending;
 
   // The maximum width of a line box. Text on a single line that exceeds this
   // width will be wrapped. A value of 0 indicates that no limit is enforced.

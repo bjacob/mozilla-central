@@ -51,13 +51,9 @@ private:
   nsCOMPtr<nsIMobileConnectionProvider> mProvider;
   nsRefPtr<Listener> mListener;
   nsRefPtr<icc::IccManager> mIccManager;
+  nsWeakPtr mWindow;
 
-  nsIDOMEventTarget*
-  ToIDOMEventTarget() const
-  {
-    return static_cast<nsDOMEventTargetHelper*>(
-           const_cast<MobileConnection*>(this));
-  }
+  bool CheckPermission(const char* type);
 };
 
 } // namespace network

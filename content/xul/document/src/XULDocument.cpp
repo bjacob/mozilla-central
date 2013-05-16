@@ -433,8 +433,7 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
         NS_GetFinalChannelURI(aChannel, getter_AddRefs(mDocumentURI));
     NS_ENSURE_SUCCESS(rv, rv);
     
-    rv = ResetStylesheetsToURI(mDocumentURI);
-    if (NS_FAILED(rv)) return rv;
+    ResetStylesheetsToURI(mDocumentURI);
 
     RetrieveRelevantHeaders(aChannel);
 
@@ -1249,7 +1248,7 @@ XULDocument::GetElementsByAttribute(const nsAString& aAttribute,
 {
     nsCOMPtr<nsIAtom> attrAtom(do_GetAtom(aAttribute));
     void* attrValue = new nsString(aValue);
-    nsContentList *list = new nsContentList(this,
+    nsRefPtr<nsContentList> list = new nsContentList(this,
                                             MatchAttribute,
                                             nsContentUtils::DestroyMatchString,
                                             attrValue,
@@ -1257,8 +1256,7 @@ XULDocument::GetElementsByAttribute(const nsAString& aAttribute,
                                             attrAtom,
                                             kNameSpaceID_Unknown);
     
-    NS_ADDREF(list);
-    return list;
+    return list.forget();
 }
 
 NS_IMETHODIMP
@@ -1293,15 +1291,14 @@ XULDocument::GetElementsByAttributeNS(const nsAString& aNamespaceURI,
       }
     }
 
-    nsContentList *list = new nsContentList(this,
+    nsRefPtr<nsContentList> list = new nsContentList(this,
                                             MatchAttribute,
                                             nsContentUtils::DestroyMatchString,
                                             attrValue,
                                             true,
                                             attrAtom,
                                             nameSpaceId);
-    NS_ADDREF(list);
-    return list;
+    return list.forget();
 }
 
 NS_IMETHODIMP
@@ -3656,8 +3653,9 @@ XULDocument::ExecuteScript(nsIScriptContext * aContext, JSScript* aScriptObject)
     NS_ENSURE_TRUE(mScriptGlobalObject, NS_ERROR_NOT_INITIALIZED);
 
     // Execute the precompiled script with the given version
+    JS::Rooted<JSScript*> script(aContext->GetNativeContext(), aScriptObject);
     JSObject* global = mScriptGlobalObject->GetGlobalJSObject();
-    return aContext->ExecuteScript(aScriptObject, global);
+    return aContext->ExecuteScript(script, global);
 }
 
 nsresult
@@ -4762,13 +4760,9 @@ XULDocument::GetBoxObjectFor(nsIDOMElement* aElement, nsIBoxObject** aResult)
 }
 
 JSObject*
-XULDocument::WrapNode(JSContext *aCx, JSObject *aScope)
+XULDocument::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aScope)
 {
-  JSObject* obj = XULDocumentBinding::Wrap(aCx, aScope, this);
-  if (obj && !PostCreateWrapper(aCx, obj)) {
-    return nullptr;
-  }
-  return obj;
+  return XULDocumentBinding::Wrap(aCx, aScope, this);
 }
 
 } // namespace dom

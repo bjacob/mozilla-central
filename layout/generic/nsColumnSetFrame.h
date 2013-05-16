@@ -5,6 +5,7 @@
 
 /* rendering object for css3 multi-column layout */
 
+#include "mozilla/Attributes.h"
 #include "nsContainerFrame.h"
 #include "nsIContent.h"
 #include "nsIFrame.h"
@@ -27,25 +28,25 @@ public:
   nsColumnSetFrame(nsStyleContext* aContext);
 
   NS_IMETHOD SetInitialChildList(ChildListID     aListID,
-                                 nsFrameList&    aChildList);
+                                 nsFrameList&    aChildList) MOZ_OVERRIDE;
 
   NS_IMETHOD Reflow(nsPresContext* aPresContext,
                     nsHTMLReflowMetrics& aDesiredSize,
                     const nsHTMLReflowState& aReflowState,
-                    nsReflowStatus& aStatus);
+                    nsReflowStatus& aStatus) MOZ_OVERRIDE;
 
   NS_IMETHOD  AppendFrames(ChildListID     aListID,
-                           nsFrameList&    aFrameList);
+                           nsFrameList&    aFrameList) MOZ_OVERRIDE;
   NS_IMETHOD  InsertFrames(ChildListID     aListID,
                            nsIFrame*       aPrevFrame,
-                           nsFrameList&    aFrameList);
+                           nsFrameList&    aFrameList) MOZ_OVERRIDE;
   NS_IMETHOD  RemoveFrame(ChildListID     aListID,
-                          nsIFrame*       aOldFrame);
+                          nsIFrame*       aOldFrame) MOZ_OVERRIDE;
 
-  virtual nscoord GetMinWidth(nsRenderingContext *aRenderingContext);
-  virtual nscoord GetPrefWidth(nsRenderingContext *aRenderingContext);
+  virtual nscoord GetMinWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
+  virtual nscoord GetPrefWidth(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
 
-  virtual nsIFrame* GetContentInsertionFrame() {
+  virtual nsIFrame* GetContentInsertionFrame() MOZ_OVERRIDE {
     nsIFrame* frame = GetFirstPrincipalChild();
 
     // if no children return nullptr
@@ -57,12 +58,12 @@ public:
 
   virtual nsresult StealFrame(nsPresContext* aPresContext,
                               nsIFrame*      aChild,
-                              bool           aForceNormal)
+                              bool           aForceNormal) MOZ_OVERRIDE
   { // nsColumnSetFrame keeps overflow containers in main child list
     return nsContainerFrame::StealFrame(aPresContext, aChild, true);
   }
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const
+  virtual bool IsFrameOfType(uint32_t aFlags) const MOZ_OVERRIDE
    {
      return nsContainerFrame::IsFrameOfType(aFlags &
               ~(nsIFrame::eCanContainOverflowContainers));
@@ -72,14 +73,14 @@ public:
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) MOZ_OVERRIDE;
 
-  virtual nsIAtom* GetType() const;
+  virtual nsIAtom* GetType() const MOZ_OVERRIDE;
 
   virtual void PaintColumnRule(nsRenderingContext* aCtx,
                                const nsRect&        aDirtyRect,
                                const nsPoint&       aPt);
 
 #ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const {
+  NS_IMETHOD GetFrameName(nsAString& aResult) const MOZ_OVERRIDE {
     return MakeFrameName(NS_LITERAL_STRING("ColumnSet"), aResult);
   }
 #endif
@@ -137,13 +138,14 @@ protected:
     // The maximum "content height" of all columns that overflowed
     // their available height
     nscoord mMaxOverflowingHeight;
-    // Whether or not we should revert back to 'auto' setting for column-fill.
-    // This happens if we overflow our columns such that we no longer have
-    // enough room to keep balancing.
-    bool mShouldRevertToAuto;
+    // This flag determines whether the last reflow of children exceeded the
+    // computed height of the column set frame. If so, we set the height to
+    // this maximum allowable height, and continue reflow without balancing.
+    bool mHasExcessHeight;
+
     void Reset() {
       mMaxHeight = mSumHeight = mLastHeight = mMaxOverflowingHeight = 0;
-      mShouldRevertToAuto = false;
+      mHasExcessHeight = false;
     }
   };
 
@@ -153,6 +155,14 @@ protected:
    * overflow list, and put them in our primary child list for reflowing.
    */
   void DrainOverflowColumns();
+
+  bool ReflowColumns(nsHTMLReflowMetrics& aDesiredSize,
+                     const nsHTMLReflowState& aReflowState,
+                     nsReflowStatus& aReflowStatus,
+                     ReflowConfig& aConfig,
+                     bool aLastColumnUnbounded,
+                     nsCollapsingMargin* aCarriedOutBottomMargin,
+                     ColumnBalanceData& aColData);
 
   /**
    * The basic reflow strategy is to call this function repeatedly to

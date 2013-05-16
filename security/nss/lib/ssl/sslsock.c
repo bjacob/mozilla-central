@@ -6,7 +6,6 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-/* $Id$ */
 #include "seccomon.h"
 #include "cert.h"
 #include "keyhi.h"
@@ -1390,9 +1389,6 @@ ssl_ImportFD(PRFileDesc *model, PRFileDesc *fd, SSLProtocolVariant variant)
 	SET_ERROR_CODE
 	return NULL;
     }
-#ifdef _WIN32
-    PR_Sleep(PR_INTERVAL_NO_WAIT);     /* workaround NT winsock connect bug. */
-#endif
     ns = ssl_FindSocket(fd);
     PORT_Assert(ns);
     if (ns)
@@ -1992,9 +1988,6 @@ ssl_Connect(PRFileDesc *fd, const PRNetAddr *sockaddr, PRIntervalTime timeout)
 
     ss->cTimeout = timeout;
     rv = (PRStatus)(*ss->ops->connect)(ss, sockaddr);
-#ifdef _WIN32
-    PR_Sleep(PR_INTERVAL_NO_WAIT);     /* workaround NT winsock connect bug. */
-#endif
 
     SSL_UNLOCK_WRITER(ss);
     SSL_UNLOCK_READER(ss);

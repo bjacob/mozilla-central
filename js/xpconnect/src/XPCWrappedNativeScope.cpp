@@ -160,8 +160,7 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext *cx,
     // In addition to being pref-controlled, we also disable XBL scopes for
     // remote XUL domains, _except_ if we have an additional pref override set.
     nsIPrincipal *principal = GetPrincipal();
-    mAllowXBLScope = XPCJSRuntime::Get()->XBLScopesEnabled() &&
-                     !RemoteXULForbidsXBLScope(principal);
+    mAllowXBLScope = !RemoteXULForbidsXBLScope(principal);
 
     // Determine whether to use an XBL scope.
     mUseXBLScope = mAllowXBLScope;
@@ -403,8 +402,8 @@ XPCWrappedNativeScope::TraceWrappedNativesInAllScopes(JSTracer* trc, XPCJSRuntim
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext) {
         cur->mWrappedNativeMap->Enumerate(WrappedNativeJSGCThingTracer, trc);
         if (cur->mDOMExpandoSet) {
-            for (DOMExpandoSet::Range r = cur->mDOMExpandoSet->all(); !r.empty(); r.popFront())
-                JS_CallObjectTracer(trc, r.front(), "DOM expando object");
+            for (DOMExpandoSet::Enum e(*cur->mDOMExpandoSet); !e.empty(); e.popFront())
+                JS_CallHashSetObjectTracer(trc, e, e.front(), "DOM expando object");
         }
     }
 }

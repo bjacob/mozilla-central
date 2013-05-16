@@ -57,6 +57,12 @@ def doc_to_paragraphs(doc):
 #
 VARIABLES = {
     # Variables controlling reading of other frontend files.
+    'ASFILES': (list, [],
+        """ Assembly file sources.
+
+        This variable contains a list of files to invoke the assembler on.
+        """),
+
     'DIRS': (list, [],
         """Child directories to descend into looking for build frontend files.
 
@@ -167,6 +173,14 @@ VARIABLES = {
         EXPORTS.mozilla.dom += ['bar.h']
         """),
 
+    'PROGRAM' : (unicode, "",
+        """Compiled executable name.
+
+        If the configuration token 'BIN_SUFFIX' is set, its value will be
+        automatically appended to PROGRAM. If PROGRAM already ends with
+        BIN_SUFFIX, PROGRAM will remain unchanged.
+        """),
+
     # IDL Generation.
     'XPIDL_SOURCES': (list, [],
         """XPCOM Interface Definition Files (xpidl).
@@ -190,6 +204,13 @@ VARIABLES = {
         This is a list of extra flags that are passed to the IDL compiler.
         Typically this is a set of -I flags that denote extra include
         directories to search for included .idl files.
+        """),
+
+    'XPCSHELL_TESTS_MANIFESTS': (list, [],
+        """XPCSHELL Test Manifest list
+
+        This is a list of xpcshell.ini manifest files.
+        Formerly XPCSHELL_TESTS=
         """),
 }
 

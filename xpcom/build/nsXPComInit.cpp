@@ -6,6 +6,7 @@
 
 #include "base/basictypes.h"
 
+#include "mozilla/Poison.h"
 #include "mozilla/XPCOM.h"
 #include "nsXULAppAPI.h"
 
@@ -15,6 +16,7 @@
 #include "nsStaticComponents.h"
 #include "prlink.h"
 
+#include "nsCycleCollector.h"
 #include "nsObserverList.h"
 #include "nsObserverService.h"
 #include "nsProperties.h"
@@ -257,16 +259,16 @@ static already_AddRefed<nsIFactory>
 CreateINIParserFactory(const mozilla::Module& module,
                        const mozilla::Module::CIDEntry& entry)
 {
-    nsIFactory* f = new nsINIParserFactory();
-    f->AddRef();
-    return f;
+    nsCOMPtr<nsIFactory> f = new nsINIParserFactory();
+    return f.forget();
 }
 
 static already_AddRefed<nsIFactory>
 CreateUnicharStreamFactory(const mozilla::Module& module,
                            const mozilla::Module::CIDEntry& entry)
 {
-    return nsSimpleUnicharStreamFactory::GetInstance();
+    return already_AddRefed<nsIFactory>(
+            nsSimpleUnicharStreamFactory::GetInstance());
 }
 
 #define COMPONENT(NAME, Ctor) static NS_DEFINE_CID(kNS_##NAME##_CID, NS_##NAME##_CID);
@@ -328,6 +330,8 @@ NS_InitXPCOM2(nsIServiceManager* *result,
               nsIFile* binDirectory,
               nsIDirectoryServiceProvider* appFileLocationProvider)
 {
+    mozPoisonValueInit();
+
     profiler_init();
     nsresult rv = NS_OK;
 
@@ -478,6 +482,10 @@ NS_InitXPCOM2(nsIServiceManager* *result,
     // add any services listed in the "xpcom-directory-providers" category
     // to the directory service.
     nsDirectoryService::gService->RegisterCategoryProviders();
+
+    // Force layout to spin up so that nsContentUtils is available for cx stack
+    // munging.
+    nsCOMPtr<nsISupports> componentLoader = do_GetService("@mozilla.org/moz/jsloader;1");
 
     mozilla::scache::StartupCache::GetSingleton();
     mozilla::AvailableMemoryTracker::Activate();
@@ -730,6 +738,8 @@ ShutdownXPCOM(nsIServiceManager* servMgr)
 #ifdef MOZ_VISUAL_EVENT_TRACER
     eventtracer::Shutdown();
 #endif
+
+    profiler_shutdown();
 
     NS_LogTerm();
 

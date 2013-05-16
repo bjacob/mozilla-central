@@ -4,8 +4,6 @@
 
 /*
  * Tool for converting builtin CA certs.
- *
- * $Id$
  */
 
 #include "nssrenam.h"
@@ -76,7 +74,7 @@ static SECStatus
 ConvertCRLEntry(SECItem *sdder, PRInt32 crlentry, char *nickname)
 {
     int rv;
-    PRArenaPool *arena = NULL;
+    PLArenaPool *arena = NULL;
     CERTSignedCrl *newCrl = NULL;
     CERTCrlEntry *entry;
     

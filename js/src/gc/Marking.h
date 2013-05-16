@@ -12,6 +12,7 @@
 #include "jslock.h"
 
 #include "gc/Barrier.h"
+#include "gc/Nursery.h"
 #include "js/TemplateLib.h"
 #include "ion/IonCode.h"
 
@@ -28,6 +29,7 @@ class JSLinearString;
 namespace js {
 
 class ArgumentsObject;
+class ArrayBufferObject;
 class BaseShape;
 class GlobalObject;
 class UnownedBaseShape;
@@ -92,12 +94,12 @@ DeclMarker(BaseShape, BaseShape)
 DeclMarker(BaseShape, UnownedBaseShape)
 DeclMarker(IonCode, ion::IonCode)
 DeclMarker(Object, ArgumentsObject)
+DeclMarker(Object, ArrayBufferObject)
 DeclMarker(Object, DebugScopeObject)
 DeclMarker(Object, GlobalObject)
 DeclMarker(Object, JSObject)
 DeclMarker(Object, JSFunction)
 DeclMarker(Object, ScopeObject)
-DeclMarker(Object, ArrayBufferObject)
 DeclMarker(Script, JSScript)
 DeclMarker(Shape, Shape)
 DeclMarker(String, JSAtom)
@@ -202,11 +204,11 @@ void
 MarkObjectSlots(JSTracer *trc, JSObject *obj, uint32_t start, uint32_t nslots);
 
 void
-MarkCrossCompartmentObjectUnbarriered(JSTracer *trc, RawObject src, JSObject **dst_obj,
+MarkCrossCompartmentObjectUnbarriered(JSTracer *trc, JSObject *src, JSObject **dst_obj,
                                       const char *name);
 
 void
-MarkCrossCompartmentScriptUnbarriered(JSTracer *trc, RawObject src, JSScript **dst_script,
+MarkCrossCompartmentScriptUnbarriered(JSTracer *trc, JSObject *src, JSScript **dst_script,
                                       const char *name);
 
 /*
@@ -214,7 +216,7 @@ MarkCrossCompartmentScriptUnbarriered(JSTracer *trc, RawObject src, JSScript **d
  * being GC'd. (Although it won't be marked if it's in the wrong compartment.)
  */
 void
-MarkCrossCompartmentSlot(JSTracer *trc, RawObject src, HeapSlot *dst_slot, const char *name);
+MarkCrossCompartmentSlot(JSTracer *trc, JSObject *src, HeapSlot *dst_slot, const char *name);
 
 
 /*** Special Cases ***/
@@ -243,7 +245,7 @@ MarkChildren(JSTracer *trc, JSObject *obj);
  * JS_TraceShapeCycleCollectorChildren.
  */
 void
-MarkCycleCollectorChildren(JSTracer *trc, RawShape shape);
+MarkCycleCollectorChildren(JSTracer *trc, Shape *shape);
 
 void
 PushArena(GCMarker *gcmarker, ArenaHeader *aheader);
@@ -279,10 +281,18 @@ Mark(JSTracer *trc, HeapPtr<ion::IonCode> *code, const char *name)
     MarkIonCode(trc, code, name);
 }
 
+/* For use by WeakMap's HashKeyRef instantiation. */
 inline void
 Mark(JSTracer *trc, JSObject **objp, const char *name)
 {
     MarkObjectUnbarriered(trc, objp, name);
+}
+
+/* For use by Debugger::WeakMap's proxiedScopes HashKeyRef instantiation. */
+inline void
+Mark(JSTracer *trc, ScopeObject **obj, const char *name)
+{
+    MarkObjectUnbarriered(trc, obj, name);
 }
 
 bool

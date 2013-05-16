@@ -83,6 +83,8 @@ pref("browser.offline-apps.notify", true);
 pref("network.protocol-handler.warn-external.tel", false);
 pref("network.protocol-handler.warn-external.mailto", false);
 pref("network.protocol-handler.warn-external.vnd.youtube", false);
+pref("network.protocol-handler.warn-external.ms-windows-store", false);
+pref("network.protocol-handler.external.ms-windows-store", true);
 
 /* history max results display */
 pref("browser.display.history.maxresults", 100);
@@ -416,7 +418,6 @@ pref("editor.singleLine.pasteNewlines", 2);
 #ifdef MOZ_SERVICES_SYNC
 // sync service
 pref("services.sync.registerEngines", "Tab,Bookmarks,Form,History,Password,Prefs");
-pref("services.sync.autoconnectDelay", 5);
 
 // prefs to sync by default
 pref("services.sync.prefs.sync.browser.startup.sessionRestore", true);

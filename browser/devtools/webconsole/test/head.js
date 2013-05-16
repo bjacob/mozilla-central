@@ -10,8 +10,8 @@ Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tempScope);
 let WebConsoleUtils = tempScope.WebConsoleUtils;
 Cu.import("resource:///modules/devtools/gDevTools.jsm", tempScope);
 let gDevTools = tempScope.gDevTools;
-Cu.import("resource:///modules/devtools/Target.jsm", tempScope);
-let TargetFactory = tempScope.TargetFactory;
+Cu.import("resource://gre/modules/devtools/Loader.jsm", tempScope);
+let TargetFactory = tempScope.devtools.TargetFactory;
 Components.utils.import("resource://gre/modules/devtools/Console.jsm", tempScope);
 let console = tempScope.console;
 let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
@@ -25,6 +25,7 @@ const CATEGORY_JS = 2;
 const CATEGORY_WEBDEV = 3;
 const CATEGORY_INPUT = 4;
 const CATEGORY_OUTPUT = 5;
+const CATEGORY_SECURITY = 6;
 
 // The possible message severities.
 const SEVERITY_ERROR = 0;
@@ -869,6 +870,8 @@ function getMessageElementText(aElement)
  *        Properties:
  *            - text: string or RegExp to match the textContent of each new
  *            message.
+ *            - noText: string or RegExp that must not match in the message
+ *            textContent.
  *            - repeats: the number of message repeats, as displayed by the Web
  *            Console.
  *            - category: match message category. See CATEGORY_* constants at
@@ -877,8 +880,31 @@ function getMessageElementText(aElement)
  *            the top of this file.
  *            - count: how many unique web console messages should be matched by
  *            this rule.
+ *            - consoleTrace: boolean, set to |true| to match a console.trace()
+ *            message. Optionally this can be an object of the form
+ *            { file, fn, line } that can match the specified file, function
+ *            and/or line number in the trace message.
+ *            - consoleTime: string that matches a console.time() timer name.
+ *            Provide this if you want to match a console.time() message.
+ *            - consoleTimeEnd: same as above, but for console.timeEnd().
+ *            - consoleDir: boolean, set to |true| to match a console.dir()
+ *            message.
+ *            - longString: boolean, set to |true} to match long strings in the
+ *            message.
+ *            - objects: boolean, set to |true| if you expect inspectable
+ *            objects in the message.
  * @return object
  *         A Promise object is returned once the messages you want are found.
+ *         The promise is resolved with the array of rule objects you give in
+ *         the |messages| property. Each objects is the same as provided, with
+ *         additional properties:
+ *         - matched: a Set of web console messages that matched the rule.
+ *         - clickableElements: a list of inspectable objects. This is available
+ *         if any of the following properties are present in the rule:
+ *         |consoleTrace| or |objects|.
+ *         - longStrings: a list of long string ellipsis elements you can click
+ *         in the message element, to expand a long string. This is available
+ *         only if |longString| is present in the matching rule.
  */
 function waitForMessages(aOptions)
 {

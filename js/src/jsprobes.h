@@ -12,21 +12,11 @@
 #endif
 #include "jspubtd.h"
 #include "jsprvtd.h"
-#include "jsscript.h"
+#include "jscntxt.h"
 #include "jsobj.h"
-
-#ifdef JS_METHODJIT
-#include "methodjit/MethodJIT.h"
-#endif
-
-#include "vm/ObjectImpl-inl.h"
+#include "jsscript.h"
 
 namespace js {
-
-namespace mjit {
-struct NativeAddressInfo;
-struct JSActiveFrame;
-}
 
 namespace Probes {
 
@@ -79,16 +69,17 @@ bool callTrackingActive(JSContext *);
 bool wantNativeAddressInfo(JSContext *);
 
 /* Entering a JS function */
-bool enterScript(JSContext *, RawScript, RawFunction , StackFrame *);
+bool enterScript(JSContext *, JSScript *, JSFunction *, StackFrame *);
 
 /* About to leave a JS function */
-bool exitScript(JSContext *, RawScript, RawFunction , StackFrame *);
+bool exitScript(JSContext *, JSScript *, JSFunction *, AbstractFramePtr);
+bool exitScript(JSContext *, JSScript *, JSFunction *, StackFrame *);
 
 /* Executing a script */
-bool startExecution(RawScript script);
+bool startExecution(JSScript *script);
 
 /* Script has completed execution */
-bool stopExecution(RawScript script);
+bool stopExecution(JSScript *script);
 
 /*
  * Object has been created. |obj| must exist (its class and size are read)
@@ -116,30 +107,6 @@ enum JITReportGranularity {
 JITReportGranularity
 JITGranularityRequested(JSContext *cx);
 
-#ifdef JS_METHODJIT
-/*
- * New method JIT code has been created
- */
-bool
-registerMJITCode(JSContext *cx, js::mjit::JITChunk *chunk,
-                 mjit::JSActiveFrame *outerFrame,
-                 mjit::JSActiveFrame **inlineFrames);
-
-/*
- * Method JIT code is about to be discarded
- */
-void
-discardMJITCode(FreeOp *fop, mjit::JITScript *jscr, mjit::JITChunk *chunk, void* address);
-
-/*
- * IC code has been allocated within the given JITChunk
- */
-bool
-registerICCode(JSContext *cx,
-               mjit::JITChunk *chunk, RawScript script, jsbytecode* pc,
-               void *start, size_t size);
-#endif /* JS_METHODJIT */
-
 /*
  * A whole region of code has been deallocated, containing any number of ICs.
  * (ICs are unregistered in a batch, so individual ICs are not registered.)
@@ -153,8 +120,8 @@ discardExecutableRegion(void *start, size_t size);
  * marshalling required for these probe points is expensive enough that it
  * shouldn't really matter.
  */
-void DTraceEnterJSFun(JSContext *cx, RawFunction fun, RawScript script);
-void DTraceExitJSFun(JSContext *cx, RawFunction fun, RawScript script);
+void DTraceEnterJSFun(JSContext *cx, JSFunction *fun, JSScript *script);
+void DTraceExitJSFun(JSContext *cx, JSFunction *fun, JSScript *script);
 
 } /* namespace Probes */
 
@@ -185,7 +152,7 @@ Probes::wantNativeAddressInfo(JSContext *cx)
 }
 
 inline bool
-Probes::enterScript(JSContext *cx, RawScript script, RawFunction maybeFun,
+Probes::enterScript(JSContext *cx, JSScript *script, JSFunction *maybeFun,
                     StackFrame *fp)
 {
     bool ok = true;
@@ -208,8 +175,8 @@ Probes::enterScript(JSContext *cx, RawScript script, RawFunction maybeFun,
 }
 
 inline bool
-Probes::exitScript(JSContext *cx, RawScript script, RawFunction maybeFun,
-                   StackFrame *fp)
+Probes::exitScript(JSContext *cx, JSScript *script, JSFunction *maybeFun,
+                   AbstractFramePtr fp)
 {
     bool ok = true;
 
@@ -227,12 +194,16 @@ Probes::exitScript(JSContext *cx, RawScript script, RawFunction maybeFun,
      * IonMonkey will only call exitScript() when absolutely necessary, so it is
      * guaranteed that fp->hasPushedSPSFrame() would have been true
      */
-    if ((fp == NULL && rt->spsProfiler.enabled()) ||
-        (fp != NULL && fp->hasPushedSPSFrame()))
-    {
+    if ((!fp && rt->spsProfiler.enabled()) || (fp && fp.hasPushedSPSFrame()))
         rt->spsProfiler.exit(cx, script, maybeFun);
-    }
     return ok;
+}
+
+inline bool
+Probes::exitScript(JSContext *cx, JSScript *script, JSFunction *maybeFun,
+                   StackFrame *fp)
+{
+    return Probes::exitScript(cx, script, maybeFun, fp ? AbstractFramePtr(fp) : AbstractFramePtr());
 }
 
 #ifdef INCLUDE_MOZILLA_DTRACE
@@ -279,7 +250,7 @@ Probes::finalizeObject(JSObject *obj)
     return ok;
 }
 inline bool
-Probes::startExecution(RawScript script)
+Probes::startExecution(JSScript *script)
 {
     bool ok = true;
 
@@ -293,7 +264,7 @@ Probes::startExecution(RawScript script)
 }
 
 inline bool
-Probes::stopExecution(RawScript script)
+Probes::stopExecution(JSScript *script)
 {
     bool ok = true;
 

@@ -32,7 +32,6 @@
 #include "nsIServiceManager.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsError.h"
-#include "nsIJSContextStack.h"
 #include "nsIDocument.h"
 #include "nsIPresShell.h"
 #include "nsMutationEvent.h"
@@ -282,7 +281,7 @@ nsEventListenerManager::AddEventListenerInternal(
     // Go from our target to the nearest enclosing DOM window.
     nsPIDOMWindow* window = GetInnerWindowForTarget();
     if (window) {
-      nsCOMPtr<nsIDocument> doc = do_QueryInterface(window->GetExtantDocument());
+      nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
       if (doc) {
         doc->WarnOnceAbout(nsIDocument::eMutationEvent);
       }
@@ -336,7 +335,7 @@ nsEventListenerManager::AddEventListenerInternal(
     nsPIDOMWindow* window = GetInnerWindowForTarget();
     if (window) {
 #ifdef DEBUG
-      nsCOMPtr<nsIDocument> d = do_QueryInterface(window->GetExtantDocument());
+      nsCOMPtr<nsIDocument> d = window->GetExtantDoc();
       NS_WARN_IF_FALSE(!nsContentUtils::IsChromeDoc(d),
                        "Please do not use mouseenter/leave events in chrome. "
                        "They are slower than mouseover/out!");
@@ -546,7 +545,7 @@ nsEventListenerManager::FindEventHandler(uint32_t aEventType,
 
 nsresult
 nsEventListenerManager::SetEventHandlerInternal(nsIScriptContext *aContext,
-                                                JSObject* aScopeObject,
+                                                JS::Handle<JSObject*> aScopeObject,
                                                 nsIAtom* aName,
                                                 const nsEventHandler& aHandler,
                                                 bool aPermitUntrustedEvents,
@@ -719,7 +718,8 @@ nsEventListenerManager::SetEventHandler(nsIAtom *aName,
   nsIScriptContext* context = global->GetScriptContext();
   NS_ENSURE_TRUE(context, NS_ERROR_FAILURE);
 
-  JSObject* scope = global->GetGlobalJSObject();
+  JS::Rooted<JSObject*> scope(context->GetNativeContext(),
+                              global->GetGlobalJSObject());
 
   nsListenerStruct *ls;
   rv = SetEventHandlerInternal(context, scope, aName, nsEventHandler(),
@@ -828,7 +828,7 @@ nsEventListenerManager::CompileEventHandlerInternal(nsListenerStruct *aListenerS
     } else {
       win = do_QueryInterface(mTarget);
       if (win) {
-        doc = do_QueryInterface(win->GetExtantDocument());
+        doc = win->GetExtantDoc();
       }
     }
 
@@ -858,11 +858,10 @@ nsEventListenerManager::CompileEventHandlerInternal(nsListenerStruct *aListenerS
     options.setFileAndLine(url.get(), lineNo)
            .setVersion(SCRIPTVERSION_DEFAULT);
 
-    JS::RootedObject rootedNull(cx, nullptr); // See bug 781070.
-    JSObject *handlerFun = nullptr;
-    result = nsJSUtils::CompileFunction(cx, rootedNull, options,
+    JS::Rooted<JSObject*> handlerFun(cx);
+    result = nsJSUtils::CompileFunction(cx, JS::NullPtr(), options,
                                         nsAtomCString(aListenerStruct->mTypeAtom),
-                                        argCount, argNames, *body, &handlerFun);
+                                        argCount, argNames, *body, handlerFun.address());
     NS_ENSURE_SUCCESS(result, result);
     handler = handlerFun;
     NS_ENSURE_TRUE(handler, NS_ERROR_FAILURE);
@@ -871,40 +870,19 @@ nsEventListenerManager::CompileEventHandlerInternal(nsListenerStruct *aListenerS
   if (handler) {
     // Bind it
     JS::Rooted<JSObject*> boundHandler(cx);
-    context->BindCompiledEventHandler(mTarget, listener->GetEventScope(),
-                                      handler, &boundHandler);
+    JS::Rooted<JSObject*> scope(cx, listener->GetEventScope());
+    context->BindCompiledEventHandler(mTarget, scope, handler, &boundHandler);
     if (listener->EventName() == nsGkAtoms::onerror && win) {
-      bool ok;
-      JSAutoRequest ar(cx);
       nsRefPtr<OnErrorEventHandlerNonNull> handlerCallback =
-        new OnErrorEventHandlerNonNull(cx, listener->GetEventScope(),
-                                       boundHandler, &ok);
-      if (!ok) {
-        // JS_WrapObject failed, which means OOM allocating the JSObject.
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
+        new OnErrorEventHandlerNonNull(boundHandler);
       listener->SetHandler(handlerCallback);
     } else if (listener->EventName() == nsGkAtoms::onbeforeunload && win) {
-      bool ok;
-      JSAutoRequest ar(cx);
       nsRefPtr<BeforeUnloadEventHandlerNonNull> handlerCallback =
-        new BeforeUnloadEventHandlerNonNull(cx, listener->GetEventScope(),
-                                            boundHandler, &ok);
-      if (!ok) {
-        // JS_WrapObject failed, which means OOM allocating the JSObject.
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
+        new BeforeUnloadEventHandlerNonNull(boundHandler);
       listener->SetHandler(handlerCallback);
     } else {
-      bool ok;
-      JSAutoRequest ar(cx);
       nsRefPtr<EventHandlerNonNull> handlerCallback =
-        new EventHandlerNonNull(cx, listener->GetEventScope(),
-                                boundHandler, &ok);
-      if (!ok) {
-        // JS_WrapObject failed, which means OOM allocating the JSObject.
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
+        new EventHandlerNonNull(boundHandler);
       listener->SetHandler(handlerCallback);
     }
   }
@@ -1215,7 +1193,7 @@ nsEventListenerManager::SetEventHandler(nsIAtom* aEventName,
   // Untrusted events are always permitted for non-chrome script
   // handlers.
   nsListenerStruct *ignored;
-  return SetEventHandlerInternal(nullptr, nullptr, aEventName,
+  return SetEventHandlerInternal(nullptr, JS::NullPtr(), aEventName,
                                  nsEventHandler(aHandler),
                                  !nsContentUtils::IsCallerChrome(), &ignored);
 }
@@ -1231,7 +1209,7 @@ nsEventListenerManager::SetEventHandler(OnErrorEventHandlerNonNull* aHandler)
   // Untrusted events are always permitted for non-chrome script
   // handlers.
   nsListenerStruct *ignored;
-  return SetEventHandlerInternal(nullptr, nullptr, nsGkAtoms::onerror,
+  return SetEventHandlerInternal(nullptr, JS::NullPtr(), nsGkAtoms::onerror,
                                  nsEventHandler(aHandler),
                                  !nsContentUtils::IsCallerChrome(), &ignored);
 }
@@ -1247,7 +1225,7 @@ nsEventListenerManager::SetEventHandler(BeforeUnloadEventHandlerNonNull* aHandle
   // Untrusted events are always permitted for non-chrome script
   // handlers.
   nsListenerStruct *ignored;
-  return SetEventHandlerInternal(nullptr, nullptr, nsGkAtoms::onbeforeunload,
+  return SetEventHandlerInternal(nullptr, JS::NullPtr(), nsGkAtoms::onbeforeunload,
                                  nsEventHandler(aHandler),
                                  !nsContentUtils::IsCallerChrome(), &ignored);
 }

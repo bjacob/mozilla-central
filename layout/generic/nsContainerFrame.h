@@ -58,10 +58,10 @@ public:
   NS_IMETHOD SetInitialChildList(ChildListID  aListID,
                                  nsFrameList& aChildList) MOZ_OVERRIDE;
   NS_IMETHOD AppendFrames(ChildListID  aListID,
-                          nsFrameList& aFrameList);
+                          nsFrameList& aFrameList) MOZ_OVERRIDE;
   NS_IMETHOD InsertFrames(ChildListID aListID,
                           nsIFrame* aPrevFrame,
-                          nsFrameList& aFrameList);
+                          nsFrameList& aFrameList) MOZ_OVERRIDE;
   NS_IMETHOD RemoveFrame(ChildListID aListID,
                          nsIFrame* aOldFrame) MOZ_OVERRIDE;
 
@@ -70,13 +70,13 @@ public:
   virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
   virtual void ChildIsDirty(nsIFrame* aChild) MOZ_OVERRIDE;
 
-  virtual bool IsLeaf() const;
+  virtual bool IsLeaf() const MOZ_OVERRIDE;
   virtual bool PeekOffsetNoAmount(bool aForward, int32_t* aOffset) MOZ_OVERRIDE;
   virtual bool PeekOffsetCharacter(bool aForward, int32_t* aOffset,
                                      bool aRespectClusters = true) MOZ_OVERRIDE;
   
 #ifdef DEBUG
-  NS_IMETHOD List(FILE* out, int32_t aIndent, uint32_t aFlags = 0) const MOZ_OVERRIDE;
+  void List(FILE* out, int32_t aIndent, uint32_t aFlags = 0) const MOZ_OVERRIDE;
 #endif  
 
   // nsContainerFrame methods
@@ -309,7 +309,7 @@ public:
    * Move any frames on our overflow list to the end of our principal list.
    * @return true if there were any overflow frames
    */
-  virtual bool DrainSelfOverflowList();
+  virtual bool DrainSelfOverflowList() MOZ_OVERRIDE;
 
   /**
    * Removes aChild without destroying it and without requesting reflow.

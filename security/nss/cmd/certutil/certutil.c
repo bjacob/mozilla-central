@@ -51,7 +51,7 @@ GetCertRequest(const SECItem *reqDER)
 {
     CERTCertificateRequest *certReq = NULL;
     CERTSignedData signedData;
-    PRArenaPool *arena = NULL;
+    PLArenaPool *arena = NULL;
     SECStatus rv;
 
     do {
@@ -190,7 +190,7 @@ CertReq(SECKEYPrivateKey *privk, SECKEYPublicKey *pubk, KeyType keyType,
     SECItem *encoding;
     SECOidTag signAlgTag;
     SECStatus rv;
-    PRArenaPool *arena;
+    PLArenaPool *arena;
     void *extHandle;
     SECItem signedReq = { siBuffer, NULL, 0 };
 
@@ -601,7 +601,7 @@ ValidateCert(CERTCertDBHandle *handle, char *name, char *date,
 {
     SECStatus rv;
     CERTCertificate *cert = NULL;
-    int64 timeBoundary;
+    PRTime timeBoundary;
     SECCertificateUsage usage;
     CERTVerifyLog reallog;
     CERTVerifyLog *log = NULL;
@@ -962,6 +962,8 @@ PrintSyntax(char *progName)
     FPS "\t%s -D -n cert-name [-d certdir] [-P dbprefix]\n", progName);
     FPS "\t%s -E -n cert-name -t trustargs [-d certdir] [-P dbprefix] [-a] [-i input]\n", 
 	progName);
+    FPS "\t%s -F -n nickname [-d certdir] [-P dbprefix]\n", 
+	progName);
     FPS "\t%s -G -n key-name [-h token-name] [-k rsa] [-g key-size] [-y exp]\n" 
 	"\t\t [-f pwfile] [-z noisefile] [-d certdir] [-P dbprefix]\n", progName);
     FPS "\t%s -G [-h token-name] -k dsa [-q pqgfile -g key-size] [-f pwfile]\n"
@@ -1212,6 +1214,24 @@ static void luD(enum usage_level ul, const char *command)
     if (ul == usage_selected && !is_my_command)
         return;
     FPS "%-20s The nickname of the cert to delete\n",
+        "   -n cert-name");
+    FPS "%-20s Cert database directory (default is ~/.netscape)\n",
+        "   -d certdir");
+    FPS "%-20s Cert & Key database prefix\n",
+        "   -P dbprefix");
+    FPS "\n");
+
+}
+
+static void luF(enum usage_level ul, const char *command)
+{
+    int is_my_command = (command && 0 == strcmp(command, "F"));
+    if (ul == usage_all || !command || is_my_command)
+    FPS "%-15s Delete a key from the database\n",
+        "-F");
+    if (ul == usage_selected && !is_my_command)
+        return;
+    FPS "%-20s The nickname of the key to delete\n",
         "   -n cert-name");
     FPS "%-20s Cert database directory (default is ~/.netscape)\n",
         "   -d certdir");
@@ -1608,6 +1628,7 @@ static void LongUsage(char *progName, enum usage_level ul, const char *command)
     luC(ul, command);
     luG(ul, command);
     luD(ul, command);
+    luF(ul, command);
     luU(ul, command);
     luK(ul, command);
     luL(ul, command);
@@ -1699,7 +1720,7 @@ SignCert(CERTCertDBHandle *handle, CERTCertificate *cert, PRBool selfsign,
     SECItem der;
     SECKEYPrivateKey *caPrivateKey = NULL;    
     SECStatus rv;
-    PRArenaPool *arena;
+    PLArenaPool *arena;
     SECOidTag algID;
     void *dummy;
 

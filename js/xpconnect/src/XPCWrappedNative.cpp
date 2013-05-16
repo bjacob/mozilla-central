@@ -439,30 +439,23 @@ XPCWrappedNative::GetNewOrUsed(XPCCallContext& ccx,
     nsRefPtr<XPCWrappedNative> wrapper;
 
     Native2WrappedNativeMap* map = Scope->GetWrappedNativeMap();
-    if (!cache) {
-        {   // scoped lock
-            XPCAutoLock lock(mapLock);
-            wrapper = map->Find(identity);
-        }
-
-        if (wrapper) {
-            if (Interface &&
-                !wrapper->FindTearOff(ccx, Interface, false, &rv)) {
-                NS_ASSERTION(NS_FAILED(rv), "returning NS_OK on failure");
-                return rv;
-            }
-            *resultWrapper = wrapper.forget().get();
-            return NS_OK;
-        }
-    }
-#ifdef DEBUG
-    else if (!cache->GetWrapperPreserveColor())
+    // Some things are nsWrapperCache subclasses but never use the cache, so go
+    // ahead and check our map even if we have a cache and it has no existing
+    // wrapper: we might have an XPCWrappedNative anyway.
     {   // scoped lock
         XPCAutoLock lock(mapLock);
-        NS_ASSERTION(!map->Find(identity),
-                     "There's a wrapper in the hashtable but it wasn't cached?");
+        wrapper = map->Find(identity);
     }
-#endif
+
+    if (wrapper) {
+        if (Interface &&
+            !wrapper->FindTearOff(ccx, Interface, false, &rv)) {
+            NS_ASSERTION(NS_FAILED(rv), "returning NS_OK on failure");
+            return rv;
+        }
+        *resultWrapper = wrapper.forget().get();
+        return NS_OK;
+    }
 
     // There is a chance that the object wants to have the self-same JSObject
     // reflection regardless of the scope into which we are reflecting it.
@@ -503,9 +496,7 @@ XPCWrappedNative::GetNewOrUsed(XPCCallContext& ccx,
 
     RootedObject parent(ccx, Scope->GetGlobalJSObject());
 
-    jsval newParentVal = JSVAL_NULL;
-    XPCMarkableJSVal newParentVal_markable(&newParentVal);
-    AutoMarkingJSVal newParentVal_automarker(ccx, &newParentVal_markable);
+    RootedValue newParentVal(ccx, NullValue());
     JSBool needsSOW = false;
     JSBool needsCOW = false;
 
@@ -2067,7 +2058,7 @@ XPCWrappedNative::GetSameCompartmentSecurityWrapper(JSContext *cx)
 {
     // Grab the current state of affairs.
     RootedObject flat(cx, GetFlatJSObject());
-    JSObject *wrapper = GetWrapper();
+    RootedObject wrapper(cx, GetWrapper());
 
     // If we already have a wrapper, it must be what we want.
     if (wrapper)
@@ -2084,7 +2075,10 @@ XPCWrappedNative::GetSameCompartmentSecurityWrapper(JSContext *cx)
     // Check the possibilities. Note that we need to check for null in each
     // case in order to distinguish between the 'no need for wrapper' and
     // 'wrapping failed' cases.
-    if (NeedsSOW()) {
+    //
+    // NB: We don't make SOWs for remote XUL domains where XBL scopes are
+    // disallowed.
+    if (NeedsSOW() && xpc::AllowXBLScope(js::GetContextCompartment(cx))) {
         wrapper = xpc::WrapperFactory::WrapSOWObject(cx, flat);
         if (!wrapper)
             return NULL;
@@ -2441,7 +2435,6 @@ CallMethodHelper::GatherAndConvertResults()
         const nsXPTType& type = paramInfo.GetType();
         nsXPTCVariant* dp = GetDispatchParam(i);
         RootedValue v(mCallContext, NullValue());
-        AUTO_MARK_JSVAL(mCallContext, v.address());
         uint32_t array_count = 0;
         nsXPTType datum_type;
         bool isArray = type.IsArray();
@@ -3017,8 +3010,12 @@ NS_IMETHODIMP XPCWrappedNative::GetXPConnect(nsIXPConnect * *aXPConnect)
 }
 
 /* XPCNativeInterface FindInterfaceWithMember (in jsval name); */
-NS_IMETHODIMP XPCWrappedNative::FindInterfaceWithMember(jsid name, nsIInterfaceInfo * *_retval)
+NS_IMETHODIMP XPCWrappedNative::FindInterfaceWithMember(jsid nameArg,
+                                                        nsIInterfaceInfo * *_retval)
 {
+    AutoJSContext cx;
+    RootedId name(cx, nameArg);
+
     XPCNativeInterface* iface;
     XPCNativeMember*  member;
 
@@ -3032,8 +3029,12 @@ NS_IMETHODIMP XPCWrappedNative::FindInterfaceWithMember(jsid name, nsIInterfaceI
 }
 
 /* XPCNativeInterface FindInterfaceWithName (in jsval name); */
-NS_IMETHODIMP XPCWrappedNative::FindInterfaceWithName(jsid name, nsIInterfaceInfo * *_retval)
+NS_IMETHODIMP XPCWrappedNative::FindInterfaceWithName(jsid nameArg,
+                                                      nsIInterfaceInfo * *_retval)
 {
+    AutoJSContext cx;
+    RootedId name(cx, nameArg);
+
     XPCNativeInterface* iface = GetSet()->FindNamedInterface(name);
     if (iface) {
         nsIInterfaceInfo* temp = iface->GetInterfaceInfo();
@@ -3046,8 +3047,11 @@ NS_IMETHODIMP XPCWrappedNative::FindInterfaceWithName(jsid name, nsIInterfaceInf
 
 /* [notxpcom] bool HasNativeMember (in jsval name); */
 NS_IMETHODIMP_(bool)
-XPCWrappedNative::HasNativeMember(jsid name)
+XPCWrappedNative::HasNativeMember(jsid nameArg)
 {
+    AutoJSContext cx;
+    RootedId name(cx, nameArg);
+
     XPCNativeMember *member = nullptr;
     uint16_t ignored;
     return GetSet()->FindMember(name, &member, &ignored) && !!member;
@@ -3577,7 +3581,7 @@ void
 XPCJSObjectHolder::TraceJS(JSTracer *trc)
 {
     JS_SET_TRACING_DETAILS(trc, GetTraceName, this, 0);
-    JS_CallObjectTracer(trc, mJSObj, "XPCJSObjectHolder::mJSObj");
+    JS_CallObjectTracer(trc, &mJSObj, "XPCJSObjectHolder::mJSObj");
 }
 
 // static
@@ -3623,7 +3627,7 @@ static uint32_t sSlimWrappers;
 JSBool
 ConstructSlimWrapper(XPCCallContext &ccx,
                      xpcObjectHelper &aHelper,
-                     XPCWrappedNativeScope* xpcScope, jsval *rval)
+                     XPCWrappedNativeScope* xpcScope, MutableHandleValue rval)
 {
     nsISupports *identityObj = aHelper.GetCanonical();
     nsXPCClassInfo *classInfoHelper = aHelper.GetXPCClassInfo();
@@ -3679,7 +3683,7 @@ ConstructSlimWrapper(XPCCallContext &ccx,
     nsWrapperCache *cache = aHelper.GetWrapperCache();
     JSObject* wrapper = cache->GetWrapper();
     if (wrapper) {
-        *rval = OBJECT_TO_JSVAL(wrapper);
+        rval.setObject(*wrapper);
 
         return true;
     }
@@ -3716,7 +3720,7 @@ ConstructSlimWrapper(XPCCallContext &ccx,
     SLIM_LOG(("+++++ %i created slim wrapper (%p, %p, %p)\n", ++sSlimWrappers,
               wrapper, p, xpcScope));
 
-    *rval = OBJECT_TO_JSVAL(wrapper);
+    rval.setObject(*wrapper);
 
     return true;
 }

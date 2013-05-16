@@ -359,6 +359,11 @@ const DownloadsIndicatorView = {
       return;
     }
 
+    // No need to show visual notification if the panel is visible.
+    if (DownloadsPanel.isPanelShowing) {
+      return;
+    }
+
     function DIV_SEN_callback() {
       if (this._notificationTimeout) {
         clearTimeout(this._notificationTimeout);
@@ -524,8 +529,6 @@ const DownloadsIndicatorView = {
   {
     browserDragAndDrop.dragOver(aEvent);
   },
-
-  onDragExit: function () { },
 
   onDrop: function DIV_onDrop(aEvent)
   {

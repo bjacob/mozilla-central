@@ -50,16 +50,7 @@ members = [
     #'nsIDOMLocation.hostname',
     #'nsIDOMLocation.href',
 
-    # dom/interfaces/canvas
-    #
-    # canvas friends
-    'nsIDOMTextMetrics.*',
-    'nsIDOMCanvasGradient.*',
-    'nsIDOMCanvasPattern.*',
-
     # dom/interfaces/core
-    'nsIDOMMozNamedAttrMap.item',
-    'nsIDOMMozNamedAttrMap.length',
     'nsIDOMDOMStringList.*',
 
     'nsIDOMKeyEvent.*',
@@ -69,7 +60,6 @@ members = [
     'nsIDOMProgressEvent.total',
     #XXX Can't quickstub initProgressEvent because it has long long parameters.
 
-    'nsIDOMTouch.*',
     'nsIDOMTouchList.*',
 
     # dom/interfaces/html
@@ -110,10 +100,6 @@ members = [
     'nsIBoxObject.width',
     'nsIBoxObject.height',
 
-    # Audio
-    'nsIDOMNotifyAudioAvailableEvent.frameBuffer',
-    'nsIDOMNotifyAudioAvailableEvent.time',
-
     # dom/indexedDB
     'nsIIDBCursor.*',
     'nsIIDBCursorWithValue.*',
@@ -147,10 +133,6 @@ members = [
 #
 irregularFilenames = {
     # stowaways
-    'nsIDOMTextMetrics': 'nsIDOMCanvasRenderingContext2D',
-    'nsIDOMCanvasGradient': 'nsIDOMCanvasRenderingContext2D',
-    'nsIDOMCanvasPattern': 'nsIDOMCanvasRenderingContext2D',
-
     'nsIDOMBlob': 'nsIDOMFile',
 
     'nsIIndexedDatabaseUsageCallback': 'nsIIndexedDatabaseManager',
@@ -168,18 +150,11 @@ customIncludes = [
     'mozilla/dom/NodeBinding.h',
     'mozilla/dom/ElementBinding.h',
     'mozilla/dom/HTMLElementBinding.h',
-    'mozilla/dom/DocumentBinding.h',
     'nsPerformance.h',
-    'mozilla/dom/HTMLDocumentBinding.h',
     'mozilla/dom/EventTargetBinding.h',
     'mozilla/dom/EventBinding.h',
     'mozilla/dom/MouseEventBinding.h',
     'mozilla/dom/UIEventBinding.h',
-    ]
-
-customReturnInterfaces = [
-    'nsIDOMCanvasPattern',
-    'nsIDOMCanvasGradient',
     ]
 
 nsIDOMStorage_Clear_customMethodCallCode = """
@@ -221,8 +196,6 @@ newBindingProperties = {
     'nsIDOMNode': 'mozilla::dom::NodeBinding::sNativePropertyHooks.mNativeProperties.regular',
     'nsIDOMElement': 'mozilla::dom::ElementBinding::sNativePropertyHooks.mNativeProperties.regular',
     'nsIDOMHTMLElement': 'mozilla::dom::HTMLElementBinding::sNativePropertyHooks.mNativeProperties.regular',
-    'nsIDOMDocument': 'mozilla::dom::DocumentBinding::sNativePropertyHooks.mNativeProperties.regular',
-    'nsIDOMHTMLDocument': 'mozilla::dom::HTMLDocumentBinding::sNativePropertyHooks.mNativeProperties.regular',
     'nsIDOMEventTarget': 'mozilla::dom::EventTargetBinding::sNativePropertyHooks.mNativeProperties.regular',
     'nsIDOMEvent': 'mozilla::dom::EventBinding::sNativePropertyHooks.mNativeProperties.regular',
     'nsIDOMMouseEvent': 'mozilla::dom::MouseEventBinding::sNativePropertyHooks.mNativeProperties.regular',

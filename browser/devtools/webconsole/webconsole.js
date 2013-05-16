@@ -37,11 +37,11 @@ XPCOMUtils.defineLazyModuleGetter(this, "Promise",
 XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
                                   "resource:///modules/devtools/VariablesView.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "ToolSidebar",
-                                  "resource:///modules/devtools/Sidebar.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
-                                  "resource:///modules/devtools/EventEmitter.jsm");
+                                  "resource:///modules/devtools/shared/event-emitter.js");
+
+XPCOMUtils.defineLazyModuleGetter(this, "devtools",
+                                  "resource://gre/modules/devtools/Loader.jsm");
 
 const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
 let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
@@ -81,6 +81,7 @@ const CATEGORY_JS = 2;
 const CATEGORY_WEBDEV = 3;
 const CATEGORY_INPUT = 4;   // always on
 const CATEGORY_OUTPUT = 5;  // always on
+const CATEGORY_SECURITY = 6;
 
 // The possible message severities. As before, we start at zero so we can use
 // these as indexes into MESSAGE_PREFERENCE_KEYS.
@@ -97,6 +98,7 @@ const CATEGORY_CLASS_FRAGMENTS = [
   "console",
   "input",
   "output",
+  "security",
 ];
 
 // The fragment of a CSS class name that identifies each severity.
@@ -120,6 +122,7 @@ const MESSAGE_PREFERENCE_KEYS = [
   [ "error",      "warn",       "info", "log",         ],  // Web Developer
   [ null,         null,         null,   null,          ],  // Input
   [ null,         null,         null,   null,          ],  // Output
+  [ "secerror",   "secwarn",    null,   null,          ],  // Security
 ];
 
 // A mapping from the console API log event levels to the Web Console
@@ -192,7 +195,7 @@ function WebConsoleFrame(aWebConsoleOwner)
   this.owner = aWebConsoleOwner;
   this.hudId = this.owner.hudId;
 
-  this._cssNodes = {};
+  this._repeatNodes = {};
   this._outputQueue = [];
   this._pruneCategoriesQueue = {};
   this._networkRequests = {};
@@ -289,11 +292,11 @@ WebConsoleFrame.prototype = {
   _outputTimerInitialized: null,
 
   /**
-   * Store for tracking repeated CSS nodes.
+   * Store for tracking repeated nodes.
    * @private
    * @type object
    */
-  _cssNodes: null,
+  _repeatNodes: null,
 
   /**
    * Preferences for filtering messages by type.
@@ -509,6 +512,8 @@ WebConsoleFrame.prototype = {
       info: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "info"),
       warn: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "warn"),
       log: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "log"),
+      secerror: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "secerror"),
+      secwarn: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "secwarn"),
     };
   },
 
@@ -852,6 +857,10 @@ WebConsoleFrame.prototype = {
       isFiltered = true;
     }
 
+    if (isFiltered && aNode.classList.contains("webconsole-msg-inspector")) {
+      aNode.classList.add("hidden-message");
+    }
+
     return isFiltered;
   },
 
@@ -898,10 +907,11 @@ WebConsoleFrame.prototype = {
     let uid = repeatNode._uid;
     let dupeNode = null;
 
-    if (aNode.classList.contains("webconsole-msg-cssparser")) {
-      dupeNode = this._cssNodes[uid];
+    if (aNode.classList.contains("webconsole-msg-cssparser") ||
+        aNode.classList.contains("webconsole-msg-security")) {
+      dupeNode = this._repeatNodes[uid];
       if (!dupeNode) {
-        this._cssNodes[uid] = aNode;
+        this._repeatNodes[uid] = aNode;
       }
     }
     else if (!aNode.classList.contains("webconsole-msg-network") &&
@@ -965,7 +975,7 @@ WebConsoleFrame.prototype = {
    *
    * @param object aMessage
    *        The message received from the server.
-   * @return nsIDOMElement|undefined
+   * @return nsIDOMElement|null
    *         The message element to display in the Web Console output.
    */
   logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
@@ -1040,11 +1050,11 @@ WebConsoleFrame.prototype = {
       case "time": {
         let timer = aMessage.timer;
         if (!timer) {
-          return;
+          return null;
         }
         if (timer.error) {
           Cu.reportError(l10n.getStr(timer.error));
-          return;
+          return null;
         }
         body = l10n.getFormatStr("timerStarted", [timer.name]);
         clipboardText = body;
@@ -1054,16 +1064,17 @@ WebConsoleFrame.prototype = {
       case "timeEnd": {
         let timer = aMessage.timer;
         if (!timer) {
-          return;
+          return null;
         }
-        body = l10n.getFormatStr("timeEnd", [timer.name, timer.duration]);
+        let duration = Math.round(timer.duration * 100) / 100;
+        body = l10n.getFormatStr("timeEnd", [timer.name, duration]);
         clipboardText = body;
         break;
       }
 
       default:
         Cu.reportError("Unknown Console API log level: " + level);
-        return;
+        return null;
     }
 
     // Release object actors for arguments coming from console API methods that
@@ -1082,7 +1093,7 @@ WebConsoleFrame.prototype = {
     }
 
     if (level == "groupEnd") {
-      return; // no need to continue
+      return null; // no need to continue
     }
 
     let node = this.createMessageNode(CATEGORY_WEBDEV, LEVELS[level], body,
@@ -1091,6 +1102,9 @@ WebConsoleFrame.prototype = {
 
     if (objectActors.size > 0) {
       node._objectActors = objectActors;
+
+      let repeatNode = node.querySelector(".webconsole-msg-repeat");
+      repeatNode._uid += [...objectActors].join("-");
     }
 
     // Make the node bring up the variables view, to allow the user to inspect
@@ -1099,7 +1113,10 @@ WebConsoleFrame.prototype = {
       node._stacktrace = aMessage.stacktrace;
 
       this.makeOutputMessageLink(node, () =>
-        this.jsterm.openVariablesView({ rawObject: node._stacktrace }));
+        this.jsterm.openVariablesView({
+          rawObject: node._stacktrace,
+          autofocus: true,
+        }));
     }
 
     return node;
@@ -1130,11 +1147,11 @@ WebConsoleFrame.prototype = {
    */
   _consoleLogClick: function WCF__consoleLogClick(aAnchor, aObjectActor)
   {
-    let options = {
+    this.jsterm.openVariablesView({
       label: aAnchor.textContent,
       objectActor: aObjectActor,
-    };
-    this.jsterm.openVariablesView(options);
+      autofocus: true,
+    });
   },
 
   /**
@@ -1180,14 +1197,14 @@ WebConsoleFrame.prototype = {
    *
    * @param object aActorId
    *        The network event actor ID to log.
-   * @return nsIDOMElement|undefined
+   * @return nsIDOMElement|null
    *         The message element to display in the Web Console output.
    */
   logNetEvent: function WCF_logNetEvent(aActorId)
   {
     let networkInfo = this._networkRequests[aActorId];
     if (!networkInfo) {
-      return;
+      return null;
     }
 
     let request = networkInfo.request;
@@ -1972,10 +1989,11 @@ WebConsoleFrame.prototype = {
       aNode._objectActors.clear();
     }
 
-    if (aNode.classList.contains("webconsole-msg-cssparser")) {
+    if (aNode.classList.contains("webconsole-msg-cssparser") ||
+        aNode.classList.contains("webconsole-msg-security")) {
       let repeatNode = aNode.getElementsByClassName("webconsole-msg-repeat")[0];
       if (repeatNode && repeatNode._uid) {
-        delete this._cssNodes[repeatNode._uid];
+        delete this._repeatNodes[repeatNode._uid];
       }
     }
     else if (aNode._connectionId &&
@@ -2160,8 +2178,12 @@ WebConsoleFrame.prototype = {
         targetElement: viewContainer,
         hideFilterInput: true,
       };
-      this.jsterm.openVariablesView(options)
-        .then((aView) => node._variablesView = aView);
+      this.jsterm.openVariablesView(options).then((aView) => {
+        node._variablesView = aView;
+        if (node.classList.contains("hidden-message")) {
+          node.classList.remove("hidden-message");
+        }
+      });
 
       let bodyContainer = this.document.createElement("vbox");
       bodyContainer.flex = 1;
@@ -2222,7 +2244,7 @@ WebConsoleFrame.prototype = {
       if (aItem && typeof aItem != "object" || !inspectable) {
         aContainer.appendChild(this.document.createTextNode(text));
 
-        if (aItem.type == "longString") {
+        if (aItem.type && aItem.type == "longString") {
           let ellipsis = this.document.createElement("description");
           ellipsis.classList.add("hud-clickable");
           ellipsis.classList.add("longStringEllipsis");
@@ -2583,7 +2605,7 @@ WebConsoleFrame.prototype = {
 
     this._destroyer = Promise.defer();
 
-    this._cssNodes = {};
+    this._repeatNodes = {};
     this._outputQueue = [];
     this._pruneCategoriesQueue = {};
     this._networkRequests = {};
@@ -2641,6 +2663,7 @@ function JSTerm(aWebConsoleFrame)
   this._inputEventHandler = this.inputEventHandler.bind(this);
   this._fetchVarProperties = this._fetchVarProperties.bind(this);
   this._fetchVarLongString = this._fetchVarLongString.bind(this);
+  this._onKeypressInVariablesView = this._onKeypressInVariablesView.bind(this);
 
   EventEmitter.decorate(this);
 }
@@ -2999,6 +3022,8 @@ JSTerm.prototype = {
    *        - targetElement: optional nsIDOMElement to append the variables view
    *        to. An iframe element is used as a container for the view. If this
    *        option is not used, then the variables view opens in the sidebar.
+   *        - autofocus: optional boolean, |true| if you want to give focus to
+   *        the variables view window after open, |false| otherwise.
    * @return object
    *         A Promise object that is resolved when the variables view has
    *         opened. The new variables view instance is given to the callbacks.
@@ -3016,10 +3041,16 @@ JSTerm.prototype = {
         view = this._createVariablesView(viewOptions);
         if (!aOptions.targetElement) {
           this._variablesView = view;
+          aWindow.addEventListener("keypress", this._onKeypressInVariablesView);
         }
       }
       aOptions.view = view;
       this._updateVariablesView(aOptions);
+
+      if (!aOptions.targetElement && aOptions.autofocus) {
+        aWindow.focus();
+      }
+
       this.emit("variablesview-open", view, aOptions);
       return view;
     };
@@ -3041,7 +3072,9 @@ JSTerm.prototype = {
       aOptions.targetElement.appendChild(iframe);
     }
     else {
-      this._createSidebar();
+      if (!this.sidebar) {
+        this._createSidebar();
+      }
       promise = this._addVariablesViewSidebarTab();
     }
 
@@ -3051,15 +3084,14 @@ JSTerm.prototype = {
   /**
    * Create the Web Console sidebar.
    *
-   * @see Sidebar.jsm
+   * @see devtools/framework/sidebar.js
    * @private
    */
   _createSidebar: function JST__createSidebar()
   {
-    if (!this.sidebar) {
-      let tabbox = this.hud.document.querySelector("#webconsole-sidebar");
-      this.sidebar = new ToolSidebar(tabbox, this);
-    }
+    let tabbox = this.hud.document.querySelector("#webconsole-sidebar");
+    let ToolSidebar = devtools.require("devtools/framework/sidebar").ToolSidebar;
+    this.sidebar = new ToolSidebar(tabbox, this);
     this.sidebar.show();
   },
 
@@ -3095,6 +3127,27 @@ JSTerm.prototype = {
     }
 
     return deferred.promise;
+  },
+
+  /**
+   * The keypress event handler for the Variables View sidebar. Currently this
+   * is used for removing the sidebar when Escape is pressed.
+   *
+   * @private
+   * @param nsIDOMEvent aEvent
+   *        The keypress DOM event object.
+   */
+  _onKeypressInVariablesView: function JST__onKeypressInVariablesView(aEvent)
+  {
+    let tag = aEvent.target.nodeName;
+    if (aEvent.keyCode != Ci.nsIDOMKeyEvent.DOM_VK_ESCAPE || aEvent.shiftKey ||
+        aEvent.altKey || aEvent.ctrlKey || aEvent.metaKey ||
+        ["input", "textarea", "select", "textbox"].indexOf(tag) > -1) {
+        return;
+    }
+
+    this._sidebarDestroy();
+    this.inputNode.focus();
   },
 
   /**
@@ -3439,7 +3492,7 @@ JSTerm.prototype = {
         aProperty.evaluationMacro = this._variablesViewSimpleValueEvalMacro;
       }
 
-      let grips = [aProperty.value, aProperty.gettter, aProperty.settter];
+      let grips = [aProperty.value, aProperty.getter, aProperty.setter];
       grips.forEach(addActorForDescriptor);
 
       let inspectable = !VariablesView.isPrimitive({ value: aProperty.value });
@@ -3456,8 +3509,21 @@ JSTerm.prototype = {
 
     let client = new GripClient(this.hud.proxy.client, grip);
     client.getPrototypeAndProperties((aResponse) => {
-      let { ownProperties, prototype } = aResponse;
+      let { ownProperties, prototype, safeGetterValues } = aResponse;
       let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(grip.class) == -1;
+
+      // Merge the safe getter values into one object such that we can use it
+      // in VariablesView.
+      for (let name of Object.keys(safeGetterValues)) {
+        if (name in ownProperties) {
+          ownProperties[name].getterValue = safeGetterValues[name].getterValue;
+          ownProperties[name].getterPrototypeLevel = safeGetterValues[name]
+                                                     .getterPrototypeLevel;
+        }
+        else {
+          ownProperties[name] = safeGetterValues[name];
+        }
+      }
 
       // Add all the variable properties.
       if (ownProperties) {
@@ -3598,7 +3664,7 @@ JSTerm.prototype = {
     hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
     hud._outputQueue = [];
     hud._networkRequests = {};
-    hud._cssNodes = {};
+    hud._repeatNodes = {};
 
     if (aClearStorage) {
       this.webConsoleClient.clearMessagesCache();
@@ -3753,6 +3819,9 @@ JSTerm.prototype = {
         if (this.autocompletePopup.isOpen) {
           this.clearCompletion();
           aEvent.preventDefault();
+        }
+        else if (this.sidebar) {
+          this._sidebarDestroy();
         }
         break;
 
@@ -4159,13 +4228,15 @@ JSTerm.prototype = {
     this.openVariablesView({
       label: VariablesView.getString(aResponse.result),
       objectActor: aResponse.result,
+      autofocus: true,
     });
   },
 
   /**
-   * Destroy the JSTerm object. Call this method to avoid memory leaks.
+   * Destroy the sidebar.
+   * @private
    */
-  destroy: function JST_destroy()
+  _sidebarDestroy: function JST__sidebarDestroy()
   {
     if (this._variablesView) {
       let actors = this._objectActorsInVariablesViews.get(this._variablesView);
@@ -4177,9 +4248,20 @@ JSTerm.prototype = {
     }
 
     if (this.sidebar) {
+      this.sidebar.hide();
       this.sidebar.destroy();
       this.sidebar = null;
     }
+
+    this.emit("sidebar-closed");
+  },
+
+  /**
+   * Destroy the JSTerm object. Call this method to avoid memory leaks.
+   */
+  destroy: function JST_destroy()
+  {
+    this._sidebarDestroy();
 
     this.clearCompletion();
     this.clearOutput();
@@ -4259,9 +4341,9 @@ var Utils = {
    *
    * @param nsIScriptError aScriptError
    *        The script error you want to determine the category for.
-   * @return CATEGORY_JS|CATEGORY_CSS
-   *         Depending on the script error CATEGORY_JS or CATEGORY_CSS can be
-   *         returned.
+   * @return CATEGORY_JS|CATEGORY_CSS|CATEGORY_SECURITY
+   *         Depending on the script error CATEGORY_JS, CATEGORY_CSS, or
+   *         CATEGORY_SECURITY can be returned.
    */
   categoryForScriptError: function Utils_categoryForScriptError(aScriptError)
   {
@@ -4269,6 +4351,10 @@ var Utils = {
       case "CSS Parser":
       case "CSS Loader":
         return CATEGORY_CSS;
+
+      case "Mixed Content Blocker":
+      case "CSP":
+        return CATEGORY_SECURITY;
 
       default:
         return CATEGORY_JS;
@@ -4358,7 +4444,7 @@ CommandController.prototype = {
       case "consoleCmd_copyURL": {
         // Only enable URL-related actions if node is Net Activity.
         let selectedItem = this.owner.outputNode.selectedItem;
-        return selectedItem && selectedItem.url;
+        return selectedItem && "url" in selectedItem;
       }
       case "cmd_fontSizeEnlarge":
       case "cmd_fontSizeReduce":
@@ -4368,6 +4454,7 @@ CommandController.prototype = {
       case "cmd_close":
         return this.owner.owner._browserConsole;
     }
+    return false;
   },
 
   doCommand: function CommandController_doCommand(aCommand)

@@ -41,7 +41,7 @@ class nsIURI;
 class nsPIDOMWindow;
 class nsITimer;
 class nsIXPCScriptNotify;
-namespace JS { class RuntimeStats; }
+namespace JS { struct RuntimeStats; }
 
 BEGIN_WORKERS_NAMESPACE
 
@@ -288,7 +288,7 @@ private:
   bool mReportCSPViolations;
 
 protected:
-  WorkerPrivateParent(JSContext* aCx, JSObject* aObject, WorkerPrivate* aParent,
+  WorkerPrivateParent(JSContext* aCx, JS::Handle<JSObject*> aObject, WorkerPrivate* aParent,
                       JSContext* aParentJSContext, const nsAString& aScriptURL,
                       bool aIsChromeWorker, const nsACString& aDomain,
                       nsCOMPtr<nsPIDOMWindow>& aWindow,
@@ -383,7 +383,8 @@ public:
   ForgetMainThreadObjects(nsTArray<nsCOMPtr<nsISupports> >& aDoomed);
 
   bool
-  PostMessage(JSContext* aCx, JS::Value aMessage, JS::Value aTransferable);
+  PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
+              JS::Handle<JS::Value> aTransferable);
 
   uint64_t
   GetInnerWindowId();
@@ -692,8 +693,8 @@ public:
   ~WorkerPrivate();
 
   static already_AddRefed<WorkerPrivate>
-  Create(JSContext* aCx, JSObject* aObj, WorkerPrivate* aParent,
-         JSString* aScriptURL, bool aIsChromeWorker);
+  Create(JSContext* aCx, JS::Handle<JSObject*> aObj, WorkerPrivate* aParent,
+         JS::Handle<JSString*> aScriptURL, bool aIsChromeWorker);
 
   void
   DoRunLoop(JSContext* aCx);
@@ -777,8 +778,8 @@ public:
   DestroySyncLoop(uint32_t aSyncLoopKey);
 
   bool
-  PostMessageToParent(JSContext* aCx, jsval aMessage,
-                      jsval transferable);
+  PostMessageToParent(JSContext* aCx, JS::Handle<JS::Value> aMessage,
+                      JS::Handle<JS::Value> transferable);
 
   bool
   NotifyInternal(JSContext* aCx, Status aStatus);
@@ -895,7 +896,7 @@ public:
   }
 
 private:
-  WorkerPrivate(JSContext* aCx, JSObject* aObject, WorkerPrivate* aParent,
+  WorkerPrivate(JSContext* aCx, JS::Handle<JSObject*> aObject, WorkerPrivate* aParent,
                 JSContext* aParentJSContext, const nsAString& aScriptURL,
                 bool aIsChromeWorker, const nsACString& aDomain,
                 nsCOMPtr<nsPIDOMWindow>& aWindow,

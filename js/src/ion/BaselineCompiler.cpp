@@ -29,6 +29,9 @@ BaselineCompiler::BaselineCompiler(JSContext *cx, HandleScript script)
 bool
 BaselineCompiler::init()
 {
+    if (!analysis_.init())
+        return false;
+
     if (!labels_.init(script->length))
         return false;
 
@@ -64,8 +67,12 @@ BaselineCompiler::compile()
     IonSpew(IonSpew_BaselineScripts, "Baseline compiling script %s:%d (%p)",
             script->filename(), script->lineno, script.get());
 
-    if (!script->ensureRanAnalysis(cx))
-        return Method_Error;
+    // Only need to analyze scripts which are marked |argumensHasVarBinding|, to
+    // compute |needsArgsObj| flag.
+    if (script->argumentsHasVarBinding()) {
+        if (!script->ensureRanAnalysis(cx))
+            return Method_Error;
+    }
 
     // Pin analysis info during compilation.
     types::AutoEnterAnalysis autoEnterAnalysis(cx);
@@ -182,23 +189,6 @@ BaselineCompiler::compile()
 
     return Method_Compiled;
 }
-
-#ifdef DEBUG
-#define SPEW_OPCODE()                                                         \
-    JS_BEGIN_MACRO                                                            \
-        if (IsJaegerSpewChannelActive(JSpew_JSOps)) {                         \
-            Sprinter sprinter(cx);                                            \
-            sprinter.init();                                                  \
-            RootedScript script_(cx, script);                                 \
-            js_Disassemble1(cx, script_, pc, pc - script_->code,              \
-                            JS_TRUE, &sprinter);                              \
-            JaegerSpew(JSpew_JSOps, "    %2u %s",                             \
-                       (unsigned)frame.stackDepth(), sprinter.string());      \
-        }                                                                     \
-    JS_END_MACRO;
-#else
-#define SPEW_OPCODE()
-#endif /* DEBUG */
 
 bool
 BaselineCompiler::emitPrologue()
@@ -411,7 +401,7 @@ BaselineCompiler::emitUseCountIncrement()
     // Emit no use count increments or bailouts if Ion is not
     // enabled, or if the script will never be Ion-compileable
 
-    if (!ionCompileable_)
+    if (!ionCompileable_ && !ionOSRCompileable_)
         return true;
 
     Register scriptReg = R2.scratchReg();
@@ -519,7 +509,7 @@ BaselineCompiler::emitSPSPop()
     Label noPop;
     masm.branchTest32(Assembler::Zero, frame.addressOfFlags(),
                       Imm32(BaselineFrame::HAS_PUSHED_SPS_FRAME), &noPop);
-    masm.spsPopFrame(&cx->runtime->spsProfiler, R1.scratchReg());
+    masm.spsPopFrameSafe(&cx->runtime->spsProfiler, R1.scratchReg());
     masm.bind(&noPop);
 }
 
@@ -532,15 +522,14 @@ BaselineCompiler::emitBody()
     uint32_t emittedOps = 0;
 
     while (true) {
-        SPEW_OPCODE();
         JSOp op = JSOp(*pc);
         IonSpew(IonSpew_BaselineOp, "Compiling op @ %d: %s",
                 int(pc - script->code), js_CodeName[op]);
 
-        analyze::Bytecode *code = script->analysis()->maybeCode(pc);
+        BytecodeInfo *info = analysis_.maybeInfo(pc);
 
         // Skip unreachable ops.
-        if (!code) {
+        if (!info) {
             if (op == JSOP_STOP)
                 break;
             pc += GetBytecodeLength(pc);
@@ -549,9 +538,9 @@ BaselineCompiler::emitBody()
         }
 
         // Fully sync the stack if there are incoming jumps.
-        if (code->jumpTarget) {
+        if (info->jumpTarget) {
             frame.syncStack(0);
-            frame.setStackDepth(code->stackDepth);
+            frame.setStackDepth(info->stackDepth);
         }
 
         // Always sync in debug mode.
@@ -1689,7 +1678,7 @@ BaselineCompiler::getScopeCoordinateAddress(Register reg)
     for (unsigned i = sc.hops; i; i--)
         masm.extractObject(Address(reg, ScopeObject::offsetOfEnclosingScope()), reg);
 
-    RawShape shape = ScopeCoordinateToStaticScopeShape(cx, script, pc);
+    Shape *shape = ScopeCoordinateToStaticScopeShape(cx, script, pc);
     Address addr;
     if (shape->numFixedSlots() <= sc.slot) {
         masm.loadPtr(Address(reg, JSObject::offsetOfSlots()), reg);
@@ -2419,7 +2408,7 @@ BaselineCompiler::emit_JSOP_ARGUMENTS()
     frame.syncStack(0);
 
     Label done;
-    if (!script->needsArgsObj()) {
+    if (!script->argumentsHasVarBinding() || !script->needsArgsObj()) {
         // We assume the script does not need an arguments object. However, this
         // assumption can be invalidated later, see argumentsOptimizationFailed
         // in JSScript. Because we can't invalidate baseline JIT code, we set a

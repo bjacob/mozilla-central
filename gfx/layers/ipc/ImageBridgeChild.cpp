@@ -16,7 +16,8 @@
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/layers/ImageClient.h"
 #include "mozilla/layers/LayersTypes.h"
-
+#include "ShadowLayers.h"
+ 
 using namespace base;
 using namespace mozilla::ipc;
 
@@ -87,6 +88,23 @@ ImageBridgeChild::UpdateTexture(CompositableClient* aCompositable,
     MOZ_ASSERT(aCompositable->GetIPDLActor());
     mTxn->AddEdit(OpPaintTexture(nullptr, aCompositable->GetIPDLActor(), 1,
                   SurfaceDescriptor(*aDescriptor)));
+    *aDescriptor = SurfaceDescriptor();
+  } else {
+    NS_WARNING("Trying to send a null SurfaceDescriptor.");
+  }
+}
+
+void
+ImageBridgeChild::UpdateTextureNoSwap(CompositableClient* aCompositable,
+                                      TextureIdentifier aTextureId,
+                                      SurfaceDescriptor* aDescriptor)
+{
+  if (aDescriptor->type() != SurfaceDescriptor::T__None &&
+      aDescriptor->type() != SurfaceDescriptor::Tnull_t) {
+    MOZ_ASSERT(aCompositable);
+    MOZ_ASSERT(aCompositable->GetIPDLActor());
+    mTxn->AddNoSwapEdit(OpPaintTexture(nullptr, aCompositable->GetIPDLActor(), 1,
+                                       SurfaceDescriptor(*aDescriptor)));
     *aDescriptor = SurfaceDescriptor();
   } else {
     NS_WARNING("Trying to send a null SurfaceDescriptor.");

@@ -18,8 +18,6 @@ DOMCI_CLASS(DOMConstructor)
 // Core classes
 DOMCI_CLASS(DOMException)
 DOMCI_CLASS(Element)
-DOMCI_CLASS(Attr)
-DOMCI_CLASS(MozNamedAttrMap)
 
 // Event classes
 DOMCI_CLASS(Event)
@@ -84,8 +82,6 @@ DOMCI_CLASS(CSSRect)
 // DOM Chrome Window class, almost identical to Window
 DOMCI_CLASS(ChromeWindow)
 
-DOMCI_CLASS(ImageDocument)
-
 #ifdef MOZ_XUL
 DOMCI_CLASS(XULTemplateBuilder)
 DOMCI_CLASS(XULTreeBuilder)
@@ -96,7 +92,6 @@ DOMCI_CLASS(DOMStringList)
 
 #ifdef MOZ_XUL
 DOMCI_CLASS(TreeColumn)
-DOMCI_CLASS(TreeColumns)
 #endif
 
 DOMCI_CLASS(CSSMozDocumentRule)
@@ -110,18 +105,11 @@ DOMCI_CLASS(TimeEvent)
 DOMCI_CLASS(SVGAnimatedEnumeration)
 DOMCI_CLASS(SVGAnimatedInteger)
 DOMCI_CLASS(SVGAnimatedNumber)
-DOMCI_CLASS(SVGAnimatedRect)
 DOMCI_CLASS(SVGAnimatedString)
 DOMCI_CLASS(SVGLength)
 DOMCI_CLASS(SVGNumber)
-DOMCI_CLASS(SVGRect)
-DOMCI_CLASS(SVGStringList)
-DOMCI_CLASS(SVGZoomEvent)
 
 // Canvas
-DOMCI_CLASS(CanvasGradient)
-DOMCI_CLASS(CanvasPattern)
-DOMCI_CLASS(TextMetrics)
 DOMCI_CLASS(MozCanvasPrintState)
 
 // WindowUtils
@@ -158,10 +146,7 @@ DOMCI_CLASS(MessageEvent)
 DOMCI_CLASS(DeviceStorage)
 
 // Geolocation
-DOMCI_CLASS(GeoGeolocation)
-DOMCI_CLASS(GeoPosition)
 DOMCI_CLASS(GeoPositionCoords)
-DOMCI_CLASS(GeoPositionError)
 
 DOMCI_CLASS(MozPowerManager)
 DOMCI_CLASS(MozWakeLock)
@@ -214,7 +199,6 @@ DOMCI_CLASS(IDBIndex)
 DOMCI_CLASS(IDBVersionChangeEvent)
 DOMCI_CLASS(IDBOpenDBRequest)
 
-DOMCI_CLASS(Touch)
 DOMCI_CLASS(TouchList)
 DOMCI_CLASS(TouchEvent)
 
@@ -252,6 +236,8 @@ DOMCI_CLASS(OpenWindowEventDetail)
 DOMCI_CLASS(AsyncScrollEventDetail)
 
 DOMCI_CLASS(LockedFile)
+
+DOMCI_CLASS(CSSFontFeatureValuesRule)
 
 #ifdef MOZ_TIME_MANAGER
 DOMCI_CLASS(MozTimeManager)
