@@ -46,7 +46,7 @@ public:
   };
   uint32_t Flags() const { return mFlags; }
   bool WantDebugInfo() const { return (mFlags & WANT_DEBUG_INFO) != 0; }
-  bool WantAllTraces() const { return true; }
+  bool WantAllTraces() const { return (mFlags & WANT_ALL_TRACES) != 0; }
 protected:
   nsCycleCollectionTraversalCallback() : mFlags(0) {}
 
