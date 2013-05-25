@@ -953,7 +953,7 @@ void RefgraphController::SnapshotToFile(const nsAString& filename) {
 }
 
 JSObject*
-RefgraphController::WrapObject(JSContext *cx, JSObject *scope)
+RefgraphController::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return RefgraphControllerBinding::Wrap(cx, scope, this);
 }
@@ -975,7 +975,7 @@ Refgraph::GetParentObject() const {
 }
 
 JSObject*
-Refgraph::WrapObject(JSContext *cx, JSObject *scope)
+Refgraph::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return RefgraphBinding::Wrap(cx, scope, this);
 }
@@ -992,7 +992,7 @@ NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(Refgraph, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(Refgraph, Release)
 
 JSObject*
-RefgraphTypeSearchResult::WrapObject(JSContext *cx, JSObject *scope)
+RefgraphTypeSearchResult::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return RefgraphTypeSearchResultBinding::Wrap(cx, scope, this);
 }
@@ -1007,7 +1007,7 @@ NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphTypeSearchResult, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphTypeSearchResult, Release)
 
 JSObject*
-RefgraphVertex::WrapObject(JSContext *cx, JSObject *scope)
+RefgraphVertex::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return dom::RefgraphVertexBinding::Wrap(cx, scope, this);
 }
@@ -1029,7 +1029,7 @@ NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphVertex, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphVertex, Release)
 
 JSObject*
-RefgraphEdge::WrapObject(JSContext *cx, JSObject *scope)
+RefgraphEdge::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return dom::RefgraphEdgeBinding::Wrap(cx, scope, this);
 }
@@ -1051,7 +1051,7 @@ NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdge, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdge, Release)
 
 JSObject*
-RefgraphEdgeRefInfo::WrapObject(JSContext *cx, JSObject *scope)
+RefgraphEdgeRefInfo::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return dom::RefgraphEdgeRefInfoBinding::Wrap(cx, scope, this);
 }
@@ -1073,7 +1073,7 @@ NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdgeRefInfo, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdgeRefInfo, Release)
 
 JSObject*
-RefgraphCycle::WrapObject(JSContext *cx, JSObject *scope)
+RefgraphCycle::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
 {
     return dom::RefgraphCycleBinding::Wrap(cx, scope, this);
 }

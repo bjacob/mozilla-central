@@ -30,7 +30,7 @@ public:
     , mTypeName(typeName)
   {}
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphTypeSearchResult)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphTypeSearchResult)
@@ -189,7 +189,7 @@ public:
 
   nsISupports* GetParentObject() const;
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphEdgeRefInfo)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphEdgeRefInfo)
@@ -211,7 +211,7 @@ public:
 
   nsISupports* GetParentObject() const;
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphEdge)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphEdge)
@@ -236,7 +236,7 @@ public:
   RefgraphVertex(Refgraph* parent, map_types_to_block_indices_t::const_iterator block);
   RefgraphVertex(Refgraph* parent, const block_t& block);
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
   nsISupports* GetParentObject() const;
 
@@ -269,7 +269,7 @@ public:
 
   RefgraphCycle(Refgraph* parent, uint32_t index);
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
   nsISupports* GetParentObject() const;
 
@@ -368,7 +368,7 @@ public:
 
   nsISupports *GetParentObject() const;
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(Refgraph)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(Refgraph)
@@ -395,7 +395,7 @@ public:
 
   nsISupports *GetParentObject() const { return mParent; }
 
-  virtual JSObject* WrapObject(JSContext *cx, JSObject *scope);
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RefgraphController)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RefgraphController)
