@@ -88,7 +88,9 @@ template <typename T>
 T* SetType(T* pointer)
 {
 #ifndef NO_MOZ_GLUE
-  refgraph_set_type(pointer, gettypename(pointer));
+  if (pointer) {
+    refgraph_set_type(pointer, gettypename(pointer));
+  }
 #endif
   return pointer;
 }
