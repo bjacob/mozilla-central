@@ -161,7 +161,6 @@ PR_IMPLEMENT(void *) PL_ArenaAllocate(PLArenaPool *pool, PRUint32 nb)
                 pool->current = a;
                 rp = (char *)a->avail;
                 a->avail += nb;
-                PL_MAKE_MEM_UNDEFINED(rp, nb);
                 return rp;
             }
         } while( NULL != (a = a->next) );
@@ -192,7 +191,6 @@ PR_IMPLEMENT(void *) PL_ArenaAllocate(PLArenaPool *pool, PRUint32 nb)
                 pool->current = a;
                 if ( NULL == pool->first.next )
                     pool->first.next = a;
-                PL_MAKE_MEM_UNDEFINED(rp, nb);
                 return(rp);
             }
         }
@@ -219,7 +217,6 @@ PR_IMPLEMENT(void *) PL_ArenaAllocate(PLArenaPool *pool, PRUint32 nb)
                 pool->first.next = a;
             PL_COUNT_ARENA(pool,++);
             COUNT(pool, nmallocs);
-            PL_MAKE_MEM_UNDEFINED(rp, nb);
             return(rp);
         }
     }

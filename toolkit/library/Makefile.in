@@ -29,14 +29,6 @@ endif
 
 VPATH += $(topsrcdir)/build/
 
-ifeq ($(OS_ARCH)_$(GNU_CC),WINNT_)
-CPPSRCS += dlldeps-xul.cpp
-endif
-
-ifeq ($(OS_ARCH),OS2)
-CPPSRCS += dlldeps-xul.cpp
-endif
-
 SHARED_LIBRARY_LIBS += \
   $(DEPTH)/media/kiss_fft/$(LIB_PREFIX)kiss_fft.$(LIB_SUFFIX) \
   $(DEPTH)/toolkit/components/osfile/$(LIB_PREFIX)osfile_s.$(LIB_SUFFIX) \
@@ -74,41 +66,14 @@ SHARED_LIBRARY_LIBS += \
   $(foreach lib,$(STATIC_LIBS),$(DEPTH)/staticlib/$(LIB_PREFIX)$(lib).$(LIB_SUFFIX)) \
   $(NULL)
 
-CPPSRCS += \
-  nsStaticXULComponents.cpp \
-  $(NULL)
-
-ifeq ($(OS_ARCH),WINNT)
-CPPSRCS += \
-  nsDllMain.cpp \
-  $(NULL)
-endif
-
 ifeq ($(OS_ARCH)_$(GNU_CC),WINNT_)
-CPPSRCS += \
-  nsGFXDeps.cpp \
-  $(NULL)
-
 RCINCLUDE = xulrunner.rc
-
-ifndef MOZ_NATIVE_ZLIB
-CPPSRCS += dlldeps-zlib.cpp
-endif
 
 LOCAL_INCLUDES += -I$(topsrcdir)/widget/windows
 LOCAL_INCLUDES += -I$(topsrcdir)/xpcom/base
 endif
 
 ifeq ($(OS_ARCH),OS2)
-
-CPPSRCS += \
-  nsGFXDeps.cpp \
-  $(NULL)
-
-ifndef MOZ_NATIVE_ZLIB
-CPPSRCS += dlldeps-zlib.cpp
-endif
-
 RESFILE = xulrunos2.res
 RCFLAGS += -i $(topsrcdir)/widget/os2
 
@@ -331,10 +296,6 @@ endif
 
 STATIC_LIBS += thebes gl ycbcr
 
-ifdef MOZ_ENABLE_GTEST
-COMPONENT_LIBS += gtest xpcom_glue_gtest
-endif
-
 ifdef MOZ_ENABLE_PROFILER_SPS
 COMPONENT_LIBS += profiler
 endif
@@ -501,11 +462,6 @@ endif
 EXTRA_DEPS += \
   $(topsrcdir)/intl/unicharutil/util/objs.mk \
   $(topsrcdir)/rdf/util/src/objs.mk \
-  $(NULL)
-
-CPPSRCS += \
-  $(INTL_UNICHARUTIL_UTIL_LCPPSRCS) \
-  $(RDF_UTIL_SRC_LCPPSRCS) \
   $(NULL)
 
 GARBAGE += \
@@ -722,7 +678,39 @@ ifeq (WINNT_1,$(OS_TARGET)_$(MOZ_PROFILE_USE))
 LD := $(PYTHON) $(topsrcdir)/build/link.py $(CURDIR)/linker-vsize $(LD)
 endif
 
+ifndef LINK_GTEST
 libs:: $(FINAL_TARGET)/dependentlibs.list
+else
+libs::
+endif
+
+ifdef MAKE_FRAMEWORK
+EFFECTIVE_LIB_PREFIX=
+else
+EFFECTIVE_LIB_PREFIX=$(LIB_PREFIX)
+endif
+
+$(FINAL_TARGET)/dependentlibs.list.gtest: $(FINAL_TARGET)/dependentlibs.list
+	sed -e "s|$(SHARED_LIBRARY)|gtest/$(SHARED_LIBRARY)|" $< > $@
+
+.PHONY: gtestxul
+
+gtestxul: $(EFFECTIVE_LIB_PREFIX)gtest/$(EFFECTIVE_LIB_PREFIX)$(LIBRARY_NAME)
+
+# Remove this target when actually linking gtest to prevent redefining
+# the implicit rules.mk target
+ifndef LINK_GTEST
+$(EFFECTIVE_LIB_PREFIX)gtest/$(EFFECTIVE_LIB_PREFIX)$(LIBRARY_NAME): $(FINAL_TARGET)/dependentlibs.list.gtest
+	$(MKDIR) -p $(EFFECTIVE_LIB_PREFIX)gtest
+	$(MAKE) libs SHARED_LIBRARY_NAME=gtest/$(EFFECTIVE_LIB_PREFIX)$(LIBRARY_NAME) FINAL_TARGET=$(FINAL_TARGET)/gtest SDK_LIBRARY= IMPORT_LIB_DEST=$(IMPORT_LIB_DEST)/gtest LINK_GTEST=true
+endif
+
+ifdef LINK_GTEST
+COMPONENT_LIBS += \
+  gtest \
+  gfxtest \
+  $(NULL)
+endif
 
 $(FINAL_TARGET)/dependentlibs.list: dependentlibs.py $(SHARED_LIBRARY) $(wildcard $(if $(wildcard $(FINAL_TARGET)/dependentlibs.list),$(addprefix $(FINAL_TARGET)/,$(shell cat $(FINAL_TARGET)/dependentlibs.list))))
 	$(PYTHON) $< $(SHARED_LIBRARY) -L $(FINAL_TARGET) $(if $(TOOLCHAIN_PREFIX),$(addprefix -p ,$(TOOLCHAIN_PREFIX))) > $@

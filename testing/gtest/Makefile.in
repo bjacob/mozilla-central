@@ -23,12 +23,6 @@ EXPORT_LIBRARY = 1
 LIBXUL_LIBRARY = 1
 IS_COMPONENT = 1
 
-CPPSRCS = \
-  gmock-all.cc \
-  gtest-all.cc \
-  GTestRunner.cpp \
-  $(NULL)
-
 GTEST_CPPSRCS = \
   SanityTest.cpp \
   $(NULL)
@@ -41,4 +35,16 @@ LOCAL_INCLUDES += \
   $(NULL)
 
 include $(topsrcdir)/config/rules.mk
+
+ifeq (browser,$(MOZ_BUILD_APP))
+# Disable because of metro linking error:
+# LNK1181: cannot open input file 'runtimeobject.lib'
+ifndef MOZ_METRO
+check gtest::
+	$(MAKE) -C $(DEPTH)/toolkit/library gtestxul
+ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
+	$(MAKE) -C $(DEPTH)/browser/app repackage
+endif
+endif
+endif
 

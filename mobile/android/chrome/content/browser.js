@@ -57,6 +57,16 @@ XPCOMUtils.defineLazyGetter(this, "Sanitizer", function() {
   return Sanitizer;
 });
 
+XPCOMUtils.defineLazyGetter(this, "Prompt", function() {
+  let temp = {};
+  Cu.import("resource://gre/modules/Prompt.jsm", temp);
+  return temp.Prompt;
+});
+
+XPCOMUtils.defineLazyServiceGetter(this, "uuidgen",
+                                   "@mozilla.org/uuid-generator;1",
+                                   "nsIUUIDGenerator");
+
 // Lazily-loaded browser scripts:
 [
   ["HelperApps", "chrome://browser/content/HelperApps.js"],
@@ -238,6 +248,7 @@ var BrowserApp = {
   _tabs: [],
   _selectedTab: null,
   _prefObservers: [],
+  _promptHandlers: {},
 
   get isTablet() {
     let sysInfo = Cc["@mozilla.org/system-info;1"].getService(Ci.nsIPropertyBag2);
@@ -287,6 +298,7 @@ var BrowserApp = {
     Services.obs.addObserver(this, "FormHistory:Init", false);
     Services.obs.addObserver(this, "gather-telemetry", false);
     Services.obs.addObserver(this, "keyword-search", false);
+    Services.obs.addObserver(this, "Prompt:Reply", false);
 
     Services.obs.addObserver(this, "sessionstore-state-purge-complete", false);
 
@@ -625,7 +637,7 @@ var BrowserApp = {
   // off to the compositor.
   isBrowserContentDocumentDisplayed: function() {
     try {
-      if (window.top.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).isFirstPaint)
+      if (!getBridge().isContentDocumentDisplayed())
         return false;
     } catch (e) {
       return false;
@@ -637,8 +649,9 @@ var BrowserApp = {
     return tab.contentDocumentIsDisplayed;
   },
 
-  displayedDocumentChanged: function() {
+  contentDocumentChanged: function() {
     window.top.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).isFirstPaint = true;
+    getBridge().contentDocumentChanged();
   },
 
   get tabs() {
@@ -665,7 +678,7 @@ var BrowserApp = {
     Tabs.touch(aTab);
     aTab.setActive(true);
     aTab.setResolution(aTab._zoom, true);
-    this.displayedDocumentChanged();
+    this.contentDocumentChanged();
     this.deck.selectedPanel = aTab.browser;
     // Focus the browser so that things like selection will be styled correctly.
     aTab.browser.focus();
@@ -1412,13 +1425,25 @@ var BrowserApp = {
         browser.contentDocument.mozCancelFullScreen();
         break;
 
+      case "Prompt:Reply":
+        {
+            let data = JSON.parse(aData);
+            let guid = data.guid;
+            let handler = this._promptHandlers[guid];
+            if (!handler)
+              break;
+            this._promptHandlers[guid];
+            handler(data);
+        }
+        break;
+
       case "Viewport:Change":
         if (this.isBrowserContentDocumentDisplayed())
           this.selectedTab.setViewport(JSON.parse(aData));
         break;
 
       case "Viewport:Flush":
-        this.displayedDocumentChanged();
+        this.contentDocumentChanged();
         break;
 
       case "Passwords:Init": {
@@ -1476,9 +1501,12 @@ var BrowserApp = {
   // selecting selIndex(if fromIndex<=selIndex<=toIndex)
   showHistory: function(fromIndex, toIndex, selIndex) {
     let browser = this.selectedBrowser;
+    let guid = uuidgen.generateUUID().toString();
     let result = {
       type: "Prompt:Show",
       multiple: false,
+      async: true,
+      guid: guid,
       selected: [],
       listitems: []
     };
@@ -1495,11 +1523,13 @@ var BrowserApp = {
       result.listitems.push(item);
       result.selected.push(i == selIndex);
     }
-    let data = JSON.parse(sendMessageToJava(result));
-    let selected = data.button;
-    if (selected == -1)
-      return;
-    browser.gotoIndex(toIndex-selected);
+    this._promptHandlers[guid] = function (data) {
+        let selected = data.button;
+        if (selected == -1)
+          return;
+        browser.gotoIndex(toIndex-selected);
+    };
+    sendMessageToJava(result);
   },
 };
 
@@ -2450,6 +2480,8 @@ function Tab(aURL, aParams) {
   this.originalURI = null;
   this.savedArticle = null;
   this.hasTouchListener = false;
+  this.browserWidth = 0;
+  this.browserHeight = 0;
 
   this.create(aURL, aParams);
 }
@@ -3809,7 +3841,7 @@ Tab.prototype = {
         let contentDocument = aSubject;
         if (contentDocument == this.browser.contentDocument) {
           if (BrowserApp.selectedTab == this) {
-            BrowserApp.displayedDocumentChanged();
+            BrowserApp.contentDocumentChanged();
           }
           this.contentDocumentIsDisplayed = true;
 
@@ -4386,8 +4418,7 @@ var BrowserEventHandler = {
        * - It's a select element showing multiple rows
        */
       if (checkElem) {
-        if (((elem.scrollHeight > elem.clientHeight) ||
-             (elem.scrollWidth > elem.clientWidth)) &&
+        if ((elem.scrollTopMax > 0 || elem.scrollLeftMax > 0) &&
             (this._hasScrollableOverflow(elem) ||
              elem.mozMatchesSelector("html, body, textarea")) ||
             (elem instanceof HTMLSelectElement && (elem.size > 1 || elem.multiple))) {
@@ -4418,10 +4449,10 @@ var BrowserEventHandler = {
 
   _elementCanScroll: function(elem, x, y) {
     let scrollX = (x < 0 && elem.scrollLeft > 0)
-               || (x > 0 && elem.scrollLeft < (elem.scrollWidth - elem.clientWidth));
+               || (x > 0 && elem.scrollLeft < elem.scrollLeftMax);
 
     let scrollY = (y < 0 && elem.scrollTop > 0)
-               || (y > 0 && elem.scrollTop < (elem.scrollHeight - elem.clientHeight));
+               || (y > 0 && elem.scrollTop < elem.scrollTopMax);
 
     return scrollX || scrollY;
   }

@@ -34,6 +34,7 @@
 #include "nsJSUtils.h"
 #include "DictionaryHelpers.h"
 #include "nsContentUtils.h"
+#include "nsCxPusher.h"
 #include "nsXULAppAPI.h"
 #include "TabChild.h"
 #include "DeviceStorageRequestChild.h"
@@ -1425,8 +1426,6 @@ JS::Value StringToJsval(nsPIDOMWindow* aWindow, nsAString& aString)
     return JSVAL_NULL;
   }
 
-  JSAutoRequest ar(cx);
-
   JS::Value result = JSVAL_NULL;
   if (!xpc::StringToJsval(cx, aString, &result)) {
     return JSVAL_NULL;
@@ -2032,7 +2031,6 @@ public:
       r = new PostResultEvent(mRequest, totalUsage);
     }
     NS_DispatchToMainThread(r);
-
     return NS_OK;
   }
 
@@ -2779,6 +2777,7 @@ nsDOMDeviceStorage::AddNamed(nsIDOMBlob *aBlob,
       NS_ADDREF(*_retval = request);
       r = new PostErrorEvent(request, POST_ERROR_EVENT_UNKNOWN);
       NS_DispatchToMainThread(r);
+      return NS_OK;
     }
     return ds->AddNamed(aBlob, storagePath, _retval);
   }

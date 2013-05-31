@@ -315,7 +315,7 @@ class JSScript : public js::gc::Cell
     js::types::TypeScript *types;
 
   private:
-    js::ScriptSource *scriptSource_; /* source code */
+    js::HeapPtrObject sourceObject_; /* source code object */
     js::HeapPtrFunction function_;
 
     // For callsite clones, which cannot have enclosing scopes, the original
@@ -336,6 +336,7 @@ class JSScript : public js::gc::Cell
 
     uint32_t        natoms;     /* length of atoms array */
 
+    /* Range of characters in scriptSource which contains this script's source. */
     uint32_t        sourceStart;
     uint32_t        sourceEnd;
 
@@ -416,6 +417,9 @@ class JSScript : public js::gc::Cell
     bool            isCachedEval:1;   /* script came from eval(), and is in eval cache */
     bool            uninlineable:1;   /* script is considered uninlineable by analysis */
 
+    /* Set for functions defined at the top level within an 'eval' script. */
+    bool directlyInsideEval:1;
+
     /* script is attempted to be cloned anew at each callsite. This is
        temporarily needed for ParallelArray selfhosted code until type
        information can be made context sensitive. See discussion in
@@ -454,8 +458,9 @@ class JSScript : public js::gc::Cell
 
   public:
     static JSScript *Create(JSContext *cx, js::HandleObject enclosingScope, bool savedCallerFun,
-                                const JS::CompileOptions &options, unsigned staticLevel,
-                                js::ScriptSource *ss, uint32_t sourceStart, uint32_t sourceEnd);
+                            const JS::CompileOptions &options, unsigned staticLevel,
+                            JS::HandleScriptSource sourceObject, uint32_t sourceStart,
+                            uint32_t sourceEnd);
 
     // Three ways ways to initialize a JSScript. Callers of partiallyInit()
     // and fullyInitTrivial() are responsible for notifying the debugger after
@@ -627,11 +632,13 @@ class JSScript : public js::gc::Cell
 
     static bool loadSource(JSContext *cx, js::HandleScript scr, bool *worked);
 
-    js::ScriptSource *scriptSource() const {
-        return scriptSource_;
+    js::ScriptSource *scriptSource() const;
+
+    js::ScriptSourceObject *sourceObject() const {
+        return &sourceObject_->asScriptSource();;
     }
 
-    void setScriptSource(js::ScriptSource *ss);
+    void setSourceObject(js::ScriptSourceObject *sourceObject);
 
     inline const char *filename() const;
 
@@ -787,6 +794,11 @@ class JSScript : public js::gc::Cell
         js::ObjectArray *arr = objects();
         JS_ASSERT(index < arr->length);
         return arr->vector[index];
+    }
+
+    size_t innerObjectsStart() {
+        // The first object contains the caller if savedCallerFun is used.
+        return savedCallerFun ? 1 : 0;
     }
 
     JSObject *getObject(jsbytecode *pc) {
@@ -1038,6 +1050,7 @@ struct ScriptSource
         JS_ASSERT(hasSourceData());
         return argumentsNotIncluded_;
     }
+    const jschar *chars(JSContext *cx);
     JSStableString *substring(JSContext *cx, uint32_t start, uint32_t stop);
     size_t sizeOfIncludingThis(JSMallocSizeOfFun mallocSizeOf);
 
@@ -1077,6 +1090,182 @@ class ScriptSourceHolder
     {
         ss->decref();
     }
+};
+
+class ScriptSourceObject : public JSObject {
+  public:
+    static void finalize(FreeOp *fop, JSObject *obj);
+    static ScriptSourceObject *create(JSContext *cx, ScriptSource *source);
+
+    ScriptSource *source() {
+        return static_cast<ScriptSource *>(getReservedSlot(SOURCE_SLOT).toPrivate());
+    }
+
+    void setSource(ScriptSource *source) {
+        if (source)
+            source->incref();
+        if (this->source())
+            this->source()->decref();
+        setReservedSlot(SOURCE_SLOT, PrivateValue(source));
+    }
+
+  private:
+    static const uint32_t SOURCE_SLOT = 0;
+};
+
+// Information about a script which may be (or has been) lazily compiled to
+// bytecode from its source.
+class LazyScript : public js::gc::Cell
+{
+    // Immediate parent in which the script is nested, or NULL if the parent
+    // has not been compiled yet. Lazy scripts are always functions within a
+    // global or eval script so there will be a parent.
+    JSScript *parent_;
+
+    // If non-NULL, the script has been compiled and this is a forwarding
+    // pointer to the result.
+    JSScript *script_;
+
+    // Heap allocated table with any free variables or inner functions.
+    void *table_;
+
+#if JS_BITS_PER_WORD == 32
+    uint32_t padding;
+#endif
+
+    uint32_t numFreeVariables_;
+    uint32_t numInnerFunctions_ : 26;
+
+    bool strict_ : 1;
+    bool bindingsAccessedDynamically_ : 1;
+    bool hasDebuggerStatement_ : 1;
+    bool directlyInsideEval_:1;
+    bool hasBeenCloned_:1;
+
+    // Source location for the script.
+    uint32_t begin_;
+    uint32_t end_;
+    uint32_t lineno_;
+    uint32_t column_;
+
+    LazyScript(void *table, uint32_t numFreeVariables, uint32_t numInnerFunctions,
+               uint32_t begin, uint32_t end, uint32_t lineno, uint32_t column)
+      : parent_(NULL),
+        script_(NULL),
+        table_(table),
+        numFreeVariables_(numFreeVariables),
+        numInnerFunctions_(numInnerFunctions),
+        strict_(false),
+        bindingsAccessedDynamically_(false),
+        hasDebuggerStatement_(false),
+        directlyInsideEval_(false),
+        hasBeenCloned_(false),
+        begin_(begin),
+        end_(end),
+        lineno_(lineno),
+        column_(column)
+    {
+        JS_ASSERT(begin <= end);
+    }
+
+  public:
+    static LazyScript *Create(JSContext *cx, uint32_t numFreeVariables, uint32_t numInnerFunctions,
+                              uint32_t begin, uint32_t end, uint32_t lineno, uint32_t column);
+
+    void initParent(JSScript *parent) {
+        JS_ASSERT(parent && !parent_);
+        parent_ = parent;
+    }
+    JSScript *parent() const {
+        return parent_;
+    }
+
+    void initScript(JSScript *script) {
+        JS_ASSERT(script && !script_);
+        script_ = script;
+    }
+    JSScript *maybeScript() {
+        return script_;
+    }
+
+    uint32_t numFreeVariables() const {
+        return numFreeVariables_;
+    }
+    HeapPtrAtom *freeVariables() {
+        return (HeapPtrAtom *)table_;
+    }
+
+    uint32_t numInnerFunctions() const {
+        return numInnerFunctions_;
+    }
+    HeapPtrFunction *innerFunctions() {
+        return (HeapPtrFunction *)&freeVariables()[numFreeVariables()];
+    }
+
+    bool strict() const {
+        return strict_;
+    }
+    void setStrict() {
+        strict_ = true;
+    }
+
+    bool bindingsAccessedDynamically() const {
+        return bindingsAccessedDynamically_;
+    }
+    void setBindingsAccessedDynamically() {
+        bindingsAccessedDynamically_ = true;
+    }
+
+    bool hasDebuggerStatement() const {
+        return hasDebuggerStatement_;
+    }
+    void setHasDebuggerStatement() {
+        hasDebuggerStatement_ = true;
+    }
+
+    bool directlyInsideEval() const {
+        return directlyInsideEval_;
+    }
+    void setDirectlyInsideEval() {
+        directlyInsideEval_ = true;
+    }
+
+    bool hasBeenCloned() const {
+        return hasBeenCloned_;
+    }
+    void setHasBeenCloned() {
+        hasBeenCloned_ = true;
+    }
+
+    ScriptSource *source() const {
+        return parent()->scriptSource();
+    }
+    uint32_t begin() const {
+        return begin_;
+    }
+    uint32_t end() const {
+        return end_;
+    }
+    uint32_t lineno() const {
+        return lineno_;
+    }
+    uint32_t column() const {
+        return column_;
+    }
+
+    Zone *zone() const {
+        return Cell::tenuredZone();
+    }
+
+    void markChildren(JSTracer *trc);
+    void finalize(js::FreeOp *fop);
+
+    size_t sizeOfExcludingThis(JSMallocSizeOfFun mallocSizeOf)
+    {
+        return mallocSizeOf(table_);
+    }
+
+    static inline void writeBarrierPre(LazyScript *lazy);
 };
 
 #ifdef JS_THREADSAFE
@@ -1249,6 +1438,13 @@ struct ScriptAndCounts
 };
 
 } /* namespace js */
+
+inline js::ScriptSourceObject &
+JSObject::asScriptSource()
+{
+    JS_ASSERT(isScriptSource());
+    return *static_cast<js::ScriptSourceObject *>(this);
+}
 
 extern jssrcnote *
 js_GetSrcNote(JSContext *cx, JSScript *script, jsbytecode *pc);

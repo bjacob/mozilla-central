@@ -70,7 +70,7 @@ GCONF_VERSION=1.2.1
 GIO_VERSION=2.20
 STARTUP_NOTIFICATION_VERSION=0.8
 DBUS_VERSION=0.60
-SQLITE_VERSION=3.7.16.1
+SQLITE_VERSION=3.7.17
 
 MSMANIFEST_TOOL=
 
@@ -206,7 +206,7 @@ if test -n "$gonkdir" ; then
 
     case "$ANDROID_VERSION" in
     15)
-        GONK_INCLUDES="-I$gonkdir/frameworks/base/opengl/include -I$gonkdir/frameworks/base/native/include -I$gonkdir/frameworks/base/include -I$gonkdir/frameworks/base/services/camera -I$gonkdir/frameworks/base/include/media/stagefright -I$gonkdir/frameworks/base/include/media/stagefright/openmax -I$gonkdir/frameworks/base/media/libstagefright/rtsp -I$gonkdir/frameworks/base/media/libstagefright/include -I$gonkdir/external/dbus -I$gonkdir/external/bluetooth/bluez/lib -I$gonkdir/dalvik/libnativehelper/include/nativehelper"
+        GONK_INCLUDES="-I$gonkdir/frameworks/base/opengl/include -I$gonkdir/frameworks/base/native/include -I$gonkdir/frameworks/base/include -I$gonkdir/frameworks/base/services/camera -I$gonkdir/frameworks/base/include/media/stagefright -I$gonkdir/frameworks/base/include/media/stagefright/openmax -I$gonkdir/frameworks/base/media/libstagefright/rtsp -I$gonkdir/frameworks/base/media/libstagefright/include -I$gonkdir/external/dbus -I$gonkdir/external/bluetooth/bluez/lib -I$gonkdir/dalvik/libnativehelper/include/nativehelper -I$gonkdir/external/valgrind"
         MOZ_B2G_BT=1
         MOZ_B2G_CAMERA=1
         MOZ_OMX_DECODER=1
@@ -1332,8 +1332,8 @@ if test "$GNU_CC"; then
     CFLAGS="$CFLAGS -std=gnu99 -fgnu89-inline"
     # FIXME: Let us build with strict aliasing. bug 414641.
     CFLAGS="$CFLAGS -fno-strict-aliasing"
-    MKSHLIB='$(CXX) $(CXXFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-h,$@ -o $@'
-    MKCSHLIB='$(CC) $(CFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-h,$@ -o $@'
+    MKSHLIB='$(CXX) $(CXXFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-h,$(notdir $@) -o $@'
+    MKCSHLIB='$(CC) $(CFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-h,$(notdir $@) -o $@'
     DSO_LDOPTS='-shared'
     if test "$GCC_USE_GNU_LD"; then
         # Some tools like ASan use a runtime library that is only
@@ -1443,8 +1443,8 @@ elif test "$SOLARIS_SUNPRO_CC"; then
     fi
     _DEFINES_CFLAGS='$(ACDEFINES) -D_MOZILLA_CONFIG_H_ -DMOZILLA_CLIENT'
 else
-    MKSHLIB='$(LD) $(DSO_LDOPTS) -h $@ -o $@'
-    MKCSHLIB='$(LD) $(DSO_LDOPTS) -h $@ -o $@'
+    MKSHLIB='$(LD) $(DSO_LDOPTS) -h $(notdir $@) -o $@'
+    MKCSHLIB='$(LD) $(DSO_LDOPTS) -h $(notdir $@) -o $@'
 
     DSO_LDOPTS='-shared'
     if test "$GNU_LD"; then
@@ -2095,6 +2095,7 @@ ia64*-hpux*)
         RC='$(WINDRES)'
         # Use static libgcc and libstdc++
         LDFLAGS="$LDFLAGS -static-libgcc -static-libstdc++"
+        NSPR_LDFLAGS="$NSPR_LDFLAGS -static-libgcc"
         # Use temp file for windres (bug 213281)
         RCFLAGS='-O coff --use-temp-file'
         # mingw doesn't require kernel32, user32, and advapi32 explicitly
@@ -2302,8 +2303,8 @@ ia64*-hpux*)
     if test "$LIBRUNPATH"; then
 	DSO_LDOPTS="-Wl,-R$LIBRUNPATH $DSO_LDOPTS"
     fi
-    MKSHLIB='$(CXX) $(CXXFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-soname,lib$(LIBRARY_NAME)$(DLL_SUFFIX) -o $@'
-    MKCSHLIB='$(CC) $(CFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-soname,lib$(LIBRARY_NAME)$(DLL_SUFFIX) -o $@'
+    MKSHLIB='$(CXX) $(CXXFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-soname,$(notdir $@) -o $@'
+    MKCSHLIB='$(CC) $(CFLAGS) $(DSO_PIC_CFLAGS) $(DSO_LDOPTS) -Wl,-soname,$(notdir $@)) -o $@'
     ;;
 
 *-openbsd*)
@@ -2409,8 +2410,8 @@ ia64*-hpux*)
                        [LDFLAGS=$_SAVE_LDFLAGS])
        fi
        MOZ_OPTIMIZE_FLAGS="-xO4"
-       MKSHLIB='$(CXX) $(CXXFLAGS) $(DSO_PIC_FLAGS) $(DSO_LDOPTS) -h $@ -o $@'
-       MKCSHLIB='$(CC) $(CFLAGS) $(DSO_PIC_FLAGS) $(DSO_LDOPTS) -h $@ -o $@'
+       MKSHLIB='$(CXX) $(CXXFLAGS) $(DSO_PIC_FLAGS) $(DSO_LDOPTS) -h $(notdir $@) -o $@'
+       MKCSHLIB='$(CC) $(CFLAGS) $(DSO_PIC_FLAGS) $(DSO_LDOPTS) -h $(notdir $@) -o $@'
        MKSHLIB_FORCE_ALL='-z allextract'
        MKSHLIB_UNFORCE_ALL='-z defaultextract'
        DSO_LDOPTS='-G'
@@ -6389,16 +6390,7 @@ MOZ_ARG_DISABLE_BOOL(tests,
     ENABLE_TESTS=,
     ENABLE_TESTS=1 )
 
-# Currently GTest is linked into libxul. This means it must be off by default.
-# Follow up will be to generate libxul.so and libxul-test.so to let GTest
-# be compiled along with ENABLE_TESTS
-MOZ_ARG_ENABLE_BOOL(gtest,
-[  --enable-gtest
-                          Enable GTest libxul unit test.],
-    MOZ_ENABLE_GTEST=1,
-    MOZ_ENABLE_GTEST= )
-
-if test -n "$MOZ_ENABLE_GTEST"; then
+if test -n "$ENABLE_TESTS"; then
     if test "${OS_TARGET}" = "WINNT" -o "${OS_TARGET}" = "Darwin" -o "${OS_TARGET}" = "Linux" -o "${OS_TARGET}" = "Android"; then
         MOZ_ENABLE_GTEST=1
         GTEST_HAS_RTTI=0
@@ -6406,8 +6398,6 @@ if test -n "$MOZ_ENABLE_GTEST"; then
         AC_DEFINE_UNQUOTED(GTEST_HAS_RTTI, 0)
         AC_SUBST(MOZ_ENABLE_GTEST)
         AC_SUBST(GTEST_HAS_RTTI)
-    else
-        AC_MSG_ERROR([Cannot build with --enable-gtest on this platform.])
     fi
     if test "${OS_TARGET}" = "Android"; then
         AC_DEFINE(GTEST_OS_LINUX_ANDROID)
@@ -9353,20 +9343,30 @@ if test -z "$MOZ_NATIVE_NSPR"; then
         ac_configure_args="$ac_configure_args --with-arm-kuser"
     fi
     ac_configure_args="$ac_configure_args $NSPR_CONFIGURE_ARGS"
+
+    # Save these, so we can mess with them for the subconfigure ..
+    _SAVE_CFLAGS="$CFLAGS"
+    _SAVE_CPPFLAGS="$CPPFLAGS"
+    _SAVE_LDFLAGS="$LDFLAGS"
+
     if test -n "$MOZ_LINKER" -a "$ac_cv_func_dladdr" = no ; then
       # dladdr is supported by the new linker, even when the system linker doesn't
       # support it. Trick nspr into using dladdr when it's not supported.
-      _SAVE_CPPFLAGS="$CPPFLAGS"
       export CPPFLAGS="-include $_topsrcdir/mozglue/linker/dladdr.h $CPPFLAGS"
     fi
-    _SAVE_LDFLAGS="$LDFLAGS"
     export LDFLAGS="$LDFLAGS $NSPR_LDFLAGS"
+    export CFLAGS="$CFLAGS $MOZ_FRAMEPTR_FLAGS"
+
     AC_OUTPUT_SUBDIRS(nsprpub)
+
+    # .. and restore them
+    unset CFLAGS
+    unset CPPFLAGS
+    unset LDFLAGS
+    CFLAGS="$_SAVE_CFLAGS"
+    CPPFLAGS="$_SAVE_CPPFLAGS"
     LDFLAGS="$_SAVE_LDFLAGS"
-    if test -n "$MOZ_LINKER" -a "$ac_cv_func_dladdr" = no; then
-      unset CPPFLAGS
-      CPPFLAGS="$_SAVE_CFLAGS"
-    fi
+
     ac_configure_args="$_SUBDIR_CONFIG_ARGS"
 fi
 

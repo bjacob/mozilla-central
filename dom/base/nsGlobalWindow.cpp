@@ -143,6 +143,7 @@
 #include "nsGlobalWindowCommands.h"
 #include "nsAutoPtr.h"
 #include "nsContentUtils.h"
+#include "nsCxPusher.h"
 #include "nsCSSProps.h"
 #include "nsIDOMFile.h"
 #include "nsIDOMFileList.h"
@@ -1458,7 +1459,6 @@ nsGlobalWindow::FreeInnerObjects()
   // We push a cx so that exceptions get reported in the right DOM Window.
   nsIScriptContext *scx = GetContextInternal();
   AutoPushJSContext cx(scx ? scx->GetNativeContext() : nsContentUtils::GetSafeJSContext());
-  JSAutoRequest ar(cx);
   mozilla::dom::workers::CancelWorkersForWindow(cx, this);
 
   // Close all offline storages for this window.
@@ -1728,25 +1728,22 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 struct TraceData
 {
-  TraceData(TraceCallback& aCallback, void* aClosure) :
-    callback(aCallback), closure(aClosure) {}
-
-  TraceCallback& callback;
+  const TraceCallbacks& callbacks;
   void* closure;
 };
 
 static PLDHashOperator
-TraceXBLHandlers(nsXBLPrototypeHandler* aKey, JSObject* aData, void* aClosure)
+TraceXBLHandlers(nsXBLPrototypeHandler* aKey, JSObject*& aData, void* aClosure)
 {
   TraceData* data = static_cast<TraceData*>(aClosure);
-  data->callback(aData, "Cached XBL prototype handler", data->closure);
+  data->callbacks.Trace(&aData, "Cached XBL prototype handler", data->closure);
   return PL_DHASH_NEXT;
 }
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsGlobalWindow)
   if (tmp->mCachedXBLPrototypeHandlers.IsInitialized()) {
-    TraceData data(aCallback, aClosure);
-    tmp->mCachedXBLPrototypeHandlers.EnumerateRead(TraceXBLHandlers, &data);
+    TraceData data = { aCallbacks, aClosure };
+    tmp->mCachedXBLPrototypeHandlers.Enumerate(TraceXBLHandlers, &data);
   }
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
@@ -2254,8 +2251,6 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
 
   nsCxPusher cxPusher;
   cxPusher.Push(cx);
-
-  XPCAutoRequest ar(cx);
 
   nsCOMPtr<WindowStateHolder> wsh = do_QueryInterface(aState);
   NS_ASSERTION(!aState || wsh, "What kind of weird state are you giving me here?");
@@ -2793,12 +2788,12 @@ TryGetTabChildGlobalAsEventTarget(nsISupports *aFrom)
 {
   nsCOMPtr<nsIFrameLoaderOwner> frameLoaderOwner = do_QueryInterface(aFrom);
   if (!frameLoaderOwner) {
-    return NULL;
+    return nullptr;
   }
 
   nsRefPtr<nsFrameLoader> frameLoader = frameLoaderOwner->GetFrameLoader();
   if (!frameLoader) {
-    return NULL;
+    return nullptr;
   }
 
   nsCOMPtr<EventTarget> target = frameLoader->GetTabChildGlobalAsEventTarget();
@@ -4434,13 +4429,19 @@ nsGlobalWindow::RequestAnimationFrame(const JS::Value& aCallback,
 NS_IMETHODIMP
 nsGlobalWindow::MozCancelRequestAnimationFrame(int32_t aHandle)
 {
-  return MozCancelAnimationFrame(aHandle);
+  return CancelAnimationFrame(aHandle);
 }
 
 NS_IMETHODIMP
 nsGlobalWindow::MozCancelAnimationFrame(int32_t aHandle)
 {
-  FORWARD_TO_INNER(MozCancelAnimationFrame, (aHandle),
+  return CancelAnimationFrame(aHandle);
+}
+
+NS_IMETHODIMP
+nsGlobalWindow::CancelAnimationFrame(int32_t aHandle)
+{
+  FORWARD_TO_INNER(CancelAnimationFrame, (aHandle),
                    NS_ERROR_NOT_INITIALIZED);
 
   if (!mDoc) {
@@ -6731,7 +6732,6 @@ PostMessageEvent::Run()
   // Deserialize the structured clone data
   JS::Rooted<JS::Value> messageData(cx);
   {
-    JSAutoRequest ar(cx);
     StructuredCloneInfo scInfo;
     scInfo.event = this;
 
@@ -7375,12 +7375,10 @@ public:
                                   static_cast<nsGlobalWindow*>(window->GetCurrentInnerWindow());
       NS_ENSURE_TRUE(currentInner, NS_OK);
 
-      JSContext* cx = nsContentUtils::GetSafeJSContext();
-
+      AutoSafeJSContext cx;
       JS::Rooted<JSObject*> obj(cx, currentInner->FastGetGlobalJSObject());
       // We only want to nuke wrappers for the chrome->content case
       if (obj && !js::IsSystemCompartment(js::GetObjectCompartment(obj))) {
-        JSAutoRequest ar(cx);
         js::NukeCrossCompartmentWrappers(cx,
                                          js::ChromeCompartmentsOnly(),
                                          js::SingleCompartment(js::GetObjectCompartment(obj)),
@@ -10929,7 +10927,6 @@ nsGlobalWindow::SuspendTimeouts(uint32_t aIncrease,
   // We push a cx so that exceptions get reported in the right DOM Window.
     nsIScriptContext *scx = GetContextInternal();
     AutoPushJSContext cx(scx ? scx->GetNativeContext() : nsContentUtils::GetSafeJSContext());
-    JSAutoRequest ar(cx);
     mozilla::dom::workers::SuspendWorkersForWindow(cx, this);
 
     TimeStamp now = TimeStamp::Now();
@@ -11022,7 +11019,6 @@ nsGlobalWindow::ResumeTimeouts(bool aThawChildren)
     // We push a cx so that exceptions get reported in the right DOM Window.
     nsIScriptContext *scx = GetContextInternal();
     AutoPushJSContext cx(scx ? scx->GetNativeContext() : nsContentUtils::GetSafeJSContext());
-    JSAutoRequest ar(cx);
     mozilla::dom::workers::ResumeWorkersForWindow(cx, this);
 
     // Restore all of the timeouts, using the stored time remaining

@@ -1163,14 +1163,6 @@ nsINode::GetContextForEventHandlers(nsresult* aRv)
   return nsContentUtils::GetContextForEventHandlers(this, aRv);
 }
 
-/* static */
-void
-nsINode::Trace(nsINode *tmp, TraceCallback cb, void *closure)
-{
-  nsContentUtils::TraceWrapper(tmp, cb, closure);
-}
-
-
 bool
 nsINode::UnoptimizableCCNode() const
 {

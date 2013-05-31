@@ -708,6 +708,8 @@ class ScriptAnalysis
 
     bool *escapedSlots;
 
+    types::StackTypeSet *undefinedTypeSet;
+
     /* Which analyses have been performed. */
     bool ranBytecode_;
     bool ranSSA_;
@@ -890,7 +892,9 @@ class ScriptAnalysis
           case SSAValue::VAR:
             JS_ASSERT(!slotEscapes(v.varSlot()));
             if (v.varInitial()) {
-                return types::TypeScript::SlotTypes(script_, v.varSlot());
+                if (v.varSlot() < LocalSlot(script_, 0))
+                    return types::TypeScript::SlotTypes(script_, v.varSlot());
+                return undefinedTypeSet;
             } else {
                 /*
                  * Results of intermediate assignments have the same type as
@@ -1040,13 +1044,12 @@ class ScriptAnalysis
 
     struct TypeInferenceState {
         Vector<SSAPhiNode *> phiNodes;
-        bool hasGetSet;
         bool hasHole;
         types::StackTypeSet *forTypes;
         bool hasPropertyReadTypes;
         uint32_t propertyReadIndex;
         TypeInferenceState(JSContext *cx)
-            : phiNodes(cx), hasGetSet(false), hasHole(false), forTypes(NULL),
+            : phiNodes(cx), hasHole(false), forTypes(NULL),
               hasPropertyReadTypes(false), propertyReadIndex(0)
         {}
     };

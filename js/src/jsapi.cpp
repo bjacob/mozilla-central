@@ -1764,12 +1764,6 @@ JS_RefreshCrossCompartmentWrappers(JSContext *cx, JSObject *objArg)
     return RemapAllWrappersForObject(cx, obj, obj);
 }
 
-JS_PUBLIC_API(JSObject *)
-JS_GetGlobalObject(JSContext *cx)
-{
-    return cx->maybeDefaultCompartmentObject();
-}
-
 JS_PUBLIC_API(void)
 JS_SetGlobalObject(JSContext *cx, JSObject *obj)
 {
@@ -2528,6 +2522,36 @@ JS_CallGenericTracer(JSTracer *trc, void *gcthingArg, const char *name)
 }
 
 JS_PUBLIC_API(void)
+JS_CallHeapValueTracer(JSTracer *trc, JS::Heap<JS::Value> *valuep, const char *name)
+{
+    MarkValueUnbarriered(trc, valuep->unsafeGet(), name);
+}
+
+JS_PUBLIC_API(void)
+JS_CallHeapIdTracer(JSTracer *trc, JS::Heap<jsid> *idp, const char *name)
+{
+    MarkIdUnbarriered(trc, idp->unsafeGet(), name);
+}
+
+JS_PUBLIC_API(void)
+JS_CallHeapObjectTracer(JSTracer *trc, JS::Heap<JSObject *> *objp, const char *name)
+{
+    MarkObjectUnbarriered(trc, objp->unsafeGet(), name);
+}
+
+JS_PUBLIC_API(void)
+JS_CallHeapStringTracer(JSTracer *trc, JS::Heap<JSString *> *strp, const char *name)
+{
+    MarkStringUnbarriered(trc, strp->unsafeGet(), name);
+}
+
+JS_PUBLIC_API(void)
+JS_CallHeapScriptTracer(JSTracer *trc, JS::Heap<JSScript *> *scriptp, const char *name)
+{
+    MarkScriptUnbarriered(trc, scriptp->unsafeGet(), name);
+}
+
+JS_PUBLIC_API(void)
 JS_TracerInit(JSTracer *trc, JSRuntime *rt, JSTraceCallback callback)
 {
     InitTracer(trc, rt, callback);
@@ -2571,6 +2595,10 @@ JS_GetTraceThingInfo(char *buf, size_t bufsize, JSTracer *trc, void *thing,
 
       case JSTRACE_SCRIPT:
         name = "script";
+        break;
+
+      case JSTRACE_LAZY_SCRIPT:
+        name = "lazyscript";
         break;
 
       case JSTRACE_IONCODE:
@@ -2644,6 +2672,7 @@ JS_GetTraceThingInfo(char *buf, size_t bufsize, JSTracer *trc, void *thing,
             break;
           }
 
+          case JSTRACE_LAZY_SCRIPT:
           case JSTRACE_IONCODE:
           case JSTRACE_SHAPE:
           case JSTRACE_BASE_SHAPE:
@@ -4895,6 +4924,11 @@ JS_CloneFunctionObject(JSContext *cx, JSObject *funobjArg, JSObject *parentArg)
      * script, we cannot clone it without breaking the compiler's assumptions.
      */
     RootedFunction fun(cx, funobj->toFunction());
+    if (fun->isInterpretedLazy()) {
+        AutoCompartment ac(cx, funobj);
+        if (!fun->getOrCreateScript(cx))
+            return NULL;
+    }
     if (fun->isInterpreted() && (fun->nonLazyScript()->enclosingStaticScope() ||
         (fun->nonLazyScript()->compileAndGo && !parent->isGlobal())))
     {
@@ -5258,10 +5292,12 @@ JS::CompileOptions::CompileOptions(JSContext *cx)
       utf8(false),
       filename(NULL),
       lineno(1),
+      column(0),
       compileAndGo(cx->hasOption(JSOPTION_COMPILE_N_GO)),
       forEval(false),
       noScriptRval(cx->hasOption(JSOPTION_NO_SCRIPT_RVAL)),
       selfHostingMode(false),
+      canLazilyParse(true),
       sourcePolicy(SAVE_SOURCE)
 {
 }
@@ -5400,7 +5436,7 @@ JS_BufferIsCompilableUnit(JSContext *cx, JSObject *objArg, const char *utf8, siz
         CompileOptions options(cx);
         options.setCompileAndGo(false);
         Parser<frontend::FullParseHandler> parser(cx, options, chars, length,
-                                                  /* foldConstants = */ true);
+                                                  /* foldConstants = */ true, NULL, NULL);
         if (parser.init()) {
             older = JS_SetErrorReporter(cx, NULL);
             if (!parser.parse(obj) &&
@@ -6329,17 +6365,13 @@ JS_Stringify(JSContext *cx, jsval *vp, JSObject *replacerArg, jsval space,
 }
 
 JS_PUBLIC_API(JSBool)
-JS_ParseJSON(JSContext *cx, const jschar *chars, uint32_t len, jsval *vp)
+JS_ParseJSON(JSContext *cx, const jschar *chars, uint32_t len, JS::MutableHandleValue vp)
 {
     AssertHeapIsIdle(cx);
     CHECK_REQUEST(cx);
 
     RootedValue reviver(cx, NullValue()), value(cx);
-    if (!ParseJSONWithReviver(cx, JS::StableCharPtr(chars, len), len, reviver, &value))
-        return false;
-
-    *vp = value;
-    return true;
+    return ParseJSONWithReviver(cx, JS::StableCharPtr(chars, len), len, reviver, vp);
 }
 
 JS_PUBLIC_API(JSBool)

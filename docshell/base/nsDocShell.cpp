@@ -188,6 +188,7 @@
 #endif
 
 #include "nsContentUtils.h"
+#include "nsCxPusher.h"
 #include "nsIChannelPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsSandboxFlags.h"
@@ -1968,35 +1969,33 @@ nsDocShell::SetCharset(const char* aCharset)
     }
 
     // set the charset override
-    nsCOMPtr<nsIAtom> csAtom = do_GetAtom(aCharset);
-    SetForcedCharset(csAtom);
+    nsCString charset(aCharset);
+    SetForcedCharset(charset);
 
     return NS_OK;
-} 
+}
 
-NS_IMETHODIMP nsDocShell::SetForcedCharset(nsIAtom * aCharset)
+NS_IMETHODIMP nsDocShell::SetForcedCharset(const nsACString& aCharset)
 {
   mForcedCharset = aCharset;
   return NS_OK;
 }
 
-NS_IMETHODIMP nsDocShell::GetForcedCharset(nsIAtom ** aResult)
+NS_IMETHODIMP nsDocShell::GetForcedCharset(nsACString& aResult)
 {
-  *aResult = mForcedCharset;
-  if (mForcedCharset) NS_ADDREF(*aResult);
+  aResult = mForcedCharset;
   return NS_OK;
 }
 
-NS_IMETHODIMP nsDocShell::SetParentCharset(nsIAtom * aCharset)
+NS_IMETHODIMP nsDocShell::SetParentCharset(const nsACString& aCharset)
 {
   mParentCharset = aCharset;
   return NS_OK;
 }
 
-NS_IMETHODIMP nsDocShell::GetParentCharset(nsIAtom ** aResult)
+NS_IMETHODIMP nsDocShell::GetParentCharset(nsACString& aResult)
 {
-  *aResult = mParentCharset;
-  if (mParentCharset) NS_ADDREF(*aResult);
+  aResult = mParentCharset;
   return NS_OK;
 }
 
@@ -3496,8 +3495,7 @@ nsDocShell::AddChild(nsIDocShellTreeItem * aChild)
         // expose here.
 
         // set the child's parentCharset
-        nsCOMPtr<nsIAtom> parentCSAtom(do_GetAtom(parentCS));
-        res = childAsDocShell->SetParentCharset(parentCSAtom);
+        res = childAsDocShell->SetParentCharset(parentCS);
         if (NS_FAILED(res))
             return NS_OK;
 
@@ -4036,9 +4034,16 @@ nsDocShell::LoadURI(const PRUnichar * aURI,
         if (aLoadFlags & LOAD_FLAGS_URI_IS_UTF8) {
           fixupFlags |= nsIURIFixup::FIXUP_FLAG_USE_UTF8;
         }
+        nsCOMPtr<nsIInputStream> fixupStream;
         rv = sURIFixup->CreateFixupURI(uriString, fixupFlags,
-                                       getter_AddRefs(postStream),
+                                       getter_AddRefs(fixupStream),
                                        getter_AddRefs(uri));
+        if (fixupStream) {
+            // CreateFixupURI only returns a post data stream if it succeeded
+            // and changed the URI, in which case we should override the
+            // passed-in post data.
+            postStream = fixupStream;
+        }
     }
     // else no fixup service so just use the URI we created and see
     // what happens

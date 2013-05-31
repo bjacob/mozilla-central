@@ -67,6 +67,9 @@ BaselineCompiler::compile()
     IonSpew(IonSpew_BaselineScripts, "Baseline compiling script %s:%d (%p)",
             script->filename(), script->lineno, script.get());
 
+    if (cx->typeInferenceEnabled() && !script->ensureHasBytecodeTypeMap(cx))
+        return Method_Error;
+
     // Only need to analyze scripts which are marked |argumensHasVarBinding|, to
     // compute |needsArgsObj| flag.
     if (script->argumentsHasVarBinding()) {
@@ -551,7 +554,7 @@ BaselineCompiler::emitBody()
         if (frame.stackDepth() > 2)
             frame.syncStack(2);
 
-        frame.assertValidState(pc);
+        frame.assertValidState(*info);
 
         masm.bind(labelOf(pc));
 
@@ -617,6 +620,13 @@ bool
 BaselineCompiler::emit_JSOP_POP()
 {
     frame.pop();
+    return true;
+}
+
+bool
+BaselineCompiler::emit_JSOP_POPN()
+{
+    frame.popn(GET_UINT16(pc));
     return true;
 }
 
@@ -1874,6 +1884,78 @@ BaselineCompiler::emit_JSOP_DEFFUN()
     return callVM(DefFunOperationInfo);
 }
 
+typedef bool (*InitPropGetterSetterFn)(JSContext *, jsbytecode *, HandleObject, HandlePropertyName,
+                                       HandleValue);
+static const VMFunction InitPropGetterSetterInfo =
+    FunctionInfo<InitPropGetterSetterFn>(InitGetterSetterOperation);
+
+bool
+BaselineCompiler::emitInitPropGetterSetter()
+{
+    JS_ASSERT(JSOp(*pc) == JSOP_INITPROP_GETTER ||
+              JSOp(*pc) == JSOP_INITPROP_SETTER);
+
+    // Load value in R0, keep object on the stack.
+    frame.popRegsAndSync(1);
+    prepareVMCall();
+
+    pushArg(R0);
+    pushArg(ImmGCPtr(script->getName(pc)));
+    masm.extractObject(frame.addressOfStackValue(frame.peek(-1)), R0.scratchReg());
+    pushArg(R0.scratchReg());
+    pushArg(ImmWord(pc));
+
+    return callVM(InitPropGetterSetterInfo);
+}
+
+bool
+BaselineCompiler::emit_JSOP_INITPROP_GETTER()
+{
+    return emitInitPropGetterSetter();
+}
+
+bool
+BaselineCompiler::emit_JSOP_INITPROP_SETTER()
+{
+    return emitInitPropGetterSetter();
+}
+
+typedef bool (*InitElemGetterSetterFn)(JSContext *, jsbytecode *, HandleObject, HandleValue,
+                                       HandleValue);
+static const VMFunction InitElemGetterSetterInfo =
+    FunctionInfo<InitElemGetterSetterFn>(InitGetterSetterOperation);
+
+bool
+BaselineCompiler::emitInitElemGetterSetter()
+{
+    JS_ASSERT(JSOp(*pc) == JSOP_INITELEM_GETTER ||
+              JSOp(*pc) == JSOP_INITELEM_SETTER);
+
+    // Load index and value in R0 and R1, keep object on the stack.
+    frame.popRegsAndSync(2);
+    prepareVMCall();
+
+    pushArg(R1);
+    pushArg(R0);
+    masm.extractObject(frame.addressOfStackValue(frame.peek(-1)), R0.scratchReg());
+    pushArg(R0.scratchReg());
+    pushArg(ImmWord(pc));
+
+    return callVM(InitElemGetterSetterInfo);
+}
+
+bool
+BaselineCompiler::emit_JSOP_INITELEM_GETTER()
+{
+    return emitInitElemGetterSetter();
+}
+
+bool
+BaselineCompiler::emit_JSOP_INITELEM_SETTER()
+{
+    return emitInitElemGetterSetter();
+}
+
 bool
 BaselineCompiler::emit_JSOP_GETLOCAL()
 {
@@ -2087,6 +2169,16 @@ bool
 BaselineCompiler::emit_JSOP_TYPEOFEXPR()
 {
     return emit_JSOP_TYPEOF();
+}
+
+typedef bool (*SetCallFn)(JSContext *);
+static const VMFunction SetCallInfo = FunctionInfo<SetCallFn>(js::SetCallOperation);
+
+bool
+BaselineCompiler::emit_JSOP_SETCALL()
+{
+    prepareVMCall();
+    return callVM(SetCallInfo);
 }
 
 typedef bool (*ThrowFn)(JSContext *, HandleValue);
@@ -2386,6 +2478,17 @@ BaselineCompiler::emit_JSOP_SETRVAL()
     storeValue(frame.peek(-1), frame.addressOfReturnValue(), R2);
     masm.or32(Imm32(BaselineFrame::HAS_RVAL), frame.addressOfFlags());
     frame.pop();
+    return true;
+}
+
+bool
+BaselineCompiler::emit_JSOP_CALLEE()
+{
+    JS_ASSERT(function());
+    frame.syncStack(0);
+    masm.loadPtr(frame.addressOfCallee(), R0.scratchReg());
+    masm.tagValue(JSVAL_TYPE_OBJECT, R0.scratchReg(), R0);
+    frame.push(R0);
     return true;
 }
 

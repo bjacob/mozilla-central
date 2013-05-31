@@ -17,6 +17,7 @@ using namespace js;
 using namespace js::frontend;
 using namespace mozilla;
 
+#include "ion/PerfSpewer.h"
 #include "ion/CodeGenerator.h"
 #include "ion/MIR.h"
 #include "ion/MIRGraph.h"
@@ -3341,6 +3342,28 @@ CheckMathAbs(FunctionCompiler &f, ParseNode *call, MDefinition **def, Type *type
 }
 
 static bool
+CheckMathSqrt(FunctionCompiler &f, ParseNode *call, MDefinition **def, Type *type)
+{
+    if (CallArgListLength(call) != 1)
+        return f.fail(call, "Math.sqrt must be passed 1 argument");
+
+    ParseNode *arg = CallArgList(call);
+
+    MDefinition *argDef;
+    Type argType;
+    if (!CheckExpr(f, arg, Use::ToNumber, &argDef, &argType))
+        return false;
+
+    if (argType.isDoublish()) {
+        *def = f.unary<MSqrt>(argDef, MIRType_Double);
+        *type = Type::Double;
+        return true;
+    }
+
+    return f.failf(call, "%s is not a subtype of doublish", argType.toChars());
+}
+
+static bool
 CheckCallArgs(FunctionCompiler &f, ParseNode *callNode, Use use, FunctionCompiler::Args *args)
 {
     f.startCallArgs(args);
@@ -3540,7 +3563,7 @@ CheckMathBuiltinCall(FunctionCompiler &f, ParseNode *callNode, AsmJSMathBuiltin 
       case AsmJSMathBuiltin_floor: arity = 1; callee = UnaryMathFunCast(floor);      break;
       case AsmJSMathBuiltin_exp:   arity = 1; callee = UnaryMathFunCast(exp);        break;
       case AsmJSMathBuiltin_log:   arity = 1; callee = UnaryMathFunCast(log);        break;
-      case AsmJSMathBuiltin_sqrt:  arity = 1; callee = UnaryMathFunCast(sqrt);       break;
+      case AsmJSMathBuiltin_sqrt:  return CheckMathSqrt(f, callNode, def, type);
       case AsmJSMathBuiltin_pow:   arity = 2; callee = BinaryMathFunCast(ecmaPow);   break;
       case AsmJSMathBuiltin_atan2: arity = 2; callee = BinaryMathFunCast(ecmaAtan2); break;
     }
@@ -4353,6 +4376,7 @@ CheckSwitchRange(FunctionCompiler &f, ParseNode *stmt, int32_t *low, int32_t *hi
 
     *low = *high = i;
 
+    ParseNode *initialStmt = stmt;
     for (stmt = NextNode(stmt); stmt && stmt->isKind(PNK_CASE); stmt = NextNode(stmt)) {
         int32_t i = 0;
         if (!CheckCaseExpr(f, CaseExpr(stmt), &i))
@@ -4364,7 +4388,7 @@ CheckSwitchRange(FunctionCompiler &f, ParseNode *stmt, int32_t *low, int32_t *hi
 
     int64_t i64 = (int64_t(*high) - int64_t(*low)) + 1;
     if (i64 > 128*1024*1024)
-        return f.fail(stmt, "all switch statements generate tables; this table would be too big");
+        return f.fail(initialStmt, "all switch statements generate tables; this table would be too big");
 
     *tableLength = int32_t(i64);
     return true;
@@ -4600,7 +4624,8 @@ CheckFunctionBody(ModuleCompiler &m, ModuleCompiler::Func &func, LifoAlloc &lifo
     // Memory for the objects is provided by the LifoAlloc argument,
     // which may be explicitly tracked by the caller.
     MIRGraph *graph = lifo.new_<MIRGraph>(tempAlloc);
-    CompileInfo *info = lifo.new_<CompileInfo>(locals.count());
+    CompileInfo *info = lifo.new_<CompileInfo>(locals.count(),
+                                               SequentialExecution);
     MIRGenerator *mirGen = lifo.new_<MIRGenerator>(m.cx()->compartment, tempAlloc, graph, info);
     JS_ASSERT(tempAlloc && graph && info && mirGen);
 

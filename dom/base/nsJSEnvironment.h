@@ -90,7 +90,8 @@ public:
   virtual void WillInitializeContext();
   virtual void DidInitializeContext();
 
-  virtual nsresult Serialize(nsIObjectOutputStream* aStream, JSScript* aScriptObject);
+  virtual nsresult Serialize(nsIObjectOutputStream* aStream,
+                             JS::Handle<JSScript*> aScriptObject);
   virtual nsresult Deserialize(nsIObjectInputStream* aStream,
                                JS::MutableHandle<JSScript*> aResult);
 
@@ -151,7 +152,7 @@ public:
   {
     // Verify that we have a global so that this
     // does always return a null when GetGlobalObject() is null.
-    JSObject* global = JS_GetGlobalObject(mContext);
+    JSObject* global = GetNativeGlobal();
     return global ? mGlobalObjectRef.get() : nullptr;
   }
 protected:

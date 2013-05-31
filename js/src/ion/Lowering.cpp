@@ -857,8 +857,8 @@ ReorderCommutative(MDefinition **lhsp, MDefinition **rhsp)
 
     // Ensure that if there is a constant, then it is in rhs.
     // In addition, since clobbering binary operations clobber the left
-    // operand, prefer a lhs operand with no further uses.
-    if (lhs->isConstant() || rhs->useCount() == 1) {
+    // operand, prefer a non-constant lhs operand with no further uses.
+    if (lhs->isConstant() || (!rhs->isConstant() && rhs->useCount() == 1)) {
         *rhsp = lhs;
         *lhsp = rhs;
     }
@@ -1735,6 +1735,32 @@ LIRGenerator::visitMonitorTypes(MMonitorTypes *ins)
 }
 
 bool
+LIRGenerator::visitPostWriteBarrier(MPostWriteBarrier *ins)
+{
+#ifdef JSGC_GENERATIONAL
+    switch (ins->value()->type()) {
+      case MIRType_Object: {
+        LPostWriteBarrierO *lir = new LPostWriteBarrierO(useRegisterOrConstant(ins->object()),
+                                                         useRegister(ins->value()));
+        return add(lir, ins) && assignSafepoint(lir, ins);
+      }
+      case MIRType_Value: {
+        LPostWriteBarrierV *lir =
+            new LPostWriteBarrierV(useRegisterOrConstant(ins->object()), temp());
+        if (!useBox(lir, LPostWriteBarrierV::Input, ins->value()))
+            return false;
+        return add(lir, ins) && assignSafepoint(lir, ins);
+      }
+      default:
+        // Currently, only objects can be in the nursery. Other instruction
+        // types cannot hold nursery pointers.
+        return true;
+    }
+#endif // JSGC_GENERATIONAL
+    return true;
+}
+
+bool
 LIRGenerator::visitArrayLength(MArrayLength *ins)
 {
     JS_ASSERT(ins->elements()->type() == MIRType_Elements);
@@ -2364,6 +2390,33 @@ LIRGenerator::visitSetPropertyCache(MSetPropertyCache *ins)
         return false;
 
     return assignSafepoint(lir, ins);
+}
+
+bool
+LIRGenerator::visitSetElementCache(MSetElementCache *ins)
+{
+    JS_ASSERT(ins->object()->type() == MIRType_Object);
+    JS_ASSERT(ins->index()->type() == MIRType_Value);
+
+    LInstruction *lir;
+    if (ins->value()->type() == MIRType_Value) {
+        lir = new LSetElementCacheV(useRegister(ins->object()), temp());
+
+        if (!useBox(lir, LSetElementCacheV::Index, ins->index()))
+            return false;
+        if (!useBox(lir, LSetElementCacheV::Value, ins->value()))
+            return false;
+    } else {
+        lir = new LSetElementCacheT(
+            useRegister(ins->object()),
+            useRegisterOrConstant(ins->value()),
+            temp());
+
+        if (!useBox(lir, LSetElementCacheT::Index, ins->index()))
+            return false;
+    }
+
+    return add(lir, ins) && assignSafepoint(lir, ins);
 }
 
 bool

@@ -6,7 +6,7 @@
 #include "TextureHostOGL.h"
 #include "ipc/AutoOpenSurface.h"
 #include "gfx2DGlue.h"
-#include "ShmemYCbCrImage.h"
+#include "mozilla/layers/YCbCrImageDataSerializer.h"
 #include "GLContext.h"
 #include "gfxImageSurface.h"
 #include "SurfaceStream.h"
@@ -141,7 +141,6 @@ TextureImageTextureHostOGL::GetSize() const
   return gfx::IntSize(0, 0);
 }
 
-
 void
 TextureImageTextureHostOGL::SetCompositor(Compositor* aCompositor)
 {
@@ -234,7 +233,7 @@ bool
 TextureImageTextureHostOGL::Lock()
 {
   if (!mTexture) {
-    NS_WARNING("TextureImageAsTextureHost to be composited without texture");
+    NS_WARNING("TextureImageTextureHost to be composited without texture");
     return false;
   }
 
@@ -491,11 +490,10 @@ YCbCrTextureHostOGL::UpdateImpl(const SurfaceDescriptor& aImage,
   }
   NS_ASSERTION(aImage.type() == SurfaceDescriptor::TYCbCrImage, "SurfaceDescriptor mismatch");
 
-  ShmemYCbCrImage shmemImage(aImage.get_YCbCrImage().data(),
-                             aImage.get_YCbCrImage().offset());
+  YCbCrImageDataDeserializer deserializer(aImage.get_YCbCrImage().data().get<uint8_t>());
 
-  gfxIntSize gfxSize = shmemImage.GetYSize();
-  gfxIntSize gfxCbCrSize = shmemImage.GetCbCrSize();
+  gfxIntSize gfxSize = deserializer.GetYSize();
+  gfxIntSize gfxCbCrSize = deserializer.GetCbCrSize();
 
   if (!mYTexture->mTexImage || mYTexture->mTexImage->GetSize() != gfxSize) {
     mYTexture->mTexImage = CreateBasicTextureImage(mGL,
@@ -519,14 +517,14 @@ YCbCrTextureHostOGL::UpdateImpl(const SurfaceDescriptor& aImage,
                                                     FlagsToGLFlags(mFlags));
   }
 
-  RefPtr<gfxImageSurface> tempY = new gfxImageSurface(shmemImage.GetYData(),
-                                      gfxSize, shmemImage.GetYStride(),
-                                      gfxASurface::ImageFormatA8);
-  RefPtr<gfxImageSurface> tempCb = new gfxImageSurface(shmemImage.GetCbData(),
-                                       gfxCbCrSize, shmemImage.GetCbCrStride(),
+  RefPtr<gfxImageSurface> tempY = new gfxImageSurface(deserializer.GetYData(),
+                                       gfxSize, deserializer.GetYStride(),
                                        gfxASurface::ImageFormatA8);
-  RefPtr<gfxImageSurface> tempCr = new gfxImageSurface(shmemImage.GetCrData(),
-                                       gfxCbCrSize, shmemImage.GetCbCrStride(),
+  RefPtr<gfxImageSurface> tempCb = new gfxImageSurface(deserializer.GetCbData(),
+                                       gfxCbCrSize, deserializer.GetCbCrStride(),
+                                       gfxASurface::ImageFormatA8);
+  RefPtr<gfxImageSurface> tempCr = new gfxImageSurface(deserializer.GetCrData(),
+                                       gfxCbCrSize, deserializer.GetCbCrStride(),
                                        gfxASurface::ImageFormatA8);
 
   nsIntRegion yRegion(nsIntRect(0, 0, gfxSize.width, gfxSize.height));
@@ -782,7 +780,7 @@ void GrallocTextureHostOGL::BindTexture(GLenum aTextureUnit)
 bool
 GrallocTextureHostOGL::IsValid() const
 {
-  return !!mGraphicBuffer.get();
+  return !!mGL && !!mGraphicBuffer.get();
 }
 
 GrallocTextureHostOGL::~GrallocTextureHostOGL()
@@ -800,6 +798,9 @@ GrallocTextureHostOGL::~GrallocTextureHostOGL()
 bool
 GrallocTextureHostOGL::Lock()
 {
+  if (!IsValid()) {
+    return false;
+  }
   /*
    * The job of this function is to ensure that the texture is tied to the
    * android::GraphicBuffer, so that texturing will source the GraphicBuffer.
@@ -876,6 +877,68 @@ GrallocTextureHostOGL::SetBuffer(SurfaceDescriptor* aBuffer, ISurfaceAllocator* 
   RegisterTextureHostAtGrallocBufferActor(this, *mBuffer);
 }
 
+#endif
+
+already_AddRefed<gfxImageSurface>
+TextureImageTextureHostOGL::GetAsSurface() {
+  nsRefPtr<gfxImageSurface> surf = IsValid() ?
+    mGL->GetTexImage(mTexture->GetTextureID(),
+                     false,
+                     mTexture->GetShaderProgramType())
+    : nullptr;
+  return surf.forget();
+}
+
+already_AddRefed<gfxImageSurface>
+YCbCrTextureHostOGL::GetAsSurface() {
+  nsRefPtr<gfxImageSurface> surf = IsValid() ?
+    mGL->GetTexImage(mYTexture->mTexImage->GetTextureID(),
+                     false,
+                     mYTexture->mTexImage->GetShaderProgramType())
+    : nullptr;
+  return surf.forget();
+}
+
+already_AddRefed<gfxImageSurface>
+SharedTextureHostOGL::GetAsSurface() {
+  nsRefPtr<gfxImageSurface> surf = IsValid() ?
+    mGL->GetTexImage(GetTextureHandle(),
+                     false,
+                     GetShaderProgram())
+    : nullptr;
+  return surf.forget();
+}
+
+already_AddRefed<gfxImageSurface>
+SurfaceStreamHostOGL::GetAsSurface() {
+  nsRefPtr<gfxImageSurface> surf = IsValid() ?
+    mGL->GetTexImage(mTextureHandle,
+                     false,
+                     GetShaderProgram())
+    : nullptr;
+  return surf.forget();
+}
+
+already_AddRefed<gfxImageSurface>
+TiledTextureHostOGL::GetAsSurface() {
+  nsRefPtr<gfxImageSurface> surf = IsValid() ?
+    mGL->GetTexImage(mTextureHandle,
+                     false,
+                     GetShaderProgram())
+    : nullptr;
+  return surf.forget();
+}
+
+#ifdef MOZ_WIDGET_GONK
+already_AddRefed<gfxImageSurface>
+GrallocTextureHostOGL::GetAsSurface() {
+  nsRefPtr<gfxImageSurface> surf = IsValid() && mGLTexture ?
+    mGL->GetTexImage(mGLTexture,
+                     false,
+                     GetShaderProgram())
+    : nullptr;
+  return surf.forget();
+}
 #endif
 
 } // namespace

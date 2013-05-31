@@ -1966,9 +1966,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsXULPrototypeNode)
     if (tmp->mType == nsXULPrototypeNode::eType_Script) {
         nsXULPrototypeScript *script =
             static_cast<nsXULPrototypeScript*>(tmp);
-        NS_IMPL_CYCLE_COLLECTION_TRACE_JS_CALLBACK(script->GetScriptObject(),
-                                                   "mScriptObject")
-
+        script->Trace(aCallbacks, aClosure);
     }
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
@@ -2389,7 +2387,8 @@ nsXULPrototypeScript::Serialize(nsIObjectOutputStream* aStream,
     rv = aStream->Write32(mLangVersion);
     if (NS_FAILED(rv)) return rv;
     // And delegate the writing to the nsIScriptContext
-    rv = context->Serialize(aStream, mScriptObject);
+    rv = context->Serialize(aStream,
+                            JS::Handle<JSScript*>::fromMarkedLocation(&mScriptObject));
     if (NS_FAILED(rv)) return rv;
 
     return NS_OK;

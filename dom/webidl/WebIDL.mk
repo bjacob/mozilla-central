@@ -150,6 +150,7 @@ webidl_files = \
   HTMLTableSectionElement.webidl \
   HTMLTemplateElement.webidl \
   HTMLTextAreaElement.webidl \
+  HTMLTrackElement.webidl \
   HTMLTimeElement.webidl \
   HTMLTitleElement.webidl \
   HTMLUListElement.webidl \
@@ -315,6 +316,11 @@ webidl_files = \
   Text.webidl \
   TextDecoder.webidl \
   TextEncoder.webidl \
+  TextTrack.webidl \
+  TextTrackCue.webidl \
+  TextTrackCueList.webidl \
+  TextTrackList.webidl \
+  TimeEvent.webidl \
   TimeRanges.webidl \
   Touch.webidl \
   TouchEvent.webidl \
@@ -332,6 +338,7 @@ webidl_files = \
   USSDReceivedEvent.webidl \
   VideoStreamTrack.webidl \
   WaveShaperNode.webidl \
+  WaveTable.webidl \
   Window.webidl \
   XMLDocument.webidl \
   XMLHttpRequest.webidl \
