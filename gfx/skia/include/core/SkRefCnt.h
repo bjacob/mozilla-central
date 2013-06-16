@@ -14,6 +14,8 @@
 #include "SkInstCnt.h"
 #include "SkTemplates.h"
 
+#include "mozilla/RefgraphInstrumentation.h"
+
 /** \class SkRefCnt
 
     SkRefCnt is the base class for objects that may be shared by multiple
@@ -47,7 +49,8 @@ public:
 
     /** Increment the reference count. Must be balanced by a call to unref().
     */
-    void ref() const {
+    virtual void ref() const {
+        refgraph::SetType(this);
         SkASSERT(fRefCnt > 0);
         sk_atomic_inc(&fRefCnt);  // No barrier required.
     }
@@ -56,7 +59,7 @@ public:
         decrement, then delete the object. Note that if this is the case, then
         the object needs to have been allocated via new, and not on the stack.
     */
-    void unref() const {
+    virtual void unref() const {
         SkASSERT(fRefCnt > 0);
         // Release barrier (SL/S), if not provided below.
         if (sk_atomic_dec(&fRefCnt) == 1) {
@@ -249,6 +252,7 @@ public:
 
 private:
     T* fObj;
+    refgraph::StrongRefMarker mMarker;
 };
 
 #endif
