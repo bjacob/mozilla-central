@@ -12,7 +12,8 @@
 #include "IonCode.h"
 #include "CompileInfo.h"
 #include "jsinfer.h"
-#include "jsinterp.h"
+
+#include "vm/Interpreter.h"
 
 namespace js {
 namespace ion {
@@ -101,12 +102,6 @@ struct IonOptions
     // Default: 1,000
     uint32_t usesBeforeCompile;
 
-    // How many invocations or loop iterations are needed before functions
-    // are compiled when JM is disabled.
-    //
-    // Default: 40
-    uint32_t usesBeforeCompileNoJaeger;
-
     // How many invocations or loop iterations are needed before calls
     // are inlined, as a fraction of usesBeforeCompile.
     //
@@ -182,7 +177,7 @@ struct IonOptions
 
     void setEagerCompilation() {
         eagerCompilation = true;
-        usesBeforeCompile = usesBeforeCompileNoJaeger = 0;
+        usesBeforeCompile = 0;
         baselineUsesBeforeCompile = 0;
 
         parallelCompilation = false;
@@ -203,7 +198,6 @@ struct IonOptions
         parallelCompilation(false),
         baselineUsesBeforeCompile(10),
         usesBeforeCompile(1000),
-        usesBeforeCompileNoJaeger(40),
         usesBeforeInliningFactor(.125),
         osrPcMismatchesBeforeRecompile(6000),
         frequentBailoutThreshold(10),

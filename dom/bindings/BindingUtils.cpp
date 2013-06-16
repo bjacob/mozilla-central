@@ -7,19 +7,22 @@
 #include <algorithm>
 #include <stdarg.h>
 
+#include "prprf.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/Assertions.h"
 
 #include "BindingUtils.h"
 
 #include "AccessCheck.h"
+#include "jsfriendapi.h"
 #include "nsContentUtils.h"
+#include "nsIDOMGlobalPropertyInitializer.h"
 #include "nsIXPConnect.h"
 #include "WrapperFactory.h"
 #include "xpcprivate.h"
 #include "XPCQuickStubs.h"
 #include "XrayWrapper.h"
-#include "jsfriendapi.h"
 
 #include "mozilla/dom/HTMLObjectElement.h"
 #include "mozilla/dom/HTMLObjectElementBinding.h"
@@ -157,6 +160,19 @@ ErrorResult::ReportJSException(JSContext* cx)
   // If JS_WrapValue failed, not much we can do about it...  No matter
   // what, go ahead and unroot mJSException.
   JS_RemoveValueRoot(cx, &mJSException);
+}
+
+void
+ErrorResult::StealJSException(JSContext* cx,
+                              JS::MutableHandle<JS::Value> value)
+{
+  MOZ_ASSERT(!mMightHaveUnreportedJSException,
+             "Must call WouldReportJSException unconditionally in all codepaths that might call StealJSException");
+  MOZ_ASSERT(IsJSException(), "No exception to steal");
+
+  value.set(mJSException);
+  JS_RemoveValueRoot(cx, &mJSException);
+  mResult = NS_OK;
 }
 
 namespace dom {
@@ -583,8 +599,7 @@ NativeInterface2JSObjectAndThrowIfFailed(JSContext* aCx,
                                          bool aAllowNativeWrapper)
 {
   nsresult rv;
-  XPCLazyCallContext lccx(JS_CALLER, aCx, aScope);
-  if (!XPCConvert::NativeInterface2JSObject(lccx, aRetval, NULL, aHelper, aIID,
+  if (!XPCConvert::NativeInterface2JSObject(aRetval, NULL, aHelper, aIID,
                                             NULL, aAllowNativeWrapper, &rv)) {
     // I can't tell if NativeInterface2JSObject throws JS exceptions
     // or not.  This is a sloppy stab at the right semantics; the
@@ -600,8 +615,7 @@ NativeInterface2JSObjectAndThrowIfFailed(JSContext* aCx,
 bool
 TryPreserveWrapper(JSObject* obj)
 {
-  nsISupports* native;
-  if (UnwrapDOMObjectToISupports(obj, native)) {
+  if (nsISupports* native = UnwrapDOMObjectToISupports(obj)) {
     nsWrapperCache* cache = nullptr;
     CallQueryInterface(native, &cache);
     if (cache) {
@@ -655,8 +669,7 @@ VariantToJsval(JSContext* aCx, JS::Handle<JSObject*> aScope,
                nsIVariant* aVariant, JS::Value* aRetval)
 {
   nsresult rv;
-  XPCLazyCallContext lccx(JS_CALLER, aCx, aScope);
-  if (!XPCVariant::VariantDataToJS(lccx, aVariant, &rv, aRetval)) {
+  if (!XPCVariant::VariantDataToJS(aVariant, &rv, aRetval)) {
     // Does it throw?  Who knows
     if (!JS_IsExceptionPending(aCx)) {
       Throw<true>(aCx, NS_FAILED(rv) ? rv : NS_ERROR_UNEXPECTED);
@@ -670,6 +683,7 @@ VariantToJsval(JSContext* aCx, JS::Handle<JSObject*> aScope,
 JSBool
 QueryInterface(JSContext* cx, unsigned argc, JS::Value* vp)
 {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   JS::Rooted<JS::Value> thisv(cx, JS_THIS(cx, vp));
   if (thisv.isNull())
     return false;
@@ -683,8 +697,8 @@ QueryInterface(JSContext* cx, unsigned argc, JS::Value* vp)
       return false;
   }
 
-  nsISupports* native;
-  if (!UnwrapDOMObjectToISupports(obj, native)) {
+  nsISupports* native = UnwrapDOMObjectToISupports(obj);
+  if (!native) {
     return Throw<true>(cx, NS_ERROR_FAILURE);
   }
 
@@ -712,7 +726,7 @@ QueryInterface(JSContext* cx, unsigned argc, JS::Value* vp)
       return Throw<true>(cx, rv);
     }
 
-    return WrapObject(cx, origObj, ci, &NS_GET_IID(nsIClassInfo), vp);
+    return WrapObject(cx, origObj, ci, &NS_GET_IID(nsIClassInfo), args.rval());
   }
 
   nsCOMPtr<nsISupports> unused;
@@ -1469,8 +1483,8 @@ ReparentWrapper(JSContext* aCx, JS::HandleObject aObjArg)
     return NS_OK;
   }
 
-  nsISupports* native;
-  if (!UnwrapDOMObjectToISupports(aObj, native)) {
+  nsISupports* native = UnwrapDOMObjectToISupports(aObj);
+  if (!native) {
     return NS_OK;
   }
 
@@ -1785,13 +1799,13 @@ Date::SetTimeStamp(JSContext* cx, JSObject* objArg)
 }
 
 bool
-Date::ToDateObject(JSContext* cx, JS::Value* vp) const
+Date::ToDateObject(JSContext* cx, JS::MutableHandle<JS::Value> rval) const
 {
   JSObject* obj = JS_NewDateObjectMsec(cx, mMsecSinceEpoch);
   if (!obj) {
     return false;
   }
-  *vp = JS::ObjectValue(*obj);
+  rval.set(JS::ObjectValue(*obj));
   return true;
 }
 
@@ -1827,6 +1841,141 @@ GetWindowForJSImplementedObject(JSContext* cx, JS::Handle<JSObject*> obj,
   // object really wasn't associated with any window.
   nsCOMPtr<nsPIDOMWindow> win(do_QueryInterface(global.Get()));
   win.forget(window);
+  return true;
+}
+
+already_AddRefed<nsPIDOMWindow>
+ConstructJSImplementation(JSContext* aCx, const char* aContractId,
+                          const GlobalObject& aGlobal,
+                          JS::MutableHandle<JSObject*> aObject,
+                          ErrorResult& aRv)
+{
+  // Get the window to use as a parent and for initialization.
+  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.Get());
+  if (!window) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  // Make sure to have nothing on the JS context stack while creating and
+  // initializing the object, so exceptions from that will get reported
+  // properly, since those are never exceptions that a spec wants to be thrown.
+  {  // Scope for the nsCxPusher
+    nsCxPusher pusher;
+    pusher.PushNull();
+    // Get the XPCOM component containing the JS implementation.
+    nsCOMPtr<nsISupports> implISupports = do_CreateInstance(aContractId);
+    if (!implISupports) {
+      NS_WARNING("Failed to get JS implementation for contract");
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+    // Initialize the object, if it implements nsIDOMGlobalPropertyInitializer.
+    nsCOMPtr<nsIDOMGlobalPropertyInitializer> gpi =
+      do_QueryInterface(implISupports);
+    if (gpi) {
+      JS::Rooted<JS::Value> initReturn(aCx);
+      nsresult rv = gpi->Init(window, initReturn.address());
+      if (NS_FAILED(rv)) {
+        aRv.Throw(rv);
+        return nullptr;
+      }
+      MOZ_ASSERT(initReturn.isUndefined(),
+                 "nsIDOMGlobalPropertyInitializer should return undefined");
+    }
+    // Extract the JS implementation from the XPCOM object.
+    nsCOMPtr<nsIXPConnectWrappedJS> implWrapped =
+      do_QueryInterface(implISupports);
+    MOZ_ASSERT(implWrapped, "Failed to get wrapped JS from XPCOM component.");
+    if (!implWrapped) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+    aObject.set(implWrapped->GetJSObject());
+    if (!aObject) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+  }
+
+  return window.forget();
+}
+
+bool
+NonVoidByteStringToJsval(JSContext *cx, const nsACString &str,
+                         JS::MutableHandle<JS::Value> rval)
+{
+    if (str.IsEmpty()) {
+        rval.set(JS_GetEmptyStringValue(cx));
+        return true;
+    }
+
+    // ByteStrings are not UTF-8 encoded.
+    JSString* jsStr = JS_NewStringCopyN(cx, str.Data(), str.Length());
+
+    if (!jsStr)
+        return false;
+
+    rval.setString(jsStr);
+    return true;
+}
+
+bool
+ConvertJSValueToByteString(JSContext* cx, JS::Handle<JS::Value> v,
+                           JS::MutableHandle<JS::Value> pval, bool nullable,
+                           nsACString& result)
+{
+  JSString *s;
+  if (v.isString()) {
+    s = v.toString();
+  } else {
+
+    if (nullable && v.isNullOrUndefined()) {
+      result.SetIsVoid(true);
+      return true;
+    }
+
+    s = JS_ValueToString(cx, v);
+    if (!s) {
+      return false;
+    }
+    pval.set(JS::StringValue(s));  // Root the new string.
+  }
+
+  size_t length;
+  const jschar *chars = JS_GetStringCharsZAndLength(cx, s, &length);
+  if (!chars) {
+    return false;
+  }
+
+  // Conversion from Javascript string to ByteString is only valid if all
+  // characters < 256.
+  for (size_t i = 0; i < length; i++) {
+    if (chars[i] > 255) {
+      // The largest unsigned 64 bit number (18,446,744,073,709,551,615) has
+      // 20 digits, plus one more for the null terminator.
+      char index[21];
+      MOZ_STATIC_ASSERT(sizeof(size_t) <= 8, "index array too small");
+      PR_snprintf(index, sizeof(index), "%d", i);
+      // A jschar is 16 bits long.  The biggest unsigned 16 bit
+      // number (65,535) has 5 digits, plus one more for the null
+      // terminator.
+      char badChar[6];
+      MOZ_STATIC_ASSERT(sizeof(jschar) <= 2, "badChar array too small");
+      PR_snprintf(badChar, sizeof(badChar), "%d", chars[i]);
+      ThrowErrorMessage(cx, MSG_INVALID_BYTESTRING, index, badChar);
+      return false;
+    }
+  }
+
+  if (length >= UINT32_MAX) {
+    return false;
+  }
+  result.SetCapacity(length+1);
+  JS_EncodeStringToBuffer(cx, s, result.BeginWriting(), length);
+  result.BeginWriting()[length] = '\0';
+  result.SetLength(length);
+
   return true;
 }
 

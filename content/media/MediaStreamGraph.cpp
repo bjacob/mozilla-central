@@ -1443,7 +1443,8 @@ MediaStreamGraphImpl::AppendMessage(ControlMessage* aMessage)
     // This should only happen during forced shutdown.
     aMessage->RunDuringShutdown();
     delete aMessage;
-    if (IsEmpty()) {
+    if (IsEmpty() &&
+        mLifecycleState >= LIFECYCLE_WAITING_FOR_STREAM_DESTRUCTION) {
       if (gGraph == this) {
         gGraph = nullptr;
       }
@@ -1491,6 +1492,13 @@ MediaStream::SetGraphImpl(MediaStreamGraphImpl* aGraph)
 {
   MOZ_ASSERT(!mGraph, "Should only be called once");
   mGraph = aGraph;
+}
+
+void
+MediaStream::SetGraphImpl(MediaStreamGraph* aGraph)
+{
+  MediaStreamGraphImpl* graph = static_cast<MediaStreamGraphImpl*>(aGraph);
+  SetGraphImpl(graph);
 }
 
 StreamTime

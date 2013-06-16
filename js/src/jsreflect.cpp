@@ -1787,17 +1787,6 @@ ASTSerializer::variableDeclaration(ParseNode *pn, bool let, MutableHandleValue d
     VarDeclKind kind = let ? VARDECL_LET : VARDECL_VAR;
 
     NodeVector dtors(cx);
-
-    /* In a for-in context, variable declarations contain just a single pattern. */
-    if (pn->pn_xflags & PNX_FORINVAR) {
-        RootedValue patt(cx), child(cx);
-        RootedValue nullVal(cx, NullValue());
-        return pattern(pn->pn_head, &kind, &patt) &&
-               builder.variableDeclarator(patt, nullVal, &pn->pn_head->pn_pos, &child) &&
-               dtors.append(child) &&
-               builder.variableDeclaration(dtors, kind, &pn->pn_pos, dst);
-    }
-
     if (!dtors.reserve(pn->pn_count))
         return false;
     for (ParseNode *next = pn->pn_head; next; next = next->pn_next) {
@@ -1806,16 +1795,12 @@ ASTSerializer::variableDeclaration(ParseNode *pn, bool let, MutableHandleValue d
             return false;
         dtors.infallibleAppend(child);
     }
-
     return builder.variableDeclaration(dtors, kind, &pn->pn_pos, dst);
 }
 
 bool
 ASTSerializer::variableDeclarator(ParseNode *pn, VarDeclKind *pkind, MutableHandleValue dst)
 {
-    /* A destructuring declarator is always a PNK_ASSIGN. */
-    JS_ASSERT(pn->isKind(PNK_NAME) || pn->isKind(PNK_ASSIGN));
-
     ParseNode *pnleft;
     ParseNode *pnright;
 
@@ -1823,12 +1808,15 @@ ASTSerializer::variableDeclarator(ParseNode *pn, VarDeclKind *pkind, MutableHand
         pnleft = pn;
         pnright = pn->isUsed() ? NULL : pn->pn_expr;
         JS_ASSERT_IF(pnright, pn->pn_pos.encloses(pnright->pn_pos));
-    } else {
-        JS_ASSERT(pn->isKind(PNK_ASSIGN));
+    } else if (pn->isKind(PNK_ASSIGN)) {
         pnleft = pn->pn_left;
         pnright = pn->pn_right;
         JS_ASSERT(pn->pn_pos.encloses(pnleft->pn_pos));
         JS_ASSERT(pn->pn_pos.encloses(pnright->pn_pos));
+    } else {
+        /* This happens for a destructuring declarator in a for-in/of loop. */
+        pnleft = pn;
+        pnright = NULL;
     }
 
     RootedValue left(cx), right(cx);
@@ -2159,12 +2147,12 @@ ASTSerializer::statement(ParseNode *pn, MutableHandleValue dst)
                 : builder.continueStatement(label, &pn->pn_pos, dst));
       }
 
-      case PNK_COLON:
+      case PNK_LABEL:
       {
         JS_ASSERT(pn->pn_pos.encloses(pn->pn_expr->pn_pos));
 
         RootedValue label(cx), stmt(cx);
-        RootedAtom pnAtom(cx, pn->pn_atom);
+        RootedAtom pnAtom(cx, pn->as<LabeledStatement>().label());
         return identifier(pnAtom, NULL, &label) &&
                statement(pn->pn_expr, &stmt) &&
                builder.labeledStatement(label, stmt, &pn->pn_pos, dst);
@@ -2528,7 +2516,7 @@ ASTSerializer::expression(ParseNode *pn, MutableHandleValue dst)
         for (ParseNode *next = pn->pn_head; next; next = next->pn_next) {
             JS_ASSERT(pn->pn_pos.encloses(next->pn_pos));
 
-            if (next->isKind(PNK_COMMA) && next->pn_count == 0) {
+            if (next->isKind(PNK_ELISION)) {
                 elts.infallibleAppend(NullValue());
             } else {
                 RootedValue expr(cx);
@@ -2708,10 +2696,7 @@ ASTSerializer::arrayPattern(ParseNode *pn, VarDeclKind *pkind, MutableHandleValu
         return false;
 
     for (ParseNode *next = pn->pn_head; next; next = next->pn_next) {
-        /* Comma expressions can't occur inside patterns, so no need to test pn_count. */
-        JS_ASSERT_IF(next->isKind(PNK_COMMA), next->pn_count == 0);
-
-        if (next->isKind(PNK_COMMA)) {
+        if (next->isKind(PNK_ELISION)) {
             elts.infallibleAppend(NullValue());
         } else {
             RootedValue patt(cx);
@@ -2971,13 +2956,15 @@ ASTSerializer::moduleOrFunctionBody(ParseNode *pn, TokenPos *pos, MutableHandleV
 static JSBool
 reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
 {
-    if (argc < 1) {
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (args.length() < 1) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_MORE_ARGS_NEEDED,
                              "Reflect.parse", "0", "s");
         return JS_FALSE;
     }
 
-    RootedString src(cx, ToString<CanGC>(cx, JS_ARGV(cx, vp)[0]));
+    RootedString src(cx, ToString<CanGC>(cx, args.handleAt(0)));
     if (!src)
         return JS_FALSE;
 
@@ -2987,7 +2974,7 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
 
     RootedObject builder(cx);
 
-    RootedValue arg(cx, argc > 1 ? JS_ARGV(cx, vp)[1] : UndefinedValue());
+    RootedValue arg(cx, args.get(1));
 
     if (!arg.isNullOrUndefined()) {
         if (!arg.isObject()) {
@@ -3072,8 +3059,6 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
     options.setCanLazilyParse(false);
     Parser<FullParseHandler> parser(cx, options, chars.get(), length,
                                     /* foldConstants = */ false, NULL, NULL);
-    if (!parser.init())
-        return JS_FALSE;
 
     serialize.setParser(&parser);
 
@@ -3083,11 +3068,11 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
 
     RootedValue val(cx);
     if (!serialize.program(pn, &val)) {
-        JS_SET_RVAL(cx, vp, JSVAL_NULL);
+        args.rval().setNull();
         return JS_FALSE;
     }
 
-    JS_SET_RVAL(cx, vp, val);
+    args.rval().set(val);
     return JS_TRUE;
 }
 

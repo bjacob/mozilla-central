@@ -204,8 +204,6 @@ public:
                     nsIFrame*   aParent,
                     nsIFrame*   aPrevInFlow) MOZ_OVERRIDE;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
-
   NS_IMETHOD AttributeChanged(int32_t aNamespaceID,
                               nsIAtom* aAttribute,
                               int32_t aModType) MOZ_OVERRIDE;
@@ -214,11 +212,6 @@ public:
   {
     return GetFirstPrincipalChild()->GetContentInsertionFrame();
   }
-
-  NS_IMETHOD Reflow(nsPresContext*           aPresContext,
-                    nsHTMLReflowMetrics&     aDesiredSize,
-                    const nsHTMLReflowState& aReflowState,
-                    nsReflowStatus&          aStatus) MOZ_OVERRIDE;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
@@ -238,11 +231,14 @@ public:
   }
 #endif
 
+  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) MOZ_OVERRIDE;
+
   /**
    * Finds the nsTextFrame for the closest rendered run to the specified point.
    */
   virtual void FindCloserFrameForSelection(nsPoint aPoint,
                                           FrameWithDistance* aCurrentBestFrame) MOZ_OVERRIDE;
+
 
 
   // nsISVGChildFrame interface:
@@ -279,16 +275,37 @@ public:
 
   /**
    * Schedules mPositions to be recomputed and the covered region to be
-   * updated.  The aFlags argument can take the ePositioningDirtyDueToMutation
-   * value to indicate that glyph metrics need to be recomputed due to
-   * a DOM mutation in the <text> element on one of its descendants.
+   * updated.
    */
-  void NotifyGlyphMetricsChange(uint32_t aFlags = 0);
+  void NotifyGlyphMetricsChange();
 
   /**
-   * Enum for NotifyGlyphMetricsChange's aFlags argument.
+   * Reflows the anonymous block frame of this non-display nsSVGTextFrame2.
+   *
+   * When we are under nsSVGDisplayContainerFrame::ReflowSVG, we need to
+   * reflow any nsSVGTextFrame2 frames in the subtree in case they are
+   * being observed (by being for example in a <mask>) and the change
+   * that caused the reflow would not already have caused a reflow.
+   *
+   * Note that displayed nsSVGTextFrame2s are reflowed as needed, when PaintSVG
+   * is called or some SVG DOM method is called on the element.
    */
-  enum { ePositioningDirtyDueToMutation = 1 };
+  void ReflowSVGNonDisplayText();
+
+  /**
+   * This is a function that behaves similarly to nsSVGUtils::ScheduleReflowSVG,
+   * but which will skip over any ancestor non-display container frames on the
+   * way to the nsSVGOuterSVGFrame.  It exists for the situation where a
+   * non-display <text> element has changed and needs to ensure ReflowSVG will
+   * be called on its closest display container frame, so that
+   * nsSVGDisplayContainerFrame::ReflowSVG will call ReflowSVGNonDisplayText on
+   * it.
+   *
+   * The only case where we have to do this is in response to a style change on
+   * a non-display <text>; the only caller of ScheduleReflowSVGNonDisplayText
+   * currently is nsSVGTextFrame2::DidSetStyleContext.
+   */
+  void ScheduleReflowSVGNonDisplayText();
 
   /**
    * Updates the mFontSizeScaleFactor value by looking at the range of
@@ -340,7 +357,6 @@ private:
     }
     ~AutoCanvasTMForMarker()
     {
-      // Default
       mFrame->mGetCanvasTMForFlag = mOldFor;
     }
   private:
@@ -387,17 +403,19 @@ private:
   };
 
   /**
-   * Reflows the anonymous block child.
+   * Reflows the anonymous block child if it is dirty or has dirty
+   * children, or if the nsSVGTextFrame2 itself is dirty.
+   */
+  void MaybeReflowAnonymousBlockChild();
+
+  /**
+   * Performs the actual work of reflowing the anonymous block child.
    */
   void DoReflow();
 
   /**
-   * Calls FrameNeedsReflow on the anonymous block child.
-   */
-  void RequestReflow(nsIPresShell::IntrinsicDirty aType, uint32_t aBit);
-
-  /**
-   * Reflows the anonymous block child and recomputes mPositions if needed.
+   * Recomputes mPositions by calling DoGlyphPositioning if this information
+   * is out of date.
    */
   void UpdateGlyphPositioning();
 
@@ -567,12 +585,6 @@ private:
    * The MutationObserver we have registered for the <text> element subtree.
    */
   MutationObserver mMutationObserver;
-
-  /**
-   * The runnable we have dispatched to perform the work of
-   * NotifyGlyphMetricsChange.
-   */
-  nsRefPtr<GlyphMetricsUpdater> mGlyphMetricsUpdater;
 
   /**
    * Cached canvasTM value.

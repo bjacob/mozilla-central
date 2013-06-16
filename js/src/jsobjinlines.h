@@ -7,48 +7,18 @@
 #ifndef jsobjinlines_h___
 #define jsobjinlines_h___
 
-#include "jsapi.h"
-#include "jsarray.h"
-#include "jsbool.h"
-#include "jscntxt.h"
-#include "jsfun.h"
-#include "jsiter.h"
-#include "jslock.h"
-#include "jsnum.h"
 #include "jsobj.h"
-#include "jsprobes.h"
-#include "jspropertytree.h"
-#include "jsproxy.h"
-#include "jsstr.h"
-#include "jstypedarray.h"
+
 #include "jswrapper.h"
 
-#include "builtin/Iterator-inl.h"
-#include "gc/Barrier.h"
-#include "gc/Marking.h"
-#include "js/MemoryMetrics.h"
-#include "js/RootingAPI.h"
-#include "js/TemplateLib.h"
-#include "vm/BooleanObject.h"
-#include "vm/GlobalObject.h"
-#include "vm/Shape.h"
 #include "vm/NumberObject.h"
-#include "vm/RegExpStatics.h"
+#include "vm/Probes.h"
 #include "vm/StringObject.h"
 
 #include "jsatominlines.h"
-#include "jscompartmentinlines.h"
 #include "jsfuninlines.h"
-#include "jsgcinlines.h"
-#include "jsinferinlines.h"
-#include "jsscriptinlines.h"
-
-#include "gc/Barrier-inl.h"
 
 #include "vm/ObjectImpl-inl.h"
-#include "vm/Shape-inl.h"
-#include "vm/RegExpStatics-inl.h"
-#include "vm/String-inl.h"
 
 /* static */ inline bool
 JSObject::enumerate(JSContext *cx, JS::HandleObject obj, JSIterateOp iterop,
@@ -252,6 +222,12 @@ JSObject::getParent() const
 }
 
 inline JSObject *
+JSObject::getMetadata() const
+{
+    return lastProperty()->getObjectMetadata();
+}
+
+inline JSObject *
 JSObject::enclosingScope()
 {
     return isScope()
@@ -308,6 +284,7 @@ JSObject::canRemoveLastProperty()
     JS_ASSERT(!inDictionaryMode());
     js::Shape *previous = lastProperty()->previous().get();
     return previous->getObjectParent() == lastProperty()->getObjectParent()
+        && previous->getObjectMetadata() == lastProperty()->getObjectMetadata()
         && previous->getObjectFlags() == lastProperty()->getObjectFlags();
 }
 
@@ -316,20 +293,6 @@ JSObject::getRawSlots()
 {
     JS_ASSERT(isGlobal());
     return slots;
-}
-
-inline const js::Value &
-JSObject::getReservedSlot(uint32_t index) const
-{
-    JS_ASSERT(index < JSSLOT_FREE(getClass()));
-    return getSlot(index);
-}
-
-inline js::HeapSlot &
-JSObject::getReservedSlotRef(uint32_t index)
-{
-    JS_ASSERT(index < JSSLOT_FREE(getClass()));
-    return getSlotRef(index);
 }
 
 inline void
@@ -666,13 +629,13 @@ JSObject::parExtendDenseElements(js::Allocator *alloc, js::Value *v, uint32_t ex
 
     js::HeapSlot *sp = elements + initializedLength;
     if (v) {
-        for (uint32_t i = 0; i < extra; i++)
-            sp[i].init(runtime(), this, js::HeapSlot::Element, initializedLength+i, v[i]);
-    } else {
         for (uint32_t i = 0; i < extra; i++) {
-            sp[i].init(runtime(), this, js::HeapSlot::Element,
-                       initializedLength + i, js::MagicValue(JS_ELEMENTS_HOLE));
+            JS_ASSERT_IF(v[i].isMarkable(), static_cast<js::gc::Cell *>(v[i].toGCThing())->isTenured());
+            *sp[i].unsafeGet() = v[i];
         }
+    } else {
+        for (uint32_t i = 0; i < extra; i++)
+            *sp[i].unsafeGet() = js::MagicValue(JS_ELEMENTS_HOLE);
     }
     header->initializedLength = requiredCapacity;
     if (header->length < requiredCapacity)
@@ -750,12 +713,13 @@ JSObject::setDateUTCTime(const js::Value &time)
 /* static */ inline bool
 JSObject::setSingletonType(JSContext *cx, js::HandleObject obj)
 {
-    JS_ASSERT(!IsInsideNursery(cx->runtime, obj.get()));
+    JS_ASSERT(!IsInsideNursery(cx->runtime(), obj.get()));
 
     if (!cx->typeInferenceEnabled())
         return true;
 
-    js::types::TypeObject *type = cx->compartment->getLazyType(cx, obj->getClass(), obj->getTaggedProto());
+    js::types::TypeObject *type =
+        cx->compartment()->getLazyType(cx, obj->getClass(), obj->getTaggedProto());
     if (!type)
         return false;
 
@@ -766,10 +730,10 @@ JSObject::setSingletonType(JSContext *cx, js::HandleObject obj)
 inline js::types::TypeObject*
 JSObject::getType(JSContext *cx)
 {
-    JS_ASSERT(cx->compartment == compartment());
+    JS_ASSERT(cx->compartment() == compartment());
     if (hasLazyType()) {
         JS::RootedObject self(cx, this);
-        if (cx->compartment != compartment())
+        if (cx->compartment() != compartment())
             MOZ_CRASH();
         return makeLazyType(cx, self);
     }
@@ -780,9 +744,9 @@ JSObject::getType(JSContext *cx)
 JSObject::clearType(JSContext *cx, js::HandleObject obj)
 {
     JS_ASSERT(!obj->hasSingletonType());
-    JS_ASSERT(cx->compartment == obj->compartment());
+    JS_ASSERT(cx->compartment() == obj->compartment());
 
-    js::types::TypeObject *type = cx->compartment->getNewType(cx, obj->getClass(), NULL);
+    js::types::TypeObject *type = cx->compartment()->getNewType(cx, obj->getClass(), NULL);
     if (!type)
         return false;
 
@@ -881,40 +845,9 @@ inline bool JSObject::watched() const
     return lastProperty()->hasObjectFlag(js::BaseShape::WATCHED);
 }
 
-inline bool JSObject::isArray() const { return hasClass(&js::ArrayClass); }
-inline bool JSObject::isArguments() const { return isNormalArguments() || isStrictArguments(); }
-inline bool JSObject::isArrayBuffer() const { return hasClass(&js::ArrayBufferClass); }
-inline bool JSObject::isBlock() const { return hasClass(&js::BlockClass); }
-inline bool JSObject::isBoolean() const { return hasClass(&js::BooleanClass); }
-inline bool JSObject::isCall() const { return hasClass(&js::CallClass); }
 inline bool JSObject::isClonedBlock() const { return isBlock() && !!getProto(); }
-inline bool JSObject::isDataView() const { return hasClass(&js::DataViewClass); }
-inline bool JSObject::isDate() const { return hasClass(&js::DateClass); }
-inline bool JSObject::isDeclEnv() const { return hasClass(&js::DeclEnvClass); }
-inline bool JSObject::isElementIterator() const { return hasClass(&js::ElementIteratorClass); }
-inline bool JSObject::isError() const { return hasClass(&js::ErrorClass); }
-inline bool JSObject::isFunction() const { return hasClass(&js::FunctionClass); }
-inline bool JSObject::isFunctionProxy() const { return hasClass(&js::FunctionProxyClass); }
-inline bool JSObject::isGenerator() const { return hasClass(&js::GeneratorClass); }
-inline bool JSObject::isMapIterator() const { return hasClass(&js::MapIteratorClass); }
-inline bool JSObject::isModule() const { return hasClass(&js::ModuleClass); }
-inline bool JSObject::isNestedScope() const { return isBlock() || isWith(); }
-inline bool JSObject::isNormalArguments() const { return hasClass(&js::NormalArgumentsObjectClass); }
-inline bool JSObject::isNumber() const { return hasClass(&js::NumberClass); }
-inline bool JSObject::isObject() const { return hasClass(&js::ObjectClass); }
-inline bool JSObject::isPrimitive() const { return isNumber() || isString() || isBoolean(); }
-inline bool JSObject::isRegExp() const { return hasClass(&js::RegExpClass); }
-inline bool JSObject::isRegExpStatics() const { return hasClass(&js::RegExpStaticsClass); }
-inline bool JSObject::isScope() const { return isCall() || isDeclEnv() || isNestedScope(); }
-inline bool JSObject::isScriptSource() const { return hasClass(&js::ScriptSourceClass); }
-inline bool JSObject::isSetIterator() const { return hasClass(&js::SetIteratorClass); }
 inline bool JSObject::isStaticBlock() const { return isBlock() && !getProto(); }
-inline bool JSObject::isStopIteration() const { return hasClass(&js::StopIterationClass); }
-inline bool JSObject::isStrictArguments() const { return hasClass(&js::StrictArgumentsObjectClass); }
-inline bool JSObject::isString() const { return hasClass(&js::StringClass); }
 inline bool JSObject::isTypedArray() const { return IsTypedArrayClass(getClass()); }
-inline bool JSObject::isWeakMap() const { return hasClass(&js::WeakMapClass); }
-inline bool JSObject::isWith() const { return hasClass(&js::WithClass); }
 
 inline js::NumberObject &
 JSObject::asNumber()
@@ -928,6 +861,13 @@ JSObject::asString()
 {
     JS_ASSERT(isString());
     return *static_cast<js::StringObject *>(this);
+}
+
+inline js::ScriptSourceObject &
+JSObject::asScriptSource()
+{
+    JS_ASSERT(isScriptSource());
+    return *static_cast<js::ScriptSourceObject *>(this);
 }
 
 inline bool
@@ -973,7 +913,7 @@ JSObject::create(JSContext *cx, js::gc::AllocKind kind, js::gc::InitialHeap heap
     }
 
 #ifdef JSGC_GENERATIONAL
-    cx->runtime->gcNursery.notifyInitialSlots(obj, slots);
+    cx->runtime()->gcNursery.notifyInitialSlots(obj, slots);
 #endif
 
     obj->shape_.init(shape);
@@ -1105,6 +1045,10 @@ JSObject::hasShapeTable() const
 JSObject::lookupGeneric(JSContext *cx, js::HandleObject obj, js::HandleId id,
                         js::MutableHandleObject objp, js::MutableHandleShape propp)
 {
+    /* NB: The logic of lookupGeneric is implicitly reflected in IonBuilder.cpp's
+     *     |CanEffectlesslyCallLookupGenericOnObject| logic.
+     *     If this changes, please remember to update the logic there as well.
+     */
     js::LookupGenericOp op = obj->getOps()->lookupGeneric;
     if (op)
         return op(cx, obj, id, objp, propp);
@@ -1279,12 +1223,6 @@ JSObject::getSpecialAttributes(JSContext *cx, js::HandleObject obj,
 {
     JS::RootedId id(cx, SPECIALID_TO_JSID(sid));
     return getGenericAttributes(cx, obj, id, attrsp);
-}
-
-inline bool
-js::ObjectImpl::isProxy() const
-{
-    return js::IsProxy(const_cast<JSObject*>(this->asObjectPtr()));
 }
 
 inline bool
@@ -1529,16 +1467,6 @@ class AutoPropertyDescriptorRooter : private AutoGCRooter, public PropertyDescri
     friend void AutoGCRooter::trace(JSTracer *trc);
 };
 
-inline void
-NewObjectCache::copyCachedToObject(JSObject *dst, JSObject *src, gc::AllocKind kind)
-{
-    js_memcpy(dst, src, gc::Arena::thingSize(kind));
-#ifdef JSGC_GENERATIONAL
-    Shape::writeBarrierPost(dst->shape_, &dst->shape_);
-    types::TypeObject::writeBarrierPost(dst->type_, &dst->type_);
-#endif
-}
-
 static inline bool
 CanBeFinalizedInBackground(gc::AllocKind kind, Class *clasp)
 {
@@ -1684,8 +1612,11 @@ CopyInitializerObject(JSContext *cx, HandleObject baseobj, NewObjectKind newKind
     if (!obj)
         return NULL;
 
+    RootedObject metadata(cx, obj->getMetadata());
     RootedShape lastProp(cx, baseobj->lastProperty());
     if (!JSObject::setLastProperty(cx, obj, lastProp))
+        return NULL;
+    if (metadata && !JSObject::setMetadata(cx, obj, metadata))
         return NULL;
 
     return obj;
@@ -1792,6 +1723,20 @@ DefineConstructorAndPrototype(JSContext *cx, HandleObject obj, JSProtoKey key, H
                               const JSPropertySpec *static_ps, const JSFunctionSpec *static_fs,
                               JSObject **ctorp = NULL,
                               gc::AllocKind ctorKind = JSFunction::FinalizeKind);
+
+static JS_ALWAYS_INLINE JSObject *
+NewObjectMetadata(JSContext *cx)
+{
+    // The metadata callback is invoked before each created object, except when
+    // analysis is active as the callback may reenter JS.
+    if (JS_UNLIKELY((size_t)cx->compartment()->objectMetadataCallback) &&
+        !cx->compartment()->activeAnalysis)
+    {
+        gc::AutoSuppressGC suppress(cx);
+        return cx->compartment()->objectMetadataCallback(cx);
+    }
+    return NULL;
+}
 
 } /* namespace js */
 

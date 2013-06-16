@@ -98,7 +98,7 @@ using namespace mozilla::widget;
 
 NS_IMPL_ISUPPORTS1(ContentListener, nsIDOMEventListener)
 
-static const nsIntSize kDefaultViewportSize(980, 480);
+static const CSSSize kDefaultViewportSize(980, 480);
 
 static const char CANCEL_DEFAULT_PAN_ZOOM[] = "cancel-default-pan-zoom";
 static const char BROWSER_ZOOM_TO_RECT[] = "browser-zoom-to-rect";
@@ -341,20 +341,18 @@ TabChild::Observe(nsISupports *aSubject,
         // Reset CSS viewport and zoom to default on new page, then
         // calculate them properly using the actual metadata from the
         // page.
-        SetCSSViewport(kDefaultViewportSize.width, kDefaultViewportSize.height);
+        SetCSSViewport(kDefaultViewportSize);
 
         // Calculate a really simple resolution that we probably won't
         // be keeping, as well as putting the scroll offset back to
         // the top-left of the page.
         mLastMetrics.mZoom = gfxSize(1.0, 1.0);
-        mLastMetrics.mViewport =
-            gfx::Rect(0, 0,
-                      kDefaultViewportSize.width, kDefaultViewportSize.height);
-        mLastMetrics.mCompositionBounds = nsIntRect(nsIntPoint(0, 0),
-                                                    mInnerSize);
-        mLastMetrics.mResolution =
+        mLastMetrics.mViewport = CSSRect(CSSPoint(), kDefaultViewportSize);
+        mLastMetrics.mCompositionBounds = ScreenIntRect(ScreenIntPoint(), mInnerSize);
+        CSSToScreenScale resolution =
           AsyncPanZoomController::CalculateResolution(mLastMetrics);
-        mLastMetrics.mScrollOffset = gfx::Point(0, 0);
+        mLastMetrics.mResolution = gfxSize(resolution.scale, resolution.scale);
+        mLastMetrics.mScrollOffset = CSSPoint(0, 0);
         utils->SetResolution(mLastMetrics.mResolution.width,
                              mLastMetrics.mResolution.height);
 
@@ -470,13 +468,13 @@ TabChild::OnSecurityChange(nsIWebProgress* aWebProgress,
 }
 
 void
-TabChild::SetCSSViewport(float aWidth, float aHeight)
+TabChild::SetCSSViewport(const CSSSize& aSize)
 {
-  mOldViewportWidth = aWidth;
+  mOldViewportWidth = aSize.width;
 
   if (mContentDocumentIsDisplayed) {
     nsCOMPtr<nsIDOMWindowUtils> utils(GetDOMWindowUtils());
-    utils->SetCSSViewport(aWidth, aHeight);
+    utils->SetCSSViewport(aSize.width, aSize.height);
   }
 }
 
@@ -501,8 +499,7 @@ TabChild::HandlePossibleViewportChange()
 
   float screenW = mInnerSize.width;
   float screenH = mInnerSize.height;
-  float viewportW = viewportInfo.GetWidth();
-  float viewportH = viewportInfo.GetHeight();
+  CSSSize viewport(viewportInfo.GetWidth(), viewportInfo.GetHeight());
 
   // We're not being displayed in any way; don't bother doing anything because
   // that will just confuse future adjustments.
@@ -516,12 +513,11 @@ TabChild::HandlePossibleViewportChange()
   // we have to call SetCSSViewport twice - once to set the width, and the
   // second time to figure out the height based on the layout at that width.
   float oldBrowserWidth = mOldViewportWidth;
-  mLastMetrics.mViewport.width = viewportW;
-  mLastMetrics.mViewport.height = viewportH;
+  mLastMetrics.mViewport.SizeTo(viewport);
   if (!oldBrowserWidth) {
     oldBrowserWidth = kDefaultViewportSize.width;
   }
-  SetCSSViewport(viewportW, viewportH);
+  SetCSSViewport(viewport);
 
   // If this page has not been painted yet, then this must be getting run
   // because a meta-viewport element was added (via the DOMMetaAdded handler).
@@ -552,24 +548,26 @@ TabChild::HandlePossibleViewportChange()
     bodyHeight = bodyDOMElement->ScrollHeight();
   }
 
-  float pageWidth, pageHeight;
+  CSSSize pageSize;
   if (htmlDOMElement || bodyDOMElement) {
-    pageWidth = std::max(htmlWidth, bodyWidth);
-    pageHeight = std::max(htmlHeight, bodyHeight);
+    pageSize = CSSSize(std::max(htmlWidth, bodyWidth),
+                       std::max(htmlHeight, bodyHeight));
   } else {
     // For non-HTML content (e.g. SVG), just assume page size == viewport size.
-    pageWidth = viewportW;
-    pageHeight = viewportH;
+    pageSize = viewport;
   }
-  NS_ENSURE_TRUE_VOID(pageWidth); // (return early rather than divide by 0)
+  if (!pageSize.width) {
+    // Return early rather than divide by 0.
+    return;
+  }
 
-  minScale = mInnerSize.width / pageWidth;
+  minScale = mInnerSize.width / pageSize.width;
   minScale = clamped((double)minScale, viewportInfo.GetMinZoom(),
                      viewportInfo.GetMaxZoom());
   NS_ENSURE_TRUE_VOID(minScale); // (return early rather than divide by 0)
 
-  viewportH = std::max(viewportH, screenH / minScale);
-  SetCSSViewport(viewportW, viewportH);
+  viewport.height = std::max(viewport.height, screenH / minScale);
+  SetCSSViewport(viewport);
 
   // This change to the zoom accounts for all types of changes I can conceive:
   // 1. screen size changes, CSS viewport does not (pages with no meta viewport
@@ -589,9 +587,9 @@ TabChild::HandlePossibleViewportChange()
   }
 
   FrameMetrics metrics(mLastMetrics);
-  metrics.mViewport = gfx::Rect(0.0f, 0.0f, viewportW, viewportH);
-  metrics.mScrollableRect = gfx::Rect(0.0f, 0.0f, pageWidth, pageHeight);
-  metrics.mCompositionBounds = nsIntRect(0, 0, mInnerSize.width, mInnerSize.height);
+  metrics.mViewport = CSSRect(CSSPoint(), viewport);
+  metrics.mScrollableRect = CSSRect(CSSPoint(), pageSize);
+  metrics.mCompositionBounds = ScreenIntRect(ScreenIntPoint(), mInnerSize);
 
   // Changing the zoom when we're not doing a first paint will get ignored
   // by AsyncPanZoomController and causes a blurry flash.
@@ -622,14 +620,13 @@ TabChild::HandlePossibleViewportChange()
     // new CSS viewport, so we know that there's no velocity, acceleration, and
     // we have no idea how long painting will take.
     metrics, gfx::Point(0.0f, 0.0f), gfx::Point(0.0f, 0.0f), 0.0);
-  gfxSize resolution = AsyncPanZoomController::CalculateResolution(metrics);
+  CSSToScreenScale resolution = AsyncPanZoomController::CalculateResolution(metrics);
   // XXX is this actually hysteresis?  This calculation is not well
   // understood.  It's taken from the previous JS implementation.
   gfxFloat hysteresis/*?*/ =
     gfxFloat(oldBrowserWidth) / gfxFloat(oldScreenWidth);
-  resolution.width *= hysteresis;
-  resolution.height *= hysteresis;
-  metrics.mResolution = resolution;
+  metrics.mResolution = gfxSize(resolution.scale * hysteresis,
+                                resolution.scale * hysteresis);
   utils->SetResolution(metrics.mResolution.width, metrics.mResolution.height);
 
   // Force a repaint with these metrics. This, among other things, sets the
@@ -1412,7 +1409,8 @@ TabChild::RecvUpdateDimensions(const nsRect& rect, const nsIntSize& size, const 
     mOuterRect.height = rect.height;
 
     mOrientation = orientation;
-    mInnerSize = size;
+    mInnerSize = ScreenIntSize::FromUnknownSize(
+      gfx::IntSize(size.width, size.height));
     mWidget->Resize(0, 0, size.width, size.height,
                     true);
 
@@ -1452,7 +1450,7 @@ TabChild::DispatchMessageManagerMessage(const nsAString& aMessageName,
 }
 
 static void
-ScrollWindowTo(nsIDOMWindow* aWindow, const mozilla::gfx::Point& aPoint)
+ScrollWindowTo(nsIDOMWindow* aWindow, const CSSPoint& aPoint)
 {
     nsGlobalWindow* window = static_cast<nsGlobalWindow*>(aWindow);
     nsIScrollableFrame* sf = window->GetScrollFrame();
@@ -1471,7 +1469,10 @@ TabChild::RecvUpdateFrame(const FrameMetrics& aFrameMetrics)
     nsresult rv = utils->GetPresShellId(&presShellId);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
     if (NS_SUCCEEDED(rv) && aFrameMetrics.mPresShellId != presShellId) {
-        return true;
+        // We've recieved a message that is out of date and we want to ignore.
+        // However we can't reply without painting so we reply by painting the
+        // exact same thing as we did before.
+        return ProcessUpdateFrame(mLastMetrics);
     }
     return ProcessUpdateFrame(aFrameMetrics);
 }
@@ -1483,7 +1484,7 @@ TabChild::ProcessUpdateFrame(const FrameMetrics& aFrameMetrics)
         return true;
     }
 
-    gfx::Rect cssCompositedRect =
+    CSSRect cssCompositedRect =
       AsyncPanZoomController::CalculateCompositedRectInCssPixels(aFrameMetrics);
     // The BrowserElementScrolling helper must know about these updated metrics
     // for other functions it performs, such as double tap handling.
@@ -1526,9 +1527,9 @@ TabChild::ProcessUpdateFrame(const FrameMetrics& aFrameMetrics)
     utils->SetScrollPositionClampingScrollPortSize(
       cssCompositedRect.width, cssCompositedRect.height);
     ScrollWindowTo(window, aFrameMetrics.mScrollOffset);
-    gfxSize resolution = AsyncPanZoomController::CalculateResolution(
+    CSSToScreenScale resolution = AsyncPanZoomController::CalculateResolution(
       aFrameMetrics);
-    utils->SetResolution(resolution.width, resolution.height);
+    utils->SetResolution(resolution.scale, resolution.scale);
 
     nsCOMPtr<nsIDOMDocument> domDoc;
     nsCOMPtr<nsIDOMElement> docElement;
@@ -1549,7 +1550,7 @@ TabChild::ProcessUpdateFrame(const FrameMetrics& aFrameMetrics)
 }
 
 bool
-TabChild::RecvHandleDoubleTap(const nsIntPoint& aPoint)
+TabChild::RecvHandleDoubleTap(const CSSIntPoint& aPoint)
 {
     if (!mCx || !mTabChildGlobal) {
         return true;
@@ -1566,7 +1567,7 @@ TabChild::RecvHandleDoubleTap(const nsIntPoint& aPoint)
 }
 
 bool
-TabChild::RecvHandleSingleTap(const nsIntPoint& aPoint)
+TabChild::RecvHandleSingleTap(const CSSIntPoint& aPoint)
 {
   if (!mCx || !mTabChildGlobal) {
     return true;
@@ -1580,7 +1581,7 @@ TabChild::RecvHandleSingleTap(const nsIntPoint& aPoint)
 }
 
 bool
-TabChild::RecvHandleLongTap(const nsIntPoint& aPoint)
+TabChild::RecvHandleLongTap(const CSSIntPoint& aPoint)
 {
   if (!mCx || !mTabChildGlobal) {
     return true;

@@ -18,6 +18,8 @@
 #include "vm/RegExpObject.h"
 #include "vm/Shape.h"
 
+#include "jscompartmentinlines.h"
+
 #include "vm/Shape-inl.h"
 
 namespace js {
@@ -84,22 +86,11 @@ SetFrameArgumentsObject(JSContext *cx, AbstractFramePtr frame,
 
 } // namespace js
 
-inline const char *
-JSScript::filename() const
-{
-    return scriptSource()->filename();
-}
-
 inline void
 JSScript::setFunction(JSFunction *fun)
 {
+    JS_ASSERT(fun->isTenured());
     function_ = fun;
-}
-
-inline js::ScriptSource *
-JSScript::scriptSource() const
-{
-    return sourceObject()->source();
 }
 
 inline JSFunction *

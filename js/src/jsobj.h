@@ -203,10 +203,6 @@ DeleteGeneric(JSContext *cx, HandleObject obj, HandleId id, JSBool *succeeded);
 
 } /* namespace js::baseops */
 
-/* ES5 8.12.8. */
-extern JSBool
-DefaultValue(JSContext *cx, HandleObject obj, JSType hint, MutableHandleValue vp);
-
 extern Class ArrayClass;
 extern Class ArrayBufferClass;
 extern Class BlockClass;
@@ -264,6 +260,8 @@ class RegExpObject;
 class WithObject;
 
 }  /* namespace js */
+
+#define JSSLOT_FREE(clasp)  JSCLASS_RESERVED_SLOTS(clasp)
 
 /*
  * The public interface for an object.
@@ -426,8 +424,16 @@ class JSObject : public js::ObjectImpl
     static inline void nativeSetSlotWithType(JSContext *cx, js::HandleObject, js::Shape *shape,
                                              const js::Value &value);
 
-    inline const js::Value &getReservedSlot(uint32_t index) const;
-    inline js::HeapSlot &getReservedSlotRef(uint32_t index);
+    inline const js::Value &getReservedSlot(uint32_t index) const {
+        JS_ASSERT(index < JSSLOT_FREE(getClass()));
+        return getSlot(index);
+    }
+
+    inline js::HeapSlot &getReservedSlotRef(uint32_t index) {
+        JS_ASSERT(index < JSSLOT_FREE(getClass()));
+        return getSlotRef(index);
+    }
+
     inline void initReservedSlot(uint32_t index, const js::Value &v);
     inline void setReservedSlot(uint32_t index, const js::Value &v);
 
@@ -457,7 +463,6 @@ class JSObject : public js::ObjectImpl
      *    GC in order to compute the proto. Currently, it will not run JS code.
      */
     inline JSObject *getProto() const;
-    using js::ObjectImpl::getTaggedProto;
     static inline bool getProto(JSContext *cx, js::HandleObject obj,
                                 js::MutableHandleObject protop);
 
@@ -528,8 +533,11 @@ class JSObject : public js::ObjectImpl
      */
     inline JSObject *enclosingScope();
 
+    /* Access the metadata on an object. */
+    inline JSObject *getMetadata() const;
+    static bool setMetadata(JSContext *cx, js::HandleObject obj, js::HandleObject newMetadata);
+
     inline js::GlobalObject &global() const;
-    using js::ObjectImpl::compartment;
 
     /* Remove the type (and prototype) or parent from a new object. */
     static inline bool clearType(JSContext *cx, js::HandleObject obj);
@@ -960,54 +968,53 @@ class JSObject : public js::ObjectImpl
      */
 
     /* Direct subtypes of JSObject: */
-    inline bool isArray() const;
-    inline bool isArguments() const;
-    inline bool isArrayBuffer() const;
-    inline bool isDataView() const;
-    inline bool isDate() const;
-    inline bool isElementIterator() const;
-    inline bool isError() const;
-    inline bool isFunction() const;
-    inline bool isGenerator() const;
-    inline bool isGlobal() const;
-    inline bool isMapIterator() const;
-    inline bool isModule() const;
-    inline bool isObject() const;
-    inline bool isPrimitive() const;
+    inline bool isArray()            const { return hasClass(&js::ArrayClass); }
+    inline bool isArguments()        const { return isNormalArguments() || isStrictArguments(); }
+    inline bool isArrayBuffer()      const { return hasClass(&js::ArrayBufferClass); }
+    inline bool isDataView()         const { return hasClass(&js::DataViewClass); }
+    inline bool isDate()             const { return hasClass(&js::DateClass); }
+    inline bool isElementIterator()  const { return hasClass(&js::ElementIteratorClass); }
+    inline bool isError()            const { return hasClass(&js::ErrorClass); }
+    inline bool isFunction()         const { return hasClass(&js::FunctionClass); }
+    inline bool isGenerator()        const { return hasClass(&js::GeneratorClass); }
+    inline bool isGlobal()           const;
+    inline bool isMapIterator()      const { return hasClass(&js::MapIteratorClass); }
+    inline bool isModule()           const { return hasClass(&js::ModuleClass); }
+    inline bool isObject()           const { return hasClass(&js::ObjectClass); }
+    inline bool isPrimitive()        const { return isNumber() || isString() || isBoolean(); }
     inline bool isPropertyIterator() const;
     using js::ObjectImpl::isProxy;
-    inline bool isRegExp() const;
-    inline bool isRegExpStatics() const;
-    inline bool isScope() const;
-    inline bool isScript() const;
-    inline bool isScriptSource() const;
-    inline bool isSetIterator() const;
-    inline bool isStopIteration() const;
-    inline bool isTypedArray() const;
-    inline bool isWeakMap() const;
+    inline bool isRegExp()           const { return hasClass(&js::RegExpClass); }
+    inline bool isRegExpStatics()    const { return hasClass(&js::RegExpStaticsClass); }
+    inline bool isScope()            const { return isCall() || isDeclEnv() || isNestedScope(); }
+    inline bool isScriptSource()     const { return hasClass(&js::ScriptSourceClass); }
+    inline bool isSetIterator()      const { return hasClass(&js::SetIteratorClass); }
+    inline bool isStopIteration()    const { return hasClass(&js::StopIterationClass); }
+    inline bool isTypedArray()       const;
+    inline bool isWeakMap()          const { return hasClass(&js::WeakMapClass); }
 
     /* Subtypes of ScopeObject. */
-    inline bool isBlock() const;
-    inline bool isCall() const;
-    inline bool isDeclEnv() const;
-    inline bool isNestedScope() const;
-    inline bool isWith() const;
+    inline bool isBlock()       const { return hasClass(&js::BlockClass); }
+    inline bool isCall()        const { return hasClass(&js::CallClass); }
+    inline bool isDeclEnv()     const { return hasClass(&js::DeclEnvClass); }
+    inline bool isNestedScope() const { return isBlock() || isWith(); }
+    inline bool isWith()        const { return hasClass(&js::WithClass); }
     inline bool isClonedBlock() const;
     inline bool isStaticBlock() const;
 
     /* Subtypes of PrimitiveObject. */
-    inline bool isBoolean() const;
-    inline bool isNumber() const;
-    inline bool isString() const;
+    inline bool isBoolean() const { return hasClass(&js::BooleanClass); }
+    inline bool isNumber()  const { return hasClass(&js::NumberClass); }
+    inline bool isString()  const { return hasClass(&js::StringClass); }
 
     /* Subtypes of ArgumentsObject. */
-    inline bool isNormalArguments() const;
-    inline bool isStrictArguments() const;
+    inline bool isNormalArguments() const { return hasClass(&js::NormalArgumentsObjectClass); }
+    inline bool isStrictArguments() const { return hasClass(&js::StrictArgumentsObjectClass); }
 
     /* Subtypes of Proxy. */
-    inline bool isDebugScope() const;
-    inline bool isWrapper() const;
-    inline bool isFunctionProxy() const;
+    inline bool isDebugScope()              const;
+    inline bool isWrapper()                 const;
+    inline bool isFunctionProxy()           const { return hasClass(&js::FunctionProxyClass); }
     inline bool isCrossCompartmentWrapper() const;
 
     inline js::ArgumentsObject &asArguments();
@@ -1023,7 +1030,10 @@ class JSObject : public js::ObjectImpl
     inline js::GlobalObject &asGlobal();
     inline js::MapObject &asMap();
     inline js::MapIteratorObject &asMapIterator();
-    inline js::Module &asModule();
+    js::Module &asModule() {
+        JS_ASSERT(isModule());
+        return *reinterpret_cast<js::Module *>(this);
+    }
     inline js::NestedScopeObject &asNestedScope();
     inline js::NormalArgumentsObject &asNormalArguments();
     inline js::NumberObject &asNumber();
@@ -1082,8 +1092,6 @@ struct JSObject_Slots4 : JSObject { js::Value fslots[4]; };
 struct JSObject_Slots8 : JSObject { js::Value fslots[8]; };
 struct JSObject_Slots12 : JSObject { js::Value fslots[12]; };
 struct JSObject_Slots16 : JSObject { js::Value fslots[16]; };
-
-#define JSSLOT_FREE(clasp)  JSCLASS_RESERVED_SLOTS(clasp)
 
 class JSValueArray {
   public:
@@ -1169,15 +1177,15 @@ js_AddNativeProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
                      JSPropertyOp getter, JSStrictPropertyOp setter, uint32_t slot,
                      unsigned attrs, unsigned flags, int shortid);
 
-extern JSBool
-js_DefineOwnProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
-                     const JS::Value &descriptor, JSBool *bp);
-
-extern JSBool
-js_DefineOwnProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
-                     const js::PropertyDescriptor &descriptor, JSBool *bp);
-
 namespace js {
+
+extern JSBool
+DefineOwnProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+                  JS::HandleValue descriptor, JSBool *bp);
+
+extern JSBool
+DefineOwnProperty(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+                  const js::PropertyDescriptor &descriptor, JSBool *bp);
 
 /*
  * The NewObjectKind allows an allocation site to specify the type properties

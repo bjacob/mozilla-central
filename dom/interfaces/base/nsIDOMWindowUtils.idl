@@ -42,7 +42,7 @@ interface nsIURI;
 interface nsIDOMEventTarget;
 interface nsIRunnable;
 
-[scriptable, uuid(dba80826-6251-4947-bf2a-a3873b9ec764)]
+[scriptable, uuid(cbe333d7-5b2c-4a9b-b99b-e6e388afa62b)]
 interface nsIDOMWindowUtils : nsISupports {
 
   /**
@@ -657,6 +657,11 @@ interface nsIDOMWindowUtils : nsISupports {
    * @param aFlushLayout flushes layout if true. Otherwise, no flush occurs.
    */
   void getScrollbarSize(in boolean aFlushLayout, out long aWidth, out long aHeight);
+
+  /**
+   * Returns the given element's bounds without flushing pending layout changes.
+   */
+  nsIDOMClientRect getBoundsWithoutFlushing(in nsIDOMElement aElement);
 
   /**
    * Returns the bounds of the window's currently loaded document. This will
@@ -1360,6 +1365,17 @@ interface nsIDOMWindowUtils : nsISupports {
    * was created can be closed using scripts.
    */
    void allowScriptsToClose();
+
+  /**
+   * Is the parent window's main widget visible?  If it isn't, we probably
+   * don't want to display any dialogs etc it may request.  This corresponds
+   * to the visibility check in nsWindowWatcher::OpenWindowInternal().
+   *
+   * Will throw a DOM security error if called without chrome privileges or
+   * NS_ERROR_NOT_AVAILABLE in the unlikely event that the parent window's
+   * main widget can't be reached.
+   */
+  readonly attribute boolean isParentWindowMainWidgetVisible;
 
    /**
     * In certain cases the event handling of nodes, form controls in practice,

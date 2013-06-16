@@ -10,7 +10,6 @@ DOMCI_CLASS(Plugin)
 DOMCI_CLASS(PluginArray)
 DOMCI_CLASS(MimeType)
 DOMCI_CLASS(MimeTypeArray)
-DOMCI_CLASS(BarProp)
 DOMCI_CLASS(History)
 DOMCI_CLASS(DOMPrototype)
 DOMCI_CLASS(DOMConstructor)
@@ -109,15 +108,11 @@ DOMCI_CLASS(XPathResult)
 // WhatWG WebApps Objects
 DOMCI_CLASS(Storage)
 
-DOMCI_CLASS(OfflineResourceList)
-
 DOMCI_CLASS(Blob)
 DOMCI_CLASS(File)
 
 // DOM modal content window class, almost identical to Window
 DOMCI_CLASS(ModalContentWindow)
-
-DOMCI_CLASS(DeviceStorage)
 
 // Geolocation
 DOMCI_CLASS(GeoPositionCoords)
@@ -187,7 +182,6 @@ DOMCI_CLASS(BluetoothAdapter)
 DOMCI_CLASS(BluetoothDevice)
 #endif
 
-DOMCI_CLASS(CameraManager)
 DOMCI_CLASS(CameraControl)
 DOMCI_CLASS(CameraCapabilities)
 
@@ -197,10 +191,3 @@ DOMCI_CLASS(AsyncScrollEventDetail)
 DOMCI_CLASS(LockedFile)
 
 DOMCI_CLASS(CSSFontFeatureValuesRule)
-
-#ifdef MOZ_TIME_MANAGER
-DOMCI_CLASS(MozTimeManager)
-#endif
-
-#ifdef MOZ_WEBRTC
-#endif

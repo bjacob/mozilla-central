@@ -565,6 +565,7 @@ WebappsApplication.prototype = {
           if (this.installState == "installed") {
             this._downloadError = null;
             this.downloading = false;
+            this.downloadAvailable = false;
             this._fireEvent("downloadsuccess", this._ondownloadsuccess);
             this._fireEvent("downloadapplied", this._ondownloadapplied);
           } else {
@@ -590,6 +591,7 @@ WebappsApplication.prototype = {
         this.progress = app.progress || msg.progress || 0;
         this.readyToApplyDownload = app.readyToApplyDownload;
         this.updateTime = app.updateTime;
+        this.origin = app.origin;
 
         switch(msg.type) {
           case "error":

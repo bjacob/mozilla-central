@@ -48,10 +48,12 @@ WMFReader::WMFReader(AbstractMediaDecoder* aDecoder)
     mVideoWidth(0),
     mVideoHeight(0),
     mVideoStride(0),
+    mAudioFrameSum(0),
+    mAudioFrameOffset(0),
     mHasAudio(false),
     mHasVideo(false),
-    mCanSeek(false),
     mUseHwAccel(false),
+    mMustRecaptureAudioPosition(true),
     mIsMP3Enabled(WMFDecoder::IsMP3Supported())
 {
   NS_ASSERTION(NS_IsMainThread(), "Must be on main thread.");
@@ -118,9 +120,18 @@ WMFReader::InitializeDXVA()
   }
 
   mDXVA2Manager = DXVA2Manager::Create();
-  NS_ENSURE_TRUE(mDXVA2Manager, false);
 
-  return true;
+  return mDXVA2Manager != nullptr;
+}
+
+static bool
+IsVideoContentType(const nsCString& aContentType)
+{
+  NS_NAMED_LITERAL_CSTRING(video, "video");
+  if (FindInReadable(video, aContentType)) {
+    return true;
+  }
+  return false;
 }
 
 nsresult
@@ -143,7 +154,11 @@ WMFReader::Init(MediaDecoderReader* aCloneDonor)
   rv = mByteStream->Init();
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mUseHwAccel = InitializeDXVA();
+  if (IsVideoContentType(mDecoder->GetResource()->GetContentType())) {
+    mUseHwAccel = InitializeDXVA();
+  } else {
+    mUseHwAccel = false;
+  }
 
   return NS_OK;
 }
@@ -580,14 +595,21 @@ WMFReader::ReadMetadata(VideoInfo* aInfo,
   // Abort if both video and audio failed to initialize.
   NS_ENSURE_TRUE(mInfo.mHasAudio || mInfo.mHasVideo, NS_ERROR_FAILURE);
 
+  // Get the duration, and report it to the decoder if we have it.
   int64_t duration = 0;
-  if (SUCCEEDED(GetSourceReaderDuration(mSourceReader, duration))) {
+  hr = GetSourceReaderDuration(mSourceReader, duration);
+  if (SUCCEEDED(hr)) {
     ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
     mDecoder->SetMediaDuration(duration);
   }
-
-  hr = GetSourceReaderCanSeek(mSourceReader, mCanSeek);
-  NS_ASSERTION(SUCCEEDED(hr), "Can't determine if resource is seekable");
+  // We can seek if we get a duration *and* the reader reports that it's
+  // seekable.
+  bool canSeek = false;
+  if (FAILED(hr) ||
+      FAILED(GetSourceReaderCanSeek(mSourceReader, canSeek)) ||
+      !canSeek) {
+    mDecoder->SetMediaSeekable(false);
+  }
 
   *aInfo = mInfo;
   *aTags = nullptr;
@@ -603,6 +625,31 @@ GetSampleDuration(IMFSample* aSample)
   int64_t duration = 0;
   aSample->GetSampleDuration(&duration);
   return HNsToUsecs(duration);
+}
+
+HRESULT
+HNsToFrames(int64_t aHNs, uint32_t aRate, int64_t* aOutFrames)
+{
+  MOZ_ASSERT(aOutFrames);
+  const int64_t HNS_PER_S = USECS_PER_S * 10;
+  CheckedInt<int64_t> i = aHNs;
+  i *= aRate;
+  i /= HNS_PER_S;
+  NS_ENSURE_TRUE(i.isValid(), E_FAIL);
+  *aOutFrames = i.value();
+  return S_OK;
+}
+
+HRESULT
+FramesToUsecs(int64_t aSamples, uint32_t aRate, int64_t* aOutUsecs)
+{
+  MOZ_ASSERT(aOutUsecs);
+  CheckedInt<int64_t> i = aSamples;
+  i *= USECS_PER_S;
+  i /= aRate;
+  NS_ENSURE_TRUE(i.isValid(), E_FAIL);
+  *aOutUsecs = i.value();
+  return S_OK;
 }
 
 bool
@@ -660,11 +707,33 @@ WMFReader::DecodeAudioData()
   memcpy(pcmSamples.get(), data, currentLength);
   buffer->Unlock();
 
-  int64_t offset = mDecoder->GetResource()->Tell();
-  int64_t timestamp = HNsToUsecs(timestampHns);
-  int64_t duration = GetSampleDuration(sample);
+  // We calculate the timestamp and the duration based on the number of audio
+  // frames we've already played. We don't trust the timestamp stored on the
+  // IMFSample, as sometimes it's wrong, possibly due to buggy encoders?
 
-  mAudioQueue.Push(new AudioData(offset,
+  // If this sample block comes after a discontinuity (i.e. a gap or seek)
+  // reset the frame counters, and capture the timestamp. Future timestamps
+  // will be offset from this block's timestamp.
+  UINT32 discontinuity = false;
+  sample->GetUINT32(MFSampleExtension_Discontinuity, &discontinuity);
+  if (mMustRecaptureAudioPosition || discontinuity) {
+    mAudioFrameSum = 0;
+    hr = HNsToFrames(timestampHns, mAudioRate, &mAudioFrameOffset);
+    NS_ENSURE_TRUE(SUCCEEDED(hr), false);
+    mMustRecaptureAudioPosition = false;
+  }
+
+  int64_t timestamp;
+  hr = FramesToUsecs(mAudioFrameOffset + mAudioFrameSum, mAudioRate, &timestamp);
+  NS_ENSURE_TRUE(SUCCEEDED(hr), false);
+
+  mAudioFrameSum += numFrames;
+
+  int64_t duration;
+  hr = FramesToUsecs(numFrames, mAudioRate, &duration);
+  NS_ENSURE_TRUE(SUCCEEDED(hr), false);
+
+  mAudioQueue.Push(new AudioData(mDecoder->GetResource()->Tell(),
                                  timestamp,
                                  duration,
                                  numFrames,
@@ -675,6 +744,8 @@ WMFReader::DecodeAudioData()
   LOG("Decoded audio sample! timestamp=%lld duration=%lld currentLength=%u",
       timestamp, duration, currentLength);
   #endif
+
+  NotifyBytesConsumed();
 
   return true;
 }
@@ -901,7 +972,7 @@ WMFReader::DecodeVideoFrame(bool &aKeyframeSkip,
 
   #ifdef LOG_SAMPLE_DECODE
   LOG("Decoded video sample timestamp=%lld duration=%lld stride=%d height=%u flags=%u",
-      timestamp, duration, stride, mVideoHeight, flags);
+      timestamp, duration, mVideoStride, mVideoHeight, flags);
   #endif
 
   if ((flags & MF_SOURCE_READERF_ENDOFSTREAM)) {
@@ -911,7 +982,18 @@ WMFReader::DecodeVideoFrame(bool &aKeyframeSkip,
     return false;
   }
 
+  NotifyBytesConsumed();
+
   return true;
+}
+
+void
+WMFReader::NotifyBytesConsumed()
+{
+  uint32_t bytesConsumed = mByteStream->GetAndResetBytesConsumedCount();
+  if (bytesConsumed > 0) {
+    mDecoder->NotifyBytesConsumed(bytesConsumed);
+  }
 }
 
 nsresult
@@ -923,12 +1005,20 @@ WMFReader::Seek(int64_t aTargetUs,
   LOG("WMFReader::Seek() %lld", aTargetUs);
 
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
-  if (!mCanSeek) {
-    return NS_ERROR_FAILURE;
-  }
+#ifdef DEBUG
+  bool canSeek = false;
+  GetSourceReaderCanSeek(mSourceReader, canSeek);
+  NS_ASSERTION(canSeek, "WMFReader::Seek() should only be called if we can seek!");
+#endif
 
   nsresult rv = ResetDecode();
   NS_ENSURE_SUCCESS(rv, rv);
+
+  // Mark that we must recapture the audio frame count from the next sample.
+  // WMF doesn't set a discontinuity marker when we seek to time 0, so we
+  // must remember to recapture the audio frame offset and reset the frame
+  // sum on the next audio packet we decode.
+  mMustRecaptureAudioPosition = true;
 
   AutoPropVar var;
   HRESULT hr = InitPropVariantFromInt64(UsecsToHNs(aTargetUs), &var);

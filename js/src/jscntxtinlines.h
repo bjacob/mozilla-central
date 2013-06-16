@@ -8,17 +8,19 @@
 #define jscntxtinlines_h___
 
 #include "jscntxt.h"
+
 #include "jscompartment.h"
 #include "jsfriendapi.h"
-#include "jsinterp.h"
-#include "jsprobes.h"
 #include "jsgc.h"
-
 #include "builtin/Object.h" // For js::obj_construct
 #include "frontend/ParseMaps.h"
+#include "vm/Interpreter.h"
+#include "vm/Probes.h"
 #include "vm/RegExpObject.h"
 
 #include "jsgcinlines.h"
+
+#include "vm/ObjectImpl-inl.h"
 
 namespace js {
 
@@ -86,14 +88,6 @@ NewObjectCache::fill(EntryIndex entry_, Class *clasp, gc::Cell *key, gc::AllocKi
 }
 
 inline void
-NewObjectCache::fillProto(EntryIndex entry, Class *clasp, js::TaggedProto proto, gc::AllocKind kind, JSObject *obj)
-{
-    JS_ASSERT_IF(proto.isObject(), !proto.toObject()->isGlobal());
-    JS_ASSERT(obj->getTaggedProto() == proto);
-    return fill(entry, clasp, proto.raw(), kind, obj);
-}
-
-inline void
 NewObjectCache::fillGlobal(EntryIndex entry, Class *clasp, js::GlobalObject *global, gc::AllocKind kind, JSObject *obj)
 {
     //JS_ASSERT(global == obj->getGlobal());
@@ -107,9 +101,22 @@ NewObjectCache::fillType(EntryIndex entry, Class *clasp, js::types::TypeObject *
     return fill(entry, clasp, type, kind, obj);
 }
 
+inline void
+NewObjectCache::copyCachedToObject(JSObject *dst, JSObject *src, gc::AllocKind kind)
+{
+    js_memcpy(dst, src, gc::Arena::thingSize(kind));
+#ifdef JSGC_GENERATIONAL
+    Shape::writeBarrierPost(dst->shape_, &dst->shape_);
+    types::TypeObject::writeBarrierPost(dst->type_, &dst->type_);
+#endif
+}
+
 inline JSObject *
 NewObjectCache::newObjectFromHit(JSContext *cx, EntryIndex entry_, js::gc::InitialHeap heap)
 {
+    // The new object cache does not account for metadata attached via callbacks.
+    JS_ASSERT(!cx->compartment()->objectMetadataCallback);
+
     JS_ASSERT(unsigned(entry_) < mozilla::ArrayLength(entries));
     Entry *entry = &entries[entry_];
 
@@ -150,7 +157,7 @@ class CompartmentChecker
 
   public:
     explicit CompartmentChecker(JSContext *cx)
-      : context(cx), compartment(cx->compartment)
+      : context(cx), compartment(cx->compartment())
     {}
 
     /*
@@ -176,7 +183,7 @@ class CompartmentChecker
     }
 
     void check(JSCompartment *c) {
-        if (c && c != context->runtime->atomsCompartment) {
+        if (c && c != context->runtime()->atomsCompartment) {
             if (!compartment)
                 compartment = c;
             else if (c != compartment)
@@ -245,15 +252,8 @@ class CompartmentChecker
             check(script->compartment());
     }
 
-    void check(StackFrame *fp) {
-        if (fp)
-            check(fp->scopeChain());
-    }
-
-    void check(AbstractFramePtr frame) {
-        if (frame)
-            check(frame.scopeChain());
-    }
+    void check(StackFrame *fp);
+    void check(AbstractFramePtr frame);
 };
 #endif /* JS_CRASH_DIAGNOSTICS */
 
@@ -262,8 +262,8 @@ class CompartmentChecker
  * depends on other objects not having been swept yet.
  */
 #define START_ASSERT_SAME_COMPARTMENT()                                       \
-    JS_ASSERT(cx->compartment->zone() == cx->zone());                         \
-    if (cx->runtime->isHeapBusy())                                            \
+    JS_ASSERT(cx->compartment()->zone() == cx->zone());                       \
+    if (cx->runtime()->isHeapBusy())                                          \
         return;                                                               \
     CompartmentChecker c(cx)
 
@@ -444,8 +444,10 @@ inline bool
 CallSetter(JSContext *cx, HandleObject obj, HandleId id, StrictPropertyOp op, unsigned attrs,
            unsigned shortid, JSBool strict, MutableHandleValue vp)
 {
-    if (attrs & JSPROP_SETTER)
-        return InvokeGetterOrSetter(cx, obj, CastAsObjectJsval(op), 1, vp.address(), vp.address());
+    if (attrs & JSPROP_SETTER) {
+        RootedValue opv(cx, CastAsObjectJsval(op));
+        return InvokeGetterOrSetter(cx, obj, opv, 1, vp.address(), vp.address());
+    }
 
     if (attrs & JSPROP_GETTER)
         return js_ReportGetterOnlyAssignment(cx);
@@ -459,18 +461,6 @@ CallSetter(JSContext *cx, HandleObject obj, HandleId id, StrictPropertyOp op, un
 }
 
 }  /* namespace js */
-
-inline JSVersion
-JSContext::findVersion() const
-{
-    if (hasVersionOverride)
-        return versionOverride;
-
-    if (JSScript *script = stack.currentScript(NULL, js::ContextStack::ALLOW_CROSS_COMPARTMENT))
-        return script->getVersion();
-
-    return defaultVersion;
-}
 
 inline bool
 JSContext::canSetDefaultVersion() const
@@ -500,7 +490,7 @@ JSContext::maybeOverrideVersion(JSVersion newVersion)
 inline js::LifoAlloc &
 JSContext::analysisLifoAlloc()
 {
-    return compartment->analysisLifoAlloc;
+    return compartment()->analysisLifoAlloc;
 }
 
 inline js::LifoAlloc &
@@ -517,19 +507,10 @@ JSContext::setPendingException(js::Value v) {
     js::assertSameCompartment(this, v);
 }
 
-inline bool
-JSContext::ensureParseMapPool()
-{
-    if (parseMapPool_)
-        return true;
-    parseMapPool_ = js_new<js::frontend::ParseMapPool>(this);
-    return parseMapPool_;
-}
-
 inline js::PropertyTree&
 JSContext::propertyTree()
 {
-    return compartment->propertyTree;
+    return compartment()->propertyTree;
 }
 
 inline void
@@ -574,7 +555,7 @@ JSContext::leaveCompartment(JSCompartment *oldCompartment)
     JS_ASSERT(hasEnteredCompartment());
     enterCompartmentDepth_--;
 
-    compartment->leave();
+    compartment()->leave();
 
     /*
      * Before we entered the current compartment, 'compartment' was
@@ -593,24 +574,10 @@ JSContext::leaveCompartment(JSCompartment *oldCompartment)
         wrapPendingException();
 }
 
-inline JS::Zone *
-JSContext::zone() const
-{
-    JS_ASSERT_IF(!compartment, !zone_);
-    JS_ASSERT_IF(compartment, compartment->zone() == zone_);
-    return zone_;
-}
-
-inline void
-JSContext::updateMallocCounter(size_t nbytes)
-{
-    runtime->updateMallocCounter(zone(), nbytes);
-}
-
 inline void
 JSContext::setCompartment(JSCompartment *comp)
 {
-    compartment = comp;
+    compartment_ = comp;
     zone_ = comp ? comp->zone() : NULL;
 }
 

@@ -12,7 +12,7 @@
 #include "mozilla/HashFunctions.h"
 #include "vm/GlobalObject.h"
 
-#include "jsinterpinlines.h"
+#include "vm/Interpreter-inl.h"
 
 using namespace js;
 
@@ -96,13 +96,13 @@ class EvalScriptGuard
 
     ~EvalScriptGuard() {
         if (script_) {
-            CallDestroyScriptHook(cx_->runtime->defaultFreeOp(), script_);
+            CallDestroyScriptHook(cx_->runtime()->defaultFreeOp(), script_);
             script_->isActiveEval = false;
             script_->isCachedEval = true;
             EvalCacheEntry cacheEntry = {script_, lookup_.callerScript, lookup_.pc};
             lookup_.str = lookupStr_;
             if (lookup_.str && IsEvalCacheCandidate(script_))
-                cx_->runtime->evalCache.relookupOrAdd(p_, lookup_, cacheEntry);
+                cx_->runtime()->evalCache.relookupOrAdd(p_, lookup_, cacheEntry);
         }
     }
 
@@ -113,10 +113,10 @@ class EvalScriptGuard
         lookup_.callerScript = callerScript;
         lookup_.version = cx_->findVersion();
         lookup_.pc = pc;
-        p_ = cx_->runtime->evalCache.lookupForAdd(lookup_);
+        p_ = cx_->runtime()->evalCache.lookupForAdd(lookup_);
         if (p_) {
             script_ = p_->script;
-            cx_->runtime->evalCache.remove(p_);
+            cx_->runtime()->evalCache.remove(p_);
             CallNewScriptHook(cx_, script_, NullPtr());
             script_->isCachedEval = false;
             script_->isActiveEval = true;
@@ -177,7 +177,7 @@ TryEvalJSON(JSContext *cx, JSScript *callerScript,
             if (cp == end) {
                 bool isArray = (chars[0] == '[');
                 JSONParser parser(cx, isArray ? chars : chars + 1U, isArray ? length : length - 2,
-                                  JSONParser::StrictJSON, JSONParser::NoError);
+                                  JSONParser::NoError);
                 RootedValue tmp(cx);
                 if (!parser.parse(&tmp))
                     return EvalJSON_Failure;
@@ -260,7 +260,7 @@ EvalKernel(JSContext *cx, const CallArgs &args, EvalType evalType, AbstractFrame
     unsigned staticLevel;
     RootedValue thisv(cx);
     if (evalType == DIRECT_EVAL) {
-        JS_ASSERT_IF(caller.isStackFrame(), !caller.asStackFrame()->runningInIon());
+        JS_ASSERT_IF(caller.isStackFrame(), !caller.asStackFrame()->runningInJit());
         staticLevel = caller.script()->staticLevel + 1;
 
         // Direct calls to eval are supposed to see the caller's |this|. If we
@@ -360,7 +360,7 @@ js::DirectEvalFromIon(JSContext *cx,
     EvalScriptGuard esg(cx);
 
     // Ion will not perform cross compartment direct eval calls.
-    JSPrincipals *principals = cx->compartment->principals;
+    JSPrincipals *principals = cx->compartment()->principals;
 
     esg.lookupInEvalCache(stableStr, callerScript, pc);
 

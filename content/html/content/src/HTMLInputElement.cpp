@@ -324,6 +324,10 @@ HTMLInputElement::nsFilePickerShownCallback::Done(int16_t aResult)
     nsresult rv = mFilePicker->GetDomfiles(getter_AddRefs(iter));
     NS_ENSURE_SUCCESS(rv, rv);
 
+    if (!iter) {
+      return NS_OK;
+    }
+
     nsCOMPtr<nsISupports> tmp;
     bool prefSaved = false;
     bool loop = true;
@@ -730,18 +734,18 @@ NS_IMPL_RELEASE_INHERITED(HTMLInputElement, Element)
 
 // QueryInterface implementation for HTMLInputElement
 NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLInputElement)
-  NS_HTML_CONTENT_INTERFACE_TABLE8(HTMLInputElement,
-                                   nsIDOMHTMLInputElement,
-                                   nsITextControlElement,
-                                   nsIPhonetic,
-                                   imgINotificationObserver,
-                                   nsIImageLoadingContent,
-                                   imgIOnloadBlocker,
-                                   nsIDOMNSEditableElement,
-                                   nsIConstraintValidation)
-  NS_HTML_CONTENT_INTERFACE_TABLE_TO_MAP_SEGUE(HTMLInputElement,
-                                               nsGenericHTMLFormElement)
-NS_HTML_CONTENT_INTERFACE_MAP_END
+  NS_HTML_CONTENT_INTERFACES(nsGenericHTMLFormElement)
+  NS_INTERFACE_TABLE_INHERITED8(HTMLInputElement,
+                                nsIDOMHTMLInputElement,
+                                nsITextControlElement,
+                                nsIPhonetic,
+                                imgINotificationObserver,
+                                nsIImageLoadingContent,
+                                imgIOnloadBlocker,
+                                nsIDOMNSEditableElement,
+                                nsIConstraintValidation)
+  NS_INTERFACE_TABLE_TO_MAP_SEGUE
+NS_ELEMENT_INTERFACE_MAP_END
 
 // nsIConstraintValidation
 NS_IMPL_NSICONSTRAINTVALIDATION_EXCEPT_SETCUSTOMVALIDITY(HTMLInputElement)
@@ -2761,10 +2765,30 @@ HTMLInputElement::ShouldPreventDOMActivateDispatch(EventTarget* aOriginalTarget)
                              nsGkAtoms::button, eCaseMatters);
 }
 
+void
+HTMLInputElement::MaybeFireAsyncClickHandler(nsEventChainPostVisitor& aVisitor)
+{
+  // Open a file picker when we receive a click on a <input type='file'>, or
+  // open a color picker when we receive a click on a <input type='color'>.
+  // A click is handled in the following cases:
+  // - preventDefault() has not been called (or something similar);
+  // - it's the left mouse button.
+  // We do not prevent non-trusted click because authors can already use
+  // .click(). However, the file picker will follow the rules of popup-blocking.
+  if ((mType == NS_FORM_INPUT_FILE || mType == NS_FORM_INPUT_COLOR) &&
+      NS_IS_MOUSE_LEFT_CLICK(aVisitor.mEvent) &&
+      !aVisitor.mEvent->mFlags.mDefaultPrevented) {
+    FireAsyncClickHandler();
+  }
+}
+
 nsresult
 HTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
 {
   if (!aVisitor.mPresContext) {
+    // Hack alert! In order to open file picker even in case the element isn't
+    // in document, fire click handler even without PresContext.
+    MaybeFireAsyncClickHandler(aVisitor);
     return NS_OK;
   }
 
@@ -3168,18 +3192,7 @@ HTMLInputElement::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
     PostHandleEventForRangeThumb(aVisitor);
   }
 
-  // Open a file picker when we receive a click on a <input type='file'>, or
-  // open a color picker when we receive a click on a <input type='color'>.
-  // A click is handled in the following cases:
-  // - preventDefault() has not been called (or something similar);
-  // - it's the left mouse button.
-  // We do not prevent non-trusted click because authors can already use
-  // .click(). However, the file picker will follow the rules of popup-blocking.
-  if ((mType == NS_FORM_INPUT_FILE || mType == NS_FORM_INPUT_COLOR) &&
-      NS_IS_MOUSE_LEFT_CLICK(aVisitor.mEvent) &&
-      !aVisitor.mEvent->mFlags.mDefaultPrevented) {
-    return FireAsyncClickHandler();
-  }
+  MaybeFireAsyncClickHandler(aVisitor);
 
   return rv;
 }

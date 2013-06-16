@@ -116,9 +116,6 @@ function usbTetheringFail(params) {
   postMessage(params);
   // Try to roll back to ensure
   // we don't leave the network systems in limbo.
-  let functionChain = [setIpForwardingEnabled,
-                       stopTethering];
-
   // This parameter is used to disable ipforwarding.
   params.enable = false;
   chain(params, gUSBFailChain, null);
@@ -143,6 +140,18 @@ function networkInterfaceStatsSuccess(params) {
   // Notify the main thread.
   params.txBytes = parseFloat(params.resultReason);
 
+  postMessage(params);
+  return true;
+}
+
+function updateUpStreamSuccess(params) {
+  // Notify the main thread.
+  postMessage(params);
+  return true;
+}
+
+function updateUpStreamFail(params) {
+  // Notify the main thread.
   postMessage(params);
   return true;
 }
@@ -229,20 +238,18 @@ function removeDefaultRoute(options) {
  * Add host route for given network interface.
  */
 function addHostRoute(options) {
-  libnetutils.ifc_add_route(options.ifname, options.dns1, 32, options.gateway);
-  libnetutils.ifc_add_route(options.ifname, options.dns2, 32, options.gateway);
-  libnetutils.ifc_add_route(options.ifname, options.httpproxy, 32, options.gateway);
-  libnetutils.ifc_add_route(options.ifname, options.mmsproxy, 32, options.gateway);
+  for (let i = 0; i < options.hostnames.length; i++) {
+    libnetutils.ifc_add_route(options.ifname, options.hostnames[i], 32, options.gateway);
+  }
 }
 
 /**
  * Remove host route for given network interface.
  */
 function removeHostRoute(options) {
-  libnetutils.ifc_remove_route(options.ifname, options.dns1, 32, options.gateway);
-  libnetutils.ifc_remove_route(options.ifname, options.dns2, 32, options.gateway);
-  libnetutils.ifc_remove_route(options.ifname, options.httpproxy, 32, options.gateway);
-  libnetutils.ifc_remove_route(options.ifname, options.mmsproxy, 32, options.gateway);
+  for (let i = 0; i < options.hostnames.length; i++) {
+    libnetutils.ifc_remove_route(options.ifname, options.hostnames[i], 32, options.gateway);
+  }
 }
 
 function removeNetworkRoute(options) {
@@ -444,6 +451,18 @@ function setAccessPoint(params, callback) {
   return doCommand(command, callback);
 }
 
+function cleanUpStream(params, callback) {
+  let command = "nat disable " + params.previous.internalIfname + " " +
+                params.previous.externalIfname + " " + "0";
+  return doCommand(command, callback);
+}
+
+function createUpStream(params, callback) {
+  let command = "nat enable " + params.current.internalIfname + " " +
+                params.current.externalIfname + " " + "0";
+  return doCommand(command, callback);
+}
+
 /**
  * Modify usb function's property to turn on USB RNDIS function
  */
@@ -616,6 +635,16 @@ function setWifiTethering(params) {
     chain(params, gWifiDisableChain, wifiTetheringFail);
   }
   return true;
+}
+
+let gUpdateUpStreamChain = [cleanUpStream,
+                            createUpStream,
+                            updateUpStreamSuccess];
+/**
+ * handling upstream interface change event.
+ */
+function updateUpStream(params) {
+  chain(params, gUpdateUpStreamChain, updateUpStreamFail);
 }
 
 let gUSBEnableChain = [setInterfaceUp,

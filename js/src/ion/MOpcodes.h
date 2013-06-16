@@ -55,6 +55,7 @@ namespace ion {
     _(MinMax)                                                               \
     _(Abs)                                                                  \
     _(Sqrt)                                                                 \
+    _(Atan2)                                                                \
     _(Pow)                                                                  \
     _(PowHalf)                                                              \
     _(Random)                                                               \
@@ -155,6 +156,7 @@ namespace ion {
     _(StringLength)                                                         \
     _(ArgumentsLength)                                                      \
     _(GetArgument)                                                          \
+    _(RunOncePrologue)                                                      \
     _(Rest)                                                                 \
     _(Floor)                                                                \
     _(Round)                                                                \

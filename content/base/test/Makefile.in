@@ -236,6 +236,7 @@ MOCHITEST_FILES_A = \
 		test_meta_viewport4.html \
 		test_meta_viewport5.html \
 		test_meta_viewport6.html \
+			viewport_helpers.js \
 		test_mutationobservers.html \
 		mutationobserver_dialog.html \
 		test_bug744830.html \
@@ -648,7 +649,7 @@ MOCHITEST_CHROME_FILES =	\
 		$(NULL)
 
 # This test fails on the Mac for some reason
-ifneq (,$(filter gtk2 windows,$(MOZ_WIDGET_TOOLKIT)))
+ifneq (,$(filter gtk2 gtk3 windows,$(MOZ_WIDGET_TOOLKIT)))
 MOCHITEST_FILES_C += \
 		test_copyimage.html \
 		$(NULL)

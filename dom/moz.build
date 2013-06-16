@@ -71,7 +71,9 @@ PARALLEL_DIRS += [
     'workers',
     'camera',
     'audiochannel',
-    'refgraph'
+    'refgraph',
+    'future',
+    'wappush'
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':

@@ -14,3 +14,13 @@ XPIDL_SOURCES += [
 
 MODULE = 'extensions'
 
+EXTRA_COMPONENTS += [
+    'addonManager.js',
+    'amContentHandler.js',
+    'amWebInstallListener.js',
+]
+
+EXTRA_PP_COMPONENTS += [
+    'extensions.manifest',
+    'nsBlocklistService.js',
+]

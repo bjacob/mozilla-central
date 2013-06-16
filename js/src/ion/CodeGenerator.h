@@ -154,6 +154,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitSetPropertyPolymorphicV(LSetPropertyPolymorphicV *ins);
     bool visitSetPropertyPolymorphicT(LSetPropertyPolymorphicT *ins);
     bool visitAbsI(LAbsI *lir);
+    bool visitAtan2D(LAtan2D *lir);
     bool visitPowI(LPowI *lir);
     bool visitPowD(LPowD *lir);
     bool visitRandom(LRandom *lir);
@@ -215,6 +216,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitIteratorEnd(LIteratorEnd *lir);
     bool visitArgumentsLength(LArgumentsLength *lir);
     bool visitGetArgument(LGetArgument *lir);
+    bool visitRunOncePrologue(LRunOncePrologue *lir);
     bool emitRest(LInstruction *lir, Register array, Register numActuals,
                   Register temp0, Register temp1, unsigned numFormals,
                   JSObject *templateObject, const VMFunction &f);

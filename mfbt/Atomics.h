@@ -32,8 +32,10 @@
     * GCC.  We do not have a particularly good way to detect this sort of
     * case at this point, so just assume that if we're on a Linux system,
     * we can't use the system's <atomic>.
+    *
+    * OpenBSD uses an old libstdc++ 4.2.1 and thus doesnt have <atomic>.
     */
-#  if !defined(__linux__) && \
+#  if !defined(__linux__) && !defined(__OpenBSD__) && \
       (__cplusplus >= 201103L || defined(__GXX_EXPERIMENTAL_CXX0X__)) && \
       __has_include(<atomic>)
 #    define MOZ_HAVE_CXX11_ATOMICS
@@ -45,7 +47,7 @@
 #elif defined(__GNUC__) && !defined(__ANDROID__)
 #  include "mozilla/Compiler.h"
 #  if (defined(__GXX_EXPERIMENTAL_CXX0X__) || __cplusplus >= 201103L) && \
-      MOZ_GCC_VERSION_AT_LEAST(4, 5, 0)
+      MOZ_GCC_VERSION_AT_LEAST(4, 5, 2)
 #    define MOZ_HAVE_CXX11_ATOMICS
 #  endif
 #elif defined(_MSC_VER) && _MSC_VER >= 1700

@@ -11,6 +11,7 @@
 #include "nsImageLoadingContent.h"
 #include "nsIDOMHTMLImageElement.h"
 #include "imgRequestProxy.h"
+#include "Units.h"
 
 namespace mozilla {
 namespace dom {
@@ -165,8 +166,16 @@ public:
     SetHTMLAttr(nsGkAtoms::border, aBorder, aError);
   }
 
+  int32_t X();
+  int32_t Y();
+  // Uses XPCOM GetLowsrc.
+  void SetLowsrc(const nsAString& aLowsrc, ErrorResult& aError)
+  {
+    SetHTMLAttr(nsGkAtoms::lowsrc, aLowsrc, aError);
+  }
+
 protected:
-  nsIntPoint GetXY();
+  CSSIntPoint GetXY();
   virtual void GetItemValueText(nsAString& text) MOZ_OVERRIDE;
   virtual void SetItemValueText(const nsAString& text) MOZ_OVERRIDE;
   virtual JSObject* WrapNode(JSContext *aCx,

@@ -295,8 +295,7 @@ EnableUniversalXPConnect(JSContext *cx)
     XPCWrappedNativeScope *scope = priv->scope;
     if (!scope)
         return true;
-    XPCCallContext ccx(NATIVE_CALLER, cx);
-    return nsXPCComponents::AttachComponentsObject(ccx, scope);
+    return nsXPCComponents::AttachComponentsObject(cx, scope);
 }
 
 JSObject *
@@ -382,7 +381,7 @@ void XPCJSRuntime::TraceBlackJS(JSTracer* trc, void* data)
 
     // Skip this part if XPConnect is shutting down. We get into
     // bad locking problems with the thread iteration otherwise.
-    if (!self->GetXPConnect()->IsShuttingDown()) {
+    if (!nsXPConnect::XPConnect()->IsShuttingDown()) {
         // Trace those AutoMarkingPtr lists!
         if (AutoMarkingPtr *roots = Get()->mAutoRoots)
             roots->TraceJSAll(trc);
@@ -399,7 +398,7 @@ void XPCJSRuntime::TraceBlackJS(JSTracer* trc, void* data)
     }
 
     dom::TraceBlackJS(trc, JS_GetGCParameter(self->GetJSRuntime(), JSGC_NUMBER),
-                      self->GetXPConnect()->IsShuttingDown());
+                      nsXPConnect::XPConnect()->IsShuttingDown());
 }
 
 // static
@@ -608,9 +607,8 @@ XPCJSRuntime::UnmarkSkippableJSHolders()
 void
 xpc_UnmarkSkippableJSHolders()
 {
-    if (nsXPConnect::GetXPConnect() &&
-        nsXPConnect::GetXPConnect()->GetRuntime()) {
-        nsXPConnect::GetXPConnect()->GetRuntime()->UnmarkSkippableJSHolders();
+    if (nsXPConnect::XPConnect()->GetRuntime()) {
+        nsXPConnect::XPConnect()->GetRuntime()->UnmarkSkippableJSHolders();
     }
 }
 
@@ -936,7 +934,7 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, JSBool is
 
             // Skip this part if XPConnect is shutting down. We get into
             // bad locking problems with the thread iteration otherwise.
-            if (!self->GetXPConnect()->IsShuttingDown()) {
+            if (!nsXPConnect::XPConnect()->IsShuttingDown()) {
 
                 // Mark those AutoMarkingPtr lists!
                 if (AutoMarkingPtr *roots = Get()->mAutoRoots)
@@ -978,7 +976,7 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, JSBool is
             // We don't want to sweep the JSClasses at shutdown time.
             // At this point there may be JSObjects using them that have
             // been removed from the other maps.
-            if (!self->GetXPConnect()->IsShuttingDown()) {
+            if (!nsXPConnect::XPConnect()->IsShuttingDown()) {
                 self->mNativeScriptableSharedMap->
                     Enumerate(JSClassSweeper, sweepArg);
             }
@@ -1024,7 +1022,7 @@ XPCJSRuntime::FinalizeCallback(JSFreeOp *fop, JSFinalizeStatus status, JSBool is
 
             // Skip this part if XPConnect is shutting down. We get into
             // bad locking problems with the thread iteration otherwise.
-            if (!self->GetXPConnect()->IsShuttingDown()) {
+            if (!nsXPConnect::XPConnect()->IsShuttingDown()) {
                 // Do the marking...
 
                 XPCCallContext* ccxp = XPCJSRuntime::Get()->GetCallContext();
@@ -1678,7 +1676,7 @@ ReportZoneStats(const JS::ZoneStats &zStats,
                       "heap that holds references to executable code pools "
                       "used by the IonMonkey JIT.");
 
-    ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("lazy-scripts"),
+    ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("lazy-script-data"),
                    zStats.lazyScripts,
                    "Memory holding miscellaneous additional information associated with lazy "
                    "scripts.");
@@ -2259,7 +2257,7 @@ class XPCJSRuntimeStats : public JS::RuntimeStats
 
     virtual void initExtraZoneStats(JS::Zone *zone, JS::ZoneStats *zStats) MOZ_OVERRIDE {
         // Get the compartment's global.
-        nsXPConnect *xpc = nsXPConnect::GetXPConnect();
+        nsXPConnect *xpc = nsXPConnect::XPConnect();
         AutoSafeJSContext cx;
         JSCompartment *comp = js::GetAnyCompartmentInZone(zone);
         xpc::ZoneStatsExtras *extras = new xpc::ZoneStatsExtras;
@@ -2292,7 +2290,7 @@ class XPCJSRuntimeStats : public JS::RuntimeStats
         GetCompartmentName(c, cName, true);
 
         // Get the compartment's global.
-        nsXPConnect *xpc = nsXPConnect::GetXPConnect();
+        nsXPConnect *xpc = nsXPConnect::XPConnect();
         AutoSafeJSContext cx;
         bool needZone = true;
         RootedObject global(cx, JS_GetGlobalForCompartmentOrNull(cx, c));
@@ -2324,7 +2322,7 @@ class XPCJSRuntimeStats : public JS::RuntimeStats
         }
 
         if (needZone)
-            extras->jsPathPrefix += nsPrintfCString("zone(%p)/", (void *)js::GetCompartmentZone(c));
+            extras->jsPathPrefix += nsPrintfCString("zone(0x%p)/", (void *)js::GetCompartmentZone(c));
 
         extras->jsPathPrefix += NS_LITERAL_CSTRING("compartment(") + cName + NS_LITERAL_CSTRING(")/");
 
@@ -2539,14 +2537,10 @@ PreserveWrapper(JSContext *cx, JSObject *objArg)
     if (!ccx.IsValid())
         return false;
 
-    if (!IS_WRAPPER_CLASS(js::GetObjectClass(obj)))
+    if (!IS_WN_REFLECTOR(obj))
         return mozilla::dom::TryPreserveWrapper(obj);
 
-    nsISupports *supports = nullptr;
-    if (IS_WN_WRAPPER_OBJECT(obj))
-        supports = XPCWrappedNative::Get(obj)->Native();
-    else
-        supports = static_cast<nsISupports*>(xpc_GetJSPrivate(obj));
+    nsISupports *supports = XPCWrappedNative::Get(obj)->Native();
 
     // For pre-Paris DOM bindings objects, we only support Node.
     if (nsCOMPtr<nsINode> node = do_QueryInterface(supports)) {
@@ -2655,8 +2649,7 @@ SourceHook(JSContext *cx, JS::Handle<JSScript*> script, jschar **src,
 }
 
 XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
- : mXPConnect(aXPConnect),
-   mJSRuntime(nullptr),
+   : mJSRuntime(nullptr),
    mJSContextStack(new XPCJSContextStack()),
    mCallContext(nullptr),
    mAutoRoots(nullptr),
@@ -2915,7 +2908,6 @@ XPCJSRuntime::DebugDump(int16_t depth)
     depth--;
     XPC_LOG_ALWAYS(("XPCJSRuntime @ %x", this));
         XPC_LOG_INDENT();
-        XPC_LOG_ALWAYS(("mXPConnect @ %x", mXPConnect));
         XPC_LOG_ALWAYS(("mJSRuntime @ %x", mJSRuntime));
         XPC_LOG_ALWAYS(("mMapLock @ %x", mMapLock));
 
@@ -3004,8 +2996,8 @@ XPCRootSetElem::AddToRootSet(XPCLock *lock, XPCRootSetElem **listHead)
 void
 XPCRootSetElem::RemoveFromRootSet(XPCLock *lock)
 {
-    if (nsXPConnect *xpc = nsXPConnect::GetXPConnect())
-        JS::PokeGC(xpc->GetRuntime()->GetJSRuntime());
+    nsXPConnect *xpc = nsXPConnect::XPConnect();
+    JS::PokeGC(xpc->GetRuntime()->GetJSRuntime());
 
     NS_ASSERTION(mSelfp, "Must be linked");
 

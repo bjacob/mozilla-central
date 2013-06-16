@@ -22,7 +22,10 @@
 
 this.EXPORTED_SYMBOLS = [ "console" ];
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+const Cu = Components.utils;
+
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
@@ -44,7 +47,8 @@ let gTimerRegistry = new Map();
  * @param {object} aOptions (optional)
  *        An object allowing format customization. The only customization
  *        allowed currently is 'truncate' which can take the value "start" to
- *        truncate strings from the start as opposed to the end.
+ *        truncate strings from the start as opposed to the end or "center" to
+ *        truncate strings in the center
  * @return {string}
  *        The original string formatted to fit the specified lengths
  */
@@ -58,6 +62,12 @@ function fmt(aStr, aMaxLen, aMinLen, aOptions) {
   if (aStr.length > aMaxLen) {
     if (aOptions && aOptions.truncate == "start") {
       return "_" + aStr.substring(aStr.length - aMaxLen + 1);
+    }
+    else if (aOptions && aOptions.truncate == "center") {
+      let start = aStr.substring(0, (aMaxLen / 2));
+
+      let end = aStr.substring((aStr.length - (aMaxLen / 2)) + 1);
+      return start + "_" + end;
     }
     else {
       return aStr.substring(0, aMaxLen - 1) + "_";
@@ -125,15 +135,15 @@ function stringify(aThing) {
       // Can't use a real ellipsis here, because cmd.exe isn't unicode-enabled
       json = "{" + Object.keys(aThing).join(":..,") + ":.., " + "}";
     }
-    return type + fmt(json, 50, 0);
+    return type + json;
   }
 
   if (typeof aThing == "function") {
-    return fmt(aThing.toString().replace(/\s+/g, " "), 80, 0);
+    return aThing.toString().replace(/\s+/g, " ");
   }
 
   let str = aThing.toString().replace(/\n/g, "|");
-  return fmt(str, 80, 0);
+  return str;
 }
 
 /**
@@ -334,7 +344,7 @@ function formatTrace(aTrace) {
   aTrace.forEach(function(frame) {
     reply += fmt(frame.filename, 20, 20, { truncate: "start" }) + " " +
              fmt(frame.lineNumber, 5, 5) + " " +
-             fmt(frame.functionName, 75, 75) + "\n";
+             fmt(frame.functionName, 75, 75, { truncate: "center" }) + "\n";
   });
   return reply;
 }
@@ -446,7 +456,8 @@ function createMultiLineDumper(aLevel) {
 function sendConsoleAPIMessage(aLevel, aFrame, aArgs, aOptions = {})
 {
   let consoleEvent = {
-    ID: aFrame.filename,
+    ID: "jsm",
+    innerID: aFrame.filename,
     level: aLevel,
     filename: aFrame.filename,
     lineNumber: aFrame.lineNumber,
@@ -480,12 +491,12 @@ function sendConsoleAPIMessage(aLevel, aFrame, aArgs, aOptions = {})
   }
 
   Services.obs.notifyObservers(consoleEvent, "console-api-log-event", null);
+  ConsoleAPIStorage.recordEvent("jsm", consoleEvent);
 }
 
 /**
  * This creates a console object that somewhat replicates Firebug's console
- * object. It currently writes to dump(), but should write to the web
- * console's chrome error section (when it has one)
+ * object.
  */
 this.console = {
   debug: createMultiLineDumper("debug"),
@@ -493,6 +504,7 @@ this.console = {
   info: createDumper("info"),
   warn: createDumper("warn"),
   error: createMultiLineDumper("error"),
+  exception: createMultiLineDumper("error"),
 
   trace: function Console_trace() {
     let args = Array.prototype.slice.call(arguments, 0);

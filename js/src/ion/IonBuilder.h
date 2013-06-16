@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef jsion_bytecode_analyzer_h__
+#if !defined(jsion_bytecode_analyzer_h__) && defined(JS_ION)
 #define jsion_bytecode_analyzer_h__
 
 // This file declares the data structures for building a MIRGraph from a
@@ -39,6 +39,20 @@ class IonBuilder : public MIRGenerator
         // - assumed to be in bounds,
         // - not checked for data races
         SetElem_Unsafe,
+    };
+
+    enum GetElemSafety {
+        // Normal read like a[b]
+        GetElem_Normal,
+
+        // Read due to UnsafeGetElement:
+        // - assumed to be in bounds,
+        GetElem_Unsafe,
+
+        // Read due to UnsafeGetImmutableElement:
+        // - assumed to be in bounds,
+        // - assumed not to alias any stores
+        GetElem_UnsafeImmutable,
     };
 
     struct DeferredEdge : public TempObject
@@ -219,8 +233,10 @@ class IonBuilder : public MIRGenerator
 
     JSFunction *getSingleCallTarget(types::StackTypeSet *calleeTypes);
     bool getPolyCallTargets(types::StackTypeSet *calleeTypes,
-                            AutoObjectVector &targets, uint32_t maxTargets);
-    bool canInlineTarget(JSFunction *target, CallInfo &callInfo);
+                            AutoObjectVector &targets,
+                            uint32_t maxTargets,
+                            bool *gotLambda);
+    bool canInlineTarget(JSFunction *target);
 
     void popCfgStack();
     DeferredEdge *filterDeadDeferredEdges(DeferredEdge *edge);
@@ -311,7 +327,7 @@ class IonBuilder : public MIRGenerator
     bool initParameters();
     void rewriteParameter(uint32_t slotIdx, MDefinition *param, int32_t argIndex);
     void rewriteParameters();
-    bool initScopeChain();
+    bool initScopeChain(MDefinition *callee = NULL);
     bool initArgumentsObject();
     bool pushConstant(const Value &v);
 
@@ -339,9 +355,11 @@ class IonBuilder : public MIRGenerator
 
     bool invalidatedIdempotentCache();
 
+    bool hasStaticScopeObject(ScopeCoordinate sc, MutableHandleObject pcall);
     bool loadSlot(MDefinition *obj, Shape *shape, MIRType rvalType,
                   bool barrier, types::StackTypeSet *types);
-    bool storeSlot(MDefinition *obj, Shape *shape, MDefinition *value, bool needsBarrier);
+    bool storeSlot(MDefinition *obj, Shape *shape, MDefinition *value, bool needsBarrier,
+                   MIRType slotType = MIRType_None);
 
     // jsop_getprop() helpers.
     bool getPropTryArgumentsLength(bool *emitted);
@@ -381,13 +399,13 @@ class IonBuilder : public MIRGenerator
     bool jsop_dup2();
     bool jsop_loophead(jsbytecode *pc);
     bool jsop_compare(JSOp op);
-    bool jsop_getgname(HandlePropertyName name);
-    bool jsop_setgname(HandlePropertyName name);
+    bool getStaticName(HandleObject staticObject, HandlePropertyName name, bool *psucceeded);
+    bool setStaticName(HandleObject staticObject, HandlePropertyName name);
     bool jsop_getname(HandlePropertyName name);
     bool jsop_intrinsic(HandlePropertyName name);
     bool jsop_bindname(PropertyName *name);
     bool jsop_getelem();
-    bool jsop_getelem_dense();
+    bool jsop_getelem_dense(GetElemSafety safety, MDefinition *object, MDefinition *index);
     bool jsop_getelem_typed(int arrayType);
     bool jsop_getelem_typed_static(bool *psucceeded);
     bool jsop_getelem_string();
@@ -406,6 +424,7 @@ class IonBuilder : public MIRGenerator
     bool jsop_arguments_length();
     bool jsop_arguments_getelem();
     bool jsop_arguments_setelem(MDefinition *object, MDefinition *index, MDefinition *value);
+    bool jsop_runonce();
     bool jsop_rest();
     bool jsop_not();
     bool jsop_getprop(HandlePropertyName name);
@@ -461,6 +480,7 @@ class IonBuilder : public MIRGenerator
     InliningStatus inlineMathFloor(CallInfo &callInfo);
     InliningStatus inlineMathRound(CallInfo &callInfo);
     InliningStatus inlineMathSqrt(CallInfo &callInfo);
+    InliningStatus inlineMathAtan2(CallInfo &callInfo);
     InliningStatus inlineMathMinMax(CallInfo &callInfo, bool max);
     InliningStatus inlineMathPow(CallInfo &callInfo);
     InliningStatus inlineMathRandom(CallInfo &callInfo);
@@ -480,6 +500,8 @@ class IonBuilder : public MIRGenerator
     InliningStatus inlineUnsafeSetElement(CallInfo &callInfo);
     bool inlineUnsafeSetDenseArrayElement(CallInfo &callInfo, uint32_t base);
     bool inlineUnsafeSetTypedArrayElement(CallInfo &callInfo, uint32_t base, int arrayType);
+    InliningStatus inlineUnsafeGetElement(CallInfo &callInfo,
+                                          GetElemSafety safety);
     InliningStatus inlineForceSequentialOrInParallelSection(CallInfo &callInfo);
     InliningStatus inlineNewDenseArray(CallInfo &callInfo);
     InliningStatus inlineNewDenseArrayForSequentialExecution(CallInfo &callInfo);
@@ -504,7 +526,7 @@ class IonBuilder : public MIRGenerator
 
     // Call functions
     InliningStatus inlineCallsite(AutoObjectVector &targets, AutoObjectVector &originals,
-                                  CallInfo &callInfo);
+                                  bool lambda, CallInfo &callInfo);
     bool inlineCalls(CallInfo &callInfo, AutoObjectVector &targets, AutoObjectVector &originals,
                      Vector<bool> &choiceSet, MGetPropertyCache *maybeCache);
 
@@ -600,7 +622,6 @@ class IonBuilder : public MIRGenerator
     BaselineInspector *inspector;
 
     size_t inliningDepth_;
-    Vector<MDefinition *, 0, IonAllocPolicy> inlinedArguments_;
 
     // Cutoff to disable compilation if excessive time is spent reanalyzing
     // loop bodies to compute a fixpoint of the types for loop variables.
@@ -621,6 +642,9 @@ class IonBuilder : public MIRGenerator
     // If this script can use a lazy arguments object, it will be pre-created
     // here.
     MInstruction *lazyArguments_;
+
+    // If this is an inline builder, the call info for the builder.
+    const CallInfo *inlineCallInfo_;
 };
 
 class CallInfo
@@ -630,6 +654,7 @@ class CallInfo
     Vector<MDefinition *> args_;
 
     bool constructing_;
+    bool lambda_;
 
   public:
     CallInfo(JSContext *cx, bool constructing)
@@ -696,6 +721,10 @@ class CallInfo
         return args_;
     }
 
+    const Vector<MDefinition *> &argv() const {
+        return args_;
+    }
+
     MDefinition *getArg(uint32_t i) {
         JS_ASSERT(i < argc());
         return args_[i];
@@ -717,6 +746,13 @@ class CallInfo
 
     bool constructing() {
         return constructing_;
+    }
+
+    bool isLambda() const {
+        return lambda_;
+    }
+    void setLambda(bool lambda) {
+        lambda_ = lambda;
     }
 
     void wrapArgs(MBasicBlock *current) {

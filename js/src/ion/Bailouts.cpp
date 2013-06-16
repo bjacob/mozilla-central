@@ -6,7 +6,6 @@
 
 #include "jscntxt.h"
 #include "jscompartment.h"
-#include "jsinterp.h"
 #include "Bailouts.h"
 #include "SnapshotReader.h"
 #include "Ion.h"
@@ -15,6 +14,7 @@
 #include "jsinfer.h"
 #include "jsanalyze.h"
 #include "jsinferinlines.h"
+#include "vm/Interpreter.h"
 #include "IonFrames-inl.h"
 #include "BaselineJIT.h"
 
@@ -69,9 +69,9 @@ ion::Bailout(BailoutStack *sp, BaselineBailoutInfo **bailoutInfo)
     JSContext *cx = GetIonContext()->cx;
     // We don't have an exit frame.
     cx->mainThread().ionTop = NULL;
-    IonActivationIterator ionActivations(cx);
-    IonBailoutIterator iter(ionActivations, sp);
-    IonActivation *activation = ionActivations.activation();
+    JitActivationIterator jitActivations(cx->runtime());
+    IonBailoutIterator iter(jitActivations, sp);
+    JitActivation *activation = jitActivations.activation()->asJit();
 
     IonSpew(IonSpew_Bailouts, "Took bailout! Snapshot offset: %d", iter.snapshotOffset());
 
@@ -100,9 +100,9 @@ ion::InvalidationBailout(InvalidationBailoutStack *sp, size_t *frameSizeOut,
 
     // We don't have an exit frame.
     cx->mainThread().ionTop = NULL;
-    IonActivationIterator ionActivations(cx);
-    IonBailoutIterator iter(ionActivations, sp);
-    IonActivation *activation = ionActivations.activation();
+    JitActivationIterator jitActivations(cx->runtime());
+    IonBailoutIterator iter(jitActivations, sp);
+    JitActivation *activation = jitActivations.activation()->asJit();
 
     IonSpew(IonSpew_Bailouts, "Took invalidation bailout! Snapshot offset: %d", iter.snapshotOffset());
 
@@ -133,7 +133,7 @@ ion::InvalidationBailout(InvalidationBailoutStack *sp, size_t *frameSizeOut,
         IonSpew(IonSpew_Invalidate, "   new  ra %p", (void *) frame->returnAddress());
     }
 
-    iter.ionScript()->decref(cx->runtime->defaultFreeOp());
+    iter.ionScript()->decref(cx->runtime()->defaultFreeOp());
 
     return retval;
 }
@@ -158,7 +158,8 @@ ion::CheckFrequentBailouts(JSContext *cx, JSScript *script)
     // we compile this script LICM will be disabled.
 
     if (script->hasIonScript() &&
-        script->ionScript()->numBailouts() >= js_IonOptions.frequentBailoutThreshold)
+        script->ionScript()->numBailouts() >= js_IonOptions.frequentBailoutThreshold &&
+        !script->hadFrequentBailouts)
     {
         script->hadFrequentBailouts = true;
 

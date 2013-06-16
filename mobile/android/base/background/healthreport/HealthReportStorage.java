@@ -4,6 +4,8 @@
 
 package org.mozilla.gecko.background.healthreport;
 
+import org.json.JSONObject;
+
 import android.database.Cursor;
 import android.util.SparseArray;
 
@@ -29,10 +31,13 @@ public interface HealthReportStorage {
 
     protected static final int FLAG_INTEGER  = 1 << 0;
     protected static final int FLAG_STRING   = 1 << 1;
+    protected static final int FLAG_JSON     = 1 << 2;
 
     protected static final int FLAG_DISCRETE = 1 << 8;
     protected static final int FLAG_LAST     = 1 << 9;
     protected static final int FLAG_COUNTER  = 1 << 10;
+
+    protected static final int FLAG_COUNTED  = 1 << 14;
 
     public static final int TYPE_INTEGER_DISCRETE = FLAG_INTEGER | FLAG_DISCRETE;
     public static final int TYPE_INTEGER_LAST     = FLAG_INTEGER | FLAG_LAST;
@@ -40,6 +45,11 @@ public interface HealthReportStorage {
 
     public static final int TYPE_STRING_DISCRETE  = FLAG_STRING | FLAG_DISCRETE;
     public static final int TYPE_STRING_LAST      = FLAG_STRING | FLAG_LAST;
+
+    public static final int TYPE_JSON_DISCRETE    = FLAG_JSON | FLAG_DISCRETE;
+    public static final int TYPE_JSON_LAST        = FLAG_JSON | FLAG_LAST;
+
+    public static final int TYPE_COUNTED_STRING_DISCRETE = FLAG_COUNTED | TYPE_STRING_DISCRETE;
 
     protected int fieldID = UNKNOWN_TYPE_OR_FIELD_ID;
     protected int flags;
@@ -69,8 +79,25 @@ public interface HealthReportStorage {
       return (this.flags & FLAG_STRING) > 0;
     }
 
+    public boolean isJSONField() {
+      return (this.flags & FLAG_JSON) > 0;
+    }
+
+    public boolean isStoredAsString() {
+      return (this.flags & (FLAG_JSON | FLAG_STRING)) > 0;
+    }
+
     public boolean isDiscreteField() {
       return (this.flags & FLAG_DISCRETE) > 0;
+    }
+
+    /**
+     * True if the accrued values are intended to be bucket-counted. For strings,
+     * each discrete value will name a bucket, with the number of instances per
+     * day being the value in the bucket.
+     */
+    public boolean isCountedField() {
+      return (this.flags & FLAG_COUNTED) > 0;
     }
   }
 
@@ -141,12 +168,19 @@ public interface HealthReportStorage {
    */
   public SparseArray<Field> getFieldsByID();
 
+  public void recordDailyLast(int env, int day, int field, JSONObject value);
   public void recordDailyLast(int env, int day, int field, String value);
   public void recordDailyLast(int env, int day, int field, int value);
+  public void recordDailyDiscrete(int env, int day, int field, JSONObject value);
   public void recordDailyDiscrete(int env, int day, int field, String value);
   public void recordDailyDiscrete(int env, int day, int field, int value);
   public void incrementDailyCount(int env, int day, int field, int by);
   public void incrementDailyCount(int env, int day, int field);
+
+  /**
+   * Return true if events exist that were recorded on or after <code>time</code>.
+   */
+  boolean hasEventSince(long time);
 
   /**
    * Obtain a cursor over events that were recorded since <code>time</code>.

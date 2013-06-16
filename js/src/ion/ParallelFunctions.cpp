@@ -4,12 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jsinterp.h"
-#include "ParallelFunctions.h"
-#include "IonSpewer.h"
+#include "ion/ParallelFunctions.h"
 
-#include "jsinterpinlines.h"
+#include "ion/IonSpewer.h"
+#include "vm/Interpreter.h"
+
 #include "jscompartmentinlines.h"
+#include "jsstrinlines.h"
+#include "vm/Interpreter-inl.h"
 
 using namespace js;
 using namespace ion;
@@ -432,6 +434,8 @@ ion::ParCallToUncompiledScript(JSFunction *func)
         JSScript *script = func->nonLazyScript();
         Spew(SpewBailouts, "Call to uncompiled script: %p:%s:%d",
              script, script->filename(), script->lineno);
+    } else if (func->isInterpretedLazy()) {
+        Spew(SpewBailouts, "Call to uncompiled lazy script");
     } else if (func->isBoundFunction()) {
         int depth = 0;
         JSFunction *target = func->getBoundFunctionTarget()->toFunction();

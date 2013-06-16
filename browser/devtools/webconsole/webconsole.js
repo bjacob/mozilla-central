@@ -178,6 +178,7 @@ const MIN_FONT_SIZE = 10;
 const MAX_LONG_STRING_LENGTH = 200000;
 
 const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
+const PREF_PERSISTLOG = "devtools.webconsole.persistlog";
 
 /**
  * A WebConsoleFrame instance is an interactive console initialized *per target*
@@ -369,6 +370,20 @@ WebConsoleFrame.prototype = {
         this._saveRequestAndResponseBodies = newValue;
       }
     }.bind(this));
+  },
+
+  _persistLog: null,
+
+  /**
+   * Getter for the persistent logging preference. This value is cached per
+   * instance to avoid reading the pref too often.
+   * @type boolean
+   */
+  get persistLog() {
+    if (this._persistLog === null) {
+      this._persistLog = Services.prefs.getBoolPref(PREF_PERSISTLOG);
+    }
+    return this._persistLog;
   },
 
   /**
@@ -1177,14 +1192,34 @@ WebConsoleFrame.prototype = {
       severity = SEVERITY_WARNING;
     }
 
+    let objectActors = new Set();
+
+    // Gather the actor IDs.
+    for (let prop of ["errorMessage", "lineText"]) {
+      let grip = aScriptError[prop];
+      if (WebConsoleUtils.isActorGrip(grip)) {
+        objectActors.add(grip.actor);
+      }
+    }
+
+    let errorMessage = aScriptError.errorMessage;
+    if (errorMessage.type && errorMessage.type == "longString") {
+      errorMessage = errorMessage.initial;
+    }
+
     let node = this.createMessageNode(aCategory, severity,
-                                      aScriptError.errorMessage,
+                                      errorMessage,
                                       aScriptError.sourceName,
                                       aScriptError.lineNumber, null, null,
                                       aScriptError.timeStamp);
     if (aScriptError.private) {
       node.setAttribute("private", true);
     }
+
+    if (objectActors.size > 0) {
+      node._objectActors = objectActors;
+    }
+
     return node;
   },
 
@@ -1210,10 +1245,32 @@ WebConsoleFrame.prototype = {
    */
   handleLogMessage: function WCF_handleLogMessage(aPacket)
   {
-    this.outputMessage(CATEGORY_JS, () => {
-      return this.createMessageNode(CATEGORY_JS, SEVERITY_LOG, aPacket.message,
-                                    null, null, null, null, aPacket.timeStamp);
-    });
+    if (aPacket.message) {
+      this.outputMessage(CATEGORY_JS, this._reportLogMessage, [aPacket]);
+    }
+  },
+
+  /**
+   * Display log messages received from the server.
+   *
+   * @private
+   * @param object aPacket
+   *        The message packet received from the server.
+   * @return nsIDOMElement
+   *         The message element to render for the given log message.
+   */
+  _reportLogMessage: function WCF__reportLogMessage(aPacket)
+  {
+    let msg = aPacket.message;
+    if (msg.type && msg.type == "longString") {
+      msg = msg.initial;
+    }
+    let node = this.createMessageNode(CATEGORY_JS, SEVERITY_LOG, msg, null,
+                                      null, null, null, aPacket.timeStamp);
+    if (WebConsoleUtils.isActorGrip(aPacket.message)) {
+      node._objectActors = new Set([aPacket.message.actor]);
+    }
+    return node;
   },
 
   /**
@@ -1977,6 +2034,22 @@ WebConsoleFrame.prototype = {
         }
       });
     }
+    else if (category == CATEGORY_JS &&
+             methodOrNode == this.reportPageError) {
+      let pageError = args[1];
+      for (let prop of ["errorMessage", "lineText"]) {
+        let grip = pageError[prop];
+        if (WebConsoleUtils.isActorGrip(grip)) {
+          this._releaseObject(grip.actor);
+        }
+      }
+    }
+    else if (category == CATEGORY_JS &&
+             methodOrNode == this._reportLogMessage) {
+      if (WebConsoleUtils.isActorGrip(args[0].message)) {
+        this._releaseObject(args[0].message.actor);
+      }
+    }
   },
 
   /**
@@ -2373,21 +2446,24 @@ WebConsoleFrame.prototype = {
 
     // Create the text, which consists of an abbreviated version of the URL
     // plus an optional line number. Scratchpad URLs should not be abbreviated.
-    let text;
+    let displayLocation;
+    let fullURL;
 
     if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
-      text = aSourceURL;
+      displayLocation = aSourceURL;
+      fullURL = aSourceURL;
     }
     else {
-      text = WebConsoleUtils.abbreviateSourceURL(aSourceURL);
+      fullURL = aSourceURL.split(" -> ").pop();
+      displayLocation = WebConsoleUtils.abbreviateSourceURL(fullURL);
     }
 
     if (aSourceLine) {
-      text += ":" + aSourceLine;
+      displayLocation += ":" + aSourceLine;
       locationNode.sourceLine = aSourceLine;
     }
 
-    locationNode.setAttribute("value", text);
+    locationNode.setAttribute("value", displayLocation);
 
     // Style appropriately.
     locationNode.setAttribute("crop", "center");
@@ -2397,7 +2473,7 @@ WebConsoleFrame.prototype = {
     locationNode.classList.add("text-link");
 
     // Make the location clickable.
-    locationNode.addEventListener("click", function() {
+    locationNode.addEventListener("click", () => {
       if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
         let wins = Services.wm.getEnumerator("devtools:scratchpad");
 
@@ -2411,16 +2487,16 @@ WebConsoleFrame.prototype = {
         }
       }
       else if (locationNode.parentNode.category == CATEGORY_CSS) {
-        this.owner.viewSourceInStyleEditor(aSourceURL, aSourceLine);
+        this.owner.viewSourceInStyleEditor(fullURL, aSourceLine);
       }
       else if (locationNode.parentNode.category == CATEGORY_JS ||
                locationNode.parentNode.category == CATEGORY_WEBDEV) {
-        this.owner.viewSourceInDebugger(aSourceURL, aSourceLine);
+        this.owner.viewSourceInDebugger(fullURL, aSourceLine);
       }
       else {
-        this.owner.viewSource(aSourceURL, aSourceLine);
+        this.owner.viewSource(fullURL, aSourceLine);
       }
-    }.bind(this), true);
+    }, true);
 
     return locationNode;
   },
@@ -2683,8 +2759,14 @@ function JSTerm(aWebConsoleFrame)
 
   this.lastCompletion = { value: null };
   this.history = [];
-  this.historyIndex = 0;
-  this.historyPlaceHolder = 0;  // this.history.length;
+
+  // Holds the number of entries in history. This value is incremented in
+  // this.execute().
+  this.historyIndex = 0; // incremented on this.execute()
+
+  // Holds the index of the history entry that the user is currently viewing.
+  // This is reset to this.history.length when this.execute() is invoked.
+  this.historyPlaceHolder = 0;
   this._objectActorsInVariablesViews = new Map();
 
   this._keyPress = this.keyPress.bind(this);
@@ -2954,8 +3036,10 @@ JSTerm.prototype = {
     let options = { frame: this.SELECTED_FRAME };
     this.requestEvaluation(aExecuteString, options).then(onResult, onResult);
 
-    this.history.push(aExecuteString);
-    this.historyIndex++;
+    // Append a new value in the history of executed code, or overwrite the most
+    // recent entry. The most recent entry may contain the last edited input
+    // value that was not evaluated yet.
+    this.history[this.historyIndex++] = aExecuteString;
     this.historyPlaceHolder = this.history.length;
     this.setInputValue("");
     this.clearCompletion();
@@ -3865,13 +3949,9 @@ JSTerm.prototype = {
         }
         break;
 
+      // Bug 873250 - always enter, ignore autocomplete
       case Ci.nsIDOMKeyEvent.DOM_VK_RETURN:
-        if (this.autocompletePopup.isOpen && this.autocompletePopup.selectedIndex > -1) {
-          this.acceptProposedCompletion();
-        }
-        else {
-          this.execute();
-        }
+        this.execute();
         aEvent.preventDefault();
         break;
 
@@ -3937,27 +4017,26 @@ JSTerm.prototype = {
       if (this.historyPlaceHolder <= 0) {
         return false;
       }
-
       let inputVal = this.history[--this.historyPlaceHolder];
-      if (inputVal){
-        this.setInputValue(inputVal);
+
+      // Save the current input value as the latest entry in history, only if
+      // the user is already at the last entry.
+      // Note: this code does not store changes to items that are already in
+      // history.
+      if (this.historyPlaceHolder+1 == this.historyIndex) {
+        this.history[this.historyIndex] = this.inputNode.value || "";
       }
+
+      this.setInputValue(inputVal);
     }
     // Down Arrow key
     else if (aDirection == HISTORY_FORWARD) {
-      if (this.historyPlaceHolder == this.history.length - 1) {
-        this.historyPlaceHolder ++;
-        this.setInputValue("");
-      }
-      else if (this.historyPlaceHolder >= (this.history.length)) {
+      if (this.historyPlaceHolder >= (this.history.length-1)) {
         return false;
       }
-      else {
-        let inputVal = this.history[++this.historyPlaceHolder];
-        if (inputVal){
-          this.setInputValue(inputVal);
-        }
-      }
+
+      let inputVal = this.history[++this.historyPlaceHolder];
+      this.setInputValue(inputVal);
     }
     else {
       throw new Error("Invalid argument 0");
@@ -4893,6 +4972,10 @@ WebConsoleConnectionProxy.prototype = {
   {
     if (!this.owner) {
       return;
+    }
+
+    if (aEvent == "will-navigate" && !this.owner.persistLog) {
+      this.owner.jsterm.clearOutput();
     }
 
     if (aPacket.url) {

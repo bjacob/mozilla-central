@@ -19,28 +19,32 @@
 #include "jstypes.h"
 #include "jsutil.h"
 #include "jsprf.h"
+#include "jsanalyze.h"
 #include "jsapi.h"
 #include "jsatom.h"
 #include "jscntxt.h"
+#include "jscompartment.h"
 #include "jsfun.h"
 #include "jsnum.h"
 #include "jsobj.h"
 #include "jsscript.h"
 #include "jsstr.h"
 
-#include "frontend/BytecodeEmitter.h"
-#include "frontend/TokenStream.h"
+#include "frontend/BytecodeCompiler.h"
+#include "frontend/SourceNotes.h"
 #include "js/CharacterEncoding.h"
 #include "vm/Shape.h"
 #include "vm/StringBuffer.h"
 
 #include "jscntxtinlines.h"
 #include "jsobjinlines.h"
+#include "jscompartmentinlines.h"
 #include "jsopcodeinlines.h"
 
 #include "jsautooplen.h"
 
 #include "vm/RegExpObject-inl.h"
+#include "vm/ScopeObject-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -54,7 +58,7 @@ using mozilla::ArrayLength;
 JS_STATIC_ASSERT(sizeof(uint32_t) * JS_BITS_PER_BYTE >= INDEX_LIMIT_LOG2 + 1);
 
 /* Verify JSOP_XXX_LENGTH constant definitions. */
-#define OPDEF(op,val,name,token,length,nuses,ndefs,prec,format)               \
+#define OPDEF(op,val,name,token,length,nuses,ndefs,format)               \
     JS_STATIC_ASSERT(op##_LENGTH == length);
 #include "jsopcode.tbl"
 #undef OPDEF
@@ -63,8 +67,8 @@ static const char js_incop_strs[][3] = {"++", "--"};
 static const char js_for_each_str[]  = "for each";
 
 const JSCodeSpec js_CodeSpec[] = {
-#define OPDEF(op,val,name,token,length,nuses,ndefs,prec,format) \
-    {length,nuses,ndefs,prec,format},
+#define OPDEF(op,val,name,token,length,nuses,ndefs,format) \
+    {length,nuses,ndefs,format},
 #include "jsopcode.tbl"
 #undef OPDEF
 };
@@ -76,7 +80,7 @@ unsigned js_NumCodeSpecs = JS_ARRAY_LENGTH(js_CodeSpec);
  * bytecode or null.
  */
 static const char *CodeToken[] = {
-#define OPDEF(op,val,name,token,length,nuses,ndefs,prec,format) \
+#define OPDEF(op,val,name,token,length,nuses,ndefs,format) \
     token,
 #include "jsopcode.tbl"
 #undef OPDEF
@@ -87,7 +91,7 @@ static const char *CodeToken[] = {
  * and JIT debug spew.
  */
 const char *js_CodeName[] = {
-#define OPDEF(op,val,name,token,length,nuses,ndefs,prec,format) \
+#define OPDEF(op,val,name,token,length,nuses,ndefs,format) \
     name,
 #include "jsopcode.tbl"
 #undef OPDEF
@@ -462,7 +466,7 @@ ToDisassemblySource(JSContext *cx, jsval v, JSAutoByteString *bytes)
         return true;
     }
 
-    if (cx->runtime->isHeapBusy() || cx->runtime->noGCOrAllocationCheck) {
+    if (cx->runtime()->isHeapBusy() || cx->runtime()->noGCOrAllocationCheck) {
         char *source = JS_sprintf_append(NULL, "<value>");
         if (!source)
             return false;
@@ -600,7 +604,7 @@ js_Disassemble1(JSContext *cx, HandleScript script, jsbytecode *pc,
 
       case JOF_OBJECT: {
         /* Don't call obj.toSource if analysis/inference is active. */
-        if (cx->compartment->activeAnalysis) {
+        if (cx->compartment()->activeAnalysis) {
             Sprint(sp, " object");
             break;
         }
@@ -1462,10 +1466,10 @@ FindStartPC(JSContext *cx, ScriptFrameIter &iter, int spindex, int skipStackHits
      * stack pointer and skewing it from what static analysis in pcstack.init
      * would compute.
      *
-     * FIXME: also fall back if iter.isIonOptimizedJS(), since the stack snapshot
-     * may be for the previous pc (see bug 831120).
+     * FIXME: also fall back if iter.isIon(), since the stack snapshot may be
+     * for the previous pc (see bug 831120).
      */
-    if (iter.isIonOptimizedJS())
+    if (iter.isIon())
         return true;
 
     *valuepc = NULL;
@@ -2057,7 +2061,7 @@ js::IsValidBytecodeOffset(JSContext *cx, JSScript *script, size_t offset)
 JS_FRIEND_API(size_t)
 js::GetPCCountScriptCount(JSContext *cx)
 {
-    JSRuntime *rt = cx->runtime;
+    JSRuntime *rt = cx->runtime();
 
     if (!rt->scriptAndCountsVector)
         return 0;
@@ -2094,7 +2098,7 @@ AppendArrayJSONProperties(JSContext *cx, StringBuffer &buf,
 JS_FRIEND_API(JSString *)
 js::GetPCCountScriptSummary(JSContext *cx, size_t index)
 {
-    JSRuntime *rt = cx->runtime;
+    JSRuntime *rt = cx->runtime();
 
     if (!rt->scriptAndCountsVector || index >= rt->scriptAndCountsVector->length()) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_BUFFER_TOO_SMALL);
@@ -2357,7 +2361,7 @@ GetPCCountJSON(JSContext *cx, const ScriptAndCounts &sac, StringBuffer &buf)
 JS_FRIEND_API(JSString *)
 js::GetPCCountScriptContents(JSContext *cx, size_t index)
 {
-    JSRuntime *rt = cx->runtime;
+    JSRuntime *rt = cx->runtime();
 
     if (!rt->scriptAndCountsVector || index >= rt->scriptAndCountsVector->length()) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_BUFFER_TOO_SMALL);

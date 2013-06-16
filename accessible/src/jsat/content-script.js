@@ -16,6 +16,8 @@ XPCOMUtils.defineLazyModuleGetter(this, 'Utils',
   'resource://gre/modules/accessibility/Utils.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'EventManager',
   'resource://gre/modules/accessibility/EventManager.jsm');
+XPCOMUtils.defineLazyModuleGetter(this, 'ObjectWrapper',
+  'resource://gre/modules/ObjectWrapper.jsm');
 
 Logger.debug('content-script.js');
 
@@ -156,6 +158,20 @@ function activateCurrent(aMessage) {
     activateAccessible(vc.position);
 }
 
+function activateContextMenu(aMessage) {
+  function sendContextMenuCoordinates(aAccessible) {
+    let objX = {}, objY = {}, objW = {}, objH = {};
+    aAccessible.getBounds(objX, objY, objW, objH);
+    let x = objX.value + objW.value / 2;
+    let y = objY.value + objH.value / 2;
+    sendAsyncMessage('AccessFu:ActivateContextMenu', {x: x, y: y});
+  }
+
+  let vc = Utils.getVirtualCursor(content.document);
+  if (!forwardMessage(vc, aMessage))
+    sendContextMenuCoordinates(vc.position);
+}
+
 function scroll(aMessage) {
   let vc = Utils.getVirtualCursor(content.document);
 
@@ -167,6 +183,21 @@ function scroll(aMessage) {
     let acc = vc.position;
     while (acc) {
       let elem = acc.DOMNode;
+
+      // This is inspired by IndieUI events. Once they are
+      // implemented, it should be easy to transition to them.
+      // https://dvcs.w3.org/hg/IndieUI/raw-file/tip/src/indie-ui-events.html#scrollrequest
+      let uiactions = elem.getAttribute ? elem.getAttribute('uiactions') : '';
+      if (uiactions && uiactions.split(' ').indexOf('scroll') >= 0) {
+        let evt = elem.ownerDocument.createEvent('CustomEvent');
+        let details = horiz ? { deltaX: page * elem.clientWidth } :
+          { deltaY: page * elem.clientHeight };
+        evt.initCustomEvent(
+          'scrollrequest', true, true,
+          ObjectWrapper.wrap(details, elem.ownerDocument.defaultView));
+        if (!elem.dispatchEvent(evt))
+          return;
+      }
 
       // We will do window scrolling next.
       if (elem == content.document)
@@ -185,25 +216,6 @@ function scroll(aMessage) {
           let s = content.getComputedStyle(elem);
           if (s.overflowX == 'scroll' || s.overflowX == 'auto') {
             elem.scrollLeft += page * elem.clientWidth;
-            return true;
-          }
-        }
-
-        let controllers = acc.
-          getRelationByType(
-            Ci.nsIAccessibleRelation.RELATION_CONTROLLED_BY);
-        for (let i = 0; controllers.targetsCount > i; i++) {
-          let controller = controllers.getTarget(i);
-          // If the section has a controlling slider, it should be considered
-          // the page-turner.
-          if (controller.role == Ci.nsIAccessibleRole.ROLE_SLIDER) {
-            // Sliders are controlled with ctrl+right/left. I just decided :)
-            let evt = content.document.createEvent('KeyboardEvent');
-            evt.initKeyEvent(
-              'keypress', true, true, null,
-              true, false, false, false,
-              (page > 0) ? evt.DOM_VK_RIGHT : evt.DOM_VK_LEFT, 0);
-            controller.DOMNode.dispatchEvent(evt);
             return true;
           }
         }
@@ -248,6 +260,7 @@ addMessageListener(
 
     addMessageListener('AccessFu:VirtualCursor', virtualCursorControl);
     addMessageListener('AccessFu:Activate', activateCurrent);
+    addMessageListener('AccessFu:ContextMenu', activateContextMenu);
     addMessageListener('AccessFu:Scroll', scroll);
 
     if (!eventManager) {
@@ -263,6 +276,7 @@ addMessageListener(
 
     removeMessageListener('AccessFu:VirtualCursor', virtualCursorControl);
     removeMessageListener('AccessFu:Activate', activateCurrent);
+    removeMessageListener('AccessFu:ContextMenu', activateContextMenu);
     removeMessageListener('AccessFu:Scroll', scroll);
 
     eventManager.stop();

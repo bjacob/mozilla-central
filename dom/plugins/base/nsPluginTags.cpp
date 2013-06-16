@@ -11,6 +11,7 @@
 #include "nsServiceManagerUtils.h"
 #include "nsPluginsDir.h"
 #include "nsPluginHost.h"
+#include "nsIBlocklistService.h"
 #include "nsIUnicodeDecoder.h"
 #include "nsIPlatformCharset.h"
 #include "nsICharsetConverterManager.h"
@@ -30,7 +31,6 @@ using mozilla::TimeStamp;
 // no longer used                   0x0002    // reuse only if regenerating pluginreg.dat
 #define NS_PLUGIN_FLAG_FROMCACHE    0x0004    // this plugintag info was loaded from cache
 // no longer used                   0x0008    // reuse only if regenerating pluginreg.dat
-#define NS_PLUGIN_FLAG_BLOCKLISTED  0x0010    // this is a blocklisted plugin
 #define NS_PLUGIN_FLAG_CLICKTOPLAY  0x0020    // this is a click-to-play plugin
 
 inline char* new_str(const char* str)
@@ -63,44 +63,38 @@ GetStatePrefNameForPlugin(nsPluginTag* aTag)
   return MakePrefNameForPlugin("state", aTag);
 }
 
-static nsCString
-GetBlocklistedPrefNameForPlugin(nsPluginTag* aTag)
-{
-  return MakePrefNameForPlugin("blocklisted", aTag);
-}
-
 NS_IMPL_ISUPPORTS1(DOMMimeTypeImpl, nsIDOMMimeType)
 
 /* nsPluginTag */
 
 nsPluginTag::nsPluginTag(nsPluginTag* aPluginTag)
-: mName(aPluginTag->mName),
-mDescription(aPluginTag->mDescription),
-mMimeTypes(aPluginTag->mMimeTypes),
-mMimeDescriptions(aPluginTag->mMimeDescriptions),
-mExtensions(aPluginTag->mExtensions),
-mLibrary(nullptr),
-mIsJavaPlugin(aPluginTag->mIsJavaPlugin),
-mIsFlashPlugin(aPluginTag->mIsFlashPlugin),
-mFileName(aPluginTag->mFileName),
-mFullPath(aPluginTag->mFullPath),
-mVersion(aPluginTag->mVersion),
-mLastModifiedTime(0),
-mNiceFileName()
+  : mName(aPluginTag->mName),
+    mDescription(aPluginTag->mDescription),
+    mMimeTypes(aPluginTag->mMimeTypes),
+    mMimeDescriptions(aPluginTag->mMimeDescriptions),
+    mExtensions(aPluginTag->mExtensions),
+    mLibrary(nullptr),
+    mIsJavaPlugin(aPluginTag->mIsJavaPlugin),
+    mIsFlashPlugin(aPluginTag->mIsFlashPlugin),
+    mFileName(aPluginTag->mFileName),
+    mFullPath(aPluginTag->mFullPath),
+    mVersion(aPluginTag->mVersion),
+    mLastModifiedTime(0),
+    mNiceFileName()
 {
 }
 
 nsPluginTag::nsPluginTag(nsPluginInfo* aPluginInfo)
-: mName(aPluginInfo->fName),
-mDescription(aPluginInfo->fDescription),
-mLibrary(nullptr),
-mIsJavaPlugin(false),
-mIsFlashPlugin(false),
-mFileName(aPluginInfo->fFileName),
-mFullPath(aPluginInfo->fFullPath),
-mVersion(aPluginInfo->fVersion),
-mLastModifiedTime(0),
-mNiceFileName()
+  : mName(aPluginInfo->fName),
+    mDescription(aPluginInfo->fDescription),
+    mLibrary(nullptr),
+    mIsJavaPlugin(false),
+    mIsFlashPlugin(false),
+    mFileName(aPluginInfo->fFileName),
+    mFullPath(aPluginInfo->fFullPath),
+    mVersion(aPluginInfo->fVersion),
+    mLastModifiedTime(0),
+    mNiceFileName()
 {
   InitMime(aPluginInfo->fMimeTypeArray,
            aPluginInfo->fMimeDescriptionArray,
@@ -120,18 +114,19 @@ nsPluginTag::nsPluginTag(const char* aName,
                          int32_t aVariants,
                          int64_t aLastModifiedTime,
                          bool aArgsAreUTF8)
-: mName(aName),
-mDescription(aDescription),
-mLibrary(nullptr),
-mIsJavaPlugin(false),
-mIsFlashPlugin(false),
-mFileName(aFileName),
-mFullPath(aFullPath),
-mVersion(aVersion),
-mLastModifiedTime(aLastModifiedTime),
-mNiceFileName()
+  : mName(aName),
+    mDescription(aDescription),
+    mLibrary(nullptr),
+    mIsJavaPlugin(false),
+    mIsFlashPlugin(false),
+    mFileName(aFileName),
+    mFullPath(aFullPath),
+    mVersion(aVersion),
+    mLastModifiedTime(aLastModifiedTime),
+    mNiceFileName()
 {
-  InitMime(aMimeTypes, aMimeDescriptions, aExtensions, static_cast<uint32_t>(aVariants));
+  InitMime(aMimeTypes, aMimeDescriptions, aExtensions,
+           static_cast<uint32_t>(aVariants));
   if (!aArgsAreUTF8)
     EnsureMembersAreUTF8();
 }
@@ -331,33 +326,20 @@ nsPluginTag::GetDisabled(bool* aDisabled)
 bool
 nsPluginTag::IsBlocklisted()
 {
-  return Preferences::GetBool(GetBlocklistedPrefNameForPlugin(this).get(), false);
+  nsCOMPtr<nsIBlocklistService> bls = do_GetService("@mozilla.org/extensions/blocklist;1");
+  if (!bls) {
+    return false;
+  }
+
+  uint32_t state = nsIBlocklistService::STATE_NOT_BLOCKED;
+  bls->GetPluginBlocklistState(this, EmptyString(), EmptyString(), &state);
+  return state == nsIBlocklistService::STATE_BLOCKED;
 }
 
 NS_IMETHODIMP
 nsPluginTag::GetBlocklisted(bool* aBlocklisted)
 {
   *aBlocklisted = IsBlocklisted();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPluginTag::SetBlocklisted(bool blocklisted)
-{
-  if (blocklisted == IsBlocklisted()) {
-    return NS_OK;
-  }
-
-  const nsCString pref = GetBlocklistedPrefNameForPlugin(this);
-  if (blocklisted) {
-    Preferences::SetBool(pref.get(), true);
-  } else {
-    Preferences::ClearUser(pref.get());
-  }
-
-  if (nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst()) {
-    host->UpdatePluginInfo(this);
-  }
   return NS_OK;
 }
 
@@ -431,19 +413,51 @@ nsPluginTag::SetPluginState(PluginState state)
 }
 
 NS_IMETHODIMP
-nsPluginTag::GetMimeTypes(uint32_t* aCount, nsIDOMMimeType*** aResults)
+nsPluginTag::GetMimeTypes(uint32_t* aCount, PRUnichar*** aResults)
 {
   uint32_t count = mMimeTypes.Length();
-  *aResults = static_cast<nsIDOMMimeType**>
+  *aResults = static_cast<PRUnichar**>
                          (nsMemory::Alloc(count * sizeof(**aResults)));
   if (!*aResults)
     return NS_ERROR_OUT_OF_MEMORY;
   *aCount = count;
 
   for (uint32_t i = 0; i < count; i++) {
-    nsIDOMMimeType* mimeType = new DOMMimeTypeImpl(this, i);
-    (*aResults)[i] = mimeType;
-    NS_ADDREF((*aResults)[i]);
+    (*aResults)[i] = ToNewUnicode(mMimeTypes[i]);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsPluginTag::GetMimeDescriptions(uint32_t* aCount, PRUnichar*** aResults)
+{
+  uint32_t count = mMimeDescriptions.Length();
+  *aResults = static_cast<PRUnichar**>
+                         (nsMemory::Alloc(count * sizeof(**aResults)));
+  if (!*aResults)
+    return NS_ERROR_OUT_OF_MEMORY;
+  *aCount = count;
+
+  for (uint32_t i = 0; i < count; i++) {
+    (*aResults)[i] = ToNewUnicode(mMimeDescriptions[i]);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsPluginTag::GetExtensions(uint32_t* aCount, PRUnichar*** aResults)
+{
+  uint32_t count = mExtensions.Length();
+  *aResults = static_cast<PRUnichar**>
+                         (nsMemory::Alloc(count * sizeof(**aResults)));
+  if (!*aResults)
+    return NS_ERROR_OUT_OF_MEMORY;
+  *aCount = count;
+
+  for (uint32_t i = 0; i < count; i++) {
+    (*aResults)[i] = ToNewUnicode(mExtensions[i]);
   }
 
   return NS_OK;
@@ -522,9 +536,5 @@ void nsPluginTag::ImportFlagsToPrefs(uint32_t flags)
 {
   if (!(flags & NS_PLUGIN_FLAG_ENABLED)) {
     SetPluginState(ePluginState_Disabled);
-  }
-
-  if (flags & NS_PLUGIN_FLAG_BLOCKLISTED) {
-    Preferences::SetBool(GetBlocklistedPrefNameForPlugin(this).get(), true);
   }
 }

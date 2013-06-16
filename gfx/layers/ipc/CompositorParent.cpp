@@ -424,12 +424,6 @@ CompositorParent::ScheduleComposition()
 }
 
 void
-CompositorParent::SetTransformation(float aScale, nsIntPoint aScrollOffset)
-{
-  mCompositionManager->SetTransformation(aScale, aScrollOffset);
-}
-
-void
 CompositorParent::Composite()
 {
   NS_ABORT_IF_FALSE(CompositorThreadID() == PlatformThread::CurrentId(),
@@ -545,6 +539,9 @@ CompositorParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
   mLayerManager->SetRoot(root);
   if (root) {
     SetShadowProperties(root);
+    if (mIsTesting) {
+      mCompositionManager->TransformShadowTree(mTestTime);
+    }
   }
   ScheduleComposition();
   LayerManagerComposite *layerComposite = mLayerManager->AsLayerManagerComposite();

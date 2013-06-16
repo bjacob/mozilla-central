@@ -129,12 +129,18 @@ function setLinks(aLinks) {
     });
   }
 
-  clearHistory(function () {
-    fillHistory(links, function () {
-      NewTabUtils.links.populateCache(function () {
-        NewTabUtils.allPages.update();
-        TestRunner.next();
-      }, true);
+  // Call populateCache() once to make sure that all link fetching that is
+  // currently in progress has ended. We clear the history, fill it with the
+  // given entries and call populateCache() now again to make sure the cache
+  // has the desired contents.
+  NewTabUtils.links.populateCache(function () {
+    clearHistory(function () {
+      fillHistory(links, function () {
+        NewTabUtils.links.populateCache(function () {
+          NewTabUtils.allPages.update();
+          TestRunner.next();
+        }, true);
+      });
     });
   });
 }
@@ -221,7 +227,10 @@ function addNewTabPageTab() {
         executeSoon(TestRunner.next);
       });
     } else {
-      TestRunner.next();
+      // It's important that we call next() asynchronously.
+      // 'yield addNewTabPageTab()' would fail if next() is called
+      // synchronously because the iterator is already executing.
+      executeSoon(TestRunner.next);
     }
   }
 

@@ -26,6 +26,7 @@
 #include "vm/Xdr.h"
 
 #include "jsatominlines.h"
+#include "jscompartmentinlines.h"
 
 #include "vm/String-inl.h"
 
@@ -154,16 +155,16 @@ js::InitCommonNames(JSContext *cx)
 #undef COMMON_NAME_INFO
     };
 
-    FixedHeapPtr<PropertyName> *names = &cx->runtime->firstCachedName;
+    FixedHeapPtr<PropertyName> *names = &cx->runtime()->firstCachedName;
     for (size_t i = 0; i < ArrayLength(cachedNames); i++, names++) {
         JSAtom *atom = Atomize(cx, cachedNames[i].str, cachedNames[i].length, InternAtom);
         if (!atom)
             return false;
         names->init(atom->asPropertyName());
     }
-    JS_ASSERT(uintptr_t(names) == uintptr_t(&cx->runtime->atomState + 1));
+    JS_ASSERT(uintptr_t(names) == uintptr_t(&cx->runtime()->atomState + 1));
 
-    cx->runtime->emptyString = cx->names().empty;
+    cx->runtime()->emptyString = cx->names().empty;
     return true;
 }
 
@@ -214,7 +215,7 @@ AtomIsInterned(JSContext *cx, JSAtom *atom)
     if (StaticStrings::isStatic(atom))
         return true;
 
-    AtomSet::Ptr p = cx->runtime->atoms.lookup(atom);
+    AtomSet::Ptr p = cx->runtime()->atoms.lookup(atom);
     if (!p)
         return false;
 
@@ -238,7 +239,7 @@ AtomizeAndTakeOwnership(JSContext *cx, jschar *tbchars, size_t length, InternBeh
 {
     JS_ASSERT(tbchars[length] == 0);
 
-    if (JSAtom *s = cx->runtime->staticStrings.lookup(tbchars, length)) {
+    if (JSAtom *s = cx->runtime()->staticStrings.lookup(tbchars, length)) {
         js_free(tbchars);
         return s;
     }
@@ -249,7 +250,7 @@ AtomizeAndTakeOwnership(JSContext *cx, jschar *tbchars, size_t length, InternBeh
      * unchanged, we need to re-lookup the table position because a last-ditch
      * GC will potentially free some table entries.
      */
-    AtomSet& atoms = cx->runtime->atoms;
+    AtomSet& atoms = cx->runtime()->atoms;
     AtomSet::AddPtr p = atoms.lookupForAdd(AtomHasher::Lookup(tbchars, length));
     SkipRoot skipHash(cx, &p); /* Prevent the hash from being poisoned. */
     if (p) {
@@ -284,7 +285,7 @@ JS_ALWAYS_INLINE
 static JSAtom *
 AtomizeAndCopyChars(JSContext *cx, const jschar *tbchars, size_t length, InternBehavior ib)
 {
-    if (JSAtom *s = cx->runtime->staticStrings.lookup(tbchars, length))
+    if (JSAtom *s = cx->runtime()->staticStrings.lookup(tbchars, length))
          return s;
 
     /*
@@ -294,7 +295,7 @@ AtomizeAndCopyChars(JSContext *cx, const jschar *tbchars, size_t length, InternB
      * GC will potentially free some table entries.
      */
 
-    AtomSet& atoms = cx->runtime->atoms;
+    AtomSet& atoms = cx->runtime()->atoms;
     AtomSet::AddPtr p = atoms.lookupForAdd(AtomHasher::Lookup(tbchars, length));
     SkipRoot skipHash(cx, &p); /* Prevent the hash from being poisoned. */
     if (p) {
@@ -330,7 +331,7 @@ js::AtomizeString(JSContext *cx, JSString *str, js::InternBehavior ib /* = js::D
         if (ib != InternAtom || js::StaticStrings::isStatic(&atom))
             return &atom;
 
-        AtomSet::Ptr p = cx->runtime->atoms.lookup(AtomHasher::Lookup(&atom));
+        AtomSet::Ptr p = cx->runtime()->atoms.lookup(AtomHasher::Lookup(&atom));
         JS_ASSERT(p); /* Non-static atom must exist in atom state set. */
         JS_ASSERT(p->asPtr() == &atom);
         JS_ASSERT(ib == InternAtom);
@@ -476,7 +477,7 @@ js::XDRAtom(XDRState<mode> *xdr, MutableHandleAtom atomp)
          * most allocations here will be bigger than tempLifoAlloc's default
          * chunk size.
          */
-        chars = cx->runtime->pod_malloc<jschar>(nchars);
+        chars = cx->runtime()->pod_malloc<jschar>(nchars);
         if (!chars)
             return false;
     }

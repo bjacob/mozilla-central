@@ -41,6 +41,17 @@ struct IntRectTyped :
     void Round() {}
     void RoundIn() {}
     void RoundOut() {}
+
+    // XXX When all of the code is ported, the following functions to convert to and from
+    // unknown types should be removed.
+
+    static IntRectTyped<units> FromUnknownRect(const IntRectTyped<UnknownUnits>& rect) {
+        return IntRectTyped<units>(rect.x, rect.y, rect.width, rect.height);
+    }
+
+    IntRectTyped<UnknownUnits> ToUnknownRect() const {
+        return IntRectTyped<UnknownUnits>(this->x, this->y, this->width, this->height);
+    }
 };
 typedef IntRectTyped<UnknownUnits> IntRect;
 
@@ -75,8 +86,39 @@ struct RectTyped :
                               Float(aOut->width), Float(aOut->height))
              .IsEqualEdges(*this);
     }
+
+    // XXX When all of the code is ported, the following functions to convert to and from
+    // unknown types should be removed.
+
+    static RectTyped<units> FromUnknownRect(const RectTyped<UnknownUnits>& rect) {
+        return RectTyped<units>(rect.x, rect.y, rect.width, rect.height);
+    }
+
+    RectTyped<UnknownUnits> ToUnknownRect() const {
+        return RectTyped<UnknownUnits>(this->x, this->y, this->width, this->height);
+    }
 };
 typedef RectTyped<UnknownUnits> Rect;
+
+template<class units>
+IntRectTyped<units> RoundedToInt(const RectTyped<units>& aRect)
+{
+  return IntRectTyped<units>(NS_lround(aRect.x),
+                             NS_lround(aRect.y),
+                             NS_lround(aRect.width),
+                             NS_lround(aRect.height));
+}
+
+template<class units>
+IntRectTyped<units> RoundedIn(const RectTyped<units>& aRect)
+{
+  RectTyped<units> copy(aRect);
+  copy.RoundIn();
+  return IntRectTyped<units>(int32_t(copy.x),
+                             int32_t(copy.y),
+                             int32_t(copy.width),
+                             int32_t(copy.height));
+}
 
 }
 }

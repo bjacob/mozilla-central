@@ -19,18 +19,17 @@
 #include "jscpucfg.h"
 #include "jsversion.h"
 #include "jsgc.h"
-#include "jsinterp.h"
 #include "jsnum.h"
 #include "jsobj.h"
 
 #include "gc/Barrier.h"
 #include "gc/Marking.h"
 #include "vm/GlobalObject.h"
+#include "vm/Interpreter.h"
 #include "vm/NumericConversions.h"
 
 #include "jsatominlines.h"
 #include "jsinferinlines.h"
-#include "jsobjinlines.h"
 #include "jstypedarrayinlines.h"
 
 #include "vm/GlobalObject-inl.h"
@@ -559,7 +558,7 @@ ArrayBufferObject::create(JSContext *cx, uint32_t nbytes, uint8_t *contents)
     JS_ASSERT(obj->getClass() == &ArrayBufferClass);
 
     js::Shape *empty = EmptyShape::getInitialShape(cx, &ArrayBufferClass,
-                                                   obj->getProto(), obj->getParent(),
+                                                   obj->getProto(), obj->getParent(), obj->getMetadata(),
                                                    gc::FINALIZE_OBJECT16_BACKGROUND);
     if (!empty)
         return NULL;
@@ -1785,7 +1784,7 @@ class TypedArrayTemplate
         // would just boil down to a slightly slower wrapper around the
         // following code anyway:
         js::Shape *empty = EmptyShape::getInitialShape(cx, fastClass(),
-                                                       obj->getProto(), obj->getParent(),
+                                                       obj->getProto(), obj->getParent(), obj->getMetadata(),
                                                        gc::FINALIZE_OBJECT8_BACKGROUND,
                                                        BaseShape::NOT_EXTENSIBLE);
         if (!empty)
@@ -1923,7 +1922,7 @@ class TypedArrayTemplate
         RootedId id(cx, NameToId(name));
         unsigned flags = JSPROP_SHARED | JSPROP_GETTER | JSPROP_PERMANENT;
 
-        Rooted<GlobalObject*> global(cx, cx->compartment->maybeGlobal());
+        Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
         JSObject *getter = NewFunction(cx, NullPtr(), Getter<ValueGetter>, 0,
                                        JSFunction::NATIVE_FUN, global, NullPtr());
         if (!getter)
@@ -2170,7 +2169,7 @@ class TypedArrayTemplate
                 if (!cx->stack.pushInvokeArgs(cx, 3, &ag))
                     return NULL;
 
-                ag.setCallee(cx->compartment->maybeGlobal()->createArrayFromBuffer<NativeType>());
+                ag.setCallee(cx->compartment()->maybeGlobal()->createArrayFromBuffer<NativeType>());
                 ag.setThis(ObjectValue(*bufobj));
                 ag[0] = NumberValue(byteOffset);
                 ag[1] = Int32Value(lengthInt);
@@ -2768,7 +2767,7 @@ DataViewObject::class_constructor(JSContext *cx, unsigned argc, Value *vp)
         return false;
 
     if (bufobj->isWrapper() && UncheckedUnwrap(bufobj)->isArrayBuffer()) {
-        Rooted<GlobalObject*> global(cx, cx->compartment->maybeGlobal());
+        Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
         Rooted<JSObject*> proto(cx, global->getOrCreateDataViewPrototype(cx));
         if (!proto)
             return false;
@@ -3535,7 +3534,7 @@ template<class ArrayType>
 static inline JSObject *
 InitTypedArrayClass(JSContext *cx)
 {
-    Rooted<GlobalObject*> global(cx, cx->compartment->maybeGlobal());
+    Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
     RootedObject proto(cx, global->createBlankPrototype(cx, ArrayType::protoClass()));
     if (!proto)
         return NULL;
@@ -3639,7 +3638,7 @@ js::IsTypedArrayThisCheck(JS::IsAcceptableThis test)
 static JSObject *
 InitArrayBufferClass(JSContext *cx)
 {
-    Rooted<GlobalObject*> global(cx, cx->compartment->maybeGlobal());
+    Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
     RootedObject arrayBufferProto(cx, global->createBlankPrototype(cx, &ArrayBufferObject::protoClass));
     if (!arrayBufferProto)
         return NULL;
@@ -3755,7 +3754,7 @@ DataViewObject::defineGetter(JSContext *cx, PropertyName *name, HandleObject pro
     RootedId id(cx, NameToId(name));
     unsigned flags = JSPROP_SHARED | JSPROP_GETTER | JSPROP_PERMANENT;
 
-    Rooted<GlobalObject*> global(cx, cx->compartment->maybeGlobal());
+    Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
     JSObject *getter = NewFunction(cx, NullPtr(), DataViewObject::getter<ValueGetter>, 0,
                                    JSFunction::NATIVE_FUN, global, NullPtr());
     if (!getter)
@@ -3770,7 +3769,7 @@ DataViewObject::defineGetter(JSContext *cx, PropertyName *name, HandleObject pro
 JSObject *
 DataViewObject::initClass(JSContext *cx)
 {
-    Rooted<GlobalObject*> global(cx, cx->compartment->maybeGlobal());
+    Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
     RootedObject proto(cx, global->createBlankPrototype(cx, &DataViewObject::protoClass));
     if (!proto)
         return NULL;

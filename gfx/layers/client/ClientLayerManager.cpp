@@ -395,18 +395,15 @@ ClientLayerManager::ProgressiveUpdateCallback(bool aHasPendingNewThebesContent,
     // This is derived from the code in
     // gfx/layers/ipc/CompositorParent.cpp::TransformShadowTree.
     const gfx3DMatrix& rootTransform = GetRoot()->GetTransform();
-    float devPixelRatioX = 1 / rootTransform.GetXScale();
-    float devPixelRatioY = 1 / rootTransform.GetYScale();
-    const gfx::Rect& metricsDisplayPort =
+    CSSToLayerScale paintScale = LayerToCSSScale(rootTransform.GetXScale(),
+                                                 rootTransform.GetYScale()).Inverse();
+    const CSSRect& metricsDisplayPort =
       (aDrawingCritical && !metrics.mCriticalDisplayPort.IsEmpty()) ?
         metrics.mCriticalDisplayPort : metrics.mDisplayPort;
-    gfx::Rect displayPort((metricsDisplayPort.x + metrics.mScrollOffset.x) * devPixelRatioX,
-                          (metricsDisplayPort.y + metrics.mScrollOffset.y) * devPixelRatioY,
-                          metricsDisplayPort.width * devPixelRatioX,
-                          metricsDisplayPort.height * devPixelRatioY);
+    LayerRect displayPort = (metricsDisplayPort + metrics.mScrollOffset) * paintScale;
 
     return AndroidBridge::Bridge()->ProgressiveUpdateCallback(
-      aHasPendingNewThebesContent, displayPort, devPixelRatioX, aDrawingCritical,
+      aHasPendingNewThebesContent, displayPort, paintScale.scale, aDrawingCritical,
       aViewport, aScaleX, aScaleY);
   }
 #endif

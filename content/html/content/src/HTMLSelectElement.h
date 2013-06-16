@@ -206,10 +206,9 @@ public:
   {
     return mOptions->ItemAsOption(aIdx);
   }
-  JSObject* NamedItem(JSContext* aCx, const nsAString& aName,
-                      ErrorResult& aRv) const
+  HTMLOptionElement* NamedItem(const nsAString& aName) const
   {
-    return mOptions->NamedItem(aCx, aName, aRv);
+    return mOptions->GetNamedItem(aName);
   }
   void Add(const HTMLOptionElementOrHTMLOptGroupElement& aElement,
            const Nullable<HTMLElementOrLong>& aBefore,
@@ -400,6 +399,14 @@ public:
                aError);
   }
 
+  /**
+   * Is this a combobox?
+   */
+  bool IsCombobox() const
+  {
+    return !Multiple() && Size() <= 1;
+  }
+
 protected:
   friend class SafeOptionListMutation;
 
@@ -540,19 +547,6 @@ protected:
    * @return the select frame, or null
    */
   nsISelectControlFrame* GetSelectFrame();
-
-  /**
-   * Is this a combobox?
-   */
-  bool IsCombobox() {
-    if (HasAttr(kNameSpaceID_None, nsGkAtoms::multiple)) {
-      return false;
-    }
-
-    uint32_t size = 1;
-    GetSize(&size);
-    return size <= 1;
-  }
 
   /**
    * Helper method for dispatching ContentReset notifications to list

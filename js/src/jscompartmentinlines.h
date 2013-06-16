@@ -9,6 +9,8 @@
 
 #include "jscompartment.h"
 
+#include "jscntxtinlines.h"
+
 inline void
 JSCompartment::initGlobal(js::GlobalObject &global)
 {
@@ -26,7 +28,7 @@ JSCompartment::maybeGlobal() const
 
 js::AutoCompartment::AutoCompartment(JSContext *cx, JSObject *target)
   : cx_(cx),
-    origin_(cx->compartment)
+    origin_(cx->compartment())
 {
     cx_->enterCompartment(target->compartment());
 }
@@ -77,9 +79,9 @@ class AutoEnterAtomsCompartment
   public:
     AutoEnterAtomsCompartment(JSContext *cx)
       : cx(cx),
-        oldCompartment(cx->compartment)
+        oldCompartment(cx->compartment())
     {
-        cx->setCompartment(cx->runtime->atomsCompartment);
+        cx->setCompartment(cx->runtime()->atomsCompartment);
     }
 
     ~AutoEnterAtomsCompartment()

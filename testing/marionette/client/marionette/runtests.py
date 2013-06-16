@@ -19,6 +19,7 @@ import xml.dom.minidom as dom
 
 from manifestparser import TestManifest
 from mozhttpd import MozHttpd
+from telnetlib import Telnet
 
 from marionette import Marionette
 from marionette_test import MarionetteJSTestCase, MarionetteTestCase
@@ -70,7 +71,8 @@ class MarionetteTestResult(unittest._TextTestResult):
                 self.stream.writeln('END LOG:')
 
     def printErrorList(self, flavour, errors):
-        for test, err in errors:
+        for error in errors:
+            test, err = error[:2]
             self.stream.writeln(self.separator1)
             self.stream.writeln("%s: %s" % (flavour, self.getDescription(test)))
             self.stream.writeln(self.separator2)
@@ -168,6 +170,8 @@ class MarionetteTextTestRunner(unittest.TextTestRunner):
 
 class MarionetteTestRunner(object):
 
+    textrunnerclass = MarionetteTextTestRunner
+
     def __init__(self, address=None, emulator=None, emulatorBinary=None,
                  emulatorImg=None, emulator_res='480x800', homedir=None,
                  app=None, bin=None, profile=None, autolog=False, revision=None,
@@ -242,16 +246,12 @@ class MarionetteTestRunner(object):
 
     def start_httpd(self):
         host = moznetwork.get_ip()
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("",0))
-        port = s.getsockname()[1]
-        s.close()
-        self.baseurl = 'http://%s:%d/' % (host, port)
-        self.logger.info('running webserver on %s' % self.baseurl)
         self.httpd = MozHttpd(host=host,
-                              port=port,
+                              port=0,
                               docroot=os.path.join(os.path.dirname(__file__), 'www'))
         self.httpd.start()
+        self.baseurl = 'http://%s:%d/' % (host, self.httpd.httpd.server_port)
+        self.logger.info('running webserver on %s' % self.baseurl)
 
     def start_marionette(self):
         assert(self.baseurl is not None)
@@ -270,7 +270,12 @@ class MarionetteTestRunner(object):
                                          timeout=self.timeout)
         elif self.address:
             host, port = self.address.split(':')
-            if self.emulator:
+            try:
+		#establish a telnet connection so we can vertify the data come back
+		tlconnection = Telnet(host, port)
+	    except:
+		raise Exception("could not connect to given marionette host/port")
+	    if self.emulator:
                 self.marionette = Marionette.getMarionetteOrExit(
                                              host=host, port=int(port),
                                              connectToRunningEmulator=True,
@@ -438,8 +443,8 @@ class MarionetteTestRunner(object):
                 break
 
         if suite.countTestCases():
-            runner = MarionetteTextTestRunner(verbosity=3,
-                                              marionette=self.marionette)
+            runner = self.textrunnerclass(verbosity=3,
+                                          marionette=self.marionette)
             results = runner.run(suite)
             self.results.append(results)
 
@@ -644,7 +649,7 @@ class MarionetteTestOptions(OptionParser):
         self.add_option('--timeout',
                         dest='timeout',
                         type=int,
-                        help='if a --timeout value is given, it will set the default page load timeout, search timeout and script timeout to the given value. If not passed in, it will use the default values of 30000ms for page load, 0ms for search timeout and 10ms for script timeout')
+                        help='if a --timeout value is given, it will set the default page load timeout, search timeout and script timeout to the given value. If not passed in, it will use the default values of 30000ms for page load, 0ms for search timeout and 10000ms for script timeout')
 
     def verify_usage(self, options, tests):
         if not tests:

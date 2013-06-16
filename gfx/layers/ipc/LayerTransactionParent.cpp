@@ -26,6 +26,7 @@
 #include "mozilla/layers/ColorLayerComposite.h"
 #include "mozilla/layers/ContainerLayerComposite.h"
 #include "mozilla/layers/CanvasLayerComposite.h"
+#include "mozilla/layers/PLayerTransaction.h"
 
 typedef std::vector<mozilla::layers::EditReply> EditReplyVector;
 
@@ -454,7 +455,34 @@ LayerTransactionParent::RecvGetTransform(PLayerParent* aParent,
     return false;
   }
 
-  *aTransform = cast(aParent)->AsLayer()->GetLocalTransform();
+  // The following code recovers the untranslated transform
+  // from the shadow transform by undoing the translations in
+  // AsyncCompositionManager::SampleValue.
+  Layer* layer = cast(aParent)->AsLayer();
+  *aTransform = layer->AsLayerComposite()->GetShadowTransform();
+  if (ContainerLayer* c = layer->AsContainerLayer()) {
+    aTransform->ScalePost(1.0f/c->GetInheritedXScale(),
+                          1.0f/c->GetInheritedYScale(),
+                          1.0f);
+  }
+  float scale = 1;
+  gfxPoint3D scaledOrigin;
+  gfxPoint3D mozOrigin;
+  for (uint32_t i=0; i < layer->GetAnimations().Length(); i++) {
+    if (layer->GetAnimations()[i].data().type() == AnimationData::TTransformData) {
+      const TransformData& data = layer->GetAnimations()[i].data().get_TransformData();
+      scale = data.appUnitsPerDevPixel();
+      scaledOrigin =
+        gfxPoint3D(NS_round(NSAppUnitsToFloatPixels(data.origin().x, scale)),
+                   NS_round(NSAppUnitsToFloatPixels(data.origin().y, scale)),
+                   0.0f);
+      mozOrigin = data.mozOrigin();
+      break;
+    }
+  }
+
+  aTransform->Translate(-scaledOrigin);
+  *aTransform = nsLayoutUtils::ChangeMatrixBasis(-scaledOrigin - mozOrigin, *aTransform);
   return true;
 }
 
@@ -463,14 +491,13 @@ LayerTransactionParent::Attach(ShadowLayerParent* aLayerParent, CompositablePare
 {
   LayerComposite* layer = aLayerParent->AsLayer()->AsLayerComposite();
   MOZ_ASSERT(layer);
-  LayerComposite* layerComposite = aLayerParent->AsLayer()->AsLayerComposite();
 
   Compositor* compositor
     = static_cast<LayerManagerComposite*>(aLayerParent->AsLayer()->Manager())->GetCompositor();
 
   CompositableHost* compositable = aCompositable->GetCompositableHost();
   MOZ_ASSERT(compositable);
-  layerComposite->SetCompositableHost(compositable);
+  layer->SetCompositableHost(compositable);
   compositable->Attach(aLayerParent->AsLayer(), compositor);
 }
 
@@ -488,11 +515,12 @@ LayerTransactionParent::RecvClearCachedResources()
 
 PGrallocBufferParent*
 LayerTransactionParent::AllocPGrallocBuffer(const gfxIntSize& aSize,
-                                            const gfxContentType& aContent,
+                                            const uint32_t& aFormat,
+                                            const uint32_t& aUsage,
                                             MaybeMagicGrallocBufferHandle* aOutHandle)
 {
 #ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
-  return GrallocBufferActor::Create(aSize, aContent, aOutHandle);
+  return GrallocBufferActor::Create(aSize, aFormat, aUsage, aOutHandle);
 #else
   NS_RUNTIMEABORT("No gralloc buffers for you");
   return nullptr;

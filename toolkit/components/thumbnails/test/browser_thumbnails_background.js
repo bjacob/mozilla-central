@@ -194,6 +194,76 @@ let tests = [
 
     win.close();
   },
+
+  function noCookies() {
+    // Visit the test page in the browser and tell it to set a cookie.
+    let url = testPageURL({ setGreenCookie: true });
+    let tab = gBrowser.loadOneTab(url, { inBackground: false });
+    let browser = tab.linkedBrowser;
+    yield onPageLoad(browser);
+
+    // The root element of the page shouldn't be green yet.
+    let greenStr = "rgb(0, 255, 0)";
+    isnot(browser.contentDocument.documentElement.style.backgroundColor,
+          greenStr,
+          "The page shouldn't be green yet.");
+
+    // Cookie should be set now.  Reload the page to verify.  Its root element
+    // will be green if the cookie's set.
+    browser.reload();
+    yield onPageLoad(browser);
+    is(browser.contentDocument.documentElement.style.backgroundColor,
+       greenStr,
+       "The page should be green now.");
+
+    // Capture the page.  Get the image data of the capture and verify it's not
+    // green.  (Checking only the first pixel suffices.)
+    yield capture(url);
+    let file = fileForURL(url);
+    ok(file.exists(), "Thumbnail file should exist after capture.");
+
+    let deferred = imports.Promise.defer();
+    retrieveImageDataForURL(url, function ([r, g, b]) {
+      isnot([r, g, b].toString(), [0, 255, 0].toString(),
+            "The captured page should not be green.");
+      gBrowser.removeTab(tab);
+      file.remove(false);
+      deferred.resolve();
+    });
+    yield deferred.promise;
+  },
+
+  // the following tests attempt to display modal dialogs.  The test just
+  // relies on the fact that if the dialog was displayed the test will hang
+  // and timeout.  IOW - the tests would pass if the dialogs appear and are
+  // manually closed by the user - so don't do that :)  (obviously there is
+  // noone available to do that when run via tbpl etc, so this should be safe,
+  // and it's tricky to use the window-watcher to check a window *does not*
+  // appear - how long should the watcher be active before assuming it's not
+  // going to appear?)
+  function noAuthPrompt() {
+    let url = "http://mochi.test:8888/browser/browser/base/content/test/authenticate.sjs?user=anyone";
+    let file = fileForURL(url);
+    ok(!file.exists(), "Thumbnail file should not already exist.");
+
+    let capturedURL = yield capture(url);
+    is(capturedURL, url, "Captured URL should be URL passed to capture.");
+    ok(file.exists(),
+       "Thumbnail file should exist even though it requires auth.");
+    file.remove(false);
+  },
+
+  function noAlert() {
+    let url = "data:text/html,<script>alert('yo!');</script>";
+    let file = fileForURL(url);
+    ok(!file.exists(), "Thumbnail file should not already exist.");
+
+    let capturedURL = yield capture(url);
+    is(capturedURL, url, "Captured URL should be URL passed to capture.");
+    ok(file.exists(),
+       "Thumbnail file should exist even though it alerted.");
+    file.remove(false);
+  },
 ];
 
 function capture(url, options) {
@@ -237,5 +307,16 @@ function openPrivateWindow() {
       deferred.resolve(win);
     }
   });
+  return deferred.promise;
+}
+
+function onPageLoad(browser) {
+  let deferred = imports.Promise.defer();
+  browser.addEventListener("load", function load(event) {
+    if (event.target == browser.contentWindow.document) {
+      browser.removeEventListener("load", load, true);
+      deferred.resolve();
+    }
+  }, true);
   return deferred.promise;
 }

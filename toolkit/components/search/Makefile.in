@@ -9,12 +9,12 @@ VPATH     = @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
-EXTRA_COMPONENTS = \
+DISABLED_EXTRA_COMPONENTS = \
   toolkitsearch.manifest \
   nsSearchSuggestions.js \
   $(NULL)
 
-EXTRA_PP_COMPONENTS = \
+DISABLED_EXTRA_PP_COMPONENTS = \
   nsSearchService.js \
   $(NULL)
 

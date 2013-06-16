@@ -237,25 +237,29 @@ ThebesLayerComposite::GetCompositionBounds()
       scrollableLayer = parent;
     if (!parentMetrics.mDisplayPort.IsEmpty() && scrollableLayer) {
       // Get the composition bounds, so as not to waste rendering time.
-      compositionBounds = gfxRect(parentMetrics.mCompositionBounds);
+      compositionBounds = gfxRect(parentMetrics.mCompositionBounds.x,
+                                  parentMetrics.mCompositionBounds.y,
+                                  parentMetrics.mCompositionBounds.width,
+                                  parentMetrics.mCompositionBounds.height);
 
       // Calculate the scale transform applied to the root layer to determine
       // the content resolution.
       Layer* rootLayer = Manager()->GetRoot();
       const gfx3DMatrix& rootTransform = rootLayer->GetTransform();
-      float scaleX = rootTransform.GetXScale();
-      float scaleY = rootTransform.GetYScale();
+      LayerToCSSScale scale(rootTransform.GetXScale(),
+                            rootTransform.GetYScale());
 
       // Get the content document bounds, in screen-space.
       const FrameMetrics& metrics = scrollableLayer->GetFrameMetrics();
-      const nsIntSize& contentSize = metrics.mContentRect.Size();
+      const LayerIntRect content = RoundedToInt(metrics.mScrollableRect / scale);
       gfx::Point scrollOffset =
-        gfx::Point((metrics.mScrollOffset.x * metrics.LayersPixelsPerCSSPixel().width) / scaleX,
-                   (metrics.mScrollOffset.y * metrics.LayersPixelsPerCSSPixel().height) / scaleY);
-      const nsIntPoint& contentOrigin = metrics.mContentRect.TopLeft() -
-        nsIntPoint(NS_lround(scrollOffset.x), NS_lround(scrollOffset.y));
+        gfx::Point((metrics.mScrollOffset.x * metrics.LayersPixelsPerCSSPixel().width) / scale.scale,
+                   (metrics.mScrollOffset.y * metrics.LayersPixelsPerCSSPixel().height) / scale.scale);
+      const nsIntPoint contentOrigin(
+        content.x - NS_lround(scrollOffset.x),
+        content.y - NS_lround(scrollOffset.y));
       gfxRect contentRect = gfxRect(contentOrigin.x, contentOrigin.y,
-                                    contentSize.width, contentSize.height);
+                                    content.width, content.height);
       gfxRect contentBounds = scrollableLayer->GetEffectiveTransform().
         TransformBounds(contentRect);
 

@@ -26,6 +26,7 @@
 #include "ChannelSplitterNode.h"
 #include "WaveShaperNode.h"
 #include "WaveTable.h"
+#include "ConvolverNode.h"
 #include "nsNetUtil.h"
 
 namespace mozilla {
@@ -50,6 +51,7 @@ AudioContext::AudioContext(nsPIDOMWindow* aWindow,
   , mDestination(new AudioDestinationNode(this, aIsOffline,
                                           aNumberOfChannels,
                                           aLength, aSampleRate))
+  , mNumberOfChannels(aNumberOfChannels)
   , mIsOffline(aIsOffline)
 {
   // Actually play audio
@@ -106,7 +108,7 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
   if (aNumberOfChannels == 0 ||
       aNumberOfChannels > WebAudioUtils::MaxChannelCount ||
       aLength == 0 ||
-      aSampleRate <= 0.0f ||
+      aSampleRate <= 1.0f ||
       aSampleRate >= TRACK_RATE_MAX) {
     // The DOM binding protects us against infinity and NaN
     aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
@@ -263,6 +265,13 @@ AudioContext::CreatePanner()
   return pannerNode.forget();
 }
 
+already_AddRefed<ConvolverNode>
+AudioContext::CreateConvolver()
+{
+  nsRefPtr<ConvolverNode> convolverNode = new ConvolverNode(this);
+  return convolverNode.forget();
+}
+
 already_AddRefed<ChannelSplitterNode>
 AudioContext::CreateChannelSplitter(uint32_t aNumberOfOutputs, ErrorResult& aRv)
 {
@@ -395,6 +404,12 @@ void
 AudioContext::UpdatePannerSource()
 {
   mPannerNodes.EnumerateEntries(FindConnectedSourcesOn, nullptr);
+}
+
+uint32_t
+AudioContext::MaxChannelCount() const
+{
+  return mIsOffline ? mNumberOfChannels : AudioStream::MaxNumberOfChannels();
 }
 
 MediaStreamGraph*

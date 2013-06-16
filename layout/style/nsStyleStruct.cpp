@@ -740,6 +740,8 @@ nsChangeHint nsStyleXUL::CalcDifference(const nsStyleXUL& aOther) const
 // --------------------
 // nsStyleColumn
 //
+/* static */ const uint32_t nsStyleColumn::kMaxColumnCount = 1000;
+
 nsStyleColumn::nsStyleColumn(nsPresContext* aPresContext)
 {
   MOZ_COUNT_CTOR(nsStyleColumn);
@@ -2303,6 +2305,7 @@ nsStyleVisibility::nsStyleVisibility(nsPresContext* aPresContext)
 
   mVisible = NS_STYLE_VISIBILITY_VISIBLE;
   mPointerEvents = NS_STYLE_POINTER_EVENTS_AUTO;
+  mWritingMode = NS_STYLE_WRITING_MODE_HORIZONTAL_TB;
 }
 
 nsStyleVisibility::nsStyleVisibility(const nsStyleVisibility& aSource)
@@ -2311,13 +2314,14 @@ nsStyleVisibility::nsStyleVisibility(const nsStyleVisibility& aSource)
   mDirection = aSource.mDirection;
   mVisible = aSource.mVisible;
   mPointerEvents = aSource.mPointerEvents;
+  mWritingMode = aSource.mWritingMode;
 } 
 
 nsChangeHint nsStyleVisibility::CalcDifference(const nsStyleVisibility& aOther) const
 {
   nsChangeHint hint = nsChangeHint(0);
 
-  if (mDirection != aOther.mDirection) {
+  if (mDirection != aOther.mDirection || mWritingMode != aOther.mWritingMode) {
     NS_UpdateHint(hint, nsChangeHint_ReconstructFrame);
   } else {
     if (mVisible != aOther.mVisible) {

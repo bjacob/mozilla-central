@@ -92,6 +92,7 @@
     _(AbsI)                         \
     _(AbsD)                         \
     _(SqrtD)                        \
+    _(Atan2D)                       \
     _(PowI)                         \
     _(PowD)                         \
     _(Random)                       \
@@ -207,6 +208,7 @@
     _(StringLength)                 \
     _(ArgumentsLength)              \
     _(GetArgument)                  \
+    _(RunOncePrologue)              \
     _(Rest)                         \
     _(ParRest)                      \
     _(TypeOfV)                      \

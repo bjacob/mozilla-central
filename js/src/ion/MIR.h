@@ -371,6 +371,9 @@ class MDefinition : public MNode
     ValueNumberData *valueNumberData() {
         return valueNumber_;
     }
+    void clearValueNumberData() {
+        valueNumber_ = NULL;
+    }
     void setValueNumberData(ValueNumberData *vn) {
         JS_ASSERT(valueNumber_ == NULL);
         valueNumber_ = vn;
@@ -401,6 +404,7 @@ class MDefinition : public MNode
     types::StackTypeSet *resultTypeSet() const {
         return resultTypeSet_;
     }
+    bool emptyResultTypeSet() const;
 
     bool mightBeType(MIRType type) const {
         JS_ASSERT(type != MIRType_Value);
@@ -436,6 +440,10 @@ class MDefinition : public MNode
 
     // Number of uses of this instruction.
     size_t useCount() const;
+
+    // Number of uses of this instruction.
+    // (only counting MDefinitions, ignoring MResumePoints)
+    size_t defUseCount() const;
 
     bool hasUses() const {
         return !uses_.empty();
@@ -2275,6 +2283,23 @@ class MSetArgumentsObjectArg
     }
 };
 
+class MRunOncePrologue
+  : public MNullaryInstruction
+{
+  protected:
+    MRunOncePrologue()
+    {
+        setGuard();
+    }
+
+  public:
+    INSTRUCTION_HEADER(RunOncePrologue)
+
+    static MRunOncePrologue *New() {
+        return new MRunOncePrologue();
+    }
+};
+
 // Given a MIRType_Value A and a MIRType_Object B:
 // If the Value may be safely unboxed to an Object, return Object(A).
 // Otherwise, return B.
@@ -3040,6 +3065,45 @@ class MSqrt
     TypePolicy *typePolicy() {
         return this;
     }
+    bool congruentTo(MDefinition *const &ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+};
+
+// Inline implementation of atan2 (arctangent of y/x).
+class MAtan2
+  : public MBinaryInstruction,
+    public MixPolicy<DoublePolicy<0>, DoublePolicy<1> >
+{
+    MAtan2(MDefinition *y, MDefinition *x)
+      : MBinaryInstruction(y, x)
+    {
+        setResultType(MIRType_Double);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(Atan2)
+    static MAtan2 *New(MDefinition *y, MDefinition *x) {
+        return new MAtan2(y, x);
+    }
+
+    MDefinition *y() const {
+        return getOperand(0);
+    }
+
+    MDefinition *x() const {
+        return getOperand(1);
+    }
+
+    TypePolicy *typePolicy() {
+        return this;
+    }
+
     bool congruentTo(MDefinition *const &ins) const {
         return congruentIfOperandsEqual(ins);
     }
@@ -4446,11 +4510,13 @@ class MLoadElement
 {
     bool needsHoleCheck_;
     bool loadDoubles_;
+    bool knownImmutable_; // load of data that is known to be immutable
 
-    MLoadElement(MDefinition *elements, MDefinition *index, bool needsHoleCheck, bool loadDoubles)
+    MLoadElement(MDefinition *elements, MDefinition *index, bool needsHoleCheck, bool loadDoubles, bool knownImmutable)
       : MBinaryInstruction(elements, index),
         needsHoleCheck_(needsHoleCheck),
-        loadDoubles_(loadDoubles)
+        loadDoubles_(loadDoubles),
+        knownImmutable_(knownImmutable)
     {
         setResultType(MIRType_Value);
         setMovable();
@@ -4462,8 +4528,10 @@ class MLoadElement
     INSTRUCTION_HEADER(LoadElement)
 
     static MLoadElement *New(MDefinition *elements, MDefinition *index,
-                             bool needsHoleCheck, bool loadDoubles) {
-        return new MLoadElement(elements, index, needsHoleCheck, loadDoubles);
+                             bool needsHoleCheck, bool loadDoubles,
+                             bool knownImmutable) {
+        return new MLoadElement(elements, index, needsHoleCheck, loadDoubles,
+                                knownImmutable);
     }
 
     TypePolicy *typePolicy() {
@@ -4485,6 +4553,9 @@ class MLoadElement
         return needsHoleCheck();
     }
     AliasSet getAliasSet() const {
+        if (knownImmutable_)
+            return AliasSet::None();
+
         return AliasSet::Load(AliasSet::Element);
     }
 };
@@ -6116,6 +6187,10 @@ class MFunctionEnvironment
     MDefinition *function() const {
         return getOperand(0);
     }
+
+    TypePolicy *typePolicy() {
+        return this;
+    }
 };
 
 // Loads the current js::ForkJoinSlice*.
@@ -6586,9 +6661,9 @@ class MSetDOMProperty
   : public MAryInstruction<2>,
     public MixPolicy<ObjectPolicy<0>, BoxPolicy<1> >
 {
-    const JSJitPropertyOp func_;
+    const JSJitSetterOp func_;
 
-    MSetDOMProperty(const JSJitPropertyOp func, MDefinition *obj, MDefinition *val)
+    MSetDOMProperty(const JSJitSetterOp func, MDefinition *obj, MDefinition *val)
       : func_(func)
     {
         setOperand(0, obj);
@@ -6598,12 +6673,12 @@ class MSetDOMProperty
   public:
     INSTRUCTION_HEADER(SetDOMProperty)
 
-    static MSetDOMProperty *New(const JSJitPropertyOp func, MDefinition *obj, MDefinition *val)
+    static MSetDOMProperty *New(const JSJitSetterOp func, MDefinition *obj, MDefinition *val)
     {
         return new MSetDOMProperty(func, obj, val);
     }
 
-    const JSJitPropertyOp fun() {
+    const JSJitSetterOp fun() {
         return func_;
     }
 
@@ -6631,6 +6706,7 @@ class MGetDOMProperty
       : info_(jitinfo)
     {
         JS_ASSERT(jitinfo);
+        JS_ASSERT(jitinfo->type == JSJitInfo::Getter);
 
         setOperand(0, obj);
 
@@ -6657,8 +6733,8 @@ class MGetDOMProperty
         return new MGetDOMProperty(info, obj, guard);
     }
 
-    const JSJitPropertyOp fun() {
-        return info_->op;
+    const JSJitGetterOp fun() {
+        return info_->getter;
     }
     bool isInfallible() const {
         return info_->isInfallible;
@@ -7396,10 +7472,12 @@ class MNewDeclEnvObject : public MNullaryInstruction
 class MNewCallObject : public MUnaryInstruction
 {
     CompilerRootObject templateObj_;
+    bool needsSingletonType_;
 
-    MNewCallObject(HandleObject templateObj, MDefinition *slots)
+    MNewCallObject(HandleObject templateObj, bool needsSingletonType, MDefinition *slots)
       : MUnaryInstruction(slots),
-        templateObj_(templateObj)
+        templateObj_(templateObj),
+        needsSingletonType_(needsSingletonType)
     {
         setResultType(MIRType_Object);
     }
@@ -7407,8 +7485,8 @@ class MNewCallObject : public MUnaryInstruction
   public:
     INSTRUCTION_HEADER(NewCallObject)
 
-    static MNewCallObject *New(HandleObject templateObj, MDefinition *slots) {
-        return new MNewCallObject(templateObj, slots);
+    static MNewCallObject *New(HandleObject templateObj, bool needsSingletonType, MDefinition *slots) {
+        return new MNewCallObject(templateObj, needsSingletonType, slots);
     }
 
     MDefinition *slots() {
@@ -7416,6 +7494,9 @@ class MNewCallObject : public MUnaryInstruction
     }
     JSObject *templateObject() {
         return templateObj_;
+    }
+    bool needsSingletonType() {
+        return needsSingletonType_;
     }
     AliasSet getAliasSet() const {
         return AliasSet::None();

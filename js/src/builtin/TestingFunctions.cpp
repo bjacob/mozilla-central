@@ -11,12 +11,13 @@
 #include "jsfriendapi.h"
 #include "jsgc.h"
 #include "jsobj.h"
-#include "jsobjinlines.h"
 #include "jsprf.h"
 #include "jswrapper.h"
 
 #include "builtin/TestingFunctions.h"
 #include "vm/ForkJoin.h"
+
+#include "jsobjinlines.h"
 
 #include "vm/Stack-inl.h"
 
@@ -203,24 +204,38 @@ GC(JSContext *cx, unsigned argc, jsval *vp)
     }
 
 #ifndef JS_MORE_DETERMINISTIC
-    size_t preBytes = cx->runtime->gcBytes;
+    size_t preBytes = cx->runtime()->gcBytes;
 #endif
 
     if (compartment)
-        PrepareForDebugGC(cx->runtime);
+        PrepareForDebugGC(cx->runtime());
     else
-        PrepareForFullGC(cx->runtime);
-    GCForReason(cx->runtime, gcreason::API);
+        PrepareForFullGC(cx->runtime());
+    GCForReason(cx->runtime(), gcreason::API);
 
     char buf[256] = { '\0' };
 #ifndef JS_MORE_DETERMINISTIC
     JS_snprintf(buf, sizeof(buf), "before %lu, after %lu\n",
-                (unsigned long)preBytes, (unsigned long)cx->runtime->gcBytes);
+                (unsigned long)preBytes, (unsigned long)cx->runtime()->gcBytes);
 #endif
     JSString *str = JS_NewStringCopyZ(cx, buf);
     if (!str)
         return false;
     *vp = STRING_TO_JSVAL(str);
+    return true;
+}
+
+static JSBool
+MinorGC(JSContext *cx, unsigned argc, jsval *vp)
+{
+#ifdef JSGC_GENERATIONAL
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (args.get(0) == BooleanValue(true))
+        cx->runtime()->gcStoreBuffer.setOverflowed();
+
+    MinorGC(cx->runtime(), gcreason::API);
+#endif
     return true;
 }
 
@@ -268,7 +283,7 @@ GCParameter(JSContext *cx, unsigned argc, jsval *vp)
     JSGCParamKey param = paramMap[paramIndex].param;
 
     if (argc == 1) {
-        uint32_t value = JS_GetGCParameter(cx->runtime, param);
+        uint32_t value = JS_GetGCParameter(cx->runtime(), param);
         vp[0] = JS_NumberValue(value);
         return true;
     }
@@ -289,7 +304,7 @@ GCParameter(JSContext *cx, unsigned argc, jsval *vp)
     }
 
     if (param == JSGC_MAX_BYTES) {
-        uint32_t gcBytes = JS_GetGCParameter(cx->runtime, JSGC_BYTES);
+        uint32_t gcBytes = JS_GetGCParameter(cx->runtime(), JSGC_BYTES);
         if (value < gcBytes) {
             JS_ReportError(cx,
                            "attempt to set maxBytes to the value less than the current "
@@ -299,7 +314,7 @@ GCParameter(JSContext *cx, unsigned argc, jsval *vp)
         }
     }
 
-    JS_SetGCParameter(cx->runtime, param, value);
+    JS_SetGCParameter(cx->runtime(), param, value);
     *vp = JSVAL_VOID;
     return true;
 }
@@ -355,7 +370,7 @@ GCPreserveCode(JSContext *cx, unsigned argc, jsval *vp)
         return JS_FALSE;
     }
 
-    cx->runtime->alwaysPreserveCode = true;
+    cx->runtime()->alwaysPreserveCode = true;
 
     *vp = JSVAL_VOID;
     return JS_TRUE;
@@ -414,7 +429,7 @@ ScheduleGC(JSContext *cx, unsigned argc, jsval *vp)
 static JSBool
 SelectForGC(JSContext *cx, unsigned argc, jsval *vp)
 {
-    JSRuntime *rt = cx->runtime;
+    JSRuntime *rt = cx->runtime();
 
     for (unsigned i = 0; i < argc; i++) {
         Value arg(JS_ARGV(cx, vp)[i]);
@@ -438,7 +453,7 @@ VerifyPreBarriers(JSContext *cx, unsigned argc, jsval *vp)
         ReportUsageError(cx, callee, "Too many arguments");
         return JS_FALSE;
     }
-    gc::VerifyBarriers(cx->runtime, gc::PreBarrierVerifier);
+    gc::VerifyBarriers(cx->runtime(), gc::PreBarrierVerifier);
     *vp = JSVAL_VOID;
     return JS_TRUE;
 }
@@ -451,7 +466,7 @@ VerifyPostBarriers(JSContext *cx, unsigned argc, jsval *vp)
         ReportUsageError(cx, callee, "Too many arguments");
         return JS_FALSE;
     }
-    gc::VerifyBarriers(cx->runtime, gc::PostBarrierVerifier);
+    gc::VerifyBarriers(cx->runtime(), gc::PostBarrierVerifier);
     *vp = JSVAL_VOID;
     return JS_TRUE;
 }
@@ -468,7 +483,7 @@ GCState(JSContext *cx, unsigned argc, jsval *vp)
     }
 
     const char *state;
-    gc::State globalState = cx->runtime->gcIncrementalState;
+    gc::State globalState = cx->runtime()->gcIncrementalState;
     if (globalState == gc::NO_INCREMENTAL)
         state = "none";
     else if (globalState == gc::MARK)
@@ -522,7 +537,7 @@ GCSlice(JSContext *cx, unsigned argc, jsval *vp)
         limit = false;
     }
 
-    GCDebugSlice(cx->runtime, limit, budget);
+    GCDebugSlice(cx->runtime(), limit, budget);
     *vp = JSVAL_VOID;
     return JS_TRUE;
 }
@@ -850,9 +865,9 @@ EnableSPSProfilingAssertions(JSContext *cx, unsigned argc, jsval *vp)
     static ProfileEntry stack[1000];
     static uint32_t stack_size = 0;
 
-    SetRuntimeProfilingStack(cx->runtime, stack, &stack_size, 1000);
-    cx->runtime->spsProfiler.enableSlowAssertions(args[0].toBoolean());
-    cx->runtime->spsProfiler.enable(true);
+    SetRuntimeProfilingStack(cx->runtime(), stack, &stack_size, 1000);
+    cx->runtime()->spsProfiler.enableSlowAssertions(args[0].toBoolean());
+    cx->runtime()->spsProfiler.enable(true);
 
     JS_SET_RVAL(cx, vp, JSVAL_VOID);
     return true;
@@ -861,8 +876,8 @@ EnableSPSProfilingAssertions(JSContext *cx, unsigned argc, jsval *vp)
 static JSBool
 DisableSPSProfiling(JSContext *cx, unsigned argc, jsval *vp)
 {
-    if (cx->runtime->spsProfiler.installed())
-        cx->runtime->spsProfiler.enable(false);
+    if (cx->runtime()->spsProfiler.installed())
+        cx->runtime()->spsProfiler.enable(false);
     return true;
 }
 
@@ -878,7 +893,7 @@ DisplayName(JSContext *cx, unsigned argc, jsval *vp)
 
     JSFunction *fun = args[0].toObject().toFunction();
     JSString *str = fun->displayAtom();
-    vp->setString(str == NULL ? cx->runtime->emptyString : str);
+    vp->setString(str == NULL ? cx->runtime()->emptyString : str);
     return true;
 }
 
@@ -889,6 +904,74 @@ js::testingFunc_inParallelSection(JSContext *cx, unsigned argc, jsval *vp)
     // would be inlined to TRUE in ion-generated code.
     JS_ASSERT(!InParallelSection());
     JS_SET_RVAL(cx, vp, JSVAL_FALSE);
+    return true;
+}
+
+static JSObject *objectMetadataFunction = NULL;
+
+static JSObject *
+ShellObjectMetadataCallback(JSContext *cx)
+{
+    Value thisv = UndefinedValue();
+
+    Value rval;
+    if (!Invoke(cx, thisv, ObjectValue(*objectMetadataFunction), 0, NULL, &rval)) {
+        cx->clearPendingException();
+        return NULL;
+    }
+
+    return rval.isObject() ? &rval.toObject() : NULL;
+}
+
+static JSBool
+SetObjectMetadataCallback(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    args.rval().setUndefined();
+
+    if (argc == 0 || !args[0].isObject() || !args[0].toObject().isFunction()) {
+        if (objectMetadataFunction)
+            JS_RemoveObjectRoot(cx, &objectMetadataFunction);
+        objectMetadataFunction = NULL;
+        js::SetObjectMetadataCallback(cx, NULL);
+        return true;
+    }
+
+    if (!objectMetadataFunction && !JS_AddObjectRoot(cx, &objectMetadataFunction))
+        return false;
+
+    objectMetadataFunction = &args[0].toObject();
+    js::SetObjectMetadataCallback(cx, ShellObjectMetadataCallback);
+    return true;
+}
+
+static JSBool
+SetObjectMetadata(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (argc != 2 || !args[0].isObject() || !args[1].isObject()) {
+        JS_ReportError(cx, "Both arguments must be objects");
+        return false;
+    }
+
+    args.rval().setUndefined();
+
+    RootedObject obj(cx, &args[0].toObject());
+    RootedObject metadata(cx, &args[1].toObject());
+    return SetObjectMetadata(cx, obj, metadata);
+}
+
+static JSBool
+GetObjectMetadata(JSContext *cx, unsigned argc, jsval *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (argc != 1 || !args[0].isObject()) {
+        JS_ReportError(cx, "Argument must be an object");
+        return false;
+    }
+
+    args.rval().setObjectOrNull(GetObjectMetadata(&args[0].toObject()));
     return true;
 }
 
@@ -924,6 +1007,11 @@ static JSFunctionSpecWithHelp TestingFunctions[] = {
 "  Run the garbage collector. When obj is given, GC only its compartment.\n"
 "  If 'compartment' is given, GC any compartments that were scheduled for\n"
 "  GC via schedulegc."),
+
+    JS_FN_HELP("minorgc", ::MinorGC, 0, 0,
+"minorgc([overflow])",
+"  Run a minor collector on the Nursery. When overflow is true, marks the\n"
+"  store buffer as overflowed before collecting."),
 
     JS_FN_HELP("gcparam", GCParameter, 2, 0,
 "gcparam(name [, value])",
@@ -1078,6 +1166,18 @@ static JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("inParallelSection", testingFunc_inParallelSection, 0, 0,
 "inParallelSection()",
 "  True if this code is executing within a parallel section."),
+
+    JS_FN_HELP("setObjectMetadataCallback", SetObjectMetadataCallback, 1, 0,
+"setObjectMetadataCallback(fn)",
+"  Specify function to supply metadata for all newly created objects."),
+
+    JS_FN_HELP("setObjectMetadata", SetObjectMetadata, 2, 0,
+"setObjectMetadata(obj, metadataObj)",
+"  Change the metadata for an object."),
+
+    JS_FN_HELP("getObjectMetadata", GetObjectMetadata, 1, 0,
+"getObjectMetadata(obj)",
+"  Get the metadata for an object."),
 
     JS_FS_HELP_END
 };

@@ -371,6 +371,7 @@ ContentHostDoubleBuffered::EnsureTextureHost(TextureIdentifier aTextureId,
   }
   if (aTextureId == TextureOnWhiteBack) {
     mBackHostOnWhite = newHost;
+    return;
   }
 
   NS_ERROR("Bad texture identifier");
@@ -463,9 +464,9 @@ ContentHostDoubleBuffered::UpdateThebes(const ThebesBufferData& aData,
 }
 
 void
-ContentHostIncremental::EnsureTextureHost(ISurfaceAllocator* aAllocator,
-                                          const TextureInfo& aTextureInfo,
-                                          const nsIntRect& aBufferRect)
+ContentHostIncremental::EnsureTextureHostIncremental(ISurfaceAllocator* aAllocator,
+                                                     const TextureInfo& aTextureInfo,
+                                                     const nsIntRect& aBufferRect)
 {
   mUpdateList.AppendElement(new TextureCreationRequest(aTextureInfo,
                                                        aBufferRect));

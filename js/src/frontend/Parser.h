@@ -17,7 +17,7 @@
 #include "jsscript.h"
 #include "jswin.h"
 
-#include "frontend/FoldConstants.h"
+#include "frontend/BytecodeCompiler.h"
 #include "frontend/FullParseHandler.h"
 #include "frontend/ParseMaps.h"
 #include "frontend/ParseNode.h"
@@ -329,15 +329,7 @@ struct Parser : private AutoGCRooter, public StrictModeGetter
            LazyScript *lazyOuterFunction);
     ~Parser();
 
-    friend void AutoGCRooter::trace(JSTracer *trc);
-
-    /*
-     * Initialize a parser. The compiler owns the arena pool "tops-of-stack"
-     * space above the current JSContext.tempLifoAlloc mark. This means you
-     * cannot allocate from tempLifoAlloc and save the pointer beyond the next
-     * Parser destructor invocation.
-     */
-    bool init();
+    friend void js::frontend::MarkParser(JSTracer *trc, AutoGCRooter *parser);
 
     const char *getFilename() const { return tokenStream.getFilename(); }
     JSVersion versionNumber() const { return tokenStream.versionNumber(); }
@@ -429,10 +421,11 @@ struct Parser : private AutoGCRooter, public StrictModeGetter
     Node moduleDecl();
     Node functionStmt();
     Node functionExpr();
-    Node statements(bool *hasFunctionStmt = NULL);
+    Node statements();
 
     Node switchStatement();
     Node forStatement();
+    Node labeledStatement();
     Node tryStatement();
     Node withStatement();
 #if JS_HAS_BLOCK_SCOPE
@@ -490,7 +483,7 @@ struct Parser : private AutoGCRooter, public StrictModeGetter
     bool setAssignmentLhsOps(Node pn, JSOp op);
     bool matchInOrOf(bool *isForOfp);
 
-    void addStatementToList(Node pn, Node kid, bool *hasFunctionStmt);
+    void addStatementToList(Node pn, Node kid);
     bool checkFunctionArguments();
     bool makeDefIntoUse(Definition *dn, Node pn, JSAtom *atom);
     bool checkFunctionDefinition(HandlePropertyName funName, Node *pn, FunctionSyntaxKind kind,

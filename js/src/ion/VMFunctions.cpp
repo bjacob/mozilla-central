@@ -6,22 +6,23 @@
 
 #include "Ion.h"
 #include "IonCompartment.h"
-#include "jsinterp.h"
 #include "ion/BaselineFrame-inl.h"
 #include "ion/BaselineIC.h"
 #include "ion/IonFrames.h"
 
-#include "vm/StringObject-inl.h"
 #include "vm/Debugger.h"
+#include "vm/Interpreter.h"
+#include "vm/StringObject-inl.h"
 
 #include "builtin/ParallelArray.h"
 
-#include "frontend/TokenStream.h"
+#include "frontend/BytecodeCompiler.h"
 
 #include "jsboolinlines.h"
-#include "jsinterpinlines.h"
 
 #include "ion/IonFrames-inl.h" // for GetTopIonJSScript
+
+#include "vm/Interpreter-inl.h"
 #include "vm/StringObject-inl.h"
 
 using namespace js;
@@ -100,7 +101,7 @@ CheckOverRecursed(JSContext *cx)
     // CheckOverRecursed.
     JS_CHECK_RECURSION(cx, return false);
 
-    if (cx->runtime->interrupt)
+    if (cx->runtime()->interrupt)
         return InterruptCheck(cx);
 
     return true;
@@ -366,14 +367,10 @@ ArrayConcatDense(JSContext *cx, HandleObject obj1, HandleObject obj2, HandleObje
 bool
 CharCodeAt(JSContext *cx, HandleString str, int32_t index, uint32_t *code)
 {
-    JS_ASSERT(index >= 0 &&
-              static_cast<uint32_t>(index) < str->length());
-
-    const jschar *chars = str->getChars(cx);
-    if (!chars)
+    jschar c;
+    if (!str->getChar(cx, index, &c))
         return false;
-
-    *code = chars[index];
+    *code = c;
     return true;
 }
 
@@ -383,20 +380,29 @@ StringFromCharCode(JSContext *cx, int32_t code)
     jschar c = jschar(code);
 
     if (StaticStrings::hasUnit(c))
-        return cx->runtime->staticStrings.getUnit(c);
+        return cx->runtime()->staticStrings.getUnit(c);
 
     return js_NewStringCopyN<CanGC>(cx, &c, 1);
 }
 
 bool
 SetProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, HandleValue value,
-            bool strict, bool isSetName)
+            bool strict, int jsop)
 {
     RootedValue v(cx, value);
     RootedId id(cx, NameToId(name));
 
+    if (jsop == JSOP_SETALIASEDVAR) {
+        // Aliased var assigns ignore readonly attributes on the property, as
+        // required for initializing 'const' closure variables.
+        Shape *shape = obj->nativeLookup(cx, name);
+        JS_ASSERT(shape && shape->hasSlot());
+        JSObject::nativeSetSlotWithType(cx, obj, shape, value);
+        return true;
+    }
+
     if (JS_LIKELY(!obj->getOps()->setProperty)) {
-        unsigned defineHow = isSetName ? DNP_UNQUALIFIED : 0;
+        unsigned defineHow = (jsop == JSOP_SETNAME || jsop == JSOP_SETGNAME) ? DNP_UNQUALIFIED : 0;
         return baseops::SetPropertyHelper(cx, obj, obj, id, defineHow, &v, strict);
     }
 
@@ -427,9 +433,10 @@ NewSlots(JSRuntime *rt, unsigned nslots)
 }
 
 JSObject *
-NewCallObject(JSContext *cx, HandleShape shape, HandleTypeObject type, HeapSlot *slots)
+NewCallObject(JSContext *cx, HandleScript script,
+              HandleShape shape, HandleTypeObject type, HeapSlot *slots)
 {
-    return CallObject::create(cx, shape, type, slots);
+    return CallObject::create(cx, script, shape, type, slots);
 }
 
 JSObject *
@@ -441,13 +448,13 @@ NewStringObject(JSContext *cx, HandleString str)
 bool
 SPSEnter(JSContext *cx, HandleScript script)
 {
-    return cx->runtime->spsProfiler.enter(cx, script, script->function());
+    return cx->runtime()->spsProfiler.enter(cx, script, script->function());
 }
 
 bool
 SPSExit(JSContext *cx, HandleScript script)
 {
-    cx->runtime->spsProfiler.exit(cx, script, script->function());
+    cx->runtime()->spsProfiler.exit(cx, script, script->function());
     return true;
 }
 
@@ -529,7 +536,7 @@ GetDynamicName(JSContext *cx, JSObject *scopeChain, JSString *str, Value *vp)
         }
     }
 
-    if (!frontend::IsIdentifier(atom) || frontend::FindKeyword(atom->chars(), atom->length())) {
+    if (!frontend::IsIdentifier(atom) || frontend::IsKeyword(atom)) {
         vp->setUndefined();
         return;
     }
@@ -563,8 +570,13 @@ FilterArguments(JSContext *cx, JSString *str)
 void
 PostWriteBarrier(JSRuntime *rt, JSObject *obj)
 {
+#ifdef JS_GC_ZEAL
+    /* The jitcode version of IsInsideNursery does not know about the verifier. */
+    if (rt->gcVerifyPostData && rt->gcVerifierNursery.isInside(obj))
+        return;
+#endif
     JS_ASSERT(!IsInsideNursery(rt, obj));
-    rt->gcStoreBuffer.putWholeObject(obj);
+    rt->gcStoreBuffer.putWholeCell(obj);
 }
 #endif
 
@@ -633,7 +645,7 @@ DebugEpilogue(JSContext *cx, BaselineFrame *frame, JSBool ok)
 
     // If the frame has a pushed SPS frame, make sure to pop it.
     if (frame->hasPushedSPSFrame()) {
-        cx->runtime->spsProfiler.exit(cx, frame->script(), frame->maybeFun());
+        cx->runtime()->spsProfiler.exit(cx, frame->script(), frame->maybeFun());
         // Unset the pushedSPSFrame flag because DebugEpilogue may get called before
         // Probes::exitScript in baseline during exception handling, and we don't
         // want to double-pop SPS frames.
@@ -719,16 +731,16 @@ HandleDebugTrap(JSContext *cx, BaselineFrame *frame, uint8_t *retAddr, JSBool *m
     RootedScript script(cx, frame->script());
     jsbytecode *pc = script->baselineScript()->icEntryFromReturnAddress(retAddr).pc(script);
 
-    JS_ASSERT(cx->compartment->debugMode());
+    JS_ASSERT(cx->compartment()->debugMode());
     JS_ASSERT(script->stepModeEnabled() || script->hasBreakpointsAt(pc));
 
     RootedValue rval(cx);
     JSTrapStatus status = JSTRAP_CONTINUE;
-    JSInterruptHook hook = cx->runtime->debugHooks.interruptHook;
+    JSInterruptHook hook = cx->runtime()->debugHooks.interruptHook;
 
     if (hook || script->stepModeEnabled()) {
         if (hook)
-            status = hook(cx, script, pc, rval.address(), cx->runtime->debugHooks.interruptHookData);
+            status = hook(cx, script, pc, rval.address(), cx->runtime()->debugHooks.interruptHookData);
         if (status == JSTRAP_CONTINUE && script->stepModeEnabled())
             status = Debugger::onSingleStep(cx, &rval);
     }
@@ -768,8 +780,8 @@ OnDebuggerStatement(JSContext *cx, BaselineFrame *frame, jsbytecode *pc, JSBool 
     JSTrapStatus status = JSTRAP_CONTINUE;
     RootedValue rval(cx);
 
-    if (JSDebuggerHandler handler = cx->runtime->debugHooks.debuggerHandler)
-        status = handler(cx, script, pc, rval.address(), cx->runtime->debugHooks.debuggerHandlerData);
+    if (JSDebuggerHandler handler = cx->runtime()->debugHooks.debuggerHandler)
+        status = handler(cx, script, pc, rval.address(), cx->runtime()->debugHooks.debuggerHandlerData);
 
     if (status == JSTRAP_CONTINUE)
         status = Debugger::onDebuggerStatement(cx, &rval);
