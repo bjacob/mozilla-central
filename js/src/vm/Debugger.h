@@ -4,26 +4,23 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef Debugger_h__
-#define Debugger_h__
+#ifndef vm_Debugger_h
+#define vm_Debugger_h
 
-#include "mozilla/Attributes.h"
 #include "mozilla/LinkedList.h"
 
-#include "jsapi.h"
 #include "jsclist.h"
 #include "jscntxt.h"
 #include "jscompartment.h"
-#include "jsgc.h"
 #include "jsweakmap.h"
-#include "jswrapper.h"
 
 #include "gc/Barrier.h"
-#include "gc/FindSCCs.h"
 #include "js/HashTable.h"
 #include "vm/GlobalObject.h"
 
 namespace js {
+
+class Breakpoint;
 
 /*
  * A weakmap that supports the keys being in different compartments to the
@@ -55,11 +52,12 @@ class DebuggerWeakMap : private WeakMap<Key, Value, DefaultHasher<Key> >
   public:
     typedef WeakMap<Key, Value, DefaultHasher<Key> > Base;
     explicit DebuggerWeakMap(JSContext *cx)
-        : Base(cx), zoneCounts(cx) { }
+        : Base(cx), zoneCounts(cx->runtime()) { }
 
   public:
     /* Expose those parts of HashMap public interface that are used by Debugger methods. */
 
+    typedef typename Base::Entry Entry;
     typedef typename Base::Ptr Ptr;
     typedef typename Base::AddPtr AddPtr;
     typedef typename Base::Range Range;
@@ -106,10 +104,12 @@ class DebuggerWeakMap : private WeakMap<Key, Value, DefaultHasher<Key> >
 
   public:
     void markKeys(JSTracer *tracer) {
-        for (Range r = all(); !r.empty(); r.popFront()) {
-            Key key = r.front().key;
-            gc::Mark(tracer, &key, "cross-compartment WeakMap key");
-            JS_ASSERT(key == r.front().key);
+        for (Enum e(*static_cast<Base *>(this)); !e.empty(); e.popFront()) {
+            Key key = e.front().key;
+            gc::Mark(tracer, &key, "Debugger WeakMap key");
+            if (key != e.front().key)
+                e.rekeyFront(key);
+            key.unsafeSet(NULL);
         }
     }
 
@@ -150,11 +150,19 @@ class DebuggerWeakMap : private WeakMap<Key, Value, DefaultHasher<Key> >
     }
 };
 
+/*
+ * Env is the type of what ES5 calls "lexical environments" (runtime
+ * activations of lexical scopes). This is currently just JSObject, and is
+ * implemented by Call, Block, With, and DeclEnv objects, among others--but
+ * environments and objects are really two different concepts.
+ */
+typedef JSObject Env;
+
 class Debugger : private mozilla::LinkedListElement<Debugger>
 {
     friend class Breakpoint;
     friend class mozilla::LinkedListElement<Debugger>;
-    friend JSBool (::JS_DefineDebuggerObject)(JSContext *cx, JSObject *obj);
+    friend bool (::JS_DefineDebuggerObject)(JSContext *cx, JSObject *obj);
 
   public:
     enum Hook {
@@ -297,37 +305,37 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static void finalize(FreeOp *fop, JSObject *obj);
     void markKeysInCompartment(JSTracer *tracer);
 
-    static Class jsclass;
+    static const Class jsclass;
 
     static Debugger *fromThisValue(JSContext *cx, const CallArgs &ca, const char *fnname);
-    static JSBool getEnabled(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool setEnabled(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getHookImpl(JSContext *cx, unsigned argc, Value *vp, Hook which);
-    static JSBool setHookImpl(JSContext *cx, unsigned argc, Value *vp, Hook which);
-    static JSBool getOnDebuggerStatement(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool setOnDebuggerStatement(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getOnExceptionUnwind(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool setOnExceptionUnwind(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getOnNewScript(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool setOnNewScript(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getOnEnterFrame(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool setOnEnterFrame(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getOnNewGlobalObject(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool setOnNewGlobalObject(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool setUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool addDebuggee(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool addAllGlobalsAsDebuggees(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool removeDebuggee(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool removeAllDebuggees(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool hasDebuggee(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getDebuggees(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool getNewestFrame(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool clearAllBreakpoints(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool findScripts(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool findAllGlobals(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool wrap(JSContext *cx, unsigned argc, Value *vp);
-    static JSBool construct(JSContext *cx, unsigned argc, Value *vp);
+    static bool getEnabled(JSContext *cx, unsigned argc, Value *vp);
+    static bool setEnabled(JSContext *cx, unsigned argc, Value *vp);
+    static bool getHookImpl(JSContext *cx, unsigned argc, Value *vp, Hook which);
+    static bool setHookImpl(JSContext *cx, unsigned argc, Value *vp, Hook which);
+    static bool getOnDebuggerStatement(JSContext *cx, unsigned argc, Value *vp);
+    static bool setOnDebuggerStatement(JSContext *cx, unsigned argc, Value *vp);
+    static bool getOnExceptionUnwind(JSContext *cx, unsigned argc, Value *vp);
+    static bool setOnExceptionUnwind(JSContext *cx, unsigned argc, Value *vp);
+    static bool getOnNewScript(JSContext *cx, unsigned argc, Value *vp);
+    static bool setOnNewScript(JSContext *cx, unsigned argc, Value *vp);
+    static bool getOnEnterFrame(JSContext *cx, unsigned argc, Value *vp);
+    static bool setOnEnterFrame(JSContext *cx, unsigned argc, Value *vp);
+    static bool getOnNewGlobalObject(JSContext *cx, unsigned argc, Value *vp);
+    static bool setOnNewGlobalObject(JSContext *cx, unsigned argc, Value *vp);
+    static bool getUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
+    static bool setUncaughtExceptionHook(JSContext *cx, unsigned argc, Value *vp);
+    static bool addDebuggee(JSContext *cx, unsigned argc, Value *vp);
+    static bool addAllGlobalsAsDebuggees(JSContext *cx, unsigned argc, Value *vp);
+    static bool removeDebuggee(JSContext *cx, unsigned argc, Value *vp);
+    static bool removeAllDebuggees(JSContext *cx, unsigned argc, Value *vp);
+    static bool hasDebuggee(JSContext *cx, unsigned argc, Value *vp);
+    static bool getDebuggees(JSContext *cx, unsigned argc, Value *vp);
+    static bool getNewestFrame(JSContext *cx, unsigned argc, Value *vp);
+    static bool clearAllBreakpoints(JSContext *cx, unsigned argc, Value *vp);
+    static bool findScripts(JSContext *cx, unsigned argc, Value *vp);
+    static bool findAllGlobals(JSContext *cx, unsigned argc, Value *vp);
+    static bool makeGlobalObjectReference(JSContext *cx, unsigned argc, Value *vp);
+    static bool construct(JSContext *cx, unsigned argc, Value *vp);
     static const JSPropertySpec properties[];
     static const JSFunctionSpec methods[];
 
@@ -339,7 +347,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool slowPathOnLeaveFrame(JSContext *cx, AbstractFramePtr frame, bool ok);
     static void slowPathOnNewScript(JSContext *cx, HandleScript script,
                                     GlobalObject *compileAndGoGlobal);
-    static bool slowPathOnNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global);
+    static void slowPathOnNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global);
     static JSTrapStatus dispatchHook(JSContext *cx, MutableHandleValue vp, Hook which);
 
     JSTrapStatus fireDebuggerStatement(JSContext *cx, MutableHandleValue vp);
@@ -357,7 +365,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      * Allocate and initialize a Debugger.Source instance whose referent is
      * |source|.
      */
-    JSObject *newDebuggerSource(JSContext *cx, JS::HandleScriptSource source);
+    JSObject *newDebuggerSource(JSContext *cx, js::HandleScriptSource source);
 
     /*
      * Receive a "new script" event from the engine. A new script was compiled
@@ -411,10 +419,10 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static inline JSTrapStatus onExceptionUnwind(JSContext *cx, MutableHandleValue vp);
     static inline void onNewScript(JSContext *cx, HandleScript script,
                                    GlobalObject *compileAndGoGlobal);
-    static inline bool onNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global);
+    static inline void onNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global);
     static JSTrapStatus onTrap(JSContext *cx, MutableHandleValue vp);
     static JSTrapStatus onSingleStep(JSContext *cx, MutableHandleValue vp);
-    static bool handleBaselineOsr(JSContext *cx, StackFrame *from, ion::BaselineFrame *to);
+    static bool handleBaselineOsr(JSContext *cx, StackFrame *from, jit::BaselineFrame *to);
 
     /************************************* Functions for use by Debugger.cpp. */
 
@@ -520,7 +528,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      * needed. The context |cx| must be in the debugger compartment; |source|
      * must be a script source object in a debuggee compartment.
      */
-    JSObject *wrapSource(JSContext *cx, JS::HandleScriptSource source);
+    JSObject *wrapSource(JSContext *cx, js::HandleScriptSource source);
 
   private:
     Debugger(const Debugger &) MOZ_DELETE;
@@ -540,7 +548,7 @@ class BreakpointSite {
   private:
     JSCList breakpoints;  /* cyclic list of all js::Breakpoints at this instruction */
     size_t enabledCount;  /* number of breakpoints in the list that are enabled */
-    JSTrapHandler trapHandler;  /* jsdbgapi trap state */
+    JSTrapHandler trapHandler;  /* trap state */
     HeapValue trapClosure;
 
     void recompile(FreeOp *fop);
@@ -680,24 +688,33 @@ void
 Debugger::onNewScript(JSContext *cx, HandleScript script, GlobalObject *compileAndGoGlobal)
 {
     JS_ASSERT_IF(script->compileAndGo, compileAndGoGlobal);
+    JS_ASSERT_IF(script->compileAndGo, compileAndGoGlobal == &script->uninlinedGlobal());
+    // We early return in slowPathOnNewScript for self-hosted scripts, so we can
+    // ignore those in our assertion here.
+    JS_ASSERT_IF(!script->compartment()->options().invisibleToDebugger &&
+                 !script->selfHosted,
+                 script->compartment()->firedOnNewGlobalObject);
     JS_ASSERT_IF(!script->compileAndGo, !compileAndGoGlobal);
     if (!script->compartment()->getDebuggees().empty())
         slowPathOnNewScript(cx, script, compileAndGoGlobal);
 }
 
-bool
+void
 Debugger::onNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global)
 {
-    if (JS_CLIST_IS_EMPTY(&cx->runtime()->onNewGlobalObjectWatchers))
-        return true;
-    return Debugger::slowPathOnNewGlobalObject(cx, global);
+    JS_ASSERT(!global->compartment()->firedOnNewGlobalObject);
+#ifdef DEBUG
+    global->compartment()->firedOnNewGlobalObject = true;
+#endif
+    if (!JS_CLIST_IS_EMPTY(&cx->runtime()->onNewGlobalObjectWatchers))
+        Debugger::slowPathOnNewGlobalObject(cx, global);
 }
 
-extern JSBool
+extern bool
 EvaluateInEnv(JSContext *cx, Handle<Env*> env, HandleValue thisv, AbstractFramePtr frame,
               StableCharPtr chars, unsigned length, const char *filename, unsigned lineno,
               MutableHandleValue rval);
 
 }
 
-#endif /* Debugger_h__ */
+#endif /* vm_Debugger_h */

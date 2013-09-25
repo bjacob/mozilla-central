@@ -8,13 +8,12 @@
 #define nsIScriptGlobalObject_h__
 
 #include "nsISupports.h"
-#include "nsEvent.h"
 #include "nsIGlobalObject.h"
+#include "js/TypeDecls.h"
+#include "mozilla/EventForwards.h"
 
 class nsIScriptContext;
-class nsScriptErrorEvent;
 class nsIScriptGlobalObject;
-class JSObject;
 
 // A helper function for nsIScriptGlobalObject implementations to use
 // when handling a script error.  Generally called by the global when a context
@@ -28,8 +27,8 @@ NS_HandleScriptError(nsIScriptGlobalObject *aScriptGlobal,
 
 
 #define NS_ISCRIPTGLOBALOBJECT_IID \
-{ 0xde24b30a, 0x12c6, 0x4e5f, \
-  { 0xa8, 0x5e, 0x90, 0xcd, 0xfb, 0x6c, 0x54, 0x51 } }
+{ 0x214fa2f6, 0xcc0c, 0x42cf, \
+  { 0x98, 0x4b, 0x45, 0xf5, 0x73, 0x9c, 0x6b, 0x73 } }
 
 /**
  * The global object which keeps a script context for each supported script

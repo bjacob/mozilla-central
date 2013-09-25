@@ -14,6 +14,7 @@
 #include "nsXULAppAPI.h"
 #include "mozilla/unused.h"
 #include "nsProxyRelease.h"
+#include "nsThreadUtils.h"
 
 namespace mozilla {
 namespace dom {
@@ -53,7 +54,7 @@ GetDataSetIndex(const DOMStorage* aStorage)
 
 // DOMStorageCacheBridge
 
-NS_IMPL_THREADSAFE_ADDREF(DOMStorageCacheBridge)
+NS_IMPL_ADDREF(DOMStorageCacheBridge)
 
 // Since there is no consumer of return value of Release, we can turn this 
 // method to void to make implementation of asynchronous DOMStorageCache::Release
@@ -61,7 +62,7 @@ NS_IMPL_THREADSAFE_ADDREF(DOMStorageCacheBridge)
 NS_IMETHODIMP_(void) DOMStorageCacheBridge::Release(void)
 {
   MOZ_ASSERT(int32_t(mRefCnt) > 0, "dup release");
-  nsrefcnt count = NS_AtomicDecrementRefcnt(mRefCnt);
+  nsrefcnt count = --mRefCnt;
   NS_LOG_RELEASE(this, count, "DOMStorageCacheBridge");
   if (0 == count) {
     mRefCnt = 1; /* stabilize */

@@ -27,7 +27,6 @@ interfaces = [
     'geolocation',
     'notification',
     'permission',
-    'push',
     'svg',
     'smil',
     'apps',
@@ -50,6 +49,7 @@ PARALLEL_DIRS += [
     'devicestorage',
     'encoding',
     'file',
+    'fmradio',
     'media',
     'messages',
     'power',
@@ -71,9 +71,11 @@ PARALLEL_DIRS += [
     'workers',
     'camera',
     'audiochannel',
+    'promise',
+    'wappush',
+    'telephony',
+    'webidl',
     'refgraph',
-    'future',
-    'wappush'
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
@@ -81,18 +83,17 @@ if CONFIG['OS_ARCH'] == 'WINNT':
 
 if CONFIG['MOZ_B2G_RIL']:
     PARALLEL_DIRS += [
-        'telephony',
         'wifi',
         'icc',
         'cellbroadcast',
         'voicemail',
     ]
 
-if CONFIG['MOZ_B2G_FM']:
-    PARALLEL_DIRS += ['fm']
-
 if CONFIG['MOZ_PAY']:
     PARALLEL_DIRS += ['payment']
+
+if CONFIG['MOZ_GAMEPAD']:
+    PARALLEL_DIRS += ['gamepad']
 
 # bindings/test is here, because it needs to build after bindings/, and
 # we build subdirectories before ourselves.

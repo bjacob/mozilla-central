@@ -7,7 +7,7 @@ from copy import deepcopy
 
 import ipdl.ast
 from ipdl.cxx.ast import *
-from ipdl.type import ActorType, ProcessGraph, TypeVisitor
+from ipdl.type import Actor, ActorType, ProcessGraph, TypeVisitor
 
 # FIXME/cjones: the chromium Message logging code doesn't work on
 # gcc/POSIX, because it wprintf()s across the chromium/mozilla
@@ -25,6 +25,8 @@ lowered form of |tu|'''
         # annotate the AST with IPDL/C++ IR-type stuff used later
         tu.accept(_DecorateWithCxxStuff())
 
+        # Any modifications to the filename scheme here need corresponding
+        # modifications in the ipdl.py driver script.
         name = tu.name
         pheader, pcpp = File(name +'.h'), File(name +'.cpp')
 
@@ -379,6 +381,14 @@ def _protocolErrorBreakpoint(msg):
     return StmtExpr(ExprCall(ExprVar('mozilla::ipc::ProtocolErrorBreakpoint'),
                              args=[ msg ]))
 
+def _ipcFatalError(name, msg, otherprocess, isparent):
+    if isinstance(name, str):
+        name = ExprLiteral.String(name)
+    if isinstance(msg, str):
+        msg = ExprLiteral.String(msg)
+    return StmtExpr(ExprCall(ExprVar('mozilla::ipc::FatalError'),
+                             args=[ name, msg, otherprocess, isparent ]))
+
 def _printWarningMessage(msg):
     if isinstance(msg, str):
         msg = ExprLiteral.String(msg)
@@ -542,11 +552,11 @@ def _cxxConstPtrToType(ipdltype, side):
     t.ptrconst = 1
     return t
 
-def _allocMethod(ptype):
-    return ExprVar('Alloc'+ ptype.name())
+def _allocMethod(ptype, side):
+    return ExprVar('Alloc'+ str(Actor(ptype, side)))
 
-def _deallocMethod(ptype):
-    return ExprVar('Dealloc'+ ptype.name())
+def _deallocMethod(ptype, side):
+    return ExprVar('Dealloc'+ str(Actor(ptype, side)))
 
 ##
 ## A _HybridDecl straddles IPDL and C++ decls.  It knows which C++
@@ -1537,7 +1547,7 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
         msgenum = TypeEnum('MessageType')
         msgstart = _messageStartName(self.protocol.decl.type) +' << 16'
         msgenum.addId(self.protocol.name + 'Start', msgstart)
-        msgenum.addId(self.protocol.name +'PreStart', '('+ msgstart +') - 1')
+        #msgenum.addId(self.protocol.name +'PreStart', '('+ msgstart +') - 1')
 
         for md in p.messageDecls:
             msgenum.addId(md.msgId())
@@ -1554,14 +1564,14 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
         typedefs = self.protocol.decl.cxxtypedefs
         for md in p.messageDecls:
             ns.addstmts([
-                _generateMessageClass(md.msgClass(), md.msgId(),
+                _generateMessageClass(md, md.msgClass(), md.msgId(),
                                       typedefs, md.prettyMsgName(p.name+'::'),
                                       md.decl.type.compress),
                 Whitespace.NL ])
             if md.hasReply():
                 ns.addstmts([
                     _generateMessageClass(
-                        md.replyClass(), md.replyId(),
+                        md, md.replyClass(), md.replyId(),
                         typedefs, md.prettyReplyName(p.name+'::'),
                         md.decl.type.compress),
                     Whitespace.NL ])
@@ -1591,7 +1601,8 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
             args=[ _backstagePass(),
                    p.callGetChannel(parentvar), p.callOtherProcess(parentvar),
                    p.callGetChannel(childvar), p.callOtherProcess(childvar),
-                   _protocolId(p.decl.type)
+                   _protocolId(p.decl.type),
+                   ExprVar(_messageStartName(p.decl.type) + 'Child')
                    ])))
         return bridgefunc
 
@@ -1611,7 +1622,8 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
             args=[ _backstagePass(),
                    p.callGetChannel(openervar), p.callOtherProcess(openervar),
                    _sideToTransportMode(localside),
-                   _protocolId(p.decl.type)
+                   _protocolId(p.decl.type),
+                   ExprVar(_messageStartName(p.decl.type) + 'Child')
                    ])))
         return openfunc
 
@@ -1751,7 +1763,7 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
 
 ##--------------------------------------------------
 
-def _generateMessageClass(clsname, msgid, typedefs, prettyName, compress):
+def _generateMessageClass(md, clsname, msgid, typedefs, prettyName, compress):
     cls = Class(name=clsname, inherits=[ Inherit(Type('IPC::Message')) ])
     cls.addstmt(Label.PRIVATE)
     cls.addstmts(typedefs)
@@ -1768,12 +1780,16 @@ def _generateMessageClass(clsname, msgid, typedefs, prettyName, compress):
         compression = ExprVar('COMPRESSION_ENABLED')
     else:
         compression = ExprVar('COMPRESSION_NONE')
+    if md.decl.type.isUrgent():
+        priority = 'PRIORITY_HIGH'
+    else:
+        priority = 'PRIORITY_NORMAL'
     ctor = ConstructorDefn(
         ConstructorDecl(clsname),
         memberinits=[ ExprMemberInit(ExprVar('IPC::Message'),
                                      [ ExprVar('MSG_ROUTING_NONE'),
                                        ExprVar('ID'),
-                                       ExprVar('PRIORITY_NORMAL'),
+                                       ExprVar(priority),
                                        compression,
                                        ExprLiteral.String(prettyName) ]) ])
     cls.addstmts([ ctor, Whitespace.NL ])
@@ -2683,13 +2699,13 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             actortype = md.actorDecl().bareType(self.side)
             
             self.cls.addstmt(StmtDecl(MethodDecl(
-                _allocMethod(managed).name,
+                _allocMethod(managed, self.side).name,
                 params=md.makeCxxParams(side=self.side, implicit=0),
                 ret=actortype,
                 virtual=1, pure=1)))
 
             self.cls.addstmt(StmtDecl(MethodDecl(
-                _deallocMethod(managed).name,
+                _deallocMethod(managed, self.side).name,
                 params=[ Decl(actortype, 'actor') ],
                 ret=Type.BOOL,
                 virtual=1, pure=1)))
@@ -2699,10 +2715,10 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             # new channel is opened
             actortype = _cxxBareType(actor.asType(), actor.side)
             self.cls.addstmt(StmtDecl(MethodDecl(
-                _allocMethod(actor.ptype).name,
+                _allocMethod(actor.ptype, actor.side).name,
                 params=[ Decl(Type('Transport', ptr=1), 'transport'),
                          Decl(Type('ProcessId'), 'otherProcess') ],
-                ret=actortype,
+                ret=Type.BOOL,
                 virtual=1, pure=1)))
 
         # optional ActorDestroy() method; default is no-op
@@ -3191,22 +3207,6 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             self.cls.addstmts([ otherpid, Whitespace.NL,
                                 getdump, Whitespace.NL ])
 
-        if (ptype.isToplevel() and self.side is 'parent'
-            and ptype.talksRpc()):
-            # offer BlockChild() and UnblockChild().
-            # See ipc/glue/RPCChannel.h
-            blockchild = MethodDefn(MethodDecl(
-                'BlockChild', ret=Type.BOOL))
-            blockchild.addstmt(StmtReturn(ExprCall(
-                ExprSelect(p.channelVar(), '.', 'BlockChild'))))
-
-            unblockchild = MethodDefn(MethodDecl(
-                'UnblockChild', ret=Type.BOOL))
-            unblockchild.addstmt(StmtReturn(ExprCall(
-                ExprSelect(p.channelVar(), '.', 'UnblockChild'))))
-
-            self.cls.addstmts([ blockchild, unblockchild, Whitespace.NL ])
-
         ## private methods
         self.cls.addstmt(Label.PRIVATE)
 
@@ -3217,45 +3217,16 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         fatalerror = MethodDefn(MethodDecl(
             'FatalError',
             params=[ Decl(Type('char', const=1, ptrconst=1), msgparam.name) ],
-            const=1, virtual=1))
-        fatalerror.addstmts([
-            Whitespace('// Virtual method to prevent inlining.\n', indent=1),
-            Whitespace('// This give us better error reporting.\n', indent=1),
-            Whitespace('// See bug 589371\n\n', indent=1),
-            _protocolErrorBreakpoint(msgparam),
-            Whitespace.NL,
-            StmtDecl(Decl(Type('nsAutoCString'), msgvar.name),
-                     initargs=[ExprLiteral.String('IPDL error [' + actorname +
-                                                  ']: \\"')]),
-            StmtExpr(ExprCall(ExprSelect(msgvar, '.', 'AppendASCII'),
-                              args=[msgparam]))
-        ])
+            const=1, never_inline=1))
         if self.side is 'parent':
-            # if the error happens on the parent side, the parent
-            # kills off the child
-            fatalerror.addstmts([
-                StmtExpr(ExprCall(ExprSelect(msgvar, '.', 'AppendLiteral'),
-                                  args=[ExprLiteral.String('\\". Killing ' +
-                                                           'child side as a ' +
-                                                           'result.')])),
-                Whitespace.NL,
-                _printErrorMessage(ExprCall(ExprSelect(msgvar, '.', 'get'))),
-            ])
-
-            ifkill = StmtIf(ExprNot(_killProcess(p.callOtherProcess())))
-            ifkill.addifstmt(
-                _printErrorMessage("May have failed to kill child!"))
-            fatalerror.addstmts([Whitespace.NL, ifkill])
+            otherprocess = p.callOtherProcess()
+            isparent = ExprLiteral.TRUE
         else:
-            # and if it happens on the child side, the child commits
-            # seppuko
-            fatalerror.addstmts([
-                StmtExpr(ExprCall(ExprSelect(msgvar, '.', 'AppendLiteral'),
-                                  args=[ExprLiteral.String('\\". abort()ing ' +
-                                                           'as a result.')])),
-                Whitespace.NL,
-                _runtimeAbort(ExprCall(ExprSelect(msgvar, '.', 'get'))),
-            ])
+            otherprocess = ExprLiteral.NULL
+            isparent = ExprLiteral.FALSE
+        fatalerror.addstmts([
+            _ipcFatalError(actorname, msgparam, otherprocess, isparent)
+        ])
         self.cls.addstmts([ fatalerror, Whitespace.NL ])
 
         ## DestroySubtree(bool normal)
@@ -3337,7 +3308,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 cond=ExprBinary(ivar, '<', _callCxxArrayLength(kidsvar)),
                 update=ExprPrefixUnop(ivar, '++'))
             foreachdealloc.addstmts([
-                StmtExpr(ExprCall(_deallocMethod(managed),
+                StmtExpr(ExprCall(_deallocMethod(managed, self.side),
                                   args=[ ithkid ]))
             ])
 
@@ -3735,7 +3706,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                         "actor not managed by this!"),
                     Whitespace.NL,
                     StmtExpr(_callCxxArrayRemoveSorted(manageearray, actorvar)),
-                    StmtExpr(ExprCall(_deallocMethod(manageeipdltype),
+                    StmtExpr(ExprCall(_deallocMethod(manageeipdltype, self.side),
                                       args=[ actorvar ])),
                     StmtReturn()
                 ])
@@ -3992,7 +3963,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             iffailopen.addifstmt(StmtReturn(_Result.ValuError))
 
             iffailalloc = StmtIf(ExprNot(ExprCall(
-                _allocMethod(actor.ptype),
+                _allocMethod(actor.ptype, actor.side),
                 args=[ tvar, pidvar ])))
             iffailalloc.addifstmt(StmtReturn(_Result.ProcessingError))
 
@@ -4002,7 +3973,10 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 iffailalloc,
                 StmtBreak()
             ])
-            return CaseLabel(_protocolId(actor.ptype).name), case
+            label = _messageStartName(actor.ptype)
+            if actor.side is 'child':
+                label += 'Child'
+            return CaseLabel(label), case
 
         pswitch = StmtSwitch(pvar)
         for actor in actors:
@@ -4528,7 +4502,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 self.asyncSwitch.addcase(lbl, case)
             elif sems is ipdl.ast.SYNC:
                 self.syncSwitch.addcase(lbl, case)
-            elif sems is ipdl.ast.RPC:
+            elif sems is ipdl.ast.RPC or sems is ipdl.ast.URGENT:
                 self.rpcSwitch.addcase(lbl, case)
             else: assert 0
 
@@ -4669,7 +4643,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         helperdecl.params = helperdecl.params[1:]
         helper = MethodDefn(helperdecl)
 
-        callctor = self.callAllocActor(md, retsems='out')
+        callctor = self.callAllocActor(md, retsems='out', side=self.side)
         helper.addstmt(StmtReturn(ExprCall(
             ExprVar(helperdecl.name), args=[ callctor ] + callctor.args)))
         return helper
@@ -4809,7 +4783,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             # alloc the actor, register it under the foreign ID
             + [ StmtExpr(ExprAssn(
                 actorvar,
-                self.callAllocActor(md, retsems='in'))) ]
+                self.callAllocActor(md, retsems='in', side=self.side))) ]
             + self.ctorPrologue(md, errfn=_Result.ValuError,
                                 idexpr=_actorHId(actorhandle))
             + [ Whitespace.NL ]
@@ -5040,9 +5014,9 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             ])
         )
 
-    def callAllocActor(self, md, retsems):
+    def callAllocActor(self, md, retsems, side):
         return ExprCall(
-            _allocMethod(md.decl.type.constructedType()),
+            _allocMethod(md.decl.type.constructedType(), side),
             args=md.makeCxxArgs(params=1, retsems=retsems, retcallsems='out',
                                 implicit=0))
 
@@ -5197,6 +5171,7 @@ def _splitMethodDefn(md, clsname):
     md.decl.virtual = 0
     md.decl.static = 0
     md.decl.warn_unused = 0
+    md.decl.never_inline = 0
     for param in md.decl.params:
         if isinstance(param, Param):
             param.default = None

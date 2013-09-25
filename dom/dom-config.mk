@@ -27,6 +27,7 @@ DOM_SRCDIRS = \
   content/base/src \
   content/html/content/src \
   content/html/document/src \
+  content/media/mediasource \
   content/media/webaudio \
   content/svg/content/src \
   layout/generic \
@@ -39,7 +40,6 @@ DOM_SRCDIRS = \
 ifdef MOZ_B2G_RIL
 DOM_SRCDIRS += \
   dom/system/gonk \
-  dom/telephony \
   dom/wifi \
   dom/icc/src \
   $(NULL)
@@ -47,7 +47,7 @@ endif
 
 ifdef MOZ_B2G_FM
 DOM_SRCDIRS += \
-  dom/fm \
+  dom/fmradio \
   $(NULL)
 endif
 
@@ -62,4 +62,3 @@ DOM_SRCDIRS += content/media/webspeech
 endif
 
 LOCAL_INCLUDES += $(DOM_SRCDIRS:%=-I$(topsrcdir)/%)
-DEFINES += -D_IMPL_NS_LAYOUT

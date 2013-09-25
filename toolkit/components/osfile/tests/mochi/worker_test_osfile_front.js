@@ -31,6 +31,7 @@ self.onmessage = function onmessage_start(msg) {
     test_info();
     test_path();
     test_exists_file();
+    test_remove_file();
   } catch (x) {
     log("Catching error: " + x);
     log("Stack: " + x.stack);
@@ -648,37 +649,41 @@ function test_info() {
 
   let stop = new Date();
 
-  // We round down/up by 1s as file system precision is lower than Date precision
-  // (no clear specifications about that, but it seems that this can be a little
-  // over 1 second under ext3 and 2 seconds under FAT)
-  let startMs = start.getTime() - 2500;
-  let stopMs  = stop.getTime() + 2500;
+  // We round down/up by 1s as file system precision is lower than
+  // Date precision (no clear specifications about that, but it seems
+  // that this can be a little over 1 second under ext3 and 2 seconds
+  // under FAT).
+  let SLOPPY_FILE_SYSTEM_ADJUSTMENT = 3000;
+  let startMs = start.getTime() - SLOPPY_FILE_SYSTEM_ADJUSTMENT;
+  let stopMs  = stop.getTime() + SLOPPY_FILE_SYSTEM_ADJUSTMENT;
+  info("Testing stat with bounds [ " + startMs + ", " + stopMs +" ]");
 
   (function() {
     let birth;
-    if ("winBirthDate" in info) {
-      birth = info.winBirthDate;
-    } else if ("macBirthDate" in info) {
-      birth = info.macBirthDate;
+    if ("winBirthDate" in stat) {
+      birth = stat.winBirthDate;
+    } else if ("macBirthDate" in stat) {
+      birth = stat.macBirthDate;
     } else {
       ok(true, "Skipping birthdate test");
       return;
     }
     ok(birth.getTime() <= stopMs,
-    "test_info: file was created before now - " + stop + ", " + birth);
-    // Note: Previous versions of this test checked whether the file has
-    // been created after the start of the test. Unfortunately, this sometimes
-    // failed under Windows, in specific circumstances: if the file has been
-    // removed at the start of the test and recreated immediately, the Windows
-    // file system detects this and decides that the file was actually truncated
-    // rather than recreated, hence that it should keep its previous creation date.
-    // Debugging hilarity ensues.
+    "test_info: platformBirthDate is consistent");
+    // Note: Previous versions of this test checked whether the file
+    // has been created after the start of the test. Unfortunately,
+    // this sometimes failed under Windows, in specific circumstances:
+    // if the file has been removed at the start of the test and
+    // recreated immediately, the Windows file system detects this and
+    // decides that the file was actually truncated rather than
+    // recreated, hence that it should keep its previous creation
+    // date.  Debugging hilarity ensues.
   });
 
   let change = stat.lastModificationDate;
-  ok(change.getTime() >= startMs
-     && change.getTime() <= stopMs,
-     "test_info: file has changed between the start of the test and now - " + start + ", " + stop + ", " + change);
+  info("Testing lastModificationDate: " + change);
+  ok(change.getTime() >= startMs && change.getTime() <= stopMs,
+     "test_info: lastModificationDate is consistent");
 
   // Test OS.File.prototype.stat on new file
   file = OS.File.open(filename);
@@ -695,23 +700,20 @@ function test_info() {
 
   stop = new Date();
 
-  // We round down/up by 1s as file system precision is lower than Date precision
-  startMs = start.getTime() - 1000;
-  stopMs  = stop.getTime() + 1000;
+  // Round up/down as above
+  startMs = start.getTime() - SLOPPY_FILE_SYSTEM_ADJUSTMENT;
+  stopMs  = stop.getTime() + SLOPPY_FILE_SYSTEM_ADJUSTMENT;
+  info("Testing stat 2 with bounds [ " + startMs + ", " + stopMs +" ]");
 
-  birth = stat.creationDate;
-  ok(birth.getTime() <= stopMs,
-      "test_info: file 2 was created between the start of the test and now - " + start +  ", " + stop + ", " + birth);
-
-  let access = stat.lastModificationDate;
-  ok(access.getTime() >= startMs
-     && access.getTime() <= stopMs,
-     "test_info: file 2 was accessed between the start of the test and now - " + start + ", " + stop + ", " + access);
+  let access = stat.lastAccessDate;
+  info("Testing lastAccessDate: " + access);
+  ok(access.getTime() >= startMs && access.getTime() <= stopMs,
+     "test_info: lastAccessDate is consistent");
 
   change = stat.lastModificationDate;
-  ok(change.getTime() >= startMs
-     && change.getTime() <= stopMs,
-     "test_info: file 2 has changed between the start of the test and now - " + start + ", " + stop + ", " + change);
+  info("Testing lastModificationDate 2: " + change);
+  ok(change.getTime() >= startMs && change.getTime() <= stopMs,
+     "test_info: lastModificationDate 2 is consistent");
 
   // Test OS.File.stat on directory
   stat = OS.File.stat(OS.File.getCurrentDirectory());
@@ -818,4 +820,24 @@ function test_exists_file()
   ok(!OS.File.exists(dir_name) + ".tmp", "test_exists_file: directory does not exist");
 
   info("test_exists_file: complete");
+}
+
+/**
+ * Test the file |remove| method.
+ */
+function test_remove_file()
+{
+  let absent_file_name = "test_osfile_front_absent.tmp";
+
+  // Check that removing absent files is handled correctly
+  let exn = should_throw(function() {
+    OS.File.remove(absent_file_name, {ignoreAbsent: false});
+  });
+  ok(!!exn, "test_remove_file: throws if there is no such file");
+
+  exn = should_throw(function() {
+    OS.File.remove(absent_file_name, {ignoreAbsent: true});
+    OS.File.remove(absent_file_name);
+  });
+  ok(!exn, "test_remove_file: ignoreAbsent works");
 }

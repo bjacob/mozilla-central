@@ -8,39 +8,29 @@
 #  error "Don't include this file directly"
 #endif
 
-template<class Alloc>
-nsTArray_base<Alloc>::nsTArray_base()
+template<class Alloc, class Copy>
+nsTArray_base<Alloc, Copy>::nsTArray_base()
   : mHdr(EmptyHdr())
   , mMarker(this)
 {
   MOZ_COUNT_CTOR(nsTArray_base);
 }
 
-template<class Alloc>
-nsTArray_base<Alloc>::~nsTArray_base() {
+template<class Alloc, class Copy>
+nsTArray_base<Alloc, Copy>::~nsTArray_base() {
   if (mHdr != EmptyHdr() && !UsesAutoArrayBuffer()) {
     Alloc::Free(mHdr);
   }
   MOZ_COUNT_DTOR(nsTArray_base);
 }
 
-template<class Alloc>
-const nsTArrayHeader* nsTArray_base<Alloc>::GetAutoArrayBufferUnsafe(size_t elemAlign) const {
+template<class Alloc, class Copy>
+const nsTArrayHeader* nsTArray_base<Alloc, Copy>::GetAutoArrayBufferUnsafe(size_t elemAlign) const {
   // Assuming |this| points to an nsAutoArray, we want to get a pointer to
   // mAutoBuf.  So just cast |this| to nsAutoArray* and read &mAutoBuf!
 
   const void* autoBuf = &reinterpret_cast<const nsAutoArrayBase<nsTArray<uint32_t>, 1>*>(this)->mAutoBuf;
 
-  // If we're on a 32-bit system and elemAlign is 8, we need to adjust our
-  // pointer to take into account the extra alignment in the auto array.
-#if 0
-  MOZ_STATIC_ASSERT(sizeof(void*) != 4 ||
-                    (MOZ_ALIGNOF(mozilla::AlignedElem<8>) == 8 &&
-                     sizeof(nsAutoTArray<mozilla::AlignedElem<8>, 1>) ==
-                       sizeof(void*) + sizeof(nsTArrayHeader) +
-                       4 + sizeof(mozilla::AlignedElem<8>)),
-                    "auto array padding wasn't what we expected");
-#endif
   // We don't support alignments greater than 8 bytes.
   NS_ABORT_IF_FALSE(elemAlign <= 4 || elemAlign == 8, "unsupported alignment.");
   if (sizeof(void*) == 4 && elemAlign == 8) {
@@ -50,8 +40,8 @@ const nsTArrayHeader* nsTArray_base<Alloc>::GetAutoArrayBufferUnsafe(size_t elem
   return reinterpret_cast<const Header*>(autoBuf);
 }
 
-template<class Alloc>
-bool nsTArray_base<Alloc>::UsesAutoArrayBuffer() const {
+template<class Alloc, class Copy>
+bool nsTArray_base<Alloc, Copy>::UsesAutoArrayBuffer() const {
   if (!mHdr->mIsAutoArray) {
     return false;
   }
@@ -85,8 +75,8 @@ bool nsTArray_base<Alloc>::UsesAutoArrayBuffer() const {
   // owned by this nsAutoTArray.  We statically assert that elem_type's
   // alignment is 8 bytes or less in nsAutoArrayBase.
 
-  MOZ_STATIC_ASSERT(sizeof(nsTArrayHeader) > 4,
-                    "see comment above");
+  static_assert(sizeof(nsTArrayHeader) > 4,
+                "see comment above");
 
 #ifdef DEBUG
   ptrdiff_t diff = reinterpret_cast<const char*>(GetAutoArrayBuffer(8)) -
@@ -98,9 +88,9 @@ bool nsTArray_base<Alloc>::UsesAutoArrayBuffer() const {
 }
 
 
-template<class Alloc>
+template<class Alloc, class Copy>
 typename Alloc::ResultTypeProxy
-nsTArray_base<Alloc>::EnsureCapacity(size_type capacity, size_type elemSize) {
+nsTArray_base<Alloc, Copy>::EnsureCapacity(size_type capacity, size_type elemSize) {
   // This should be the most common case so test this first
   if (capacity <= mHdr->mCapacity)
     return Alloc::SuccessResult();
@@ -158,13 +148,16 @@ nsTArray_base<Alloc>::EnsureCapacity(size_type capacity, size_type elemSize) {
   }
 
   Header *header;
-  if (UsesAutoArrayBuffer()) {
+  if (UsesAutoArrayBuffer() || !Copy::allowRealloc) {
     // Malloc() and copy
     header = static_cast<Header*>(Alloc::Malloc(bytesToAlloc));
     if (!header)
       return Alloc::FailureResult();
 
-    memcpy(header, mHdr, sizeof(Header) + Length() * elemSize);
+    Copy::CopyHeaderAndElements(header, mHdr, Length(), elemSize);
+
+    if (!UsesAutoArrayBuffer())
+      Alloc::Free(mHdr);
   } else {
     // Realloc() existing data
     header = static_cast<Header*>(Alloc::Realloc(mHdr, bytesToAlloc));
@@ -183,9 +176,9 @@ nsTArray_base<Alloc>::EnsureCapacity(size_type capacity, size_type elemSize) {
   return Alloc::SuccessResult();
 }
 
-template<class Alloc>
+template<class Alloc, class Copy>
 void
-nsTArray_base<Alloc>::ShrinkCapacity(size_type elemSize, size_t elemAlign) {
+nsTArray_base<Alloc, Copy>::ShrinkCapacity(size_type elemSize, size_t elemAlign) {
   if (mHdr == EmptyHdr() || UsesAutoArrayBuffer())
     return;
 
@@ -199,7 +192,7 @@ nsTArray_base<Alloc>::ShrinkCapacity(size_type elemSize, size_t elemAlign) {
 
     // Copy data, but don't copy the header to avoid overwriting mCapacity
     header->mLength = length;
-    memcpy(header + 1, mHdr + 1, length * elemSize);
+    Copy::CopyElements(header + 1, mHdr + 1, length, elemSize);
 
     Alloc::Free(mHdr);
     mHdr = header;
@@ -224,9 +217,9 @@ nsTArray_base<Alloc>::ShrinkCapacity(size_type elemSize, size_t elemAlign) {
   refgraph::SetType(mHdr);
 }
 
-template<class Alloc>
+template<class Alloc, class Copy>
 void
-nsTArray_base<Alloc>::ShiftData(index_type start,
+nsTArray_base<Alloc, Copy>::ShiftData(index_type start,
                                 size_type oldLen, size_type newLen,
                                 size_type elemSize, size_t elemAlign) {
   if (oldLen == newLen)
@@ -247,15 +240,14 @@ nsTArray_base<Alloc>::ShiftData(index_type start,
     start *= elemSize;
     newLen *= elemSize;
     oldLen *= elemSize;
-    num *= elemSize;
     char *base = reinterpret_cast<char*>(mHdr + 1) + start;
-    memmove(base + newLen, base + oldLen, num);
+    Copy::MoveElements(base + newLen, base + oldLen, num, elemSize);
   }
 }
 
-template<class Alloc>
+template<class Alloc, class Copy>
 bool
-nsTArray_base<Alloc>::InsertSlotsAt(index_type index, size_type count,
+nsTArray_base<Alloc, Copy>::InsertSlotsAt(index_type index, size_type count,
                                     size_type elementSize, size_t elemAlign)  {
   MOZ_ASSERT(index <= Length(), "Bogus insertion index");
   size_type newLen = Length() + count;
@@ -269,7 +261,7 @@ nsTArray_base<Alloc>::InsertSlotsAt(index_type index, size_type count,
   // Move the existing elements as needed.  Note that this will
   // change our mLength, so no need to call IncrementLength.
   ShiftData(index, 0, count, elementSize, elemAlign);
-      
+
   return true;
 }
 
@@ -281,18 +273,18 @@ nsTArray_base<Alloc>::InsertSlotsAt(index_type index, size_type count,
 //   * if array has an auto buffer and mHdr would otherwise point to sEmptyHdr,
 //     array.mHdr points to array's auto buffer.
 
-template<class Alloc>
-nsTArray_base<Alloc>::IsAutoArrayRestorer::IsAutoArrayRestorer(
-  nsTArray_base<Alloc> &array,
-  size_t elemAlign) 
+template<class Alloc, class Copy>
+nsTArray_base<Alloc, Copy>::IsAutoArrayRestorer::IsAutoArrayRestorer(
+  nsTArray_base<Alloc, Copy> &array,
+  size_t elemAlign)
   : mArray(array),
     mElemAlign(elemAlign),
     mIsAuto(array.IsAutoArray())
 {
 }
 
-template<class Alloc>
-nsTArray_base<Alloc>::IsAutoArrayRestorer::~IsAutoArrayRestorer() {
+template<class Alloc, class Copy>
+nsTArray_base<Alloc, Copy>::IsAutoArrayRestorer::~IsAutoArrayRestorer() {
   // Careful: We don't want to set mIsAutoArray = 1 on sEmptyHdr.
   if (mIsAuto && mArray.mHdr == mArray.EmptyHdr()) {
     // Call GetAutoArrayBufferUnsafe() because GetAutoArrayBuffer() asserts
@@ -305,12 +297,11 @@ nsTArray_base<Alloc>::IsAutoArrayRestorer::~IsAutoArrayRestorer() {
   }
 }
 
-template<class Alloc>
+template<class Alloc, class Copy>
 template<class Allocator>
 typename Alloc::ResultTypeProxy
-nsTArray_base<Alloc>::SwapArrayElements(nsTArray_base<Allocator>& other,
-                                        size_type elemSize,
-                                        size_t elemAlign) {
+nsTArray_base<Alloc, Copy>::SwapArrayElements(nsTArray_base<Allocator, Copy>& other,
+                                              size_type elemSize, size_t elemAlign) {
 
   // EnsureNotUsingAutoArrayBuffer will set mHdr = sEmptyHdr even if we have an
   // auto buffer.  We need to point mHdr back to our auto buffer before we
@@ -318,7 +309,7 @@ nsTArray_base<Alloc>::SwapArrayElements(nsTArray_base<Allocator>& other,
   // IsAutoArrayRestorer takes care of this for us.
 
   IsAutoArrayRestorer ourAutoRestorer(*this, elemAlign);
-  typename nsTArray_base<Allocator>::IsAutoArrayRestorer otherAutoRestorer(other, elemAlign);
+  typename nsTArray_base<Allocator, Copy>::IsAutoArrayRestorer otherAutoRestorer(other, elemAlign);
 
   // If neither array uses an auto buffer which is big enough to store the
   // other array's elements, then ensure that both arrays use malloc'ed storage
@@ -338,7 +329,7 @@ nsTArray_base<Alloc>::SwapArrayElements(nsTArray_base<Allocator>& other,
     return Alloc::SuccessResult();
   }
 
-  // Swap the two arrays using memcpy, since at least one is using an auto
+  // Swap the two arrays by copying, since at least one is using an auto
   // buffer which is large enough to hold all of the other's elements.  We'll
   // copy the shorter array into temporary storage.
   //
@@ -382,9 +373,9 @@ nsTArray_base<Alloc>::SwapArrayElements(nsTArray_base<Allocator>& other,
     return Alloc::FailureResult();
   }
 
-  memcpy(temp.Elements(), smallerElements, smallerLength * elemSize);
-  memcpy(smallerElements, largerElements, largerLength * elemSize);
-  memcpy(largerElements, temp.Elements(), smallerLength * elemSize);
+  Copy::CopyElements(temp.Elements(), smallerElements, smallerLength, elemSize);
+  Copy::CopyElements(smallerElements, largerElements, largerLength, elemSize);
+  Copy::CopyElements(largerElements, temp.Elements(), smallerLength, elemSize);
 
   // Swap the arrays' lengths.
   NS_ABORT_IF_FALSE((other.Length() == 0 || mHdr != EmptyHdr()) &&
@@ -397,9 +388,9 @@ nsTArray_base<Alloc>::SwapArrayElements(nsTArray_base<Allocator>& other,
   return Alloc::SuccessResult();
 }
 
-template<class Alloc>
+template<class Alloc, class Copy>
 bool
-nsTArray_base<Alloc>::EnsureNotUsingAutoArrayBuffer(size_type elemSize) {
+nsTArray_base<Alloc, Copy>::EnsureNotUsingAutoArrayBuffer(size_type elemSize) {
   if (UsesAutoArrayBuffer()) {
 
     // If you call this on a 0-length array, we'll set that array's mHdr to
@@ -417,11 +408,11 @@ nsTArray_base<Alloc>::EnsureNotUsingAutoArrayBuffer(size_type elemSize) {
     if (!header)
       return false;
 
-    memcpy(header, mHdr, size);
+    Copy::CopyHeaderAndElements(header, mHdr, Length(), elemSize);
     header->mCapacity = Length();
     mHdr = header;
     refgraph::SetType(mHdr);
   }
-  
+
   return true;
 }

@@ -12,6 +12,7 @@
 #include "nsDataHashtable.h"
 #include "nsWeakReference.h"
 #include "nsAutoPtr.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/TimeStamp.h"
 #include "nsArenaMemoryStats.h"
 #include "mozilla/Attributes.h"
@@ -21,15 +22,15 @@
 // SizeOfExcludingThis from its super-class.  SizeOfIncludingThis() need not be
 // defined, it is inherited from nsINode.
 #define NS_DECL_SIZEOF_EXCLUDING_THIS \
-  virtual size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
+  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 class nsWindowSizes {
 public:
-  nsWindowSizes(nsMallocSizeOfFun aMallocSizeOf) {
+  nsWindowSizes(mozilla::MallocSizeOf aMallocSizeOf) {
     memset(this, 0, sizeof(nsWindowSizes));
     mMallocSizeOf = aMallocSizeOf;
   }
-  nsMallocSizeOfFun mMallocSizeOf;
+  mozilla::MallocSizeOf mMallocSizeOf;
   nsArenaMemoryStats mArenaStats;
   size_t mDOMElementNodes;
   size_t mDOMTextNodes;
@@ -107,49 +108,58 @@ public:
  *   the tab.
  *
  */
-class nsWindowMemoryReporter MOZ_FINAL : public nsIMemoryMultiReporter,
+class nsWindowMemoryReporter MOZ_FINAL : public nsIMemoryReporter,
                                          public nsIObserver,
                                          public nsSupportsWeakReference
 {
 public:
   NS_DECL_ISUPPORTS
-  NS_DECL_NSIMEMORYMULTIREPORTER
+  NS_DECL_NSIMEMORYREPORTER
   NS_DECL_NSIOBSERVER
 
   static void Init();
 
 private:
   /**
-   * GhostURLsReporter generates the "ghost-windows" multi-report, which
-   * includes a list of all ghost windows' URLs.  If you're only interested in
-   * this list, running this report is faster than running
-   * nsWindowMemoryReporter.
+   * GhostURLsReporter generates the list of all ghost windows' URLs.  If
+   * you're only interested in this list, running this report is faster than
+   * running nsWindowMemoryReporter.
    */
-  class GhostURLsReporter MOZ_FINAL : public nsIMemoryMultiReporter
+  class GhostURLsReporter MOZ_FINAL : public nsIMemoryReporter
   {
   public:
     GhostURLsReporter(nsWindowMemoryReporter* aWindowReporter);
 
     NS_DECL_ISUPPORTS
-    NS_DECL_NSIMEMORYMULTIREPORTER
+    NS_DECL_NSIMEMORYREPORTER
 
   private:
     nsRefPtr<nsWindowMemoryReporter> mWindowReporter;
   };
 
   /**
-   * nsGhostWindowReporter generates the "ghost-windows" single-report, which
-   * counts the number of ghost windows present.
+   * nsGhostWindowReporter generates the "ghost-windows" report, which counts
+   * the number of ghost windows present.
    */
-  class NumGhostsReporter MOZ_FINAL : public nsIMemoryReporter
+  class NumGhostsReporter MOZ_FINAL : public mozilla::MemoryUniReporter
   {
   public:
-    NumGhostsReporter(nsWindowMemoryReporter* aWindowReporter);
-
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIMEMORYREPORTER
+    NumGhostsReporter(nsWindowMemoryReporter* aWindowReporter)
+      : MemoryUniReporter("ghost-windows", KIND_OTHER, UNITS_COUNT,
+"The number of ghost windows present (the number of nodes underneath "
+"explicit/window-objects/top(none)/ghost, modulo race conditions).  A ghost "
+"window is not shown in any tab, does not share a domain with any non-detached "
+"windows, and has met these criteria for at least "
+"memory.ghost_window_timeout_seconds, or has survived a round of "
+"about:memory's minimize memory usage button.\n\n"
+"Ghost windows can happen legitimately, but they are often indicative of "
+"leaks in the browser or add-ons.")
+      , mWindowReporter(aWindowReporter)
+    {}
 
   private:
+    int64_t Amount() MOZ_OVERRIDE;
+
     nsRefPtr<nsWindowMemoryReporter> mWindowReporter;
   };
 

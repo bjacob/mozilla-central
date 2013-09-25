@@ -15,13 +15,10 @@
 #include "Role.h"
 #include "States.h"
 #include "TextLeafAccessible.h"
-#include "nsIMutableArray.h"
 
 #include "nsIDOMXULContainerElement.h"
-#include "nsIDOMXULSelectCntrlEl.h"
-#include "nsIDOMXULSelectCntrlItemEl.h"
-#include "nsWhitespaceTokenizer.h"
-#include "nsComponentManagerUtils.h"
+#include "nsIPersistentProperties2.h"
+#include "mozilla/dom/Element.h"
 
 using namespace mozilla;
 using namespace mozilla::a11y;
@@ -130,7 +127,7 @@ nsAccUtils::SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
                                        nsIContent *aStartContent,
                                        nsIContent *aTopContent)
 {
-  nsAutoString atomic, live, relevant, busy;
+  nsAutoString live, relevant, busy;
   nsIContent *ancestor = aStartContent;
   while (ancestor) {
 
@@ -159,10 +156,11 @@ nsAccUtils::SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
     }
 
     // container-atomic attribute
-    if (atomic.IsEmpty() &&
-        HasDefinedARIAToken(ancestor, nsGkAtoms::aria_atomic) &&
-        ancestor->GetAttr(kNameSpaceID_None, nsGkAtoms::aria_atomic, atomic))
-      SetAccAttr(aAttributes, nsGkAtoms::containerAtomic, atomic);
+    if (ancestor->AttrValueIs(kNameSpaceID_None, nsGkAtoms::aria_atomic,
+                              nsGkAtoms::_true, eCaseMatters)) {
+      SetAccAttr(aAttributes, nsGkAtoms::containerAtomic,
+                 NS_LITERAL_STRING("true"));
+    }
 
     // container-busy attribute
     if (busy.IsEmpty() &&

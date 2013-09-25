@@ -13,10 +13,9 @@
 #include "nsIScriptGlobalObject.h"
 #include "nsEventListenerManager.h"
 #include "nsIScriptContext.h"
+#include "MainThreadUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/EventTarget.h"
-
-class nsDOMEvent;
 
 #define NS_DOMEVENTTARGETHELPER_IID \
 { 0xda0e6d40, 0xc17b, 0x4937, \
@@ -47,7 +46,7 @@ public:
   NS_DECL_NSIDOMEVENTTARGET
   using mozilla::dom::EventTarget::RemoveEventListener;
   virtual void AddEventListener(const nsAString& aType,
-                                nsIDOMEventListener* aListener,
+                                mozilla::dom::EventListener* aListener,
                                 bool aCapture,
                                 const mozilla::dom::Nullable<bool>& aWantsUntrusted,
                                 mozilla::ErrorResult& aRv) MOZ_OVERRIDE;
@@ -121,11 +120,15 @@ public:
   nsIGlobalObject* GetParentObject() const { return mParentObject; }
   bool HasOrHasHadOwner() { return mHasOrHasHadOwnerWindow; }
 protected:
+  nsresult WantsUntrusted(bool* aRetVal);
+
   nsRefPtr<nsEventListenerManager> mListenerManager;
   // Dispatch a trusted, non-cancellable and non-bubbling event to |this|.
   nsresult DispatchTrustedEvent(const nsAString& aEventName);
   // Make |event| trusted and dispatch |aEvent| to |this|.
   nsresult DispatchTrustedEvent(nsIDOMEvent* aEvent);
+
+  virtual void LastRelease() {}
 private:
   // Inner window or sandbox.
   nsIGlobalObject*           mParentObject;
@@ -166,12 +169,18 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsDOMEventTargetHelper,
 #define IMPL_EVENT_HANDLER(_event)                                        \
   inline mozilla::dom::EventHandlerNonNull* GetOn##_event()               \
   {                                                                       \
-    return GetEventHandler(nsGkAtoms::on##_event);                        \
+    if (NS_IsMainThread()) {                                              \
+      return GetEventHandler(nsGkAtoms::on##_event, EmptyString());       \
+    }                                                                     \
+    return GetEventHandler(nullptr, NS_LITERAL_STRING(#_event));          \
   }                                                                       \
-  inline void SetOn##_event(mozilla::dom::EventHandlerNonNull* aCallback, \
-                            mozilla::ErrorResult& aRv)                    \
+  inline void SetOn##_event(mozilla::dom::EventHandlerNonNull* aCallback) \
   {                                                                       \
-    SetEventHandler(nsGkAtoms::on##_event, aCallback, aRv);               \
+    if (NS_IsMainThread()) {                                              \
+      SetEventHandler(nsGkAtoms::on##_event, EmptyString(), aCallback);   \
+    } else {                                                              \
+      SetEventHandler(nullptr, NS_LITERAL_STRING(#_event), aCallback);    \
+    }                                                                     \
   }
 
 /* Use this macro to declare functions that forward the behavior of this

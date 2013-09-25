@@ -4,14 +4,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "nsHttp.h"
 #include "SpdySession2.h"
 #include "SpdyStream2.h"
-#include "nsHttpConnection.h"
 #include "nsHttpHandler.h"
 #include "prnetdb.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/Preferences.h"
 #include "prprf.h"
 #include <algorithm>
 
@@ -26,8 +27,8 @@ namespace net {
 // SpdySession2 has multiple inheritance of things that implement
 // nsISupports, so this magic is taken from nsHttpPipeline that
 // implements some of the same abstract classes.
-NS_IMPL_THREADSAFE_ADDREF(SpdySession2)
-NS_IMPL_THREADSAFE_RELEASE(SpdySession2)
+NS_IMPL_ADDREF(SpdySession2)
+NS_IMPL_RELEASE(SpdySession2)
 NS_INTERFACE_MAP_BEGIN(SpdySession2)
     NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsAHttpConnection)
 NS_INTERFACE_MAP_END
@@ -68,8 +69,6 @@ SpdySession2::SpdySession2(nsAHttpTransaction *aHttpTransaction,
   LOG3(("SpdySession2::SpdySession2 %p transaction 1 = %p",
         this, aHttpTransaction));
 
-  mStreamIDHash.Init();
-  mStreamTransactionHash.Init();
   mConnection = aHttpTransaction->Connection();
   mInputFrameBuffer = new char[mInputFrameBufferSize];
   mDecompressBuffer = new char[mDecompressBufferSize];
@@ -332,6 +331,12 @@ SpdySession2::AddStream(nsAHttpTransaction *aHttpTransaction,
     LOG3(("SpdySession2::AddStream %p stream %p queued.",
           this, stream));
     mQueuedStreams.Push(stream);
+  }
+
+  if (!(aHttpTransaction->Caps() & NS_HTTP_ALLOW_KEEPALIVE)) {
+    LOG3(("SpdySession2::AddStream %p transaction %p forces keep-alive off.\n",
+          this, aHttpTransaction));
+    DontReuse();
   }
 
   return true;
@@ -717,7 +722,7 @@ SpdySession2::ConvertHeaders(nsDependentCSubstring &status,
       mFlatHTTPResponseHeaders.Append(nameString);
       mFlatHTTPResponseHeaders.Append(NS_LITERAL_CSTRING(": "));
 
-      // expand NULL bytes in the value string
+      // expand nullptr bytes in the value string
       for (char *cPtr = valueString.BeginWriting();
            cPtr && cPtr < valueString.EndWriting();
            ++cPtr) {
@@ -2211,7 +2216,7 @@ SpdySession2::RequestHead()
   MOZ_ASSERT(false,
              "SpdySession2::RequestHead() "
              "should not be called after SPDY is setup");
-  return NULL;
+  return nullptr;
 }
 
 uint32_t

@@ -13,6 +13,10 @@
 #include "cubeb/cubeb.h"
 #include "cubeb-internal.h"
 
+#ifdef DISABLE_LIBPULSE_DLOPEN
+#define WRAP(x) x
+#else
+#define WRAP(x) cubeb_##x
 #define MAKE_TYPEDEF(x) static typeof(x) * cubeb_##x
 MAKE_TYPEDEF(pa_channel_map_init_auto);
 MAKE_TYPEDEF(pa_context_connect);
@@ -55,7 +59,7 @@ MAKE_TYPEDEF(pa_threaded_mainloop_unlock);
 MAKE_TYPEDEF(pa_threaded_mainloop_wait);
 MAKE_TYPEDEF(pa_usec_to_bytes);
 #undef MAKE_TYPEDEF
-#define WRAP(x) cubeb_##x
+#endif
 
 static struct cubeb_ops const pulse_ops;
 
@@ -270,11 +274,12 @@ static void pulse_destroy(cubeb * ctx);
 /*static*/ int
 pulse_init(cubeb ** context, char const * context_name)
 {
-  void * libpulse;
+  void * libpulse = NULL;
   cubeb * ctx;
 
   *context = NULL;
 
+#ifndef DISABLE_LIBPULSE_DLOPEN
   libpulse = dlopen("libpulse.so.0", RTLD_LAZY);
   if (!libpulse) {
     return CUBEB_ERROR;
@@ -328,6 +333,7 @@ pulse_init(cubeb ** context, char const * context_name)
   LOAD(pa_threaded_mainloop_wait);
   LOAD(pa_usec_to_bytes);
 #undef LOAD
+#endif
 
   ctx = calloc(1, sizeof(*ctx));
   assert(ctx);
@@ -400,7 +406,9 @@ pulse_destroy(cubeb * ctx)
     WRAP(pa_threaded_mainloop_free)(ctx->mainloop);
   }
 
-  dlclose(ctx->libpulse);
+  if (ctx->libpulse) {
+    dlclose(ctx->libpulse);
+  }
   if (ctx->default_sink_info) {
     free(ctx->default_sink_info);
   }
@@ -560,6 +568,26 @@ pulse_stream_get_position(cubeb_stream * stm, uint64_t * position)
   return CUBEB_OK;
 }
 
+int
+pulse_stream_get_latency(cubeb_stream * stm, uint32_t * latency)
+{
+  pa_usec_t r_usec;
+  int negative, r;
+
+  if (!stm) {
+    return CUBEB_ERROR;
+  }
+
+  r = WRAP(pa_stream_get_latency)(stm->stream, &r_usec, &negative);
+  assert(!negative);
+  if (r) {
+    return CUBEB_ERROR;
+  }
+
+  *latency = r_usec * stm->sample_spec.rate / PA_USEC_PER_SEC;
+  return CUBEB_OK;
+}
+
 static struct cubeb_ops const pulse_ops = {
   .init = pulse_init,
   .get_backend_id = pulse_get_backend_id,
@@ -569,5 +597,6 @@ static struct cubeb_ops const pulse_ops = {
   .stream_destroy = pulse_stream_destroy,
   .stream_start = pulse_stream_start,
   .stream_stop = pulse_stream_stop,
-  .stream_get_position = pulse_stream_get_position
+  .stream_get_position = pulse_stream_get_position,
+  .stream_get_latency = pulse_stream_get_latency
 };

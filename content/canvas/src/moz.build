@@ -28,11 +28,21 @@ if CONFIG['MOZ_WEBGL']:
     CPP_SOURCES += [
         'WebGLActiveInfo.cpp',
         'WebGLBuffer.cpp',
+        'WebGL1Context.cpp',
+        'WebGL2Context.cpp',
         'WebGLContext.cpp',
+        'WebGLContextAsyncQueries.cpp',
+        'WebGLContextBuffers.cpp',
+        'WebGLContextLossTimer.cpp',
         'WebGLContextGL.cpp',
         'WebGLContextUtils.cpp',
         'WebGLContextReporter.cpp',
+        'WebGLContextState.cpp',
         'WebGLContextValidate.cpp',
+        'WebGLContextExtensions.cpp',
+        'WebGLContextFramebufferOperations.cpp',
+        'WebGLContextVertexArray.cpp',
+        'WebGLContextVertices.cpp',
         'WebGLElementArrayCache.cpp',
         'WebGLExtensionBase.cpp',
         'WebGLExtensionCompressedTextureATC.cpp',
@@ -40,23 +50,37 @@ if CONFIG['MOZ_WEBGL']:
         'WebGLExtensionCompressedTextureS3TC.cpp',
         'WebGLExtensionDebugRendererInfo.cpp',
         'WebGLExtensionDepthTexture.cpp',
+        'WebGLExtensionDrawBuffers.cpp',
         'WebGLExtensionElementIndexUint.cpp',
+        'WebGLExtensionInstancedArrays.cpp',
         'WebGLExtensionLoseContext.cpp',
         'WebGLExtensionStandardDerivatives.cpp',
         'WebGLExtensionTextureFilterAnisotropic.cpp',
         'WebGLExtensionTextureFloat.cpp',
         'WebGLExtensionTextureFloatLinear.cpp',
+        'WebGLExtensionVertexArray.cpp',
         'WebGLFramebuffer.cpp',
         'WebGLObjectModel.cpp',
         'WebGLProgram.cpp',
+        'WebGLQuery.cpp',
         'WebGLRenderbuffer.cpp',
         'WebGLShader.cpp',
         'WebGLShaderPrecisionFormat.cpp',
         'WebGLTexelConversions.cpp',
         'WebGLTexture.cpp',
         'WebGLUniformLocation.cpp',
+        'WebGLVertexArray.cpp',
     ]
 else:
     CPP_SOURCES += [
         'WebGLContextNotSupported.cpp',
     ]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+MSVC_ENABLE_PGO = True
+
+LIBRARY_NAME = 'gkconcvs_s'
+

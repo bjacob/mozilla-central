@@ -8,10 +8,19 @@ const KEY = "ril.radio.disabled";
 SpecialPowers.addPermission("telephony", true, document);
 SpecialPowers.addPermission("settings-write", true, document);
 
-let settings = window.navigator.mozSettings;
-let telephony = window.navigator.mozTelephony;
+// Permission changes can't change existing Navigator.prototype
+// objects, so grab our objects from a new Navigator
+let ifr = document.createElement("iframe");
+let settings;
+let telephony;
 let number = "112";
 let outgoing;
+ifr.onload = function() {
+  settings = ifr.contentWindow.navigator.mozSettings;
+  telephony = ifr.contentWindow.navigator.mozTelephony;
+  getExistingCalls();
+};
+document.body.appendChild(ifr);
 
 function getExistingCalls() {
   runEmulatorCmd("gsm list", function(result) {
@@ -27,7 +36,7 @@ function getExistingCalls() {
 function cancelExistingCalls(callList) {
   if (callList.length && callList[0] != "OK") {
     // Existing calls remain; get rid of the next one in the list
-    nextCall = callList.shift().split(' ')[2].trim();
+    nextCall = callList.shift().split(/\s+/)[2].trim();
     log("Cancelling existing call '" + nextCall +"'");
     runEmulatorCmd("gsm cancel " + nextCall, function(result) {
       if (result[0] == "OK") {
@@ -155,5 +164,3 @@ function cleanUp() {
   SpecialPowers.removePermission("settings-write", document);
   finish();
 }
-
-getExistingCalls();

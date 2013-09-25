@@ -11,3 +11,13 @@ CPP_SOURCES += [
     'nsPrintProgressParams.cpp',
 ]
 
+LIBRARY_NAME = 'printingui_s'
+
+CMMSRCS += [
+    'nsPrintingPromptServiceX.mm',
+]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+

@@ -3,18 +3,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsINameSpaceManager.h"
 #include "nsMathMLFrame.h"
+#include "nsINameSpaceManager.h"
 #include "nsMathMLChar.h"
 #include "nsCSSPseudoElements.h"
+#include "nsMathMLElement.h"
 
 // used to map attributes into CSS rules
 #include "nsStyleSet.h"
 #include "nsAutoPtr.h"
 #include "nsDisplayList.h"
 #include "nsRenderingContext.h"
-#include "nsContentUtils.h"
-#include "nsIScriptError.h"
 
 eMathMLFrameType
 nsMathMLFrame::GetMathMLFrameType()
@@ -133,8 +132,7 @@ nsMathMLFrame::ResolveMathMLCharStyle(nsPresContext*  aPresContext,
     ResolvePseudoElementStyle(aContent->AsElement(), pseudoType,
                               aParentStyleContext);
 
-  if (newStyleContext)
-    aMathMLChar->SetStyleContext(newStyleContext);
+  aMathMLChar->SetStyleContext(newStyleContext);
 }
 
 /* static */ void
@@ -347,9 +345,6 @@ nsMathMLFrame::ParseNumericValue(const nsString&   aString,
 // Utils to map attributes into CSS rules (work-around to bug 69409 which
 // is not scheduled to be fixed anytime soon)
 //
-
-static const int32_t kMathMLversion1 = 1;
-static const int32_t kMathMLversion2 = 2;
 
 struct
 nsCSSMapping {

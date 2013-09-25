@@ -4,29 +4,33 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef BytecodeEmitter_h__
-#define BytecodeEmitter_h__
+#ifndef frontend_BytecodeEmitter_h
+#define frontend_BytecodeEmitter_h
 
 /*
  * JS bytecode generation.
  */
-#include "jsatom.h"
+
+#include "jscntxt.h"
 #include "jsopcode.h"
 #include "jsscript.h"
-#include "jspubtd.h"
 
 #include "frontend/ParseMaps.h"
-#include "frontend/SharedContext.h"
 #include "frontend/SourceNotes.h"
-
-#include "vm/ScopeObject.h"
 
 namespace js {
 namespace frontend {
 
+class FullParseHandler;
+class ObjectBox;
+class ParseNode;
+template <typename ParseHandler> class Parser;
+class SharedContext;
+class TokenStream;
+
 struct CGTryNoteList {
     Vector<JSTryNote> list;
-    CGTryNoteList(JSContext *cx) : list(cx) {}
+    CGTryNoteList(ExclusiveContext *cx) : list(cx) {}
 
     bool append(JSTryNoteKind kind, unsigned stackDepth, size_t start, size_t end);
     size_t length() const { return list.length(); }
@@ -47,7 +51,7 @@ struct CGObjectList {
 class CGConstList {
     Vector<Value> list;
   public:
-    CGConstList(JSContext *cx) : list(cx) {}
+    CGConstList(ExclusiveContext *cx) : list(cx) {}
     bool append(Value v) { JS_ASSERT_IF(v.isString(), v.toString()->isAtom()); return list.append(v); }
     size_t length() const { return list.length(); }
     void finish(ConstArray *array);
@@ -78,7 +82,7 @@ struct BytecodeEmitter
         uint32_t    lastColumn;     /* zero-based column index on currentLine of
                                        last SRC_COLSPAN-annotated opcode */
 
-        EmitSection(JSContext *cx, uint32_t lineNum)
+        EmitSection(ExclusiveContext *cx, uint32_t lineNum)
           : code(cx), notes(cx), lastNoteOffset(0), currentLine(lineNum), lastColumn(0)
         {}
     };
@@ -180,7 +184,7 @@ struct BytecodeEmitter
 
     bool needsImplicitThis();
 
-    void tellDebuggerAboutCompiledScript(JSContext *cx);
+    void tellDebuggerAboutCompiledScript(ExclusiveContext *cx);
 
     inline TokenStream *tokenStream();
 
@@ -207,37 +211,37 @@ struct BytecodeEmitter
  * Emit one bytecode.
  */
 ptrdiff_t
-Emit1(JSContext *cx, BytecodeEmitter *bce, JSOp op);
+Emit1(ExclusiveContext *cx, BytecodeEmitter *bce, JSOp op);
 
 /*
  * Emit two bytecodes, an opcode (op) with a byte of immediate operand (op1).
  */
 ptrdiff_t
-Emit2(JSContext *cx, BytecodeEmitter *bce, JSOp op, jsbytecode op1);
+Emit2(ExclusiveContext *cx, BytecodeEmitter *bce, JSOp op, jsbytecode op1);
 
 /*
  * Emit three bytecodes, an opcode with two bytes of immediate operands.
  */
 ptrdiff_t
-Emit3(JSContext *cx, BytecodeEmitter *bce, JSOp op, jsbytecode op1, jsbytecode op2);
+Emit3(ExclusiveContext *cx, BytecodeEmitter *bce, JSOp op, jsbytecode op1, jsbytecode op2);
 
 /*
  * Emit (1 + extra) bytecodes, for N bytes of op and its immediate operand.
  */
 ptrdiff_t
-EmitN(JSContext *cx, BytecodeEmitter *bce, JSOp op, size_t extra);
+EmitN(ExclusiveContext *cx, BytecodeEmitter *bce, JSOp op, size_t extra);
 
 /*
  * Emit code into bce for the tree rooted at pn.
  */
 bool
-EmitTree(JSContext *cx, BytecodeEmitter *bce, ParseNode *pn);
+EmitTree(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *pn);
 
 /*
  * Emit function code using bce for the tree rooted at body.
  */
 bool
-EmitFunctionScript(JSContext *cx, BytecodeEmitter *bce, ParseNode *body);
+EmitFunctionScript(ExclusiveContext *cx, BytecodeEmitter *bce, ParseNode *body);
 
 /*
  * Append a new source note of the given type (and therefore size) to bce's
@@ -246,21 +250,21 @@ EmitFunctionScript(JSContext *cx, BytecodeEmitter *bce, ParseNode *body);
  * memory.
  */
 int
-NewSrcNote(JSContext *cx, BytecodeEmitter *bce, SrcNoteType type);
+NewSrcNote(ExclusiveContext *cx, BytecodeEmitter *bce, SrcNoteType type);
 
 int
-NewSrcNote2(JSContext *cx, BytecodeEmitter *bce, SrcNoteType type, ptrdiff_t offset);
+NewSrcNote2(ExclusiveContext *cx, BytecodeEmitter *bce, SrcNoteType type, ptrdiff_t offset);
 
 int
-NewSrcNote3(JSContext *cx, BytecodeEmitter *bce, SrcNoteType type, ptrdiff_t offset1,
+NewSrcNote3(ExclusiveContext *cx, BytecodeEmitter *bce, SrcNoteType type, ptrdiff_t offset1,
                ptrdiff_t offset2);
 
 /* NB: this function can add at most one extra extended delta note. */
 bool
-AddToSrcNoteDelta(JSContext *cx, BytecodeEmitter *bce, jssrcnote *sn, ptrdiff_t delta);
+AddToSrcNoteDelta(ExclusiveContext *cx, BytecodeEmitter *bce, jssrcnote *sn, ptrdiff_t delta);
 
 bool
-FinishTakingSrcNotes(JSContext *cx, BytecodeEmitter *bce, jssrcnote *notes);
+FinishTakingSrcNotes(ExclusiveContext *cx, BytecodeEmitter *bce, jssrcnote *notes);
 
 /*
  * Finish taking source notes in cx's notePool, copying final notes to the new
@@ -297,4 +301,4 @@ BytecodeEmitter::countFinalSourceNotes()
 } /* namespace frontend */
 } /* namespace js */
 
-#endif /* BytecodeEmitter_h__ */
+#endif /* frontend_BytecodeEmitter_h */

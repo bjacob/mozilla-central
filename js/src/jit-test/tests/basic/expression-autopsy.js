@@ -1,8 +1,3 @@
-// |jit-test| no-ion
-//
-// We can't guarantee error identity when functions are Ion-compiled due to
-// optimization.
-
 function check_one(expected, f, err) {
     var failed = true;
     try {
@@ -81,6 +76,9 @@ check("o[4 + 'h']", "o['4h']");
 check("this.x");
 check("ieval(undef)", "ieval(...)");
 check("ieval.call()", "ieval.call(...)");
+check("ieval(...[])", "ieval(...)");
+check("ieval(...[undef])", "ieval(...)");
+check("ieval(...[undef, undef])", "ieval(...)");
 
 for (let tok of ["|", "^", "&", "==", "!==", "===", "!==", "<", "<=", ">", ">=",
                  ">>", "<<", ">>>", "+", "-", "*", "/", "%"]) {

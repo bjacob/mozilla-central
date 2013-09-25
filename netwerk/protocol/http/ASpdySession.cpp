@@ -4,6 +4,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "nsHttp.h"
 #include "nsHttpHandler.h"
 
@@ -24,8 +27,8 @@ ASpdySession::NewSpdySession(uint32_t version,
 {
   // This is a necko only interface, so we can enforce version
   // requests as a precondition
-  MOZ_ASSERT(version == SpdyInformation::SPDY_VERSION_2 ||
-             version == SpdyInformation::SPDY_VERSION_3,
+  MOZ_ASSERT(version == SPDY_VERSION_2 ||
+             version == SPDY_VERSION_3,
              "Unsupported spdy version");
 
   // Don't do a runtime check of IsSpdyV?Enabled() here because pref value
@@ -35,7 +38,7 @@ ASpdySession::NewSpdySession(uint32_t version,
 
   Telemetry::Accumulate(Telemetry::SPDY_VERSION2, version);
 
-  if (version == SpdyInformation::SPDY_VERSION_2)
+  if (version == SPDY_VERSION_2)
     return new SpdySession2(aTransaction, aTransport, aPriority);
 
   return new SpdySession3(aTransaction, aTransport, aPriority);

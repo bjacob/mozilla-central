@@ -7,12 +7,13 @@
 #ifndef TestBindingHeader_h
 #define TestBindingHeader_h
 
-#include "nsWrapperCache.h"
-#include "mozilla/ErrorResult.h"
 #include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/Date.h"
 #include "mozilla/dom/TypedArray.h"
-#include "nsCOMPtr.h"
 #include "mozilla/dom/UnionTypes.h"
+#include "mozilla/ErrorResult.h"
+#include "nsCOMPtr.h"
+#include "nsWrapperCache.h"
 
 // Forward declare this before we include TestCodeGenBinding.h, because that header relies on including
 // this one for it, for ParentDict. Hopefully it won't begin to rely on it in more fundamental ways.
@@ -275,7 +276,6 @@ public:
   TestInterface* ReceiveWeakSelf();
   TestInterface* ReceiveWeakNullableSelf();
   void PassSelf(TestInterface&);
-  void PassSelf2(NonNull<TestInterface>&);
   void PassNullableSelf(TestInterface*);
   already_AddRefed<TestInterface> NonNullSelf();
   void SetNonNullSelf(TestInterface&);
@@ -297,7 +297,6 @@ public:
   IndirectlyImplementedInterface* ReceiveWeakOther();
   IndirectlyImplementedInterface* ReceiveWeakNullableOther();
   void PassOther(IndirectlyImplementedInterface&);
-  void PassOther2(NonNull<IndirectlyImplementedInterface>&);
   void PassNullableOther(IndirectlyImplementedInterface*);
   already_AddRefed<IndirectlyImplementedInterface> NonNullOther();
   void SetNonNullOther(IndirectlyImplementedInterface&);
@@ -312,7 +311,6 @@ public:
   TestExternalInterface* ReceiveWeakExternal();
   TestExternalInterface* ReceiveWeakNullableExternal();
   void PassExternal(TestExternalInterface*);
-  void PassExternal2(TestExternalInterface*);
   void PassNullableExternal(TestExternalInterface*);
   already_AddRefed<TestExternalInterface> NonNullExternal();
   void SetNonNullExternal(TestExternalInterface*);
@@ -327,7 +325,6 @@ public:
   TestCallbackInterface* ReceiveWeakCallbackInterface();
   TestCallbackInterface* ReceiveWeakNullableCallbackInterface();
   void PassCallbackInterface(TestCallbackInterface&);
-  void PassCallbackInterface2(OwningNonNull<TestCallbackInterface>);
   void PassNullableCallbackInterface(TestCallbackInterface*);
   already_AddRefed<TestCallbackInterface> NonNullCallbackInterface();
   void SetNonNullCallbackInterface(TestCallbackInterface&);
@@ -388,21 +385,25 @@ public:
   void ReceiveSequenceOfSequences(nsTArray< nsTArray<int32_t> >&);
 
   // Typed array types
-  void PassArrayBuffer(ArrayBuffer&);
-  void PassNullableArrayBuffer(ArrayBuffer*);
+  void PassArrayBuffer(const ArrayBuffer&);
+  void PassNullableArrayBuffer(const Nullable<ArrayBuffer>&);
   void PassOptionalArrayBuffer(const Optional<ArrayBuffer>&);
-  void PassOptionalNullableArrayBuffer(const Optional<ArrayBuffer*>&);
-  void PassOptionalNullableArrayBufferWithDefaultValue(ArrayBuffer*);
-  void PassArrayBufferView(ArrayBufferView&);
-  void PassInt8Array(Int8Array&);
-  void PassInt16Array(Int16Array&);
-  void PassInt32Array(Int32Array&);
-  void PassUint8Array(Uint8Array&);
-  void PassUint16Array(Uint16Array&);
-  void PassUint32Array(Uint32Array&);
-  void PassUint8ClampedArray(Uint8ClampedArray&);
-  void PassFloat32Array(Float32Array&);
-  void PassFloat64Array(Float64Array&);
+  void PassOptionalNullableArrayBuffer(const Optional<Nullable<ArrayBuffer> >&);
+  void PassOptionalNullableArrayBufferWithDefaultValue(const Nullable<ArrayBuffer>&);
+  void PassArrayBufferView(const ArrayBufferView&);
+  void PassInt8Array(const Int8Array&);
+  void PassInt16Array(const Int16Array&);
+  void PassInt32Array(const Int32Array&);
+  void PassUint8Array(const Uint8Array&);
+  void PassUint16Array(const Uint16Array&);
+  void PassUint32Array(const Uint32Array&);
+  void PassUint8ClampedArray(const Uint8ClampedArray&);
+  void PassFloat32Array(const Float32Array&);
+  void PassFloat64Array(const Float64Array&);
+  void PassSequenceOfArrayBuffers(const Sequence<ArrayBuffer>&);
+  void PassSequenceOfNullableArrayBuffers(const Sequence<Nullable<ArrayBuffer> >&);
+  void PassVariadicTypedArray(const Sequence<Float32Array>&);
+  void PassVariadicNullableTypedArray(const Sequence<Nullable<Float32Array> >&);
   JSObject* ReceiveUint8Array(JSContext*);
 
   // DOMString types
@@ -479,6 +480,7 @@ public:
   void PassOptionalNullableObjectWithDefaultValue(JSContext*, JS::Handle<JSObject*>);
   void PassSequenceOfObject(JSContext*, const Sequence<JSObject*>&);
   void PassSequenceOfNullableObject(JSContext*, const Sequence<JSObject*>&);
+  void PassNullableSequenceOfObject(JSContext*, const Nullable<Sequence<JSObject*> >&);
   void PassOptionalNullableSequenceOfNullableSequenceOfObject(JSContext*, const Optional<Nullable<Sequence<Nullable<Sequence<JSObject*> > > > >&);
   void PassOptionalNullableSequenceOfNullableSequenceOfNullableObject(JSContext*, const Optional<Nullable<Sequence<Nullable<Sequence<JSObject*> > > > >&);
   JSObject* ReceiveObject(JSContext*);
@@ -488,15 +490,16 @@ public:
   void PassUnion(JSContext*, const ObjectOrLong& arg);
   void PassUnionWithNullable(JSContext* cx, const ObjectOrNullOrLong& arg)
   {
-    ObjectOrLong returnValue;
+    OwningObjectOrLong returnValue;
     if (arg.IsNull()) {
     } else if (arg.IsObject()) {
       JS::Rooted<JSObject*> obj(cx, arg.GetAsObject());
       JS_GetClass(obj);
-      //returnValue.SetAsObject(&obj);
+      returnValue.SetAsObject() = obj;
     } else {
       int32_t i = arg.GetAsLong();
       i += 1;
+      returnValue.SetAsLong() = i;
     }
   }
   void PassNullableUnion(JSContext*, const Nullable<ObjectOrLong>&);
@@ -510,6 +513,46 @@ public:
   //void PassUnionWithEnum(JSContext*, const TestEnumOrObject&);
   //void PassUnionWithCallback(JSContext*, const TestCallbackOrLong&);
   void PassUnionWithObject(JSContext*, const ObjectOrLong&);
+
+  void PassUnionWithDefaultValue1(const DoubleOrString& arg);
+  void PassUnionWithDefaultValue2(const DoubleOrString& arg);
+  void PassUnionWithDefaultValue3(const DoubleOrString& arg);
+  void PassUnionWithDefaultValue4(const FloatOrString& arg);
+  void PassUnionWithDefaultValue5(const FloatOrString& arg);
+  void PassUnionWithDefaultValue6(const FloatOrString& arg);
+  void PassUnionWithDefaultValue7(const UnrestrictedDoubleOrString& arg);
+  void PassUnionWithDefaultValue8(const UnrestrictedDoubleOrString& arg);
+  void PassUnionWithDefaultValue9(const UnrestrictedDoubleOrString& arg);
+  void PassUnionWithDefaultValue10(const UnrestrictedDoubleOrString& arg);
+  void PassUnionWithDefaultValue11(const UnrestrictedFloatOrString& arg);
+  void PassUnionWithDefaultValue12(const UnrestrictedFloatOrString& arg);
+  void PassUnionWithDefaultValue13(const UnrestrictedFloatOrString& arg);
+  void PassUnionWithDefaultValue14(const UnrestrictedFloatOrString& arg);
+
+  void PassNullableUnionWithDefaultValue1(const Nullable<DoubleOrString>& arg);
+  void PassNullableUnionWithDefaultValue2(const Nullable<DoubleOrString>& arg);
+  void PassNullableUnionWithDefaultValue3(const Nullable<DoubleOrString>& arg);
+  void PassNullableUnionWithDefaultValue4(const Nullable<FloatOrString>& arg);
+  void PassNullableUnionWithDefaultValue5(const Nullable<FloatOrString>& arg);
+  void PassNullableUnionWithDefaultValue6(const Nullable<FloatOrString>& arg);
+  void PassNullableUnionWithDefaultValue7(const Nullable<UnrestrictedDoubleOrString>& arg);
+  void PassNullableUnionWithDefaultValue8(const Nullable<UnrestrictedDoubleOrString>& arg);
+  void PassNullableUnionWithDefaultValue9(const Nullable<UnrestrictedDoubleOrString>& arg);
+  void PassNullableUnionWithDefaultValue10(const Nullable<UnrestrictedFloatOrString>& arg);
+  void PassNullableUnionWithDefaultValue11(const Nullable<UnrestrictedFloatOrString>& arg);
+  void PassNullableUnionWithDefaultValue12(const Nullable<UnrestrictedFloatOrString>& arg);
+
+  void ReceiveUnion(OwningCanvasPatternOrCanvasGradient&);
+  void ReceiveUnion2(JSContext*, OwningObjectOrLong&);
+  void ReceiveUnionContainingNull(OwningCanvasPatternOrNullOrCanvasGradient&);
+  void ReceiveNullableUnion(Nullable<OwningCanvasPatternOrCanvasGradient>&);
+  void ReceiveNullableUnion2(JSContext*, Nullable<OwningObjectOrLong>&);
+  void GetWritableUnion(OwningCanvasPatternOrCanvasGradient&);
+  void SetWritableUnion(const CanvasPatternOrCanvasGradient&);
+  void GetWritableUnionContainingNull(OwningCanvasPatternOrNullOrCanvasGradient&);
+  void SetWritableUnionContainingNull(const CanvasPatternOrNullOrCanvasGradient&);
+  void GetWritableNullableUnion(Nullable<OwningCanvasPatternOrCanvasGradient>&);
+  void SetWritableNullableUnion(const Nullable<CanvasPatternOrCanvasGradient>&);
 
   // Date types
   void PassDate(Date);
@@ -558,14 +601,24 @@ public:
   TestInterface* Overload1(const nsAString&, TestInterface&);
   void Overload2(TestInterface&);
   void Overload2(JSContext*, const Dict&);
+  void Overload2(bool);
   void Overload2(const nsAString&);
   void Overload2(Date);
   void Overload3(TestInterface&);
   void Overload3(const TestCallback&);
-  void Overload3(const nsAString&);
+  void Overload3(bool);
   void Overload4(TestInterface&);
   void Overload4(TestCallbackInterface&);
   void Overload4(const nsAString&);
+  void Overload5(int32_t);
+  void Overload5(TestEnum);
+  void Overload6(int32_t);
+  void Overload6(bool);
+  void Overload7(int32_t);
+  void Overload7(bool);
+  void Overload7(const nsCString&);
+  void Overload8(int32_t);
+  void Overload8(TestInterface&);
 
   // Variadic handling
   void PassVariadicThirdArg(const nsAString&, int32_t,
@@ -602,6 +655,12 @@ public:
   TestInterface* PutForwardsAttr();
   TestInterface* PutForwardsAttr2();
   TestInterface* PutForwardsAttr3();
+  JS::Value JsonifierShouldSkipThis(JSContext*);
+  void SetJsonifierShouldSkipThis(JSContext*, JS::Rooted<JS::Value>&);
+  TestParentInterface* JsonifierShouldSkipThis2();
+  void SetJsonifierShouldSkipThis2(TestParentInterface&);
+  TestCallbackInterface* JsonifierShouldSkipThis3();
+  void SetJsonifierShouldSkipThis3(TestCallbackInterface&);
   void ThrowingMethod(ErrorResult& aRv);
   bool GetThrowingAttr(ErrorResult& aRv) const;
   void SetThrowingAttr(bool arg, ErrorResult& aRv);
@@ -610,6 +669,9 @@ public:
   bool ThrowingSetterAttr() const;
   void SetThrowingSetterAttr(bool arg, ErrorResult& aRv);
   int16_t LegacyCall(JS::Value, uint32_t, TestInterface&);
+  void PassArgsWithDefaults(JSContext*, const Optional<int32_t>&,
+                            TestInterface*, const Dict&, double,
+                            const Optional<float>&);
 
   // Methods and properties imported via "implements"
   bool ImplementedProperty();
@@ -627,6 +689,10 @@ public:
   void DontEnforceRangeOrClamp(int8_t);
   void DoEnforceRange(int8_t);
   void DoClamp(int8_t);
+  void SetEnforcedByte(int8_t);
+  int8_t EnforcedByte();
+  void SetClampedByte(int8_t);
+  int8_t ClampedByte();
 
 private:
   // We add signatures here that _could_ start matching if the codegen
@@ -805,6 +871,28 @@ private:
   void PassVariadicAny(JSContext*, Sequence<JS::Value>&) MOZ_DELETE;
   void PassVariadicObject(JSContext*, Sequence<JSObject*>&) MOZ_DELETE;
   void PassVariadicNullableObject(JSContext*, Sequence<JSObject*>&) MOZ_DELETE;
+
+  // Ensure NonNull does not leak in
+  void PassSelf(NonNull<TestInterface>&) MOZ_DELETE;
+  void PassSelf(OwningNonNull<TestInterface>&) MOZ_DELETE;
+  void PassSelf(const NonNull<TestInterface>&) MOZ_DELETE;
+  void PassSelf(const OwningNonNull<TestInterface>&) MOZ_DELETE;
+  void PassOther(NonNull<IndirectlyImplementedInterface>&) MOZ_DELETE;
+  void PassOther(const NonNull<IndirectlyImplementedInterface>&) MOZ_DELETE;
+  void PassOther(OwningNonNull<IndirectlyImplementedInterface>&) MOZ_DELETE;
+  void PassOther(const OwningNonNull<IndirectlyImplementedInterface>&) MOZ_DELETE;
+  void PassCallbackInterface(OwningNonNull<TestCallbackInterface>&) MOZ_DELETE;
+  void PassCallbackInterface(const OwningNonNull<TestCallbackInterface>&) MOZ_DELETE;
+  void PassCallbackInterface(NonNull<TestCallbackInterface>&) MOZ_DELETE;
+  void PassCallbackInterface(const NonNull<TestCallbackInterface>&) MOZ_DELETE;
+  void PassCallback(OwningNonNull<TestCallback>&) MOZ_DELETE;
+  void PassCallback(const OwningNonNull<TestCallback>&) MOZ_DELETE;
+  void PassCallback(NonNull<TestCallback>&) MOZ_DELETE;
+  void PassCallback(const NonNull<TestCallback>&) MOZ_DELETE;
+  void PassString(const NonNull<nsAString>&) MOZ_DELETE;
+  void PassString(NonNull<nsAString>&) MOZ_DELETE;
+  void PassString(const OwningNonNull<nsAString>&) MOZ_DELETE;
+  void PassString(OwningNonNull<nsAString>&) MOZ_DELETE;
 };
 
 class TestIndexedGetterInterface : public nsISupports,

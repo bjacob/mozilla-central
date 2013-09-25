@@ -11,10 +11,10 @@
 #include <android/log.h>
 
 #include "nsGeoPosition.h"
-#include "nsPoint.h"
 #include "nsRect.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "nsIObserver.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/dom/Touch.h"
 #include "InputData.h"
@@ -197,7 +197,7 @@ public:
     float GetX(JNIEnv *env);
     float GetY(JNIEnv *env);
     float GetScale(JNIEnv *env);
-    void GetFixedLayerMargins(JNIEnv *env, gfx::Margin &aFixedLayerMargins);
+    void GetFixedLayerMargins(JNIEnv *env, LayerMargin &aFixedLayerMargins);
     float GetOffsetX(JNIEnv *env);
     float GetOffsetY(JNIEnv *env);
 
@@ -269,14 +269,14 @@ public:
     AndroidGeckoLayerClient() {}
     AndroidGeckoLayerClient(jobject jobj) { Init(jobj); }
 
-    void SetFirstPaintViewport(const LayerIntPoint& aOffset, float aZoom, const CSSRect& aCssPageRect);
+    void SetFirstPaintViewport(const LayerIntPoint& aOffset, const CSSToLayerScale& aZoom, const CSSRect& aCssPageRect);
     void SetPageRect(const CSSRect& aCssPageRect);
-    void SyncViewportInfo(const LayerIntRect& aDisplayPort, float aDisplayResolution, bool aLayersUpdated,
-                          ScreenPoint& aScrollOffset, float& aScaleX, float& aScaleY,
-                          gfx::Margin& aFixedLayerMargins, ScreenPoint& aOffset);
+    void SyncViewportInfo(const LayerIntRect& aDisplayPort, const CSSToLayerScale& aDisplayResolution,
+                          bool aLayersUpdated, ScreenPoint& aScrollOffset, CSSToScreenScale& aScale,
+                          LayerMargin& aFixedLayerMargins, ScreenPoint& aOffset);
     void SyncFrameMetrics(const ScreenPoint& aScrollOffset, float aZoom, const CSSRect& aCssPageRect,
-                          bool aLayersUpdated, const CSSRect& aDisplayPort, float aDisplayResolution,
-                          bool aIsFirstPaint, gfx::Margin& aFixedLayerMargins, ScreenPoint& aOffset);
+                          bool aLayersUpdated, const CSSRect& aDisplayPort, const CSSToLayerScale& aDisplayResolution,
+                          bool aIsFirstPaint, LayerMargin& aFixedLayerMargins, ScreenPoint& aOffset);
     bool ProgressiveUpdateCallback(bool aHasPendingNewThebesContent, const LayerRect& aDisplayPort, float aDisplayResolution, bool aDrawingCritical, gfx::Rect& aViewport, float& aScaleX, float& aScaleY);
     bool CreateFrame(AutoLocalJNIFrame *jniFrame, AndroidLayerRendererFrame& aFrame);
     bool ActivateProgram(AutoLocalJNIFrame *jniFrame);
@@ -530,6 +530,14 @@ public:
         return event;
     }
 
+    static AndroidGeckoEvent* MakeAddObserver(const nsAString &key, nsIObserver *observer) {
+        AndroidGeckoEvent *event = new AndroidGeckoEvent();
+        event->Init(ADD_OBSERVER);
+        event->mCharacters.Assign(key);
+        event->mObserver = observer;
+        return event;
+    }
+
     int Action() { return mAction; }
     int Type() { return mType; }
     bool AckNeeded() { return mAckNeeded; }
@@ -539,12 +547,14 @@ public:
     const nsTArray<float>& Pressures() { return mPressures; }
     const nsTArray<float>& Orientations() { return mOrientations; }
     const nsTArray<nsIntPoint>& PointRadii() { return mPointRadii; }
+    const nsTArray<nsString>& PrefNames() { return mPrefNames; }
     double X() { return mX; }
     double Y() { return mY; }
     double Z() { return mZ; }
     const nsIntRect& Rect() { return mRect; }
     nsAString& Characters() { return mCharacters; }
     nsAString& CharactersExtra() { return mCharactersExtra; }
+    nsAString& Data() { return mData; }
     int KeyCode() { return mKeyCode; }
     int MetaState() { return mMetaState; }
     uint32_t DomKeyLocation() { return mDomKeyLocation; }
@@ -570,13 +580,17 @@ public:
     nsGeoPosition* GeoPosition() { return mGeoPosition; }
     double Bandwidth() { return mBandwidth; }
     bool CanBeMetered() { return mCanBeMetered; }
+    bool IsWifi() { return mIsWifi; }
+    int DHCPGateway() { return mDHCPGateway; }
     short ScreenOrientation() { return mScreenOrientation; }
     RefCountedJavaObject* ByteBuffer() { return mByteBuffer; }
     int Width() { return mWidth; }
     int Height() { return mHeight; }
+    int RequestId() { return mCount; } // for convenience
     nsTouchEvent MakeTouchEvent(nsIWidget* widget);
     MultiTouchInput MakeMultiTouchInput(nsIWidget* widget);
     void UnionRect(nsIntRect const& aRect);
+    nsIObserver *Observer() { return mObserver; }
 
 protected:
     int mAction;
@@ -600,13 +614,17 @@ protected:
     int mRangeForeColor, mRangeBackColor, mRangeLineColor;
     double mX, mY, mZ;
     int mPointerIndex;
-    nsString mCharacters, mCharactersExtra;
+    nsString mCharacters, mCharactersExtra, mData;
     nsRefPtr<nsGeoPosition> mGeoPosition;
     double mBandwidth;
     bool mCanBeMetered;
+    bool mIsWifi;
+    int mDHCPGateway;
     short mScreenOrientation;
     nsRefPtr<RefCountedJavaObject> mByteBuffer;
     int mWidth, mHeight;
+    nsCOMPtr<nsIObserver> mObserver;
+    nsTArray<nsString> mPrefNames;
 
     void ReadIntArray(nsTArray<int> &aVals,
                       JNIEnv *jenv,
@@ -620,9 +638,14 @@ protected:
                         JNIEnv *jenv,
                         jfieldID field,
                         int32_t count);
+    void ReadStringArray(nsTArray<nsString> &aStrings,
+                         JNIEnv *jenv,
+                         jfieldID field);
     void ReadRectField(JNIEnv *jenv);
     void ReadCharactersField(JNIEnv *jenv);
     void ReadCharactersExtraField(JNIEnv *jenv);
+    void ReadDataField(JNIEnv *jenv);
+    void ReadStringFromJString(nsString &aString, JNIEnv *jenv, jstring s);
 
     uint32_t ReadDomKeyLocation(JNIEnv* jenv, jobject jGeckoEventObj);
 
@@ -645,6 +668,7 @@ protected:
 
     static jfieldID jCharactersField;
     static jfieldID jCharactersExtraField;
+    static jfieldID jDataField;
     static jfieldID jKeyCodeField;
     static jfieldID jMetaStateField;
     static jfieldID jDomKeyLocationField;
@@ -664,9 +688,12 @@ protected:
     static jfieldID jRangeBackColorField;
     static jfieldID jRangeLineColorField;
     static jfieldID jLocationField;
+    static jfieldID jPrefNamesField;
 
     static jfieldID jBandwidthField;
     static jfieldID jCanBeMeteredField;
+    static jfieldID jIsWifiField;
+    static jfieldID jDHCPGatewayField;
 
     static jfieldID jScreenOrientationField;
     static jfieldID jByteBufferField;
@@ -703,7 +730,25 @@ public:
         COMPOSITOR_RESUME = 30,
         NATIVE_GESTURE_EVENT = 31,
         IME_KEY_EVENT = 32,
+        CALL_OBSERVER = 33,
+        REMOVE_OBSERVER = 34,
+        LOW_MEMORY = 35,
+        NETWORK_LINK_CHANGE = 36,
+        TELEMETRY_HISTOGRAM_ADD = 37,
+        ADD_OBSERVER = 38,
+        PREFERENCES_OBSERVE = 39,
+        PREFERENCES_GET = 40,
+        PREFERENCES_REMOVE_OBSERVERS = 41,
         dummy_java_enum_list_end
+    };
+
+    enum {
+        // Memory pressue levels, keep in sync with those in MemoryMonitor.java
+        MEMORY_PRESSURE_NONE = 0,
+        MEMORY_PRESSURE_CLEANUP = 1,
+        MEMORY_PRESSURE_LOW = 2,
+        MEMORY_PRESSURE_MEDIUM = 3,
+        MEMORY_PRESSURE_HIGH = 4
     };
 
     enum {

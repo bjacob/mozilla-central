@@ -6,15 +6,11 @@
 
 #include "nsIMEStateManager.h"
 #include "nsCOMPtr.h"
-#include "nsViewManager.h"
 #include "nsIPresShell.h"
 #include "nsISupports.h"
-#include "nsPIDOMWindow.h"
-#include "nsIInterfaceRequestorUtils.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsPresContext.h"
-#include "nsIDOMWindow.h"
 #include "nsIDOMMouseEvent.h"
 #include "nsContentUtils.h"
 #include "nsINode.h"
@@ -31,12 +27,12 @@
 #include "mozilla/Services.h"
 #include "nsIFormControl.h"
 #include "nsIForm.h"
-#include "nsHTMLFormElement.h"
+#include "mozilla/dom/HTMLFormElement.h"
 #include "mozilla/Attributes.h"
-#include "nsEventDispatcher.h"
 #include "TextComposition.h"
 #include "mozilla/Preferences.h"
 #include "nsAsyncDOMEvent.h"
+#include "nsGUIEvent.h"
 
 using namespace mozilla;
 using namespace mozilla::widget;
@@ -51,7 +47,7 @@ class nsTextStateManager MOZ_FINAL : public nsISelectionListener,
 {
 public:
   nsTextStateManager()
-    : mObserving(false)
+    : mObserving(nsIMEUpdatePreference::NOTIFY_NOTHING)
     {
     }
 
@@ -79,7 +75,7 @@ private:
   void NotifyContentAdded(nsINode* aContainer, int32_t aStart, int32_t aEnd);
   void ObserveEditableNode();
 
-  bool mObserving;
+  nsIMEUpdatePreference::Notifications mObserving;
   uint32_t mPreAttrChangeLength;
 };
 
@@ -487,7 +483,7 @@ nsIMEStateManager::SetIMEState(const IMEState &aState,
           willSubmit = true;
         // is this an html form and does it only have a single text input element?
         } else if (formElement && formElement->Tag() == nsGkAtoms::form && formElement->IsHTML() &&
-                   static_cast<nsHTMLFormElement*>(formElement)->HasSingleTextControl()) {
+                   static_cast<dom::HTMLFormElement*>(formElement)->HasSingleTextControl()) {
           willSubmit = true;
         }
       }
@@ -587,10 +583,9 @@ nsIMEStateManager::NotifyIME(NotificationToIME aNotification,
       case REQUEST_TO_CANCEL_COMPOSITION:
         return composition ? aWidget->NotifyIME(aNotification) : NS_OK;
       default:
-        MOZ_NOT_REACHED("Unsupported notification");
-        return NS_ERROR_INVALID_ARG;
+        MOZ_CRASH("Unsupported notification");
     }
-    MOZ_NOT_REACHED(
+    MOZ_CRASH(
       "Failed to handle the notification for non-synthesized composition");
   }
 
@@ -737,9 +732,7 @@ nsTextStateManager::Init(nsIWidget* aWidget,
     return;
   }
 
-  if (mWidget->GetIMEUpdatePreference().mWantUpdates) {
-    ObserveEditableNode();
-  }
+  ObserveEditableNode();
 }
 
 void
@@ -748,18 +741,19 @@ nsTextStateManager::ObserveEditableNode()
   MOZ_ASSERT(mSel);
   MOZ_ASSERT(mRootContent);
 
-  // add selection change listener
-  nsCOMPtr<nsISelectionPrivate> selPrivate(do_QueryInterface(mSel));
-  NS_ENSURE_TRUE_VOID(selPrivate);
-  nsresult rv = selPrivate->AddSelectionListener(this);
-  NS_ENSURE_SUCCESS_VOID(rv);
-  rv = selPrivate->AddSelectionListener(this);
-  NS_ENSURE_SUCCESS_VOID(rv);
+  mObserving = mWidget->GetIMEUpdatePreference().mWantUpdates;
+  if (mObserving & nsIMEUpdatePreference::NOTIFY_SELECTION_CHANGE) {
+    // add selection change listener
+    nsCOMPtr<nsISelectionPrivate> selPrivate(do_QueryInterface(mSel));
+    NS_ENSURE_TRUE_VOID(selPrivate);
+    nsresult rv = selPrivate->AddSelectionListener(this);
+    NS_ENSURE_SUCCESS_VOID(rv);
+  }
 
-  // add text change observer
-  mRootContent->AddMutationObserver(this);
-
-  mObserving = true;
+  if (mObserving & nsIMEUpdatePreference::NOTIFY_TEXT_CHANGE) {
+    // add text change observer
+    mRootContent->AddMutationObserver(this);
+  }
 }
 
 void
@@ -777,13 +771,13 @@ nsTextStateManager::Destroy(void)
   }
   // Even if there are some pending notification, it'll never notify the widget.
   mWidget = nullptr;
-  if (mObserving && mSel) {
+  if ((mObserving & nsIMEUpdatePreference::NOTIFY_SELECTION_CHANGE) && mSel) {
     nsCOMPtr<nsISelectionPrivate> selPrivate(do_QueryInterface(mSel));
     if (selPrivate)
       selPrivate->RemoveSelectionListener(this);
   }
   mSel = nullptr;
-  if (mObserving && mRootContent) {
+  if ((mObserving & nsIMEUpdatePreference::NOTIFY_TEXT_CHANGE) && mRootContent) {
     mRootContent->RemoveMutationObserver(this);
   }
   mRootContent = nullptr;
@@ -1049,8 +1043,7 @@ nsIMEStateManager::IsEditableIMEState(nsIWidget* aWidget)
     case widget::IMEState::DISABLED:
       return false;
     default:
-      MOZ_NOT_REACHED("Unknown IME enable state");
-      return false;
+      MOZ_CRASH("Unknown IME enable state");
   }
 }
 

@@ -13,6 +13,7 @@ registerCleanupFunction(function () {
 });
 
 function test() {
+  requestLongerTimeout(2);
   waitForExplicitFinish();
   spawnNextTest();
 }
@@ -22,7 +23,10 @@ function spawnNextTest() {
     finish();
     return;
   }
-  imports.Task.spawn(tests.shift()).then(spawnNextTest, function onError(err) {
+
+  let nextTest = tests.shift();
+  info("starting sub-test " + nextTest.name);
+  imports.Task.spawn(nextTest).then(spawnNextTest, function onError(err) {
     ok(false, err);
     spawnNextTest();
   });
@@ -47,20 +51,29 @@ let tests = [
     let urls = [
       "http://www.example.com/0",
       "http://www.example.com/1",
+      // an item that will timeout to ensure timeouts work and we resume.
+      testPageURL({ wait: 2002 }),
       "http://www.example.com/2",
     ];
     let files = urls.map(fileForURL);
     files.forEach(f => ok(!f.exists(), "Thumbnail should not be cached yet."));
     urls.forEach(function (url) {
+      let isTimeoutTest = url.indexOf("wait") >= 0;
       imports.BackgroundPageThumbs.capture(url, {
+        timeout: isTimeoutTest ? 100 : 30000,
         onDone: function onDone(capturedURL) {
           ok(urls.length > 0, "onDone called, so URLs should still remain");
           is(capturedURL, urls.shift(),
              "Captured URL should be currently expected URL (i.e., " +
              "capture() callbacks should be called in the correct order)");
           let file = files.shift();
-          ok(file.exists(),
-             "Thumbnail should be cached after capture: " + file.path);
+          if (isTimeoutTest) {
+            ok(!file.exists(),
+               "Thumbnail shouldn't exist for timed out capture: " + file.path);
+          } else {
+            ok(file.exists(),
+               "Thumbnail should be cached after capture: " + file.path);
+          }
           if (!urls.length)
             deferred.resolve();
         },
@@ -84,48 +97,6 @@ let tests = [
            "Capture timed out so thumbnail should not be cached: " + file.path);
         deferred.resolve();
       },
-    });
-    yield deferred.promise;
-  },
-
-  function timeoutQueueing() {
-    let deferred = imports.Promise.defer();
-    let urls = [
-      { url: testPageURL({ wait: 2000 }), timeout: 30000 },
-      { url: testPageURL({ wait: 2001 }), timeout: 1000 },
-      { url: testPageURL({ wait: 2002 }), timeout: 0 },
-    ];
-
-    // The expected callback order is the reverse of the above, and the reverse
-    // of the order in which the captures are made.
-    let expectedOrder = urls.slice();
-    expectedOrder.reverse();
-    expectedOrder = expectedOrder.map(u => u.url);
-
-    let files = expectedOrder.map(fileForURL);
-    files.forEach(f => ok(!f.exists(), "Thumbnail should not be cached yet."));
-
-    urls.forEach(function ({ url, timeout }) {
-      imports.BackgroundPageThumbs.capture(url, {
-        timeout: timeout,
-        onDone: function onDone(capturedURL) {
-          ok(expectedOrder.length > 0,
-             "onDone called, so URLs should still remain");
-          is(capturedURL, expectedOrder.shift(),
-             "Captured URL should be currently expected URL (i.e., " +
-             "capture() callbacks should be called in the correct order)");
-          let file = files.shift();
-          if (timeout > 2000)
-            ok(file.exists(),
-               "Thumbnail should be cached after capture: " + file.path);
-          else
-            ok(!file.exists(),
-               "Capture timed out so thumbnail should not be cached: " +
-               file.path);
-          if (!expectedOrder.length)
-            deferred.resolve();
-        },
-      });
     });
     yield deferred.promise;
   },
@@ -168,15 +139,17 @@ let tests = [
 
     yield capture(url1);
     ok(file1.exists(), "First file should exist after capture.");
+    file1.remove(false);
 
     yield wait(2000);
     is(imports.BackgroundPageThumbs._thumbBrowser, undefined,
        "Thumb browser should be destroyed after timeout.");
+    imports.BackgroundPageThumbs._destroyBrowserTimeout = defaultTimeout;
 
     yield capture(url2);
     ok(file2.exists(), "Second file should exist after capture.");
+    file2.remove(false);
 
-    imports.BackgroundPageThumbs._destroyBrowserTimeout = defaultTimeout;
     isnot(imports.BackgroundPageThumbs._thumbBrowser, undefined,
           "Thumb browser should exist immediately after capture.");
   },
@@ -189,13 +162,51 @@ let tests = [
     let win = yield openPrivateWindow();
     let capturedURL = yield capture(url);
     is(capturedURL, url, "Captured URL should be URL passed to capture.");
-    ok(!file.exists(),
-       "Thumbnail file should not exist because a private window is open.");
+    ok(file.exists(),
+       "Thumbnail file should be created even when a private window is open.");
+    file.remove(false);
 
     win.close();
   },
 
-  function noCookies() {
+  function openPrivateWindowDuringCapture() {
+    let url = "http://example.com/";
+    let file = fileForURL(url);
+    ok(!file.exists(), "Thumbnail file should not already exist.");
+
+    let deferred = imports.Promise.defer();
+
+    let waitCount = 0;
+    function maybeFinish() {
+      if (++waitCount == 2)
+        deferred.resolve();
+    }
+
+    imports.BackgroundPageThumbs.capture(url, {
+      onDone: function (capturedURL) {
+        is(capturedURL, url, "Captured URL should be URL passed to capture.");
+        ok(file.exists(),
+           "Thumbnail file should be created even though a private window " +
+           "was opened during the capture.");
+        file.remove(false);
+        maybeFinish();
+      },
+    });
+
+    // Opening the private window at this point relies on a couple of
+    // implementation details: (1) The capture will start immediately and
+    // synchronously (since at this point in the test, the service is
+    // initialized and its queue is empty), and (2) when it starts the capture
+    // registers with the window watcher.
+    openPrivateWindow().then(function (win) {
+      win.close();
+      maybeFinish();
+    });
+
+    yield deferred.promise;
+  },
+
+  function noCookiesSent() {
     // Visit the test page in the browser and tell it to set a cookie.
     let url = testPageURL({ setGreenCookie: true });
     let tab = gBrowser.loadOneTab(url, { inBackground: false });
@@ -233,6 +244,29 @@ let tests = [
     yield deferred.promise;
   },
 
+  // check that if a page captured in the background attempts to set a cookie,
+  // that cookie is not saved for subsequent requests.
+  function noCookiesStored() {
+    let url = testPageURL({ setRedCookie: true });
+    let file = fileForURL(url);
+    ok(!file.exists(), "Thumbnail file should not exist before capture.");
+    yield capture(url);
+    ok(file.exists(), "Thumbnail file should exist after capture.");
+    file.remove(false);
+    // now load it up in a browser - it should *not* be red, otherwise the
+    // cookie above was saved.
+    let tab = gBrowser.loadOneTab(url, { inBackground: false });
+    let browser = tab.linkedBrowser;
+    yield onPageLoad(browser);
+
+    // The root element of the page shouldn't be red.
+    let redStr = "rgb(255, 0, 0)";
+    isnot(browser.contentDocument.documentElement.style.backgroundColor,
+          redStr,
+          "The page shouldn't be red.");
+    gBrowser.removeTab(tab);
+  },
+
   // the following tests attempt to display modal dialogs.  The test just
   // relies on the fact that if the dialog was displayed the test will hang
   // and timeout.  IOW - the tests would pass if the dialogs appear and are
@@ -242,7 +276,7 @@ let tests = [
   // appear - how long should the watcher be active before assuming it's not
   // going to appear?)
   function noAuthPrompt() {
-    let url = "http://mochi.test:8888/browser/browser/base/content/test/authenticate.sjs?user=anyone";
+    let url = "http://mochi.test:8888/browser/browser/base/content/test/general/authenticate.sjs?user=anyone";
     let file = fileForURL(url);
     ok(!file.exists(), "Thumbnail file should not already exist.");
 
@@ -254,7 +288,7 @@ let tests = [
   },
 
   function noAlert() {
-    let url = "data:text/html,<script>alert('yo!');</script>";
+    let url = "data:text/html,<script>try { alert('yo!'); } catch (e) {}</script>";
     let file = fileForURL(url);
     ok(!file.exists(), "Thumbnail file should not already exist.");
 
@@ -264,15 +298,76 @@ let tests = [
        "Thumbnail file should exist even though it alerted.");
     file.remove(false);
   },
+
+  function noDuplicates() {
+    let deferred = imports.Promise.defer();
+    let url = "http://example.com/1";
+    let file = fileForURL(url);
+    ok(!file.exists(), "Thumbnail file should not already exist.");
+    let numCallbacks = 0;
+    let doneCallback = function(doneUrl) {
+      is(doneUrl, url, "called back with correct url");
+      numCallbacks += 1;
+      // We will delete the file after the first callback, then check it
+      // still doesn't exist on the second callback, which should give us
+      // confidence that we didn't end up with 2 different captures happening
+      // for the same url...
+      if (numCallbacks == 1) {
+        ok(file.exists(), "Thumbnail file should now exist.");
+        file.remove(false);
+        return;
+      }
+      if (numCallbacks == 2) {
+        ok(!file.exists(), "Thumbnail file should still be deleted.");
+        // and that's all we expect, so we are done...
+        deferred.resolve();
+        return;
+      }
+      ok(false, "only expecting 2 callbacks");
+    }
+    imports.BackgroundPageThumbs.capture(url, {onDone: doneCallback});
+    imports.BackgroundPageThumbs.capture(url, {onDone: doneCallback});
+    yield deferred.promise;
+  },
+
+  function capIfMissing() {
+    let url = "http://example.com/";
+    let file = fileForURL(url);
+    ok(!file.exists(), "Thumbnail file should not already exist.");
+
+    let capturedURL = yield captureIfMissing(url);
+    is(capturedURL, url, "Captured URL should be URL passed to capture");
+    ok(file.exists(), "Thumbnail should be cached after capture: " + file.path);
+
+    let past = Date.now() - 1000000000;
+    let pastFudge = past + 30000;
+    file.lastModifiedTime = past;
+    ok(file.lastModifiedTime < pastFudge, "Last modified time should stick!");
+    capturedURL = yield captureIfMissing(url);
+    is(capturedURL, url, "Captured URL should be URL passed to second capture");
+    ok(file.exists(), "Thumbnail should remain cached after second capture: " +
+                      file.path);
+    ok(file.lastModifiedTime < pastFudge,
+       "File should not have been overwritten");
+
+    file.remove(false);
+  },
 ];
 
 function capture(url, options) {
+  return captureWithMethod("capture", url, options);
+}
+
+function captureIfMissing(url, options) {
+  return captureWithMethod("captureIfMissing", url, options);
+}
+
+function captureWithMethod(methodName, url, options={}) {
   let deferred = imports.Promise.defer();
-  options = options || {};
   options.onDone = function onDone(capturedURL) {
     deferred.resolve(capturedURL);
   };
-  imports.BackgroundPageThumbs.capture(url, options);
+  imports.BackgroundPageThumbs[methodName](url, options);
   return deferred.promise;
 }
 

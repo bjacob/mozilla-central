@@ -8,31 +8,16 @@
 #ifndef nsDocShell_h__
 #define nsDocShell_h__
 
-#include "nsIDOMNode.h"
-#include "nsIDOMNodeList.h"
-#include "nsIContentViewer.h"
-#include "nsInterfaceHashtable.h"
-#include "nsIScriptContext.h"
 #include "nsITimer.h"
-
 #include "nsIDocShell.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsIDocShellTreeNode.h"
 #include "nsIBaseWindow.h"
 #include "nsIScrollable.h"
 #include "nsITextScroll.h"
-#include "nsIDocShellTreeOwner.h"
 #include "nsIContentViewerContainer.h"
 #include "nsIDOMStorageManager.h"
-
 #include "nsDocLoader.h"
-#include "nsIURILoader.h"
-
-#include "nsWeakReference.h"
-
-// Local Includes
-#include "nsDSURIContentListener.h"
-#include "nsDocShellEditorData.h"
 
 // Helper Classes
 #include "nsCOMPtr.h"
@@ -46,36 +31,22 @@
 
 // Interfaces Needed
 #include "nsIDocCharset.h"
-#include "nsIGlobalHistory2.h"
 #include "nsIInterfaceRequestor.h"
-#include "nsIInterfaceRequestorUtils.h"
-#include "nsIPrompt.h"
 #include "nsIRefreshURI.h"
 #include "nsIScriptGlobalObjectOwner.h"
-#include "nsISHistory.h"
-#include "nsILayoutHistoryState.h"
-#include "nsIStringBundle.h"
-#include "nsISupportsArray.h"
 #include "nsIWebNavigation.h"
 #include "nsIWebPageDescriptor.h"
 #include "nsIWebProgressListener.h"
-#include "nsISHContainer.h"
 #include "nsIDocShellLoadInfo.h"
-#include "nsIURIFixup.h"
-#include "nsIWebBrowserFind.h"
-#include "nsIHttpChannel.h"
-#include "nsDocShellTransferableHooks.h"
 #include "nsIAuthPromptProvider.h"
-#include "nsISecureBrowserUI.h"
 #include "nsIObserver.h"
-#include "nsDocShellLoadTypes.h"
 #include "nsILoadContext.h"
-#include "nsIWidget.h"
 #include "nsIWebShellServices.h"
 #include "nsILinkHandler.h"
 #include "nsIClipboardCommands.h"
-#include "nsICommandManager.h"
 #include "nsCRT.h"
+#include "prtime.h"
+#include "nsRect.h"
 
 namespace mozilla {
 namespace dom {
@@ -89,6 +60,25 @@ class nsGlobalWindow;
 class nsIController;
 class nsIScrollableFrame;
 class OnLinkClickEvent;
+class nsDSURIContentListener;
+class nsDocShellEditorData;
+class nsIClipboardDragDropHookList;
+class nsICommandManager;
+class nsIContentViewer;
+class nsIDocument;
+class nsIDOMNode;
+class nsIDocShellTreeOwner;
+class nsIGlobalHistory2;
+class nsIHttpChannel;
+class nsIPrompt;
+class nsISHistory;
+class nsISecureBrowserUI;
+class nsIStringBundle;
+class nsISupportsArray;
+class nsIURIFixup;
+class nsIURILoader;
+class nsIWebBrowserFind;
+class nsIWidget;
 
 /* load commands were moved to nsIDocShell.h */
 /* load types were moved to nsDocShellLoadTypes.h */
@@ -108,7 +98,7 @@ class nsRefreshTimer : public nsITimerCallback
 public:
     nsRefreshTimer();
 
-    NS_DECL_ISUPPORTS
+    NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSITIMERCALLBACK
 
     int32_t GetDelay() { return mDelay ;}
@@ -289,6 +279,8 @@ protected:
     // Actually open a channel and perform a URI load.  Note: whatever owner is
     // passed to this function will be set on the channel.  Callers who wish to
     // not have an owner on the channel should just pass null.
+    // If aSrcdoc is not void, the load will be considered as a srcdoc load,
+    // and the contents of aSrcdoc will be loaded instead of aURI.
     virtual nsresult DoURILoad(nsIURI * aURI,
                                nsIURI * aReferrer,
                                bool aSendReferrer,
@@ -302,7 +294,8 @@ protected:
                                nsIRequest ** aRequest,
                                bool aIsNewWindowTarget,
                                bool aBypassClassifier,
-                               bool aForceAllowCookies);
+                               bool aForceAllowCookies,
+                               const nsAString &aSrcdoc);
     NS_IMETHOD AddHeadersToChannel(nsIInputStream * aHeadersData, 
                                   nsIChannel * aChannel);
     virtual nsresult DoChannelLoad(nsIChannel * aChannel,
@@ -516,9 +509,6 @@ protected:
     nsresult   EnsureTransferableHookData();
     NS_IMETHOD EnsureFind();
     nsresult   RefreshURIFromQueue();
-    NS_IMETHOD DisplayLoadError(nsresult aError, nsIURI *aURI,
-                                const PRUnichar *aURL,
-                                nsIChannel* aFailedChannel = nullptr);
     NS_IMETHOD LoadErrorPage(nsIURI *aURI, const PRUnichar *aURL,
                              const char *aErrorPage,
                              const PRUnichar *aErrorType,
@@ -639,8 +629,6 @@ protected:
     // helpers for executing commands
     nsresult GetControllerForCommand(const char *inCommand,
                                      nsIController** outController);
-    nsresult IsCommandEnabled(const char * inCommand, bool* outEnabled);
-    nsresult DoCommand(const char * inCommand);
     nsresult EnsureCommandHandler();
 
     nsIChannel* GetCurrentDocChannel();
@@ -655,7 +643,11 @@ protected:
 
     void ClearFrameHistory(nsISHEntry* aEntry);
 
-    nsresult MaybeInitTiming();
+    /**
+     * Initializes mTiming if it isn't yet.
+     * After calling this, mTiming is non-null.
+     */
+    void MaybeInitTiming();
 
     // Event type dispatched by RestorePresentation
     class RestorePresentationEvent : public nsRunnable {
@@ -806,6 +798,7 @@ protected:
     bool                       mAllowMedia;
     bool                       mAllowDNSPrefetch;
     bool                       mAllowWindowControl;
+    bool                       mAllowContentRetargeting;
     bool                       mCreatingDocument; // (should be) debugging only
     bool                       mUseErrorPages;
     bool                       mObserveErrorPages;
@@ -848,6 +841,7 @@ protected:
 #endif
     bool                       mAffectPrivateSessionLifetime;
     uint64_t                   mHistoryID;
+    uint32_t                   mDefaultLoadFlags;
 
     static nsIURIFixup *sURIFixup;
 
@@ -874,6 +868,13 @@ private:
     int32_t           mParentCharsetSource;
     nsCString         mOriginalUriString;
 
+    // Separate function to do the actual name (i.e. not _top, _self etc.)
+    // searching for FindItemWithName.
+    nsresult DoFindItemWithName(const PRUnichar* aName,
+                                nsISupports* aRequestor,
+                                nsIDocShellTreeItem* aOriginalRequestor,
+                                nsIDocShellTreeItem** _retval);
+
 #ifdef DEBUG
     // We're counting the number of |nsDocShells| to help find leaks
     static unsigned long gNumberOfDocShells;
@@ -884,7 +885,7 @@ public:
     public:
         InterfaceRequestorProxy(nsIInterfaceRequestor* p);
         virtual ~InterfaceRequestorProxy();
-        NS_DECL_ISUPPORTS
+        NS_DECL_THREADSAFE_ISUPPORTS
         NS_DECL_NSIINTERFACEREQUESTOR
  
     protected:

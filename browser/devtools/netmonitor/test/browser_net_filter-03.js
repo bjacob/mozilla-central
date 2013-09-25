@@ -25,12 +25,12 @@ function test() {
       is(NetMonitorView.detailsPaneHidden, false,
         "The details pane should not be hidden after toggle button was pressed.");
 
-      testButtons();
+      testButtons("all");
       testContents([0, 1, 2, 3, 4, 5, 6], 7, 0)
         .then(() => {
           info("Sorting by size, ascending.");
           EventUtils.sendMouseEvent({ type: "click" }, $("#requests-menu-size-button"));
-          testButtons();
+          testButtons("all");
           return testContents([6, 4, 5, 0, 1, 2, 3], 7, 6);
         })
         .then(() => {
@@ -96,13 +96,13 @@ function test() {
       is(NetMonitorView.detailsPaneHidden, false,
         "The details pane should still be visible after filtering.");
 
-      is(RequestsMenu.orderedItems.length, aOrder.length,
+      is(RequestsMenu.items.length, aOrder.length,
         "There should be a specific amount of items in the requests menu.");
       is(RequestsMenu.visibleItems.length, aVisible,
         "There should be a specific amount of visbile items in the requests menu.");
 
       for (let i = 0; i < aOrder.length; i++) {
-        is(RequestsMenu.getItemAtIndex(i), RequestsMenu.orderedItems[i],
+        is(RequestsMenu.getItemAtIndex(i), RequestsMenu.items[i],
           "The requests menu items aren't ordered correctly. Misplaced item " + i + ".");
       }
 
@@ -177,7 +177,7 @@ function test() {
         });
       }
 
-      return Promise.resolve(null);
+      return promise.resolve(null);
     }
 
     let str = "'<p>'" + new Array(10).join(Math.random(10)) + "'</p>'";

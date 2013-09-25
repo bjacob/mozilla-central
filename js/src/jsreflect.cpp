@@ -8,23 +8,24 @@
 
 #include "jsreflect.h"
 
-#include <stdlib.h>
-
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Util.h"
 
-#include "jspubtd.h"
+#include <stdlib.h>
+
 #include "jsarray.h"
 #include "jsatom.h"
 #include "jsobj.h"
+#include "jspubtd.h"
 
 #include "frontend/Parser.h"
-#include "frontend/ParseNode-inl.h"
 #include "frontend/TokenStream.h"
 #include "js/CharacterEncoding.h"
 #include "vm/RegExpObject.h"
 
 #include "jsobjinlines.h"
+
+#include "frontend/ParseNode-inl.h"
 
 using namespace js;
 using namespace js::frontend;
@@ -32,7 +33,7 @@ using namespace js::frontend;
 using mozilla::ArrayLength;
 using mozilla::DebugOnly;
 
-char const *js::aopNames[] = {
+char const * const js::aopNames[] = {
     "=",    /* AOP_ASSIGN */
     "+=",   /* AOP_PLUS */
     "-=",   /* AOP_MINUS */
@@ -47,7 +48,7 @@ char const *js::aopNames[] = {
     "&="    /* AOP_BITAND */
 };
 
-char const *js::binopNames[] = {
+char const * const js::binopNames[] = {
     "==",         /* BINOP_EQ */
     "!=",         /* BINOP_NE */
     "===",        /* BINOP_STRICTEQ */
@@ -71,7 +72,7 @@ char const *js::binopNames[] = {
     "instanceof", /* BINOP_INSTANCEOF */
 };
 
-char const *js::unopNames[] = {
+char const * const js::unopNames[] = {
     "delete",  /* UNOP_DELETE */
     "-",       /* UNOP_NEG */
     "+",       /* UNOP_POS */
@@ -81,19 +82,21 @@ char const *js::unopNames[] = {
     "void"     /* UNOP_VOID */
 };
 
-char const *js::nodeTypeNames[] = {
+char const * const js::nodeTypeNames[] = {
 #define ASTDEF(ast, str, method) str,
 #include "jsast.tbl"
 #undef ASTDEF
     NULL
 };
 
-static char const *callbackNames[] = {
+static char const * const callbackNames[] = {
 #define ASTDEF(ast, str, method) method,
 #include "jsast.tbl"
 #undef ASTDEF
     NULL
 };
+
+enum YieldKind { Delegating, NotDelegating };
 
 typedef AutoValueVector NodeVector;
 
@@ -114,10 +117,27 @@ typedef AutoValueVector NodeVector;
 
 #define LOCAL_NOT_REACHED(expr)                                                        \
     JS_BEGIN_MACRO                                                                     \
-        JS_NOT_REACHED(expr);                                                          \
+        MOZ_ASSERT(false);                                                             \
         JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_BAD_PARSE_NODE);      \
         return false;                                                                  \
     JS_END_MACRO
+
+namespace {
+
+/* Set 'result' to obj[id] if any such property exists, else defaultValue. */
+static bool
+GetPropertyDefault(JSContext *cx, HandleObject obj, HandleId id, HandleValue defaultValue,
+                   MutableHandleValue result)
+{
+    bool found;
+    if (!JSObject::hasProperty(cx, obj, id, &found))
+        return false;
+    if (!found) {
+        result.set(defaultValue);
+        return true;
+    }
+    return JSObject::getGeneric(cx, obj, obj, id, result);
+}
 
 /*
  * Builder class that constructs JavaScript AST node objects. See:
@@ -172,7 +192,7 @@ class NodeBuilder
             if (!atom)
                 return false;
             RootedId id(cx, AtomToId(atom));
-            if (!baseops::GetPropertyDefault(cx, userobj, id, nullVal, &funv))
+            if (!GetPropertyDefault(cx, userobj, id, nullVal, &funv))
                 return false;
 
             if (funv.isNullOrUndefined()) {
@@ -180,7 +200,7 @@ class NodeBuilder
                 continue;
             }
 
-            if (!funv.isObject() || !funv.toObject().isFunction()) {
+            if (!funv.isObject() || !funv.toObject().is<JSFunction>()) {
                 js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_NOT_FUNCTION,
                                          JSDVG_SEARCH_STACK, funv, NullPtr(), NULL, NULL);
                 return false;
@@ -204,12 +224,12 @@ class NodeBuilder
                 return false;
             Value argv[] = { loc };
             AutoValueArray ava(cx, argv, 1);
-            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
         }
 
         Value argv[] = { NullValue() }; /* no zero-length arrays allowed! */
         AutoValueArray ava(cx, argv, 1);
-        return Invoke(cx, userv, fun, 0, argv, dst.address());
+        return Invoke(cx, userv, fun, 0, argv, dst);
     }
 
     bool callback(HandleValue fun, HandleValue v1, TokenPos *pos, MutableHandleValue dst) {
@@ -219,12 +239,12 @@ class NodeBuilder
                 return false;
             Value argv[] = { v1, loc };
             AutoValueArray ava(cx, argv, 2);
-            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
         }
 
         Value argv[] = { v1 };
         AutoValueArray ava(cx, argv, 1);
-        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
     }
 
     bool callback(HandleValue fun, HandleValue v1, HandleValue v2, TokenPos *pos,
@@ -235,12 +255,12 @@ class NodeBuilder
                 return false;
             Value argv[] = { v1, v2, loc };
             AutoValueArray ava(cx, argv, 3);
-            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
         }
 
         Value argv[] = { v1, v2 };
         AutoValueArray ava(cx, argv, 2);
-        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
     }
 
     bool callback(HandleValue fun, HandleValue v1, HandleValue v2, HandleValue v3, TokenPos *pos,
@@ -251,12 +271,12 @@ class NodeBuilder
                 return false;
             Value argv[] = { v1, v2, v3, loc };
             AutoValueArray ava(cx, argv, 4);
-            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
         }
 
         Value argv[] = { v1, v2, v3 };
         AutoValueArray ava(cx, argv, 3);
-        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
     }
 
     bool callback(HandleValue fun, HandleValue v1, HandleValue v2, HandleValue v3, HandleValue v4,
@@ -267,12 +287,12 @@ class NodeBuilder
                 return false;
             Value argv[] = { v1, v2, v3, v4, loc };
             AutoValueArray ava(cx, argv, 5);
-            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
         }
 
         Value argv[] = { v1, v2, v3, v4 };
         AutoValueArray ava(cx, argv, 4);
-        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
     }
 
     bool callback(HandleValue fun, HandleValue v1, HandleValue v2, HandleValue v3, HandleValue v4,
@@ -283,12 +303,12 @@ class NodeBuilder
                 return false;
             Value argv[] = { v1, v2, v3, v4, v5, loc };
             AutoValueArray ava(cx, argv, 6);
-            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+            return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
         }
 
         Value argv[] = { v1, v2, v3, v4, v5 };
         AutoValueArray ava(cx, argv, 5);
-        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst.address());
+        return Invoke(cx, userv, fun, ArrayLength(argv), argv, dst);
     }
 
     // WARNING: Returning a Handle is non-standard, but it works in this case
@@ -313,7 +333,7 @@ class NodeBuilder
     }
 
     bool newObject(MutableHandleObject dst) {
-        RootedObject nobj(cx, NewBuiltinClassInstance(cx, &ObjectClass));
+        RootedObject nobj(cx, NewBuiltinClassInstance(cx, &JSObject::class_));
         if (!nobj)
             return false;
 
@@ -583,7 +603,7 @@ class NodeBuilder
 
     bool thisExpression(TokenPos *pos, MutableHandleValue dst);
 
-    bool yieldExpression(HandleValue arg, TokenPos *pos, MutableHandleValue dst);
+    bool yieldExpression(HandleValue arg, YieldKind kind, TokenPos *pos, MutableHandleValue dst);
 
     bool comprehensionBlock(HandleValue patt, HandleValue src, bool isForEach, bool isForOf, TokenPos *pos,
                             MutableHandleValue dst);
@@ -614,13 +634,15 @@ class NodeBuilder
     bool propertyPattern(HandleValue key, HandleValue patt, TokenPos *pos, MutableHandleValue dst);
 };
 
+} /* anonymous namespace */
+
 bool
 NodeBuilder::newNode(ASTType type, TokenPos *pos, MutableHandleObject dst)
 {
     JS_ASSERT(type > AST_ERROR && type < AST_LIMIT);
 
     RootedValue tv(cx);
-    RootedObject node(cx, NewBuiltinClassInstance(cx, &ObjectClass));
+    RootedObject node(cx, NewBuiltinClassInstance(cx, &JSObject::class_));
     if (!node ||
         !setNodeLoc(node, pos) ||
         !atomValue(nodeTypeNames[type], &tv) ||
@@ -1222,13 +1244,23 @@ NodeBuilder::thisExpression(TokenPos *pos, MutableHandleValue dst)
 }
 
 bool
-NodeBuilder::yieldExpression(HandleValue arg, TokenPos *pos, MutableHandleValue dst)
+NodeBuilder::yieldExpression(HandleValue arg, YieldKind kind, TokenPos *pos, MutableHandleValue dst)
 {
     RootedValue cb(cx, callbacks[AST_YIELD_EXPR]);
-    if (!cb.isNull())
-        return callback(cb, opt(arg), pos, dst);
+    RootedValue delegateVal(cx);
 
-    return newNode(AST_YIELD_EXPR, pos, "argument", arg, dst);
+    switch (kind) {
+      case Delegating:
+        delegateVal = BooleanValue(true);
+        break;
+      case NotDelegating:
+        delegateVal = BooleanValue(false);
+        break;
+    }
+
+    if (!cb.isNull())
+        return callback(cb, opt(arg), delegateVal, pos, dst);
+    return newNode(AST_YIELD_EXPR, pos, "argument", arg, "delegate", delegateVal, dst);
 }
 
 bool
@@ -1470,6 +1502,8 @@ NodeBuilder::function(ASTType type, TokenPos *pos,
                    dst);
 }
 
+namespace {
+
 /*
  * Serialization of parse nodes to JavaScript objects.
  *
@@ -1580,6 +1614,8 @@ class ASTSerializer
 
     bool program(ParseNode *pn, MutableHandleValue dst);
 };
+
+} /* anonymous namespace */
 
 AssignmentOperator
 ASTSerializer::aop(JSOp op)
@@ -2201,7 +2237,7 @@ ASTSerializer::leftAssociate(ParseNode *pn, MutableHandleValue dst)
         if (!expression(next, &right))
             return false;
 
-        TokenPos subpos = {pn->pn_pos.begin, next->pn_pos.end};
+        TokenPos subpos(pn->pn_pos.begin, next->pn_pos.end);
 
         if (logop) {
             if (!builder.logicalExpression(lor, left, right, &subpos, &left))
@@ -2573,13 +2609,22 @@ ASTSerializer::expression(ParseNode *pn, MutableHandleValue dst)
       case PNK_NULL:
         return literal(pn, dst);
 
+      case PNK_YIELD_STAR:
+      {
+        JS_ASSERT(pn->pn_pos.encloses(pn->pn_kid->pn_pos));
+
+        RootedValue arg(cx);
+        return expression(pn->pn_kid, &arg) &&
+               builder.yieldExpression(arg, Delegating, &pn->pn_pos, dst);
+      }
+
       case PNK_YIELD:
       {
         JS_ASSERT_IF(pn->pn_kid, pn->pn_pos.encloses(pn->pn_kid->pn_pos));
 
         RootedValue arg(cx);
         return optExpression(pn->pn_kid, &arg) &&
-               builder.yieldExpression(arg, &pn->pn_pos, dst);
+               builder.yieldExpression(arg, NotDelegating, &pn->pn_pos, dst);
       }
 
       case PNK_ARRAYCOMP:
@@ -2648,8 +2693,8 @@ ASTSerializer::literal(ParseNode *pn, MutableHandleValue dst)
 
       case PNK_REGEXP:
       {
-        RootedObject re1(cx, pn->pn_objbox ? pn->pn_objbox->object : NULL);
-        LOCAL_ASSERT(re1 && re1->isRegExp());
+        RootedObject re1(cx, pn->as<RegExpLiteral>().objbox()->object);
+        LOCAL_ASSERT(re1 && re1->is<RegExpObject>());
 
         RootedObject proto(cx);
         if (!js_GetClassPrototype(cx, JSProto_RegExp, &proto))
@@ -2786,12 +2831,8 @@ ASTSerializer::function(ParseNode *pn, ASTType type, MutableHandleValue dst)
 {
     RootedFunction func(cx, pn->pn_funbox->function());
 
-    bool isGenerator =
-#if JS_HAS_GENERATORS
-        pn->pn_funbox->isGenerator();
-#else
-        false;
-#endif
+    // FIXME: Provide more information (legacy generator vs star generator).
+    bool isGenerator = pn->pn_funbox->isGenerator();
 
     bool isExpression =
 #if JS_HAS_EXPR_CLOSURES
@@ -2953,7 +2994,7 @@ ASTSerializer::moduleOrFunctionBody(ParseNode *pn, TokenPos *pos, MutableHandleV
     return builder.blockStatement(elts, pos, dst);
 }
 
-static JSBool
+static bool
 reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -2961,12 +3002,12 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
     if (args.length() < 1) {
         JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_MORE_ARGS_NEEDED,
                              "Reflect.parse", "0", "s");
-        return JS_FALSE;
+        return false;
     }
 
-    RootedString src(cx, ToString<CanGC>(cx, args.handleAt(0)));
+    RootedString src(cx, ToString<CanGC>(cx, args[0]));
     if (!src)
-        return JS_FALSE;
+        return false;
 
     ScopedJSFreePtr<char> filename;
     uint32_t lineno = 1;
@@ -2980,7 +3021,7 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
         if (!arg.isObject()) {
             js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
                                      JSDVG_SEARCH_STACK, arg, NullPtr(), "not an object", NULL);
-            return JS_FALSE;
+            return false;
         }
 
         RootedObject config(cx, &arg.toObject());
@@ -2990,8 +3031,8 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
         /* config.loc */
         RootedId locId(cx, NameToId(cx->names().loc));
         RootedValue trueVal(cx, BooleanValue(true));
-        if (!baseops::GetPropertyDefault(cx, config, locId, trueVal, &prop))
-            return JS_FALSE;
+        if (!GetPropertyDefault(cx, config, locId, trueVal, &prop))
+            return false;
 
         loc = ToBoolean(prop);
 
@@ -2999,45 +3040,45 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
             /* config.source */
             RootedId sourceId(cx, NameToId(cx->names().source));
             RootedValue nullVal(cx, NullValue());
-            if (!baseops::GetPropertyDefault(cx, config, sourceId, nullVal, &prop))
-                return JS_FALSE;
+            if (!GetPropertyDefault(cx, config, sourceId, nullVal, &prop))
+                return false;
 
             if (!prop.isNullOrUndefined()) {
                 RootedString str(cx, ToString<CanGC>(cx, prop));
                 if (!str)
-                    return JS_FALSE;
+                    return false;
 
                 size_t length = str->length();
                 const jschar *chars = str->getChars(cx);
                 if (!chars)
-                    return JS_FALSE;
+                    return false;
 
                 TwoByteChars tbchars(chars, length);
                 filename = LossyTwoByteCharsToNewLatin1CharsZ(cx, tbchars).c_str();
                 if (!filename)
-                    return JS_FALSE;
+                    return false;
             }
 
             /* config.line */
             RootedId lineId(cx, NameToId(cx->names().line));
             RootedValue oneValue(cx, Int32Value(1));
-            if (!baseops::GetPropertyDefault(cx, config, lineId, oneValue, &prop) ||
+            if (!GetPropertyDefault(cx, config, lineId, oneValue, &prop) ||
                 !ToUint32(cx, prop, &lineno)) {
-                return JS_FALSE;
+                return false;
             }
         }
 
         /* config.builder */
         RootedId builderId(cx, NameToId(cx->names().builder));
         RootedValue nullVal(cx, NullValue());
-        if (!baseops::GetPropertyDefault(cx, config, builderId, nullVal, &prop))
-            return JS_FALSE;
+        if (!GetPropertyDefault(cx, config, builderId, nullVal, &prop))
+            return false;
 
         if (!prop.isNullOrUndefined()) {
             if (!prop.isObject()) {
                 js_ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
                                          JSDVG_SEARCH_STACK, prop, NullPtr(), "not an object", NULL);
-                return JS_FALSE;
+                return false;
             }
             builder = &prop.toObject();
         }
@@ -3046,34 +3087,34 @@ reflect_parse(JSContext *cx, uint32_t argc, jsval *vp)
     /* Extract the builder methods first to report errors before parsing. */
     ASTSerializer serialize(cx, loc, filename, lineno);
     if (!serialize.init(builder))
-        return JS_FALSE;
+        return false;
 
     JSStableString *stable = src->ensureStable(cx);
     if (!stable)
-        return JS_FALSE;
+        return false;
 
     const StableCharPtr chars = stable->chars();
     size_t length = stable->length();
     CompileOptions options(cx);
     options.setFileAndLine(filename, lineno);
     options.setCanLazilyParse(false);
-    Parser<FullParseHandler> parser(cx, options, chars.get(), length,
+    Parser<FullParseHandler> parser(cx, &cx->tempLifoAlloc(), options, chars.get(), length,
                                     /* foldConstants = */ false, NULL, NULL);
 
     serialize.setParser(&parser);
 
     ParseNode *pn = parser.parse(NULL);
     if (!pn)
-        return JS_FALSE;
+        return false;
 
     RootedValue val(cx);
     if (!serialize.program(pn, &val)) {
         args.rval().setNull();
-        return JS_FALSE;
+        return false;
     }
 
     args.rval().set(val);
-    return JS_TRUE;
+    return true;
 }
 
 static const JSFunctionSpec static_methods[] = {
@@ -3085,7 +3126,7 @@ JS_PUBLIC_API(JSObject *)
 JS_InitReflect(JSContext *cx, JSObject *objArg)
 {
     RootedObject obj(cx, objArg);
-    RootedObject Reflect(cx, NewObjectWithClassProto(cx, &ObjectClass, NULL, obj, SingletonObject));
+    RootedObject Reflect(cx, NewObjectWithClassProto(cx, &JSObject::class_, NULL, obj, SingletonObject));
     if (!Reflect)
         return NULL;
 

@@ -8,9 +8,11 @@ package org.mozilla.gecko.gfx;
 import org.mozilla.gecko.GeckoAccessibility;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
+import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.TouchEventInterceptor;
 import org.mozilla.gecko.ZoomConstraints;
+import org.mozilla.gecko.mozglue.GeneratableAndroidBridgeTarget;
 import org.mozilla.gecko.util.EventDispatcher;
 
 import android.content.Context;
@@ -119,6 +121,15 @@ public class LayerView extends FrameLayout {
     }
 
     public void geckoConnected() {
+        // See if we want to force 16-bit colour before doing anything
+        PrefsHelper.getPref("gfx.android.rgb16.force", new PrefsHelper.PrefHandlerBase() {
+            @Override public void prefValue(String pref, boolean force16bit) {
+                if (force16bit) {
+                    GeckoAppShell.setScreenDepthOverride(16);
+                }
+            }
+        });
+
         mLayerClient.notifyGeckoReady();
         addTouchInterceptor(new TouchEventInterceptor() {
             private PointF mInitialTouchPoint = null;
@@ -255,7 +266,7 @@ public class LayerView extends FrameLayout {
             // created, and it will be shown immediately at startup. Shortly
             // after, the tab's background color will be used before any content
             // is shown.
-            mTextureView.setBackgroundResource(R.color.background_normal);
+            mTextureView.setBackgroundColor(Color.WHITE);
             addView(mTextureView, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         } else {
             // This will stop PropertyAnimator from creating a drawing cache (i.e. a bitmap)
@@ -263,7 +274,7 @@ public class LayerView extends FrameLayout {
             setWillNotCacheDrawing(false);
 
             mSurfaceView = new LayerSurfaceView(getContext(), this);
-            mSurfaceView.setBackgroundResource(R.color.background_normal);
+            mSurfaceView.setBackgroundColor(Color.WHITE);
             addView(mSurfaceView, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
 
             SurfaceHolder holder = mSurfaceView.getHolder();
@@ -391,6 +402,14 @@ public class LayerView extends FrameLayout {
         mRenderer.removeLayer(layer);
     }
 
+    public void postRenderTask(RenderTask task) {
+        mRenderer.postRenderTask(task);
+    }
+
+    public void removeRenderTask(RenderTask task) {
+        mRenderer.removeRenderTask(task);
+    }
+
     public int getMaxTextureSize() {
         return mRenderer.getMaxTextureSize();
     }
@@ -425,18 +444,20 @@ public class LayerView extends FrameLayout {
         return mGLController;
     }
 
-    private Bitmap getDrawable(int resId) {
+    private Bitmap getDrawable(String name) {
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inScaled = false;
-        return BitmapUtils.decodeResource(getContext(), resId, options);
+        Context context = getContext();
+        int resId = context.getResources().getIdentifier(name, "drawable", context.getPackageName());
+        return BitmapUtils.decodeResource(context, resId, options);
     }
 
     Bitmap getShadowPattern() {
-        return getDrawable(R.drawable.shadow);
+        return getDrawable("shadow");
     }
 
     Bitmap getScrollbarImage() {
-        return getDrawable(R.drawable.scrollbar);
+        return getDrawable("scrollbar");
     }
 
     /* When using a SurfaceView (mSurfaceView != null), resizing happens in two
@@ -487,7 +508,7 @@ public class LayerView extends FrameLayout {
         return mTextureView.getSurfaceTexture();
     }
 
-    /** This function is invoked by Gecko (compositor thread) via JNI; be careful when modifying signature. */
+    @GeneratableAndroidBridgeTarget(allowMultithread = true, stubName = "RegisterCompositorWrapper")
     public static GLController registerCxxCompositor() {
         try {
             LayerView layerView = GeckoAppShell.getLayerView();

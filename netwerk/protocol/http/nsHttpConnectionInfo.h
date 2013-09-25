@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* vim: set sw=4 ts=8 et tw=80 : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,11 +10,9 @@
 #include "nsHttp.h"
 #include "nsProxyInfo.h"
 #include "nsCOMPtr.h"
-#include "nsDependentString.h"
-#include "nsString.h"
-#include "plstr.h"
-#include "nsCRT.h"
-#include "nsIProtocolProxyService.h"
+#include "nsStringFwd.h"
+
+extern PRLogModuleInfo *gHttpLog;
 
 //-----------------------------------------------------------------------------
 // nsHttpConnectionInfo - holds the properties of a connection
@@ -24,43 +23,23 @@ class nsHttpConnectionInfo
 public:
     nsHttpConnectionInfo(const nsACString &host, int32_t port,
                          nsProxyInfo* proxyInfo,
-                         bool usingSSL=false)
-        : mRef(0)
-        , mProxyInfo(proxyInfo)
-        , mUsingSSL(usingSSL)
-        , mUsingConnect(false)
-    {
-        LOG(("Creating nsHttpConnectionInfo @%x\n", this));
-
-        mUsingHttpProxy = (proxyInfo && proxyInfo->IsHTTP());
-
-        if (mUsingHttpProxy) {
-            mUsingConnect = mUsingSSL;  // SSL always uses CONNECT
-            uint32_t resolveFlags = 0;
-            if (NS_SUCCEEDED(mProxyInfo->GetResolveFlags(&resolveFlags)) &&
-                resolveFlags & nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL) {
-                mUsingConnect = true;
-            }
-        }
-
-        SetOriginServer(host, port);
-    }
+                         bool usingSSL=false);
 
    ~nsHttpConnectionInfo()
     {
-        LOG(("Destroying nsHttpConnectionInfo @%x\n", this));
+        PR_LOG(gHttpLog, 4, ("Destroying nsHttpConnectionInfo @%x\n", this));
     }
 
     nsrefcnt AddRef()
     {
-        nsrefcnt n = NS_AtomicIncrementRefcnt(mRef);
+        nsrefcnt n = ++mRef;
         NS_LOG_ADDREF(this, n, "nsHttpConnectionInfo", sizeof(*this));
         return n;
     }
 
     nsrefcnt Release()
     {
-        nsrefcnt n = NS_AtomicDecrementRefcnt(mRef);
+        nsrefcnt n = --mRef;
         NS_LOG_RELEASE(this, n, "nsHttpConnectionInfo");
         if (n == 0)
             delete this;
@@ -114,7 +93,7 @@ public:
     bool UsingProxy();
 
 private:
-    nsrefcnt               mRef;
+    mozilla::ThreadSafeAutoRefCnt mRef;
     nsCString              mHashKey;
     nsCString              mHost;
     int32_t                mPort;

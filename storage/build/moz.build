@@ -14,3 +14,7 @@ CPP_SOURCES += [
     'mozStorageModule.cpp',
 ]
 
+LIBRARY_NAME = 'storagecomps'
+
+LIBXUL_LIBRARY = True
+

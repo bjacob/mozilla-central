@@ -5,26 +5,36 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef jsgc_nursery_h___
-#define jsgc_nursery_h___
+#ifndef gc_Nursery_h
+#define gc_Nursery_h
 
 #ifdef JSGC_GENERATIONAL
 
-#include "ds/BitArray.h"
-#include "js/HashTable.h"
-
-#include "jsgc.h"
+#include "jsalloc.h"
 #include "jspubtd.h"
+
+#include "ds/BitArray.h"
+#include "gc/Heap.h"
+#include "js/GCAPI.h"
+#include "js/HashTable.h"
+#include "js/HeapAPI.h"
+#include "js/Value.h"
+
+namespace JS {
+struct Zone;
+}
 
 namespace js {
 
 class ObjectElements;
+class HeapSlot;
 
 namespace gc {
+class Cell;
 class MinorCollectionTracer;
 } /* namespace gc */
 
-namespace ion {
+namespace jit {
 class CodeGenerator;
 class MacroAssembler;
 class ICStubCompiler;
@@ -34,10 +44,10 @@ class BaselineCompiler;
 class Nursery
 {
   public:
-    const static int NumNurseryChunks = 8;
-    const static int LastNurseryChunk = NumNurseryChunks - 1;
-    const static size_t Alignment = gc::ChunkSize;
-    const static size_t NurserySize = gc::ChunkSize * NumNurseryChunks;
+    static const int NumNurseryChunks = 16;
+    static const int LastNurseryChunk = NumNurseryChunks - 1;
+    static const size_t Alignment = gc::ChunkSize;
+    static const size_t NurserySize = gc::ChunkSize * NumNurseryChunks;
 
     explicit Nursery(JSRuntime *rt)
       : runtime_(rt),
@@ -79,6 +89,9 @@ class Nursery
     ObjectElements *reallocateElements(JSContext *cx, JSObject *obj, ObjectElements *oldHeader,
                                        uint32_t oldCount, uint32_t newCount);
 
+    /* Free a slots array. */
+    void freeSlots(JSContext *cx, HeapSlot *slots);
+
     /* Add a slots to our tracking list if it is out-of-line. */
     void notifyInitialSlots(gc::Cell *cell, HeapSlot *slots);
 
@@ -92,6 +105,9 @@ class Nursery
      */
     template <typename T>
     JS_ALWAYS_INLINE bool getForwardedPointer(T **ref);
+
+    /* Forward a slots/elements pointer stored in an Ion frame. */
+    void forwardBufferPointer(HeapSlot **pSlotsElems);
 
   private:
     /*
@@ -122,8 +138,8 @@ class Nursery
     HugeSlotsSet hugeSlots;
 
     /* The marking bitmap for the fallback marker. */
-    const static size_t ThingAlignment = sizeof(Value);
-    const static size_t FallbackBitmapBits = NurserySize / ThingAlignment;
+    static const size_t ThingAlignment = sizeof(JS::Value);
+    static const size_t FallbackBitmapBits = NurserySize / ThingAlignment;
     BitArray<FallbackBitmapBits> fallbackBitmap;
 
 #ifdef DEBUG
@@ -131,16 +147,16 @@ class Nursery
      * In DEBUG builds, these bytes indicate the state of an unused segment of
      * nursery-allocated memory.
      */
-    const static uint8_t FreshNursery = 0x2a;
-    const static uint8_t SweptNursery = 0x2b;
-    const static uint8_t AllocatedThing = 0x2c;
+    static const uint8_t FreshNursery = 0x2a;
+    static const uint8_t SweptNursery = 0x2b;
+    static const uint8_t AllocatedThing = 0x2c;
 #endif
 
     /* The maximum number of slots allowed to reside inline in the nursery. */
-    const static size_t MaxNurserySlots = 100;
+    static const size_t MaxNurserySlots = 100;
 
     /* The amount of space in the mapped nursery available to allocations. */
-    const static size_t NurseryChunkUsableSize = gc::ChunkSize - sizeof(JSRuntime *);
+    static const size_t NurseryChunkUsableSize = gc::ChunkSize - sizeof(JSRuntime *);
 
     struct NurseryChunkLayout {
         char data[NurseryChunkUsableSize];
@@ -178,6 +194,10 @@ class Nursery
         return chunk(numActiveChunks_ - 1).end();
     }
 
+    JS_ALWAYS_INLINE bool isFullyGrown() const {
+        return numActiveChunks_ == NumNurseryChunks;
+    }
+
     JS_ALWAYS_INLINE uintptr_t currentEnd() const {
         JS_ASSERT(runtime_);
         JS_ASSERT(currentEnd_ == chunk(currentChunk_).end());
@@ -197,22 +217,26 @@ class Nursery
     HeapSlot *allocateHugeSlots(JSContext *cx, size_t nslots);
 
     /* Allocates a new GC thing from the tenured generation during minor GC. */
-    void *allocateFromTenured(Zone *zone, gc::AllocKind thingKind);
+    void *allocateFromTenured(JS::Zone *zone, gc::AllocKind thingKind);
 
     /*
      * Move the object at |src| in the Nursery to an already-allocated cell
      * |dst| in Tenured.
      */
+    void collectToFixedPoint(gc::MinorCollectionTracer *trc);
+    JS_ALWAYS_INLINE void traceObject(gc::MinorCollectionTracer *trc, JSObject *src);
+    JS_ALWAYS_INLINE void markSlots(gc::MinorCollectionTracer *trc, HeapSlot *vp, uint32_t nslots);
+    JS_ALWAYS_INLINE void markSlots(gc::MinorCollectionTracer *trc, HeapSlot *vp, HeapSlot *end);
+    JS_ALWAYS_INLINE void markSlot(gc::MinorCollectionTracer *trc, HeapSlot *slotp);
     void *moveToTenured(gc::MinorCollectionTracer *trc, JSObject *src);
     size_t moveObjectToTenured(JSObject *dst, JSObject *src, gc::AllocKind dstKind);
     size_t moveElementsToTenured(JSObject *dst, JSObject *src, gc::AllocKind dstKind);
     size_t moveSlotsToTenured(JSObject *dst, JSObject *src, gc::AllocKind dstKind);
 
-    /* Handle fallback marking. See the comment in MarkStoreBuffer. */
-    void markFallback(gc::Cell *cell);
-    void moveFallbackToTenured(gc::MinorCollectionTracer *trc);
-
-    void markStoreBuffer(gc::MinorCollectionTracer *trc);
+    /* Handle relocation of slots/elements pointers stored in Ion frames. */
+    void setSlotsForwardingPointer(HeapSlot *oldSlots, HeapSlot *newSlots, uint32_t nslots);
+    void setElementsForwardingPointer(ObjectElements *oldHeader, ObjectElements *newHeader,
+                                      uint32_t nelems);
 
     /*
      * Frees all non-live nursery-allocated things at the end of a minor
@@ -226,17 +250,15 @@ class Nursery
     void shrinkAllocableSpace();
 
     static void MinorGCCallback(JSTracer *trc, void **thingp, JSGCTraceKind kind);
-    static void MinorFallbackMarkingCallback(JSTracer *trc, void **thingp, JSGCTraceKind kind);
-    static void MinorFallbackFixupCallback(JSTracer *trc, void **thingp, JSGCTraceKind kind);
 
     friend class gc::MinorCollectionTracer;
-    friend class ion::CodeGenerator;
-    friend class ion::MacroAssembler;
-    friend class ion::ICStubCompiler;
-    friend class ion::BaselineCompiler;
+    friend class jit::CodeGenerator;
+    friend class jit::MacroAssembler;
+    friend class jit::ICStubCompiler;
+    friend class jit::BaselineCompiler;
 };
 
 } /* namespace js */
 
 #endif /* JSGC_GENERATIONAL */
-#endif /* jsgc_nursery_h___ */
+#endif /* gc_Nursery_h */

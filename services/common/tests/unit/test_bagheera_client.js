@@ -6,17 +6,14 @@
 Cu.import("resource://services-common/bagheeraclient.js");
 Cu.import("resource://services-common/rest.js");
 Cu.import("resource://testing-common/services-common/bagheeraserver.js");
+Cu.import("resource://gre/modules/Promise.jsm");
+Cu.import("resource://gre/modules/Task.jsm");
 
+function getClientAndServer() {
+  let server = new BagheeraServer();
+  server.start();
 
-const PORT = 8080;
-
-function getClientAndServer(port=PORT) {
-  let uri = "http://localhost";
-  let server = new BagheeraServer(uri);
-
-  server.start(port);
-
-  let client = new BagheeraClient(uri + ":" + port);
+  let client = new BagheeraClient(server.serverURI);
 
   return [client, server];
 }
@@ -27,13 +24,13 @@ function run_test() {
 }
 
 add_test(function test_constructor() {
-  let client = new BagheeraClient("http://localhost:8080/");
+  let client = new BagheeraClient("http://localhost:1234/");
 
   run_next_test();
 });
 
 add_test(function test_post_json_transport_failure() {
-  let client = new BagheeraClient("http://localhost:8080/");
+  let client = new BagheeraClient("http://localhost:1234/");
 
   client.uploadJSON("foo", "bar", {}).then(function onResult(result) {
     do_check_false(result.transportSuccess);
@@ -72,20 +69,55 @@ add_test(function test_post_json_bad_data() {
   });
 });
 
-add_test(function test_post_json_delete_obsolete() {
+add_task(function test_post_delete_multiple_obsolete_documents () {
   let [client, server] = getClientAndServer();
-  server.createNamespace("foo");
-  server.setDocument("foo", "obsolete", "Old payload");
+  let namespace = "foo";
+  let documents = [
+    [namespace, "one", "{v:1}"],
+    [namespace, "two", "{v:2}"],
+    [namespace, "three", "{v:3}"],
+    [namespace, "four", "{v:4}"],
+  ];
 
-  let promise = client.uploadJSON("foo", "new", {foo: "bar"}, {deleteID: "obsolete"});
-  promise.then(function onSuccess(result) {
+  try {
+    // create initial documents
+    server.createNamespace(namespace);
+    for (let [ns, id, payload] of documents) {
+      server.setDocument(ns, id, payload);
+      do_check_true(server.hasDocument(ns, id));
+    }
+
+    // Test uploading with deleting some documents.
+    let deleteIDs = [0, 1].map((no) => { return documents[no][1]; });
+    let result = yield client.uploadJSON(namespace, "new-1", {foo: "bar"}, {deleteIDs: deleteIDs});
     do_check_true(result.transportSuccess);
     do_check_true(result.serverSuccess);
-    do_check_true(server.hasDocument("foo", "new"));
-    do_check_false(server.hasDocument("foo", "obsolete"));
+    do_check_true(server.hasDocument(namespace, "new-1"));
+    for (let id of deleteIDs) {
+      do_check_false(server.hasDocument(namespace, id));
+    }
+    // Check if the documents that were not staged for deletion are still there.
+    for (let [,id,] of documents) {
+      if (deleteIDs.indexOf(id) == -1) {
+        do_check_true(server.hasDocument(namespace, id));
+      }
+    }
 
-    server.stop(run_next_test);
-  });
+    // Test upload without deleting documents.
+    let ids = Object.keys(server.namespaces[namespace]);
+    result = yield client.uploadJSON(namespace, "new-2", {foo: "bar"});
+    do_check_true(result.transportSuccess);
+    do_check_true(result.serverSuccess);
+    do_check_true(server.hasDocument(namespace, "new-2"));
+    // Check to see if all the original documents are still there.
+    for (let id of ids) {
+      do_check_true(deleteIDs.indexOf(id) !== -1 || server.hasDocument(namespace, id));
+    }
+  } finally {
+    let deferred = Promise.defer();
+    server.stop(deferred.resolve.bind(deferred));
+    yield deferred.promise;
+  }
 });
 
 add_test(function test_delete_document() {

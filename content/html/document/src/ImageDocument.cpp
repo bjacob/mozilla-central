@@ -54,11 +54,10 @@ namespace dom {
 class ImageListener : public MediaDocumentStreamListener
 {
 public:
+  NS_DECL_NSIREQUESTOBSERVER
+
   ImageListener(ImageDocument* aDocument);
   virtual ~ImageListener();
-
-  /* nsIRequestObserver */
-  NS_IMETHOD OnStartRequest(nsIRequest* request, nsISupports *ctxt);
 };
 
 ImageListener::ImageListener(ImageDocument* aDocument)
@@ -81,8 +80,7 @@ ImageListener::OnStartRequest(nsIRequest* request, nsISupports *ctxt)
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsPIDOMWindow> domWindow =
-    do_QueryInterface(imgDoc->GetScriptGlobalObject());
+  nsCOMPtr<nsPIDOMWindow> domWindow = imgDoc->GetWindow();
   NS_ENSURE_TRUE(domWindow, NS_ERROR_UNEXPECTED);
 
   // Do a ShouldProcess check to see whether to keep loading the image.
@@ -97,7 +95,7 @@ ImageListener::OnStartRequest(nsIRequest* request, nsISupports *ctxt)
   if (secMan) {
     secMan->GetChannelPrincipal(channel, getter_AddRefs(channelPrincipal));
   }
-  
+
   int16_t decision = nsIContentPolicy::ACCEPT;
   nsresult rv = NS_CheckContentProcessPolicy(nsIContentPolicy::TYPE_IMAGE,
                                              channelURI,
@@ -108,7 +106,7 @@ ImageListener::OnStartRequest(nsIRequest* request, nsISupports *ctxt)
                                              &decision,
                                              nsContentUtils::GetContentPolicy(),
                                              secMan);
-                                               
+
   if (NS_FAILED(rv) || NS_CP_REJECTED(decision)) {
     request->Cancel(NS_ERROR_CONTENT_BLOCKED);
     return NS_OK;
@@ -122,6 +120,16 @@ ImageListener::OnStartRequest(nsIRequest* request, nsISupports *ctxt)
   imageLoader->LoadImageWithChannel(channel, getter_AddRefs(mNextStream));
 
   return MediaDocumentStreamListener::OnStartRequest(request, ctxt);
+}
+
+NS_IMETHODIMP
+ImageListener::OnStopRequest(nsIRequest* aRequest, nsISupports* aCtxt, nsresult aStatus)
+{
+  ImageDocument* imgDoc = static_cast<ImageDocument*>(mDocument.get());
+  nsContentUtils::DispatchChromeEvent(imgDoc, static_cast<nsIDocument*>(imgDoc),
+                                      NS_LITERAL_STRING("ImageContentLoaded"),
+                                      true, true);
+  return MediaDocumentStreamListener::OnStopRequest(aRequest, aCtxt, aStatus);
 }
 
 ImageDocument::ImageDocument()
@@ -336,6 +344,11 @@ ImageDocument::ShrinkToFit()
   // origin now that we're showing a shrunk-to-window version.
   ScrollImageTo(0, 0, false);
 
+  if (!mImageContent) {
+    // ScrollImageTo flush destroyed our content.
+    return;
+  }
+
   SetModeClass(eShrinkToFit);
   
   mImageIsResized = true;
@@ -367,7 +380,7 @@ ImageDocument::ScrollImageTo(int32_t aX, int32_t aY, bool restoreImage)
     FlushPendingNotifications(Flush_Layout);
   }
 
-  nsIPresShell *shell = GetShell();
+  nsCOMPtr<nsIPresShell> shell = GetShell();
   if (!shell)
     return;
 
@@ -445,7 +458,7 @@ ImageDocument::Notify(imgIRequest* aRequest, int32_t aType, const nsIntRect* aDa
   nsDOMTokenList* classList = mImageContent->AsElement()->GetClassList();
   mozilla::ErrorResult rv;
   if (aType == imgINotificationObserver::DECODE_COMPLETE) {
-    if (mImageContent) {
+    if (mImageContent && !nsContentUtils::IsChildOfSameType(this)) {
       // Update the background-color of the image only after the
       // image has been decoded to prevent flashes of just the
       // background-color.
@@ -456,7 +469,7 @@ ImageDocument::Notify(imgIRequest* aRequest, int32_t aType, const nsIntRect* aDa
 
   if (aType == imgINotificationObserver::DISCARD) {
     // mImageContent can be null if the document is already destroyed
-    if (mImageContent) {
+    if (mImageContent && !nsContentUtils::IsChildOfSameType(this)) {
       // Remove any decoded-related styling when the image is unloaded.
       classList->Remove(NS_LITERAL_STRING("decoded"), rv);
       NS_ENSURE_SUCCESS(rv.ErrorCode(), rv.ErrorCode());
@@ -700,8 +713,8 @@ ImageDocument::UpdateTitleAndCharset()
   {
     "ImageTitleWithNeitherDimensionsNorFile",
     "ImageTitleWithoutDimensions",
-    "ImageTitleWithDimensions",
-    "ImageTitleWithDimensionsAndFile",
+    "ImageTitleWithDimensions2",
+    "ImageTitleWithDimensions2AndFile",
   };
 
   MediaDocument::UpdateTitleAndCharset(typeStr, formatNames,
@@ -744,8 +757,6 @@ ImageDocument::GetZoomLevel()
 
 } // namespace dom
 } // namespace mozilla
-
-DOMCI_DATA(ImageDocument, mozilla::dom::ImageDocument)
 
 nsresult
 NS_NewImageDocument(nsIDocument** aResult)

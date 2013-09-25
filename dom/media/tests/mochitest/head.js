@@ -113,18 +113,32 @@ function getUserMedia(constraints, onSuccess, onError) {
  *        Test method to execute after initialization
  */
 function runTest(aCallback) {
-  SimpleTest.waitForExplicitFinish();
-  SpecialPowers.pushPrefEnv({'set': [
-    ['media.peerconnection.enabled', true],
-    ['media.navigator.permission.disabled', true]]
-  }, function () {
-    try {
-      aCallback();
-    }
-    catch (err) {
-      unexpectedCallbackAndFinish()(err);
-    }
-  });
+  if (window.SimpleTest) {
+    // Running as a Mochitest.
+    SimpleTest.waitForExplicitFinish();
+    SpecialPowers.pushPrefEnv({'set': [
+      ['media.peerconnection.enabled', true],
+      ['media.navigator.permission.disabled', true]]
+    }, function () {
+      try {
+        aCallback();
+      }
+      catch (err) {
+        unexpectedCallbackAndFinish()(err);
+      }
+    });
+  } else {
+    // Steeplechase, let it call the callback.
+    window.run_test = function(is_initiator) {
+      var options = {is_local: is_initiator,
+                     is_remote: !is_initiator};
+      aCallback(options);
+    };
+    // Also load the steeplechase test code.
+    var s = document.createElement("script");
+    s.src = "/test.js";
+    document.head.appendChild(s);
+  }
 }
 
 /**
@@ -163,6 +177,29 @@ function checkMediaStreamTracks(constraints, mediaStream) {
     mediaStream.getAudioTracks());
   checkMediaStreamTracksByType(constraints, 'video',
     mediaStream.getVideoTracks());
+}
+
+/**
+ * Utility methods
+ */
+
+/**
+ * Returns the contents of a blob as text
+ *
+ * @param {Blob} blob
+          The blob to retrieve the contents from
+ * @param {Function} onSuccess
+          Callback with the blobs content as parameter
+ */
+function getBlobContent(blob, onSuccess) {
+  var reader = new FileReader();
+
+  // Listen for 'onloadend' which will always be called after a success or failure
+  reader.onloadend = function (event) {
+    onSuccess(event.target.result);
+  };
+
+  reader.readAsText(blob);
 }
 
 /**

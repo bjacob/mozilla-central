@@ -3,19 +3,12 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH		= @DEPTH@
-topsrcdir	= @top_srcdir@
-srcdir		= @srcdir@
-VPATH		= @srcdir@
-relativesrcdir  = @relativesrcdir@
-
-include $(DEPTH)/config/autoconf.mk
-
-HOST_CPPSRCS	= \
+# Preserve until HOST_SIMPLE_PROGRAMS has been converted.
+host_cppsrcs	= \
 		ListCSSProperties.cpp \
 		$(NULL)
 
-HOST_SIMPLE_PROGRAMS	= $(addprefix host_, $(HOST_CPPSRCS:.cpp=$(HOST_BIN_SUFFIX)))
+HOST_SIMPLE_PROGRAMS	= $(addprefix host_, $(host_cppsrcs:.cpp=$(HOST_BIN_SUFFIX)))
 
 # ParseCSS.cpp used to be built as a test program, but it was not
 # being used for anything, and recent changes to the CSS loader have
@@ -84,6 +77,11 @@ MOCHITEST_FILES =	test_acid3_test46.html \
 		test_bug716226.html \
 		test_bug765590.html \
 		test_bug798567.html \
+		test_bug798843_pref.html \
+		test_bug829816.html \
+		file_bug829816.css \
+		test_bug887741_at-rules_in_declaration_lists.html \
+		test_bug892929.html \
 		test_cascade.html \
 		test_ch_ex_no_infloops.html \
 		test_compute_data_with_start_struct.html \
@@ -94,6 +92,7 @@ MOCHITEST_FILES =	test_acid3_test46.html \
 		test_default_computed_style.html \
 		test_css_cross_domain.html \
 		test_css_eof_handling.html \
+		test_css_function_mismatched_parenthesis.html \
 		test_css_supports.html \
 		test_default_bidi_css.html \
 		test_descriptor_storage.html \
@@ -140,9 +139,13 @@ MOCHITEST_FILES =	test_acid3_test46.html \
 		test_parser_diagnostics_unprintables.html \
 		test_pixel_lengths.html \
 		test_pointer-events.html \
+		file_position_sticky.html \
+		test_position_sticky.html \
 		test_property_database.html \
 		test_priority_preservation.html \
 		test_property_syntax_errors.html \
+		test_redundant_font_download.html \
+		redundant_font_download.sjs \
 		test_rem_unit.html \
 		test_rule_insertion.html \
 		test_rule_serialization.html \
@@ -151,6 +154,9 @@ MOCHITEST_FILES =	test_acid3_test46.html \
 		test_selectors_on_anonymous_content.html \
 		test_shorthand_property_getters.html \
 		test_specified_value_serialization.html \
+		test_style_attribute_quirks.html \
+		test_style_attribute_standards.html \
+		style_attribute_tests.js \
 		test_style_struct_copy_constructors.html \
 		test_supports_rules.html \
 		test_system_font_serialization.html \
@@ -233,7 +239,7 @@ MOCHITEST_BROWSER_FILES = \
 
 include $(topsrcdir)/config/rules.mk
 
-DEFINES += -DMOZILLA_INTERNAL_API -D_IMPL_NS_LAYOUT
+DEFINES += -DMOZILLA_INTERNAL_API
 
 # FIXME: We don't seem to do auto-generated dependencies here.
 host_ListCSSProperties.$(OBJ_SUFFIX): $(srcdir)/../nsCSSPropList.h

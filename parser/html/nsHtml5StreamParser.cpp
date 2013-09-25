@@ -28,6 +28,7 @@
 #include "nsIWyciwygChannel.h"
 #include "nsIThreadRetargetableRequest.h"
 #include "nsPrintfCString.h"
+#include "nsNetUtil.h"
 
 #include "mozilla/dom/EncodingUtils.h"
 
@@ -81,6 +82,8 @@ NS_INTERFACE_TABLE_HEAD(nsHtml5StreamParser)
                       nsIThreadRetargetableStreamListener)
   NS_INTERFACE_TABLE_TO_MAP_SEGUE_CYCLE_COLLECTION(nsHtml5StreamParser)
 NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsHtml5StreamParser)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsHtml5StreamParser)
   tmp->DropTimer();
@@ -170,7 +173,6 @@ nsHtml5StreamParser::nsHtml5StreamParser(nsHtml5TreeOpExecutor* aExecutor,
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
   mFlushTimer->SetTarget(mThread);
-  mAtomTable.Init(); // we aren't checking for OOM anyway...
 #ifdef DEBUG
   mAtomTable.SetPermittedLookupThread(mThread);
 #endif
@@ -875,6 +877,14 @@ nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
   bool scriptingEnabled = mMode == LOAD_AS_DATA ?
                                    false : mExecutor->IsScriptEnabled();
   mOwner->StartTokenizer(scriptingEnabled);
+
+  bool isSrcdoc = false;
+  nsCOMPtr<nsIChannel> channel;
+  nsresult rv = GetChannel(getter_AddRefs(channel));
+  if (NS_SUCCEEDED(rv)) {
+    isSrcdoc = NS_IsSrcdocChannel(channel);
+  }
+  mTreeBuilder->setIsSrcdocDocument(isSrcdoc);
   mTreeBuilder->setScriptingEnabled(scriptingEnabled);
   mTreeBuilder->SetPreventScriptExecution(!((mMode == NORMAL) &&
                                             scriptingEnabled));
@@ -910,7 +920,7 @@ nsHtml5StreamParser::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
   NS_ASSERTION(!mLastBuffer, "How come we have the last buffer set?");
   mFirstBuffer = mLastBuffer = newBuf;
 
-  nsresult rv = NS_OK;
+  rv = NS_OK;
 
   // The line below means that the encoding can end up being wrong if
   // a view-source URL is loaded without having the encoding hint from a
@@ -1040,18 +1050,13 @@ nsHtml5StreamParser::OnStopRequest(nsIRequest* aRequest,
                              nsresult status)
 {
   NS_ASSERTION(mRequest == aRequest, "Got Stop on wrong stream.");
-  NS_ASSERTION(NS_IsMainThread() || IsParserThread(), "Wrong thread!");
+  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
   if (mObserver) {
     mObserver->OnStopRequest(aRequest, aContext, status);
   }
-  if (NS_IsMainThread()) {
-    nsCOMPtr<nsIRunnable> stopper = new nsHtml5RequestStopper(this);
-    if (NS_FAILED(mThread->Dispatch(stopper, nsIThread::DISPATCH_NORMAL))) {
-      NS_WARNING("Dispatching StopRequest event failed.");
-    }
-  } else {
-    mozilla::MutexAutoLock autoLock(mTokenizerMutex);
-    DoStopRequest();
+  nsCOMPtr<nsIRunnable> stopper = new nsHtml5RequestStopper(this);
+  if (NS_FAILED(mThread->Dispatch(stopper, nsIThread::DISPATCH_NORMAL))) {
+    NS_WARNING("Dispatching StopRequest event failed.");
   }
   return NS_OK;
 }
@@ -1153,7 +1158,7 @@ nsHtml5StreamParser::OnDataAvailable(nsIRequest* aRequest,
                          aLength, &totalRead);
     NS_ENSURE_SUCCESS(rv, rv);
     NS_ASSERTION(totalRead <= aLength, "Read more bytes than were available?");
-    
+
     nsCOMPtr<nsIRunnable> dataAvailable = new nsHtml5DataAvailable(this,
                                                                    data.forget(),
                                                                    totalRead);
@@ -1192,7 +1197,6 @@ nsHtml5StreamParser::CopySegmentsToParser(nsIInputStream *aInStream,
   *aWriteCount = aCount;
   return NS_OK;
 }
-
 
 bool
 nsHtml5StreamParser::PreferredForInternalEncodingDecl(nsACString& aEncoding)
@@ -1496,7 +1500,7 @@ nsHtml5StreamParser::ContinueAfterScripts(nsHtml5Tokenizer* aTokenizer,
       mTokenizer->setLineNumber(speculation->GetStartLineNumber());
 
       nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                      "DOM Events",
+                                      NS_LITERAL_CSTRING("DOM Events"),
                                       mExecutor->GetDocument(),
                                       nsContentUtils::eDOM_PROPERTIES,
                                       "SpeculationFailed",

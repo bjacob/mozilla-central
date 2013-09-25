@@ -6,10 +6,9 @@
 
 #include "vm/RegExpStatics.h"
 
-#include "jsobjinlines.h"
+#include "vm/RegExpStaticsObject.h"
 
-#include "vm/RegExpObject-inl.h"
-#include "vm/RegExpStatics-inl.h"
+#include "jsobjinlines.h"
 
 using namespace js;
 
@@ -36,7 +35,7 @@ resc_trace(JSTracer *trc, JSObject *obj)
     res->mark(trc);
 }
 
-Class js::RegExpStaticsClass = {
+const Class RegExpStaticsObject::class_ = {
     "RegExpStatics",
     JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS,
     JS_PropertyStub,         /* addProperty */
@@ -49,15 +48,15 @@ Class js::RegExpStaticsClass = {
     resc_finalize,
     NULL,                    /* checkAccess */
     NULL,                    /* call        */
-    NULL,                    /* construct   */
     NULL,                    /* hasInstance */
+    NULL,                    /* construct   */
     resc_trace
 };
 
 JSObject *
 RegExpStatics::create(JSContext *cx, GlobalObject *parent)
 {
-    JSObject *obj = NewObjectWithGivenProto(cx, &RegExpStaticsClass, NULL, parent);
+    JSObject *obj = NewObjectWithGivenProto(cx, &RegExpStaticsObject::class_, NULL, parent);
     if (!obj)
         return NULL;
     RegExpStatics *res = cx->new_<RegExpStatics>();
@@ -65,6 +64,20 @@ RegExpStatics::create(JSContext *cx, GlobalObject *parent)
         return NULL;
     obj->setPrivate(static_cast<void *>(res));
     return obj;
+}
+
+void
+RegExpStatics::markFlagsSet(JSContext *cx)
+{
+    // Flags set on the RegExp function get propagated to constructed RegExp
+    // objects, which interferes with optimizations that inline RegExp cloning
+    // or avoid cloning entirely. Scripts making this assumption listen to
+    // type changes on RegExp.prototype, so mark a state change to trigger
+    // recompilation of all such code (when recompiling, a stub call will
+    // always be performed).
+    JS_ASSERT(this == cx->global()->getRegExpStatics());
+
+    types::MarkTypeObjectFlags(cx, cx->global(), types::OBJECT_FLAG_REGEXP_FLAGS_SET);
 }
 
 bool

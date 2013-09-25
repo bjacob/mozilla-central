@@ -5,27 +5,24 @@
 
 #include "VectorImage.h"
 
-#include <algorithm>
-
 #include "gfxContext.h"
 #include "gfxDrawable.h"
-#include "gfxPlatform.h"
 #include "gfxUtils.h"
 #include "imgDecoderObserver.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/SVGSVGElement.h"
-#include "nsComponentManagerUtils.h"
-#include "nsIObserverService.h"
+#include "nsIDOMEvent.h"
 #include "nsIPresShell.h"
 #include "nsIStreamListener.h"
 #include "nsMimeTypes.h"
 #include "nsPresContext.h"
 #include "nsRect.h"
-#include "nsServiceManagerUtils.h"
 #include "nsStubDocumentObserver.h"
 #include "nsSVGEffects.h" // for nsSVGRenderingObserver
-#include "nsSVGUtils.h"  // for nsSVGUtils::ConvertToSurfaceSize
+#include "Orientation.h"
 #include "SVGDocumentWrapper.h"
+#include "nsIDOMEventListener.h"
 
 namespace mozilla {
 
@@ -39,9 +36,10 @@ class SVGRootRenderingObserver MOZ_FINAL : public nsSVGRenderingObserver {
 public:
   SVGRootRenderingObserver(SVGDocumentWrapper* aDocWrapper,
                            VectorImage*        aVectorImage)
-    : nsSVGRenderingObserver(),
-      mDocWrapper(aDocWrapper),
-      mVectorImage(aVectorImage)
+    : nsSVGRenderingObserver()
+    , mDocWrapper(aDocWrapper)
+    , mVectorImage(aVectorImage)
+    , mHonoringInvalidations(true)
   {
     MOZ_ASSERT(mDocWrapper, "Need a non-null SVG document wrapper");
     MOZ_ASSERT(mVectorImage, "Need a non-null VectorImage");
@@ -54,15 +52,14 @@ public:
     mInObserverList = true;
   }
 
-  void ResumeListening()
-  {
-    // GetReferencedElement adds us back to our target's observer list.
-    GetReferencedElement();
-  }
-
   virtual ~SVGRootRenderingObserver()
   {
     StopListening();
+  }
+
+  void ResumeHonoringInvalidations()
+  {
+    mHonoringInvalidations = true;
   }
 
 protected:
@@ -76,29 +73,31 @@ protected:
     Element* elem = GetTarget();
     MOZ_ASSERT(elem, "missing root SVG node");
 
-    if (!mDocWrapper->ShouldIgnoreInvalidation()) {
+    if (mHonoringInvalidations && !mDocWrapper->ShouldIgnoreInvalidation()) {
       nsIFrame* frame = elem->GetPrimaryFrame();
       if (!frame || frame->PresContext()->PresShell()->IsDestroying()) {
         // We're being destroyed. Bail out.
         return;
       }
 
-      mVectorImage->InvalidateObserver();
+      // Ignore further invalidations until we draw.
+      mHonoringInvalidations = false;
 
-      // We may have been removed from the observer list by our caller. Rather
-      // than add ourselves back here, we wait until Draw gets called, ensuring
-      // that we coalesce invalidations between Draw calls.
-    } else {
-      // Here we may also have been removed from the observer list, but since
-      // we're not sending an invalidation, Draw won't get called. We need to
-      // add ourselves back immediately.
-      ResumeListening();
+      mVectorImage->InvalidateObserversOnNextRefreshDriverTick();
     }
+
+    // Our caller might've removed us from rendering-observer list.
+    // Add ourselves back!
+    if (!mInObserverList) {
+      nsSVGEffects::AddRenderingObserver(elem, this);
+      mInObserverList = true;
+    } 
   }
 
   // Private data
   const nsRefPtr<SVGDocumentWrapper> mDocWrapper;
   VectorImage* const mVectorImage;   // Raw pointer because it owns me.
+  bool mHonoringInvalidations;
 };
 
 class SVGParseCompleteListener MOZ_FINAL : public nsStubDocumentObserver {
@@ -227,9 +226,11 @@ class SVGDrawingCallback : public gfxDrawingCallback {
 public:
   SVGDrawingCallback(SVGDocumentWrapper* aSVGDocumentWrapper,
                      const nsIntRect& aViewport,
+                     const gfxSize& aScale,
                      uint32_t aImageFlags) :
     mSVGDocumentWrapper(aSVGDocumentWrapper),
     mViewport(aViewport),
+    mScale(aScale),
     mImageFlags(aImageFlags)
   {}
   virtual bool operator()(gfxContext* aContext,
@@ -239,6 +240,7 @@ public:
 private:
   nsRefPtr<SVGDocumentWrapper> mSVGDocumentWrapper;
   const nsIntRect mViewport;
+  const gfxSize   mScale;
   uint32_t        mImageFlags;
 };
 
@@ -268,6 +270,7 @@ SVGDrawingCallback::operator()(gfxContext* aContext,
 
   gfxContextMatrixAutoSaveRestore contextMatrixRestorer(aContext);
   aContext->Multiply(gfxMatrix(aTransform).Invert());
+  aContext->Scale(1.0 / mScale.width, 1.0 / mScale.height);
 
   nsPresContext* presContext = presShell->GetPresContext();
   MOZ_ASSERT(presContext, "pres shell w/out pres context");
@@ -304,7 +307,8 @@ VectorImage::VectorImage(imgStatusTracker* aStatusTracker,
   mIsInitialized(false),
   mIsFullyLoaded(false),
   mIsDrawing(false),
-  mHaveAnimations(false)
+  mHaveAnimations(false),
+  mHasPendingInvalidation(false)
 {
 }
 
@@ -339,7 +343,7 @@ VectorImage::FrameRect(uint32_t aWhichFrame)
 }
 
 size_t
-VectorImage::HeapSizeOfSourceWithComputedFallback(nsMallocSizeOfFun aMallocSizeOf) const
+VectorImage::HeapSizeOfSourceWithComputedFallback(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   // We're not storing the source data -- we just feed that directly to
   // our helper SVG document as we receive it, for it to parse.
@@ -348,7 +352,7 @@ VectorImage::HeapSizeOfSourceWithComputedFallback(nsMallocSizeOfFun aMallocSizeO
 }
 
 size_t
-VectorImage::HeapSizeOfDecodedWithComputedFallback(nsMallocSizeOfFun aMallocSizeOf) const
+VectorImage::HeapSizeOfDecodedWithComputedFallback(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   // XXXdholbert TODO: return num bytes used by helper SVG doc. (bug 590790)
   return 0;
@@ -382,10 +386,12 @@ VectorImage::OnImageDataComplete(nsIRequest* aRequest,
 
   // Actually fire OnStopRequest.
   if (mStatusTracker) {
+    // XXX(seth): Is this seriously the least insane way to do this?
     nsRefPtr<imgStatusTracker> clone = mStatusTracker->CloneForRecording();
     imgDecoderObserver* observer = clone->GetDecoderObserver();
     observer->OnStopRequest(aLastPart, finalStatus);
-    imgStatusTracker::StatusDiff diff = mStatusTracker->CalculateAndApplyDifference(clone);
+    ImageStatusDiff diff = mStatusTracker->Difference(clone);
+    mStatusTracker->ApplyDifference(diff);
     mStatusTracker->SyncNotifyDifference(diff);
   }
   return finalStatus;
@@ -473,6 +479,18 @@ VectorImage::RequestRefresh(const mozilla::TimeStamp& aTime)
 {
   // TODO: Implement for b666446.
   EvaluateAnimation();
+
+  if (mHasPendingInvalidation && mStatusTracker) {
+    // This method is called under the Tick() of an observing document's
+    // refresh driver. We send out the following notifications here rather than
+    // under WillRefresh() (which would be called by our own refresh driver) so
+    // that we only send these notifications if we actually have a document
+    // that is observing us.
+    mStatusTracker->FrameChanged(&nsIntRect::GetMaxSizedIntRect());
+    mStatusTracker->OnStopFrame();
+  }
+
+  mHasPendingInvalidation = false;
 }
 
 //******************************************************************************
@@ -503,6 +521,9 @@ VectorImage::GetIntrinsicSize(nsSize* aSize)
     return NS_ERROR_FAILURE;
 
   nsIFrame* rootFrame = mSVGDocumentWrapper->GetRootLayoutFrame();
+  if (!rootFrame)
+    return NS_ERROR_FAILURE;
+
   *aSize = nsSize(-1, -1);
   nsIFrame::IntrinsicSize rfSize = rootFrame->GetIntrinsicSize();
   if (rfSize.width.GetUnit() == eStyleUnit_Coord)
@@ -522,8 +543,17 @@ VectorImage::GetIntrinsicRatio(nsSize* aRatio)
     return NS_ERROR_FAILURE;
 
   nsIFrame* rootFrame = mSVGDocumentWrapper->GetRootLayoutFrame();
+  if (!rootFrame)
+    return NS_ERROR_FAILURE;
+
   *aRatio = rootFrame->GetIntrinsicRatio();
   return NS_OK;
+}
+
+NS_IMETHODIMP_(Orientation)
+VectorImage::GetOrientation()
+{
+  return Orientation();
 }
 
 //******************************************************************************
@@ -619,7 +649,7 @@ VectorImage::GetFrame(uint32_t aWhichFrame,
   gfxIntSize surfaceSize(imageIntSize.width, imageIntSize.height);
 
   nsRefPtr<gfxImageSurface> surface =
-    new gfxImageSurface(surfaceSize, gfxASurface::ImageFormatARGB32);
+    new gfxImageSurface(surfaceSize, gfxImageFormatARGB32);
   nsRefPtr<gfxContext> context = new gfxContext(surface);
 
   // Draw to our surface!
@@ -695,17 +725,10 @@ VectorImage::Draw(gfxContext* aContext,
   // if we hit the tiling path. Unfortunately, the temporary surface isn't
   // created at the size at which we'll ultimately draw, causing fuzzy output.
   // To fix this we pre-apply the transform's scaling to the drawing parameters
-  // and then remove the scaling from the transform, so the fact that temporary
+  // and remove the scaling from the transform, so the fact that temporary
   // surfaces won't take the scaling into account doesn't matter. (Bug 600207.)
   gfxSize scale(aUserSpaceToImageSpace.ScaleFactors(true));
   gfxPoint translation(aUserSpaceToImageSpace.GetTranslation());
-
-  // Rescale everything.
-  nsIntSize scaledViewport(aViewportSize.width / scale.width,
-                           aViewportSize.height / scale.height);
-  gfxIntSize scaledViewportGfx(scaledViewport.width, scaledViewport.height);
-  nsIntRect scaledSubimage(aSubimage);
-  scaledSubimage.ScaleRoundOut(1.0 / scale.width, 1.0 / scale.height);
 
   // Remove the scaling from the transform.
   gfxMatrix unscale;
@@ -715,32 +738,33 @@ VectorImage::Draw(gfxContext* aContext,
   unscale.Translate(-translation);
   gfxMatrix unscaledTransform(aUserSpaceToImageSpace * unscale);
 
-  mSVGDocumentWrapper->UpdateViewportBounds(scaledViewport);
+  mSVGDocumentWrapper->UpdateViewportBounds(aViewportSize);
   mSVGDocumentWrapper->FlushImageTransformInvalidation();
 
-  // Based on imgFrame::Draw
-  gfxRect sourceRect = unscaledTransform.Transform(aFill);
-  gfxRect imageRect(0, 0, scaledViewport.width, scaledViewport.height);
-  gfxRect subimage(scaledSubimage.x, scaledSubimage.y,
-                   scaledSubimage.width, scaledSubimage.height);
-
+  // Rescale drawing parameters.
+  gfxIntSize drawableSize(aViewportSize.width / scale.width,
+                          aViewportSize.height / scale.height);
+  gfxRect drawableSourceRect = unscaledTransform.Transform(aFill);
+  gfxRect drawableImageRect(0, 0, drawableSize.width, drawableSize.height);
+  gfxRect drawableSubimage(aSubimage.x, aSubimage.y,
+                           aSubimage.width, aSubimage.height);
+  drawableSubimage.ScaleRoundOut(1.0 / scale.width, 1.0 / scale.height);
 
   nsRefPtr<gfxDrawingCallback> cb =
     new SVGDrawingCallback(mSVGDocumentWrapper,
-                           nsIntRect(nsIntPoint(0, 0), scaledViewport),
+                           nsIntRect(nsIntPoint(0, 0), aViewportSize),
+                           scale,
                            aFlags);
 
-  nsRefPtr<gfxDrawable> drawable = new gfxCallbackDrawable(cb, scaledViewportGfx);
+  nsRefPtr<gfxDrawable> drawable = new gfxCallbackDrawable(cb, drawableSize);
 
-  gfxUtils::DrawPixelSnapped(aContext, drawable,
-                             unscaledTransform,
-                             subimage, sourceRect, imageRect, aFill,
-                             gfxASurface::ImageFormatARGB32, aFilter,
-                             aFlags);
+  gfxUtils::DrawPixelSnapped(aContext, drawable, unscaledTransform,
+                             drawableSubimage, drawableSourceRect,
+                             drawableImageRect, aFill,
+                             gfxImageFormatARGB32, aFilter, aFlags);
 
-  // Allow ourselves to fire FrameChanged and OnStopFrame again.
   MOZ_ASSERT(mRenderingObserver, "Should have a rendering observer by now");
-  mRenderingObserver->ResumeListening();
+  mRenderingObserver->ResumeHonoringInvalidations();
 
   return NS_OK;
 }
@@ -761,6 +785,11 @@ VectorImage::StartDecoding()
   return NS_OK;
 }
 
+bool
+VectorImage::IsDecoded()
+{
+  return mIsFullyLoaded || mError;
+}
 
 //******************************************************************************
 /* void lockImage() */
@@ -841,7 +870,8 @@ VectorImage::OnStartRequest(nsIRequest* aRequest, nsISupports* aCtxt)
     nsRefPtr<imgStatusTracker> clone = mStatusTracker->CloneForRecording();
     imgDecoderObserver* observer = clone->GetDecoderObserver();
     observer->OnStartDecode();
-    imgStatusTracker::StatusDiff diff = mStatusTracker->CalculateAndApplyDifference(clone);
+    ImageStatusDiff diff = mStatusTracker->Difference(clone);
+    mStatusTracker->ApplyDifference(diff);
     mStatusTracker->SyncNotifyDifference(diff);
   }
 
@@ -929,7 +959,8 @@ VectorImage::OnSVGDocumentLoaded()
     observer->OnStopFrame();
     observer->OnStopDecode(NS_OK); // Unblock page load.
 
-    imgStatusTracker::StatusDiff diff = mStatusTracker->CalculateAndApplyDifference(clone);
+    ImageStatusDiff diff = mStatusTracker->Difference(clone);
+    mStatusTracker->ApplyDifference(diff);
     mStatusTracker->SyncNotifyDifference(diff);
   }
 
@@ -952,7 +983,8 @@ VectorImage::OnSVGDocumentError()
 
     // Unblock page load.
     observer->OnStopDecode(NS_ERROR_FAILURE);
-    imgStatusTracker::StatusDiff diff = mStatusTracker->CalculateAndApplyDifference(clone);
+    ImageStatusDiff diff = mStatusTracker->Difference(clone);
+    mStatusTracker->ApplyDifference(diff);
     mStatusTracker->SyncNotifyDifference(diff);
   }
 }
@@ -980,12 +1012,9 @@ VectorImage::OnDataAvailable(nsIRequest* aRequest, nsISupports* aCtxt,
 // Invalidation helper method
 
 void
-VectorImage::InvalidateObserver()
+VectorImage::InvalidateObserversOnNextRefreshDriverTick()
 {
-  if (mStatusTracker) {
-    mStatusTracker->FrameChanged(&nsIntRect::GetMaxSizedIntRect());
-    mStatusTracker->OnStopFrame();
-  }
+  mHasPendingInvalidation = true;
 }
 
 } // namespace image

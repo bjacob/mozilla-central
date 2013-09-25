@@ -8,7 +8,7 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-
+Cu.import("resource://gre/modules/PhoneNumberUtils.jsm");
 Cu.import("resource://gre/modules/WspPduHelper.jsm", this);
 
 const DEBUG = false; // set to true to see debug messages
@@ -27,6 +27,16 @@ XPCOMUtils.defineLazyGetter(this, "SL", function () {
   Cu.import("resource://gre/modules/SlPduHelper.jsm", SL);
   return SL;
 });
+
+XPCOMUtils.defineLazyGetter(this, "CP", function () {
+  let CP = {};
+  Cu.import("resource://gre/modules/CpPduHelper.jsm", CP);
+  return CP;
+});
+
+XPCOMUtils.defineLazyServiceGetter(this, "gSystemMessenger",
+                                   "@mozilla.org/system-message-internal;1",
+                                   "nsISystemMessagesInternal");
 
 /**
  * Helpers for WAP PDU processing.
@@ -52,8 +62,8 @@ this.WapPushManager = {
 
     let appid = options.headers["x-wap-application-id"];
     if (!appid) {
+      // Assume message without applicatioin ID is WAP Push
       debug("Push message doesn't contains X-Wap-Application-Id.");
-      return;
     }
 
     // MMS
@@ -80,23 +90,36 @@ this.WapPushManager = {
     * @see http://technical.openmobilealliance.org/tech/omna/omna-wsp-content-type.aspx
     */
     let contentType = options.headers["content-type"].media;
-    let msg = { contentType: contentType };
+    let msg;
 
     if (contentType === "text/vnd.wap.si" ||
         contentType === "application/vnd.wap.sic") {
-      SI.PduHelper.parse(data, contentType, msg);
+      msg = SI.PduHelper.parse(data, contentType);
     } else if (contentType === "text/vnd.wap.sl" ||
                contentType === "application/vnd.wap.slc") {
-      SL.PduHelper.parse(data, contentType, msg);
+      msg = SL.PduHelper.parse(data, contentType);
     } else if (contentType === "text/vnd.wap.connectivity-xml" ||
                contentType === "application/vnd.wap.connectivity-wbxml") {
-      // TODO: Bug 869291 - Support Receiving WAP-Push-CP
+      msg = CP.PduHelper.parse(data, contentType);
     } else {
       // Unsupported type, provide raw data.
-      msg.content = data.array;
+      msg = {
+        contentType: contentType,
+        content: data.array
+      };
     }
 
-    // TODO: Bug 853782 - Notify receiving of WAP Push messages
+    let sender = PhoneNumberUtils.normalize(options.sourceAddress, false);
+    let parsedSender = PhoneNumberUtils.parse(sender);
+    if (parsedSender && parsedSender.internationalNumber) {
+      sender = parsedSender.internationalNumber;
+    }
+
+    gSystemMessenger.broadcastMessage("wappush-received", {
+      sender:         sender,
+      contentType:    msg.contentType,
+      content:        msg.content
+    });
   },
 
   /**

@@ -3,17 +3,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <stdlib.h>
-#include "nsHttp.h"
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "nsHttpPipeline.h"
 #include "nsHttpHandler.h"
 #include "nsIOService.h"
-#include "nsIRequest.h"
 #include "nsISocketTransport.h"
-#include "nsIStringStream.h"
 #include "nsIPipe.h"
 #include "nsCOMPtr.h"
-#include "nsComponentManagerUtils.h"
 #include <algorithm>
 
 #ifdef DEBUG
@@ -159,8 +157,8 @@ nsHttpPipeline::QueryPipeline()
 // nsHttpPipeline::nsISupports
 //-----------------------------------------------------------------------------
 
-NS_IMPL_THREADSAFE_ADDREF(nsHttpPipeline)
-NS_IMPL_THREADSAFE_RELEASE(nsHttpPipeline)
+NS_IMPL_ADDREF(nsHttpPipeline)
+NS_IMPL_RELEASE(nsHttpPipeline)
 
 // multiple inheritance fun :-)
 NS_INTERFACE_MAP_BEGIN(nsHttpPipeline)

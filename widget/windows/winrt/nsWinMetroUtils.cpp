@@ -9,6 +9,7 @@
 #include "FrameworkView.h"
 #include "MetroApp.h"
 #include "nsIWindowsRegKey.h"
+#include "ToastNotificationHandler.h"
 
 #include <shldisp.h>
 #include <shellapi.h>
@@ -339,34 +340,27 @@ nsWinMetroUtils::LaunchInDesktop(const nsAString &aPath, const nsAString &aArgum
   if (!ShellExecuteEx(&sinfo)) {
     return NS_ERROR_FAILURE;
   }
-
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsWinMetroUtils::GetSnappedState(int32_t *aSnappedState)
+nsWinMetroUtils::ShowNativeToast(const nsAString &aTitle,
+  const nsAString &aMessage, const nsAString &anImage)
 {
-  if (XRE_GetWindowsEnvironment() == WindowsEnvironmentType_Desktop) {
-    NS_WARNING("GetSnappedState can't be called on the desktop.");
-    return NS_ERROR_FAILURE;
+  // Firefox is in the foreground, no need for a notification.
+  if (::GetActiveWindow() == ::GetForegroundWindow()) {
+    return NS_OK;
   }
-  NS_ENSURE_ARG_POINTER(aSnappedState);
-  ApplicationViewState viewState;
-  AssertRetHRESULT(MetroUtils::GetViewState(viewState), NS_ERROR_UNEXPECTED);
-  *aSnappedState = (int32_t) viewState;
+
+  ToastNotificationHandler* notification_handler =
+      new ToastNotificationHandler;
+
+  HSTRING title = HStringReference(aTitle.BeginReading()).Get();
+  HSTRING msg = HStringReference(aMessage.BeginReading()).Get();
+  HSTRING imagePath = HStringReference(anImage.BeginReading()).Get();
+  notification_handler->DisplayNotification(title, msg, imagePath);
+
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsWinMetroUtils::Unsnap()
-{
-  if (XRE_GetWindowsEnvironment() == WindowsEnvironmentType_Desktop) {
-    NS_WARNING("Unsnap can't be called on the desktop.");
-    return NS_ERROR_FAILURE;
-  }
-
-  HRESULT hr = MetroUtils::TryUnsnap();
-  return SUCCEEDED(hr) ? NS_OK : NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP

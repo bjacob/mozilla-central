@@ -5,8 +5,15 @@
 const Cu = Components.utils;
 const Ci = Components.interfaces;
 const Cc = Components.classes;
+
+Services.prefs.setBoolPref("devtools.debugger.log", true);
+SimpleTest.registerCleanupFunction(() => {
+  Services.prefs.clearUserPref("devtools.debugger.log");
+});
+
+
 let tempScope = {};
-Cu.import("resource:///modules/devtools/LayoutHelpers.jsm", tempScope);
+Cu.import("resource://gre/modules/devtools/LayoutHelpers.jsm", tempScope);
 let LayoutHelpers = tempScope.LayoutHelpers;
 
 let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", tempScope);
@@ -18,6 +25,12 @@ let console = tempScope.console;
 // Import the GCLI test helper
 let testDir = gTestPath.substr(0, gTestPath.lastIndexOf("/"));
 Services.scriptloader.loadSubScript(testDir + "../../../commandline/test/helpers.js", this);
+
+SimpleTest.registerCleanupFunction(() => {
+  console.error("Here we are\n")
+  let {DebuggerServer} = Cu.import("resource://gre/modules/devtools/dbg-server.jsm", {});
+  console.error("DebuggerServer open connections: " + Object.getOwnPropertyNames(DebuggerServer._connections).length);
+});
 
 function openInspector(callback)
 {
@@ -31,6 +44,12 @@ function getActiveInspector()
 {
   let target = TargetFactory.forTab(gBrowser.selectedTab);
   return gDevTools.getToolbox(target).getPanel("inspector");
+}
+
+function getNodeFront(node)
+{
+  let inspector = getActiveInspector();
+  return inspector.walker.frontForRawNode(node);
 }
 
 function isHighlighting()
@@ -58,7 +77,8 @@ function getHighlitNode()
   // Get midpoint of diagonal line.
   let midpoint = midPoint(a, b);
 
-  return LayoutHelpers.getElementFromPoint(h.win.document, midpoint.x,
+  let lh = new LayoutHelpers(window.content);
+  return lh.getElementFromPoint(h.win.document, midpoint.x,
     midpoint.y);
 }
 

@@ -55,7 +55,7 @@ TEST_TOOL_DIRS += ['tests']
 # source tree.
 #
 if CONFIG['MOZ_ENABLE_GTK']:
-    DIRS += ['gtk2']
+    DIRS += ['gtk']
 
     if CONFIG['MOZ_X11']:
         DIRS += ['gtkxtbin']
@@ -69,6 +69,7 @@ XPIDL_SOURCES += [
     'nsIClipboardDragDropHooks.idl',
     'nsIClipboardHelper.idl',
     'nsIClipboardOwner.idl',
+    'nsIColorPicker.idl',
     'nsIDragService.idl',
     'nsIDragSession.idl',
     'nsIFilePicker.idl',
@@ -98,7 +99,6 @@ MODULE = 'widget'
 
 EXPORTS += [
     'InputData.h',
-    'nsEvent.h',
     'nsGUIEvent.h',
     'nsIDeviceContextSpec.h',
     'nsINativeKeyBindings.h',
@@ -106,13 +106,19 @@ EXPORTS += [
     'nsIRollupListener.h',
     'nsIWidget.h',
     'nsIWidgetListener.h',
-    'nsNativeWidget.h',
     'nsWidgetInitData.h',
     'nsWidgetsCID.h',
 ]
 
 EXPORTS.mozilla += [
+    'BasicEvents.h',
+    'ContentEvents.h',
+    'EventForwards.h',
     'LookAndFeel.h',
+    'MiscEvents.h',
+    'MouseEvents.h',
+    'TextEvents.h',
+    'TouchEvents.h',
     'WidgetUtils.h',
 ]
 
@@ -121,5 +127,5 @@ if CONFIG['MOZ_INSTRUMENT_EVENT_LOOP']:
         'WidgetTraceEvent.h',
     ]
 
-EXPORTS.IPC = ['nsGUIEventIPC.h']
+EXPORTS.ipc = ['nsGUIEventIPC.h']
 

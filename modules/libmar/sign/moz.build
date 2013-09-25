@@ -6,3 +6,10 @@
 
 MODULE = 'signmar'
 
+LIBRARY_NAME = 'signmar'
+
+CSRCS += [
+    'mar_sign.c',
+    'nss_secutil.c',
+]
+

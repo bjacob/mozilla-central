@@ -9,14 +9,13 @@
 
 #include "BluetoothCommon.h"
 #include "BluetoothProfileManagerBase.h"
+#include "BluetoothRilListener.h"
 #include "BluetoothSocketObserver.h"
-#include "BluetoothTelephonyListener.h"
 #include "mozilla/ipc/UnixSocket.h"
-#include "nsIObserver.h"
+#include "mozilla/Hal.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
 
-class BluetoothHfpManagerObserver;
 class BluetoothReplyRunnable;
 class BluetoothSocket;
 class Call;
@@ -53,29 +52,40 @@ enum BluetoothCmeError {
 
 class BluetoothHfpManager : public BluetoothSocketObserver
                           , public BluetoothProfileManagerBase
+                          , public BatteryObserver
 {
 public:
   NS_DECL_ISUPPORTS
+  NS_DECL_NSIOBSERVER
 
   static BluetoothHfpManager* Get();
   ~BluetoothHfpManager();
 
+  // The following functions are inherited from BluetoothSocketObserver
   virtual void ReceiveSocketData(
     BluetoothSocket* aSocket,
     nsAutoPtr<mozilla::ipc::UnixSocketRawData>& aMessage) MOZ_OVERRIDE;
-  virtual void OnConnectSuccess(BluetoothSocket* aSocket) MOZ_OVERRIDE;
-  virtual void OnConnectError(BluetoothSocket* aSocket) MOZ_OVERRIDE;
-  virtual void OnDisconnect(BluetoothSocket* aSocket) MOZ_OVERRIDE;
+  virtual void OnSocketConnectSuccess(BluetoothSocket* aSocket) MOZ_OVERRIDE;
+  virtual void OnSocketConnectError(BluetoothSocket* aSocket) MOZ_OVERRIDE;
+  virtual void OnSocketDisconnect(BluetoothSocket* aSocket) MOZ_OVERRIDE;
+
+  // The following functions are inherited from BluetoothProfileManagerBase
   virtual void OnGetServiceChannel(const nsAString& aDeviceAddress,
                                    const nsAString& aServiceUuid,
                                    int aChannel) MOZ_OVERRIDE;
   virtual void OnUpdateSdpRecords(const nsAString& aDeviceAddress) MOZ_OVERRIDE;
   virtual void GetAddress(nsAString& aDeviceAddress) MOZ_OVERRIDE;
+  virtual void Connect(const nsAString& aDeviceAddress,
+                       BluetoothProfileController* aController) MOZ_OVERRIDE;
+  virtual void Disconnect(BluetoothProfileController* aController) MOZ_OVERRIDE;
+  virtual void OnConnect(const nsAString& aErrorStr) MOZ_OVERRIDE;
+  virtual void OnDisconnect(const nsAString& AErrorStr) MOZ_OVERRIDE;
 
-  void Connect(const nsAString& aDeviceAddress,
-               const bool aIsHandsfree,
-               BluetoothReplyRunnable* aRunnable);
-  void Disconnect();
+  virtual void GetName(nsACString& aName)
+  {
+    aName.AssignLiteral("HFP/HSP");
+  }
+
   bool Listen();
   bool ConnectSco(BluetoothReplyRunnable* aRunnable = nullptr);
   bool DisconnectSco();
@@ -85,38 +95,39 @@ public:
    * @param aSend A boolean indicates whether we need to notify headset or not
    */
   void HandleCallStateChanged(uint32_t aCallIndex, uint16_t aCallState,
-                              const nsAString& aNumber, const bool aIsOutgoing,
-                              bool aSend);
+                              const nsAString& aError, const nsAString& aNumber,
+                              const bool aIsOutgoing, bool aSend);
+  void HandleIccInfoChanged();
+  void HandleVoiceConnectionChanged();
 
   bool IsConnected();
   bool IsScoConnected();
 
 private:
+  class CloseScoTask;
   class GetVolumeTask;
   class RespondToBLDNTask;
   class SendRingIndicatorTask;
 
+  friend class CloseScoTask;
   friend class GetVolumeTask;
   friend class RespondToBLDNTask;
   friend class SendRingIndicatorTask;
   friend class BluetoothHfpManagerObserver;
 
   BluetoothHfpManager();
-  nsresult HandleIccInfoChanged();
-  nsresult HandleShutdown();
-  nsresult HandleVolumeChanged(const nsAString& aData);
-  nsresult HandleVoiceConnectionChanged();
+  void HandleShutdown();
+  void HandleVolumeChanged(const nsAString& aData);
 
   bool Init();
-  void Cleanup();
+  void Notify(const hal::BatteryInformation& aBatteryInfo);
   void Reset();
   void ResetCallArray();
   uint32_t FindFirstCall(uint16_t aState);
   uint32_t GetNumberOfCalls(uint16_t aState);
 
+  void NotifyConnectionStatusChanged(const nsAString& aType);
   void NotifyDialer(const nsAString& aCommand);
-  void NotifyStatusChanged(const nsAString& aType);
-  void NotifyAudioManager(bool aStatus);
 
   bool SendCommand(const char* aCommand, uint32_t aValue = 0);
   bool SendLine(const char* aMessage);
@@ -143,8 +154,9 @@ private:
   nsString mOperatorName;
 
   nsTArray<Call> mCurrentCallArray;
-  nsAutoPtr<BluetoothTelephonyListener> mListener;
+  nsAutoPtr<BluetoothRilListener> mListener;
   nsRefPtr<BluetoothReplyRunnable> mRunnable;
+  BluetoothProfileController* mController;
   nsRefPtr<BluetoothReplyRunnable> mScoRunnable;
 
   // If a connection has been established, mSocket will be the socket

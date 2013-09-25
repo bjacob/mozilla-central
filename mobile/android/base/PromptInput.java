@@ -13,9 +13,18 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
+import android.text.format.DateFormat;
+import android.text.Html;
+import android.text.InputType;
+import android.text.TextUtils;
+import android.util.Log;
+import android.view.inputmethod.InputMethodManager;
 import android.view.View;
+import android.view.ViewGroup.LayoutParams;
+import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.CheckedTextView;
 import android.widget.DatePicker;
@@ -24,14 +33,6 @@ import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.TimePicker;
-import android.text.InputType;
-import android.text.TextUtils;
-import android.text.format.DateFormat;
-import android.util.Log;
-import android.text.Html;
-import android.widget.ArrayAdapter;
-import android.view.ViewGroup.LayoutParams;
-import android.view.inputmethod.InputMethodManager;
 
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -91,6 +92,21 @@ class PromptInput {
         }
     }
 
+    public static class NumberInput extends EditInput {
+        public static final String INPUT_TYPE = "number";
+        public NumberInput(JSONObject obj) {
+            super(obj);
+        }
+
+        public View getView(final Context context) throws UnsupportedOperationException {
+            EditText input = (EditText) super.getView(context);
+            input.setRawInputType(Configuration.KEYBOARD_12KEY);
+            input.setInputType(InputType.TYPE_CLASS_NUMBER |
+                               InputType.TYPE_NUMBER_FLAG_SIGNED);
+            return input;
+        }
+    }
+
     public static class PasswordInput extends EditInput {
         public static final String INPUT_TYPE = "password";
         public PasswordInput(JSONObject obj) {
@@ -99,7 +115,9 @@ class PromptInput {
 
         public View getView(Context context) throws UnsupportedOperationException {
             EditText input = (EditText) super.getView(context);
-            input.setInputType(InputType.TYPE_TEXT_VARIATION_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+            input.setInputType(InputType.TYPE_CLASS_TEXT |
+                               InputType.TYPE_TEXT_VARIATION_PASSWORD |
+                               InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
             return input;
         }
 
@@ -139,6 +157,7 @@ class PromptInput {
             "week",
             "time",
             "datetime-local",
+            "datetime",
             "month"
         };
 
@@ -181,14 +200,14 @@ class PromptInput {
                 GregorianCalendar calendar = new GregorianCalendar();
                 if (!TextUtils.isEmpty(mValue)) {
                     try {
-                        calendar.setTime(new SimpleDateFormat("kk:mm").parse(mValue));
+                        calendar.setTime(new SimpleDateFormat("HH:mm").parse(mValue));
                     } catch (Exception e) { }
                 }
                 input.setCurrentHour(calendar.get(GregorianCalendar.HOUR_OF_DAY));
                 input.setCurrentMinute(calendar.get(GregorianCalendar.MINUTE));
                 mView = (View)input;
             } else if (mType.equals("datetime-local") || mType.equals("datetime")) {
-                DateTimePicker input = new DateTimePicker(context, "yyyy-MM-dd kk:mm", mValue,
+                DateTimePicker input = new DateTimePicker(context, "yyyy-MM-dd HH:mm", mValue,
                                                           DateTimePicker.PickersState.DATETIME);
                 input.toggleCalendar(true);
                 mView = (View)input;
@@ -216,7 +235,7 @@ class PromptInput {
                 TimePicker tp = (TimePicker)mView;
                 GregorianCalendar calendar =
                     new GregorianCalendar(0,0,0,tp.getCurrentHour(),tp.getCurrentMinute());
-                return formatDateString("kk:mm",calendar);
+                return formatDateString("HH:mm",calendar);
             } else {
                 DateTimePicker dp = (DateTimePicker)mView;
                 GregorianCalendar calendar = new GregorianCalendar();
@@ -226,11 +245,11 @@ class PromptInput {
                 } else if (mType.equals("week")) {
                     return formatDateString("yyyy-'W'ww",calendar);
                 } else if (mType.equals("datetime-local")) {
-                    return formatDateString("yyyy-MM-dd kk:mm",calendar);
+                    return formatDateString("yyyy-MM-dd HH:mm",calendar);
                 } else if (mType.equals("datetime")) {
                     calendar.set(GregorianCalendar.ZONE_OFFSET,0);
                     calendar.setTimeInMillis(dp.getTimeInMillis());
-                    return formatDateString("yyyy-MM-dd kk:mm",calendar);
+                    return formatDateString("yyyy-MM-dd HH:mm",calendar);
                 } else if (mType.equals("month")) {
                     return formatDateString("yyyy-MM",calendar);
                 }
@@ -321,6 +340,8 @@ class PromptInput {
         String type = obj.optString("type");
         if (EditInput.INPUT_TYPE.equals(type)) {
             return new EditInput(obj);
+        } else if (NumberInput.INPUT_TYPE.equals(type)) {
+            return new NumberInput(obj);
         } else if (PasswordInput.INPUT_TYPE.equals(type)) {
             return new PasswordInput(obj);
         } else if (CheckboxInput.INPUT_TYPE.equals(type)) {

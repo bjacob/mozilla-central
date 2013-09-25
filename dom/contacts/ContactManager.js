@@ -46,7 +46,7 @@ function sanitizeStringArray(aArray) {
 }
 
 const nsIClassInfo            = Ci.nsIClassInfo;
-const CONTACTPROPERTIES_CID   = Components.ID("{6cb78b21-4218-414b-8a84-3b7bf0088b34}");
+const CONTACTPROPERTIES_CID   = Components.ID("{35ad8a4e-9486-44b6-883d-550f14635e49}");
 const nsIContactProperties    = Ci.nsIContactProperties;
 
 // ContactProperties is not directly instantiated. It is used as interface.
@@ -268,7 +268,8 @@ Contact.prototype = {
                       impp: 'rw',
                       anniversary: 'rw',
                       sex: 'rw',
-                      genderIdentity: 'rw'
+                      genderIdentity: 'rw',
+                      key: 'rw',
                      },
 
   set name(aName) {
@@ -467,6 +468,14 @@ Contact.prototype = {
     return this._genderIdentity;
   },
 
+  set key(aKey) {
+    this._key = sanitizeStringArray(aKey);
+  },
+
+  get key() {
+    return this._key;
+  },
+
   init: function init(aProp) {
     this.name =            aProp.name;
     this.honorificPrefix = aProp.honorificPrefix;
@@ -489,6 +498,7 @@ Contact.prototype = {
     this.anniversary =     aProp.anniversary;
     this.sex =             aProp.sex;
     this.genderIdentity =  aProp.genderIdentity;
+    this.key =             aProp.key;
   },
 
   get published () {
@@ -531,6 +541,7 @@ function ContactManager()
 ContactManager.prototype = {
   __proto__: DOMRequestIpcHelper.prototype,
   _oncontactchange: null,
+  _cachedContacts: [] ,
 
   set oncontactchange(aCallback) {
     if (DEBUG) debug("set oncontactchange");
@@ -620,6 +631,13 @@ ContactManager.prototype = {
         }
         break;
       case "Contact:Save:Return:OK":
+        // If a cached contact was saved and a new contact ID was returned, update the contact's ID
+        if (this._cachedContacts[msg.requestID]) {
+          if (msg.contactID) {
+            this._cachedContacts[msg.requestID].id = msg.contactID;
+          }
+          delete this._cachedContacts[msg.requestID];
+        }
       case "Contacts:Clear:Return:OK":
       case "Contact:Remove:Return:OK":
         req = this.getRequest(msg.requestID);
@@ -630,9 +648,21 @@ ContactManager.prototype = {
       case "Contact:Save:Return:KO":
       case "Contact:Remove:Return:KO":
       case "Contacts:Clear:Return:KO":
+      case "Contacts:GetRevision:Return:KO":
+      case "Contacts:Count:Return:KO":
         req = this.getRequest(msg.requestID);
-        if (req)
-          Services.DOMRequest.fireError(req.request, msg.errorMsg);
+        if (req) {
+          if (req.request) {
+            req = req.request;
+          }
+          Services.DOMRequest.fireError(req, msg.errorMsg);
+        }
+        break;
+      case "Contacts:GetAll:Return:KO":
+        req = this.getRequest(msg.requestID);
+        if (req) {
+          Services.DOMRequest.fireError(req.cursor, msg.errorMsg);
+        }
         break;
       case "PermissionPromptHelper:AskPermission:OK":
         if (DEBUG) debug("id: " + msg.requestID);
@@ -662,14 +692,14 @@ ContactManager.prototype = {
         if (DEBUG) debug("new revision: " + msg.revision);
         req = this.getRequest(msg.requestID);
         if (req) {
-          Services.DOMRequest.fireSuccess(req, msg.revision);
+          Services.DOMRequest.fireSuccess(req.request, msg.revision);
         }
         break;
       case "Contacts:Count":
         if (DEBUG) debug("count: " + msg.count);
         req = this.getRequest(msg.requestID);
         if (req) {
-          Services.DOMRequest.fireSuccess(req, msg.count);
+          Services.DOMRequest.fireSuccess(req.request, msg.count);
         }
         break;
       default:
@@ -729,12 +759,12 @@ ContactManager.prototype = {
       requestID: requestID,
       origin: principal.origin,
       appID: principal.appId,
-      browserFlag: principal.isInBrowserElement
+      browserFlag: principal.isInBrowserElement,
+      windowID: this._window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils).outerWindowID
     });
   },
 
   save: function save(aContact) {
-    let request;
     if (DEBUG) debug("save: " + JSON.stringify(aContact) + " :" + aContact.id);
     let newContact = {};
     newContact.properties = {
@@ -758,17 +788,22 @@ ContactManager.prototype = {
       impp:            [],
       anniversary:     null,
       sex:             null,
-      genderIdentity:  null
+      genderIdentity:  null,
+      key:             [],
     };
     for (let field in newContact.properties) {
       newContact.properties[field] = aContact[field];
     }
+    let request = this.createRequest();
+    let requestID = this.getRequestId({request: request, reason: reason});
 
     let reason;
     if (aContact.id == "undefined") {
       // for example {25c00f01-90e5-c545-b4d4-21E2ddbab9e0} becomes
       // 25c00f0190e5c545b4d421E2ddbab9e0
       aContact.id = this._getRandomId().replace('-', '', 'g').replace('{', '').replace('}', '');
+      // Cache the contact so that its ID may be updated later if necessary
+      this._cachedContacts[requestID] = aContact;
       reason = "create";
     } else {
       reason = "update";
@@ -776,10 +811,9 @@ ContactManager.prototype = {
 
     this._setMetaData(newContact, aContact);
     if (DEBUG) debug("send: " + JSON.stringify(newContact));
-    request = this.createRequest();
     let options = { contact: newContact, reason: reason };
     let allowCallback = function() {
-      cpmm.sendAsyncMessage("Contact:Save", {requestID: this.getRequestId({request: request, reason: reason}), options: options});
+      cpmm.sendAsyncMessage("Contact:Save", {requestID: requestID, options: options});
     }.bind(this)
     this.askPermission(reason, request, allowCallback);
     return request;
@@ -843,8 +877,12 @@ ContactManager.prototype = {
   },
 
   remove: function removeContact(aRecord) {
-    let request;
-    request = this.createRequest();
+    let request = this.createRequest();
+    if (!aRecord || !aRecord.id) {
+      Services.DOMRequest.fireErrorAsync(request, true);
+      return request;
+    }
+
     let options = { id: aRecord.id };
     let allowCallback = function() {
       cpmm.sendAsyncMessage("Contact:Remove", {requestID: this.getRequestId({request: request, reason: "remove"}), options: options});
@@ -870,7 +908,7 @@ ContactManager.prototype = {
 
     let allowCallback = function() {
       cpmm.sendAsyncMessage("Contacts:GetRevision", {
-        requestID: this.getRequestId(request)
+        requestID: this.getRequestId({ request: request })
       });
     }.bind(this);
 
@@ -887,7 +925,7 @@ ContactManager.prototype = {
 
     let allowCallback = function() {
       cpmm.sendAsyncMessage("Contacts:GetCount", {
-        requestID: this.getRequestId(request)
+        requestID: this.getRequestId({ request: request })
       });
     }.bind(this);
 
@@ -900,14 +938,15 @@ ContactManager.prototype = {
   },
 
   init: function(aWindow) {
-    this.initHelper(aWindow, ["Contacts:Find:Return:OK", "Contacts:Find:Return:KO",
+    this.initDOMRequestHelper(aWindow, ["Contacts:Find:Return:OK", "Contacts:Find:Return:KO",
                               "Contacts:Clear:Return:OK", "Contacts:Clear:Return:KO",
                               "Contact:Save:Return:OK", "Contact:Save:Return:KO",
                               "Contact:Remove:Return:OK", "Contact:Remove:Return:KO",
                               "Contact:Changed",
                               "PermissionPromptHelper:AskPermission:OK",
-                              "Contacts:GetAll:Next", "Contacts:Revision",
-                              "Contacts:Count"]);
+                              "Contacts:GetAll:Next", "Contacts:GetAll:Return:KO",
+                              "Contacts:Count",
+                              "Contacts:Revision", "Contacts:GetRevision:Return:KO",]);
   },
 
   // Called from DOMRequestIpcHelper
@@ -918,7 +957,9 @@ ContactManager.prototype = {
   },
 
   classID : CONTACTMANAGER_CID,
-  QueryInterface : XPCOMUtils.generateQI([nsIDOMContactManager, Ci.nsIDOMGlobalPropertyInitializer]),
+  QueryInterface : XPCOMUtils.generateQI([nsIDOMContactManager,
+                                          Ci.nsIDOMGlobalPropertyInitializer,
+                                          Ci.nsISupportsWeakReference]),
 
   classInfo : XPCOMUtils.generateCI({classID: CONTACTMANAGER_CID,
                                      contractID: CONTACTMANAGER_CONTRACTID,

@@ -7,12 +7,11 @@
 #ifndef imgFrame_h
 #define imgFrame_h
 
+#include "mozilla/MemoryReporting.h"
+#include "mozilla/Mutex.h"
 #include "nsRect.h"
 #include "nsPoint.h"
 #include "nsSize.h"
-#include "gfxTypes.h"
-#include "nsID.h"
-#include "gfxContext.h"
 #include "gfxPattern.h"
 #include "gfxDrawable.h"
 #include "gfxImageSurface.h"
@@ -30,7 +29,7 @@ public:
   imgFrame();
   ~imgFrame();
 
-  nsresult Init(int32_t aX, int32_t aY, int32_t aWidth, int32_t aHeight, gfxASurface::gfxImageFormat aFormat, uint8_t aPaletteDepth = 0);
+  nsresult Init(int32_t aX, int32_t aY, int32_t aWidth, int32_t aHeight, gfxImageFormat aFormat, uint8_t aPaletteDepth = 0);
   nsresult Optimize();
 
   void Draw(gfxContext *aContext, gfxPattern::GraphicsFilter aFilter,
@@ -39,16 +38,19 @@ public:
             uint32_t aImageFlags = imgIContainer::FLAG_NONE);
 
   nsresult ImageUpdated(const nsIntRect &aUpdateRect);
+  bool GetIsDirty() const;
 
   nsIntRect GetRect() const;
-  gfxASurface::gfxImageFormat GetFormat() const;
+  gfxImageFormat GetFormat() const;
   bool GetNeedsBackground() const;
   uint32_t GetImageBytesPerRow() const;
   uint32_t GetImageDataLength() const;
   bool GetIsPaletted() const;
   bool GetHasAlpha() const;
   void GetImageData(uint8_t **aData, uint32_t *length) const;
+  uint8_t* GetImageData() const;
   void GetPaletteData(uint32_t **aPalette, uint32_t *length) const;
+  uint32_t* GetPaletteData() const;
 
   int32_t GetTimeout() const;
   void SetTimeout(int32_t aTimeout);
@@ -67,7 +69,7 @@ public:
 
   nsresult LockImageData();
   nsresult UnlockImageData();
-  void MarkImageDataDirty();
+  void ApplyDirtToSurfaces();
 
   nsresult GetSurface(gfxASurface **aSurface) const
   {
@@ -101,21 +103,24 @@ public:
   }
 
   size_t SizeOfExcludingThisWithComputedFallbackIfHeap(
-           gfxASurface::MemoryLocation aLocation,
-           nsMallocSizeOfFun aMallocSizeOf) const;
+           gfxMemoryLocation aLocation,
+           mozilla::MallocSizeOf aMallocSizeOf) const;
 
   uint8_t GetPaletteDepth() const { return mPaletteDepth; }
-
-private: // methods
   uint32_t PaletteDataLength() const {
+    if (!mPaletteDepth)
+      return 0;
+
     return ((1 << mPaletteDepth) * sizeof(uint32_t));
   }
 
+private: // methods
+
   struct SurfaceWithFormat {
     nsRefPtr<gfxDrawable> mDrawable;
-    gfxImageSurface::gfxImageFormat mFormat;
+    gfxImageFormat mFormat;
     SurfaceWithFormat() {}
-    SurfaceWithFormat(gfxDrawable* aDrawable, gfxImageSurface::gfxImageFormat aFormat)
+    SurfaceWithFormat(gfxDrawable* aDrawable, gfxImageFormat aFormat)
      : mDrawable(aDrawable), mFormat(aFormat) {}
     bool IsValid() { return !!mDrawable; }
   };
@@ -144,6 +149,8 @@ private: // data
 
   nsIntRect    mDecoded;
 
+  mutable mozilla::Mutex mDirtyMutex;
+
   // The palette and image data for images that are paletted, since Cairo
   // doesn't support these images.
   // The paletted data comes first, then the image data itself.
@@ -159,7 +166,7 @@ private: // data
   /** Indicates how many readers currently have locked this frame */
   int32_t mLockCount;
 
-  gfxASurface::gfxImageFormat mFormat;
+  gfxImageFormat mFormat;
   uint8_t      mPaletteDepth;
   int8_t       mBlendMethod;
   bool mSinglePixel;
@@ -174,6 +181,7 @@ private: // data
 #ifdef XP_WIN
   bool mIsDDBSurface;
 #endif
+  bool mDirty;
 };
 
 namespace mozilla {

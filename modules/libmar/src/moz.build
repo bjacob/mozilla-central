@@ -17,3 +17,12 @@ HOST_CSRCS += [
     'mar_read.c',
 ]
 HOST_LIBRARY_NAME = 'hostmar'
+
+LIBRARY_NAME = 'mar'
+
+CSRCS += [
+    'mar_create.c',
+    'mar_extract.c',
+    'mar_read.c',
+]
+

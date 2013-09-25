@@ -8,11 +8,10 @@
  */
 
 #include "nsHTMLCSSStyleSheet.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/css/StyleRule.h"
 #include "nsIStyleRuleProcessor.h"
 #include "nsPresContext.h"
-#include "nsIDocument.h"
-#include "nsCOMPtr.h"
 #include "nsRuleWalker.h"
 #include "nsRuleProcessorData.h"
 #include "mozilla/dom/Element.h"
@@ -41,7 +40,6 @@ ClearAttrCache(const nsAString& aKey, MiscContainer*& aValue, void*)
 
 nsHTMLCSSStyleSheet::nsHTMLCSSStyleSheet()
 {
-  mCachedStyleAttrs.Init();
 }
 
 nsHTMLCSSStyleSheet::~nsHTMLCSSStyleSheet()
@@ -133,13 +131,13 @@ nsHTMLCSSStyleSheet::MediumFeaturesChanged(nsPresContext* aPresContext)
 }
 
 /* virtual */ size_t
-nsHTMLCSSStyleSheet::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+nsHTMLCSSStyleSheet::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   return 0;
 }
 
 /* virtual */ size_t
-nsHTMLCSSStyleSheet::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+nsHTMLCSSStyleSheet::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }

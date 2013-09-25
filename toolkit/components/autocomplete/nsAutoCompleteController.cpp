@@ -14,6 +14,7 @@
 #include "nsIAtomService.h"
 #include "nsReadableUtils.h"
 #include "nsUnicharUtils.h"
+#include "nsITreeBoxObject.h"
 #include "nsITreeColumns.h"
 #include "nsIObserverService.h"
 #include "nsIDOMKeyEvent.h"
@@ -21,6 +22,8 @@
 #include "mozilla/ModuleUtils.h"
 
 static const char *kAutoCompleteSearchCID = "@mozilla.org/autocomplete/search;1?name=";
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsAutoCompleteController)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsAutoCompleteController)
   tmp->SetInput(nullptr);

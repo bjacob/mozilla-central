@@ -23,7 +23,7 @@ else:
     elif CONFIG['OS_ARCH'] == 'DragonFly':
         os_dragonfly = 1
         os_bsd = 1
-    elif CONFIG['OS_ARCH'] == 'FreeBSD':
+    elif CONFIG['OS_ARCH'] in ['FreeBSD', 'GNU_kFreeBSD']:
         os_freebsd = 1
         os_bsd = 1
     elif CONFIG['OS_ARCH'] == 'NetBSD':
@@ -56,7 +56,6 @@ CPP_SOURCES += [
     'ipc_channel_proxy.cc',
     'ipc_logging.cc',
     'ipc_message.cc',
-    'ipc_message_utils.cc',
     'ipc_sync_channel.cc',
     'ipc_sync_message.cc',
     'lazy_instance.cc',
@@ -76,7 +75,6 @@ CPP_SOURCES += [
     'scoped_temp_dir.cc',
     'simple_thread.cc',
     'stats_table.cc',
-    'string_escape.cc',
     'string_piece.cc',
     'string_util.cc',
     'system_monitor.cc',
@@ -167,6 +165,21 @@ if os_macosx:
         'mach_message_source_mac.cc',
         'transport_dib_mac.cc',
     ]
+    CMMSRCS += [
+        'base_paths_mac.mm',
+        'chrome_application_mac.mm',
+        'chrome_paths_mac.mm',
+        'file_util_mac.mm',
+        'file_version_info_mac.mm',
+        'mac_util.mm',
+        'mach_ipc_mac.mm',
+        'message_pump_mac.mm',
+        'platform_thread_mac.mm',
+        'process_util_mac.mm',
+        'scoped_nsautorelease_pool.mm',
+        'sys_string_conversions_mac.mm',
+        'worker_pool_mac.mm',
+    ]
 
 if os_linux:
     CPP_SOURCES += [
@@ -190,9 +203,12 @@ if os_linux:
 if os_bsd:
     CPP_SOURCES += [
         'atomicops_internals_x86_gcc.cc',
-        'process_util_bsd.cc',
         'time_posix.cc',
     ]
+    if CONFIG['OS_ARCH'] == 'GNU_kFreeBSD':
+        CPP_SOURCES += ['process_util_linux.cc']
+    else:
+        CPP_SOURCES += ['process_util_bsd.cc']
     if CONFIG['MOZ_WIDGET_GTK']:
         CPP_SOURCES += [
             'message_pump_glib.cc',
@@ -213,3 +229,8 @@ if ost.find('86') == -1 and ost.find('arm') == -1 and ost.find('mips') == -1:
     CPP_SOURCES += [
         'atomicops_internals_mutex.cc',
     ]
+
+LIBXUL_LIBRARY = True
+
+LIBRARY_NAME = 'chromium_s'
+

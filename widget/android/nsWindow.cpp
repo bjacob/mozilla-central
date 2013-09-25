@@ -37,10 +37,10 @@ using mozilla::unused;
 #include "gfxContext.h"
 
 #include "Layers.h"
-#include "BasicLayers.h"
 #include "LayerManagerOGL.h"
 #include "mozilla/layers/LayerManagerComposite.h"
 #include "mozilla/layers/AsyncCompositionManager.h"
+#include "mozilla/layers/APZCTreeManager.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
 
@@ -51,7 +51,8 @@ using mozilla::unused;
 
 #include "imgIEncoder.h"
 
-#include "nsStringGlue.h"
+#include "nsString.h"
+#include "GeckoProfiler.h" // For PROFILER_LABEL
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -72,7 +73,7 @@ static gfxIntSize gAndroidScreenBounds;
 #include "nsThreadUtils.h"
 
 class ContentCreationNotifier;
-static nsCOMPtr<ContentCreationNotifier> gContentCreationNotifier;
+static StaticRefPtr<ContentCreationNotifier> gContentCreationNotifier;
 
 // A helper class to send updates when content processes
 // are created. Currently an update for the screen size is sent.
@@ -336,6 +337,26 @@ nsWindow::GetDPI()
     if (AndroidBridge::Bridge())
         return AndroidBridge::Bridge()->GetDPI();
     return 160.0f;
+}
+
+double
+nsWindow::GetDefaultScaleInternal()
+{
+    static double density = 0.0;
+
+    if (density != 0.0) {
+        return density;
+    }
+
+    if (AndroidBridge::Bridge()) {
+        density = AndroidBridge::Bridge()->GetDensity();
+    }
+
+    if (!density) {
+        density = 1.0;
+    }
+
+    return density;
 }
 
 NS_IMETHODIMP
@@ -808,7 +829,7 @@ nsWindow::OnGlobalAndroidEvent(AndroidGeckoEvent *ae)
             if (!obs)
                 break;
 
-            nsCOMPtr<ContentCreationNotifier> notifier = new ContentCreationNotifier;
+            nsRefPtr<ContentCreationNotifier> notifier = new ContentCreationNotifier;
             if (NS_SUCCEEDED(obs->AddObserver(notifier, "ipc:content-created", false))) {
                 if (NS_SUCCEEDED(obs->AddObserver(notifier, "xpcom-shutdown", false)))
                     gContentCreationNotifier = notifier;
@@ -1066,11 +1087,17 @@ nsWindow::OnDraw(AndroidGeckoEvent *ae)
         return;
     }
 
+    int bytesPerPixel = 2;
+    gfxImageFormat format = gfxImageFormatRGB16_565;
+    if (AndroidBridge::Bridge()->GetScreenDepth() == 24) {
+        bytesPerPixel = 4;
+        format = gfxImageFormatRGB24;
+    }
+
     layers::renderTraceEventStart("Get surface", "424545");
-    static unsigned char bits2[32 * 32 * 2];
+    static unsigned char bits2[32 * 32 * 4];
     nsRefPtr<gfxImageSurface> targetSurface =
-        new gfxImageSurface(bits2, gfxIntSize(32, 32), 32 * 2,
-                            gfxASurface::ImageFormatRGB16_565);
+        new gfxImageSurface(bits2, gfxIntSize(32, 32), 32 * bytesPerPixel, format);
     layers::renderTraceEventEnd("Get surface", "424545");
 
     layers::renderTraceEventStart("Widget draw to", "434646");
@@ -1138,21 +1165,6 @@ nsWindow::OnMouseEvent(AndroidGeckoEvent *ae)
 {
     uint32_t msg;
     switch (ae->Action()) {
-#ifndef MOZ_ONLY_TOUCH_EVENTS
-        case AndroidMotionEvent::ACTION_DOWN:
-            msg = NS_MOUSE_BUTTON_DOWN;
-            break;
-
-        case AndroidMotionEvent::ACTION_MOVE:
-            msg = NS_MOUSE_MOVE;
-            break;
-
-        case AndroidMotionEvent::ACTION_UP:
-        case AndroidMotionEvent::ACTION_CANCEL:
-            msg = NS_MOUSE_BUTTON_UP;
-            break;
-#endif
-
         case AndroidMotionEvent::ACTION_HOVER_MOVE:
             msg = NS_MOUSE_MOVE;
             break;
@@ -1290,7 +1302,7 @@ nsWindow::DispatchGestureEvent(uint32_t msg, uint32_t direction, double delta,
 
     event.modifiers = 0;
     event.time = time;
-    event.refPoint = refPoint;
+    event.refPoint = LayoutDeviceIntPoint::FromUntyped(refPoint);
 
     DispatchEvent(&event);
 }
@@ -1307,7 +1319,7 @@ nsWindow::DispatchMotionEvent(nsInputEvent &event, AndroidGeckoEvent *ae,
 
     // XXX possibly bound the range of event.refPoint here.
     //     some code may get confused.
-    event.refPoint = refPoint - offset;
+    event.refPoint = LayoutDeviceIntPoint::FromUntyped(refPoint - offset);
 
     DispatchEvent(&event);
 }
@@ -1667,6 +1679,7 @@ nsWindow::HandleSpecialKey(AndroidGeckoEvent *ae)
     } else {
         switch (keyCode) {
             case AKEYCODE_BACK: {
+                // XXX Where is the keydown event for this??
                 nsKeyEvent pressEvent(true, NS_KEY_PRESS, this);
                 ANPEvent pluginEvent;
                 InitKeyEvent(pressEvent, *ae, &pluginEvent);
@@ -1746,14 +1759,12 @@ nsWindow::OnKeyEvent(AndroidGeckoEvent *ae)
 
     if (Destroyed())
         return;
-    if (!firePress)
+    if (!firePress || status == nsEventStatus_eConsumeNoDefault) {
         return;
+    }
 
     nsKeyEvent pressEvent(true, NS_KEY_PRESS, this);
     InitKeyEvent(pressEvent, *ae, &pluginEvent);
-    if (status == nsEventStatus_eConsumeNoDefault) {
-        pressEvent.mFlags.mDefaultPrevented = true;
-    }
 #ifdef DEBUG_ANDROID_WIDGET
     __android_log_print(ANDROID_LOG_INFO, "Gecko", "Dispatching key pressEvent with keyCode %d charCode %d shift %d alt %d sym/ctrl %d metamask %d", pressEvent.keyCode, pressEvent.charCode, pressEvent.IsShift(), pressEvent.IsAlt(), pressEvent.IsControl(), ae->MetaState());
 #endif
@@ -2194,6 +2205,12 @@ nsWindow::SetInputContext(const InputContext& aContext,
 
     mInputContext.mIMEState.mEnabled = enabled;
 
+    if (enabled == IMEState::ENABLED && aAction.UserMightRequestOpenVKB()) {
+        // Don't reset keyboard when we should simply open the vkb
+        AndroidBridge::NotifyIME(AndroidBridge::NOTIFY_IME_OPEN_VKB);
+        return;
+    }
+
     if (mIMEUpdatingContext) {
         return;
     }
@@ -2246,8 +2263,7 @@ nsWindow::FlushIMEChanges()
         if (!event.mSucceeded)
             return;
 
-        AndroidBridge::NotifyIMEChange(event.mReply.mString.get(),
-                                       event.mReply.mString.Length(),
+        AndroidBridge::NotifyIMEChange(event.mReply.mString,
                                        change.mStart,
                                        change.mOldEnd,
                                        change.mNewEnd);
@@ -2262,9 +2278,9 @@ nsWindow::FlushIMEChanges()
         if (!event.mSucceeded)
             return;
 
-        AndroidBridge::NotifyIMEChange(nullptr, 0,
-                                       event.GetSelectionStart(),
-                                       event.GetSelectionEnd(), -1);
+        AndroidBridge::NotifyIMEChange(EmptyString(),
+                             (int32_t) event.GetSelectionStart(),
+                             (int32_t) event.GetSelectionEnd(), -1);
         mIMESelectionChanged = false;
     }
 }
@@ -2347,7 +2363,9 @@ nsWindow::NotifyIMEOfTextChange(uint32_t aStart,
 nsIMEUpdatePreference
 nsWindow::GetIMEUpdatePreference()
 {
-    return nsIMEUpdatePreference(true, true);
+    int8_t notifications = (nsIMEUpdatePreference::NOTIFY_SELECTION_CHANGE |
+                            nsIMEUpdatePreference::NOTIFY_TEXT_CHANGE);
+    return nsIMEUpdatePreference(notifications, true);
 }
 
 void
@@ -2375,6 +2393,7 @@ nsWindow::DrawWindowUnderlay(LayerManager* aManager, nsIntRect aRect)
 void
 nsWindow::DrawWindowOverlay(LayerManager* aManager, nsIntRect aRect)
 {
+    PROFILER_LABEL("nsWindow", "DrawWindowOverlay");
     JNIEnv *env = GetJNIForThread();
     NS_ABORT_IF_FALSE(env, "No JNI environment at DrawWindowOverlay()!");
     if (!env)
@@ -2396,11 +2415,11 @@ nsWindow::DrawWindowOverlay(LayerManager* aManager, nsIntRect aRect)
 
 // off-main-thread compositor fields and functions
 
-nsRefPtr<mozilla::layers::LayerManager> nsWindow::sLayerManager = 0;
-nsRefPtr<mozilla::layers::CompositorParent> nsWindow::sCompositorParent = 0;
-nsRefPtr<mozilla::layers::CompositorChild> nsWindow::sCompositorChild = 0;
+StaticRefPtr<mozilla::layers::APZCTreeManager> nsWindow::sApzcTreeManager;
+StaticRefPtr<mozilla::layers::LayerManager> nsWindow::sLayerManager;
+StaticRefPtr<mozilla::layers::CompositorParent> nsWindow::sCompositorParent;
+StaticRefPtr<mozilla::layers::CompositorChild> nsWindow::sCompositorChild;
 bool nsWindow::sCompositorPaused = true;
-nsRefPtr<mozilla::layers::AsyncPanZoomController> nsWindow::sApzc = 0;
 
 void
 nsWindow::SetCompositor(mozilla::layers::LayerManager* aLayerManager,
@@ -2475,52 +2494,30 @@ nsWindow::NeedsPaint()
   return nsIWidget::NeedsPaint();
 }
 
-class AndroidCompositorParent : public CompositorParent {
-public:
-    AndroidCompositorParent(nsIWidget* aWidget, bool aRenderToEGLSurface,
-                            int aSurfaceWidth, int aSurfaceHeight)
-        : CompositorParent(aWidget, aRenderToEGLSurface, aSurfaceHeight, aSurfaceHeight)
-    {
-        if (nsWindow::GetPanZoomController()) {
-            nsWindow::GetPanZoomController()->SetCompositorParent(this);
-        }
-    }
-
-    virtual void ShadowLayersUpdated(LayerTransactionParent* aLayerTree, const TargetConfig& aTargetConfig,
-                                     bool isFirstPaint) MOZ_OVERRIDE
-    {
-        CompositorParent::ShadowLayersUpdated(aLayerTree, aTargetConfig, isFirstPaint);
-        Layer* targetLayer = GetLayerManager()->GetPrimaryScrollableLayer();
-        AsyncPanZoomController* controller = nsWindow::GetPanZoomController();
-        if (targetLayer && targetLayer->AsContainerLayer() && controller) {
-            targetLayer->SetAsyncPanZoomController(controller);
-            controller->NotifyLayersUpdated(targetLayer->AsContainerLayer()->GetFrameMetrics(), isFirstPaint);
-        }
-    }
-};
-
 CompositorParent*
 nsWindow::NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight)
 {
-    return new AndroidCompositorParent(this, true, aSurfaceWidth, aSurfaceHeight);
+    return new CompositorParent(this, true, aSurfaceWidth, aSurfaceHeight);
 }
 
-void
-nsWindow::SetPanZoomController(AsyncPanZoomController* apzc)
+mozilla::layers::APZCTreeManager*
+nsWindow::GetAPZCTreeManager()
 {
-    if (sApzc) {
-        sApzc->SetCompositorParent(nullptr);
-        sApzc = nullptr;
+    if (!sApzcTreeManager) {
+        CompositorParent* compositor = sCompositorParent;
+        if (!compositor) {
+            return nullptr;
+        }
+        uint64_t rootLayerTreeId = compositor->RootLayerTreeId();
+        CompositorParent::SetControllerForLayerTree(rootLayerTreeId, AndroidBridge::Bridge());
+        sApzcTreeManager = CompositorParent::GetAPZCTreeManager(rootLayerTreeId);
     }
-    if (apzc) {
-        sApzc = apzc;
-        sApzc->SetCompositorParent(sCompositorParent);
-    }
+    return sApzcTreeManager;
 }
 
-AsyncPanZoomController*
-nsWindow::GetPanZoomController()
+uint64_t
+nsWindow::RootLayerTreeId()
 {
-    return sApzc;
+    MOZ_ASSERT(sCompositorParent);
+    return sCompositorParent->RootLayerTreeId();
 }
-

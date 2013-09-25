@@ -457,7 +457,6 @@ void nsTableFrame::ResetRowIndices(const nsFrameList::Slice& aRowGroupsToExclude
 
   int32_t rowIndex = 0;
   nsTHashtable<nsPtrHashKey<nsTableRowGroupFrame> > excludeRowGroups;
-  excludeRowGroups.Init();
   nsFrameList::Enumerator excludeRowGroupsEnumerator(aRowGroupsToExclude);
   while (!excludeRowGroupsEnumerator.AtEnd()) {
     excludeRowGroups.PutEntry(static_cast<nsTableRowGroupFrame*>(excludeRowGroupsEnumerator.get()));
@@ -596,10 +595,8 @@ nsTableFrame::CreateAnonymousColGroupFrame(nsTableColGroupType aColGroupType)
     ResolveAnonymousBoxStyle(nsCSSAnonBoxes::tableColGroup, mStyleContext);
   // Create a col group frame
   nsIFrame* newFrame = NS_NewTableColGroupFrame(shell, colGroupStyle);
-  if (newFrame) {
-    ((nsTableColGroupFrame *)newFrame)->SetColType(aColGroupType);
-    newFrame->Init(colGroupContent, this, nullptr);
-  }
+  ((nsTableColGroupFrame *)newFrame)->SetColType(aColGroupType);
+  newFrame->Init(colGroupContent, this, nullptr);
   return (nsTableColGroupFrame *)newFrame;
 }
 
@@ -1061,10 +1058,65 @@ public:
   }
 #endif
 
+  virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                         const nsDisplayItemGeometry* aGeometry,
+                                         nsRegion *aInvalidRegion) MOZ_OVERRIDE;
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      nsRenderingContext* aCtx);
   NS_DISPLAY_DECL_NAME("TableBorderBackground", TYPE_TABLE_BORDER_BACKGROUND)
 };
+
+#ifdef DEBUG
+static bool
+IsFrameAllowedInTable(nsIAtom* aType)
+{
+  return IS_TABLE_CELL(aType) ||
+         nsGkAtoms::tableRowFrame == aType ||
+         nsGkAtoms::tableRowGroupFrame == aType ||
+         nsGkAtoms::scrollFrame == aType ||
+         nsGkAtoms::tableFrame == aType ||
+         nsGkAtoms::tableColFrame == aType ||
+         nsGkAtoms::tableColGroupFrame == aType;
+}
+#endif
+
+/* static */ bool
+nsTableFrame::AnyTablePartHasUndecodedBackgroundImage(nsIFrame* aStart,
+                                                      nsIFrame* aEnd)
+{
+  for (nsIFrame* f = aStart; f != aEnd; f = f->GetNextSibling()) {
+    NS_ASSERTION(IsFrameAllowedInTable(f->GetType()), "unexpected frame type");
+
+    if (!nsCSSRendering::AreAllBackgroundImagesDecodedForFrame(f))
+      return true;
+
+    nsTableCellFrame *cellFrame = do_QueryFrame(f);
+    if (cellFrame)
+      continue;
+
+    if (AnyTablePartHasUndecodedBackgroundImage(f->PrincipalChildList().FirstChild(), nullptr))
+      return true;
+  }
+  
+  return false;
+}
+
+void
+nsDisplayTableBorderBackground::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                                          const nsDisplayItemGeometry* aGeometry,
+                                                          nsRegion *aInvalidRegion)
+{
+  if (aBuilder->ShouldSyncDecodeImages()) {
+    if (nsTableFrame::AnyTablePartHasUndecodedBackgroundImage(mFrame, mFrame->GetNextSibling()) ||
+        nsTableFrame::AnyTablePartHasUndecodedBackgroundImage(
+          mFrame->GetChildList(nsIFrame::kColGroupList).FirstChild(), nullptr)) {
+      bool snap;
+      aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
+    }
+  }
+
+  nsDisplayTableItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
+}
 
 void
 nsDisplayTableBorderBackground::Paint(nsDisplayListBuilder* aBuilder,
@@ -1176,20 +1228,6 @@ nsTableFrame::DisplayGenericTablePart(nsDisplayListBuilder* aBuilder,
   aFrame->DisplayOutline(aBuilder, aLists);
 }
 
-#ifdef DEBUG
-static bool
-IsFrameAllowedInTable(nsIAtom* aType)
-{
-  return IS_TABLE_CELL(aType) ||
-         nsGkAtoms::tableRowFrame == aType ||
-         nsGkAtoms::tableRowGroupFrame == aType ||
-         nsGkAtoms::scrollFrame == aType ||
-         nsGkAtoms::tableFrame == aType ||
-         nsGkAtoms::tableColFrame == aType ||
-         nsGkAtoms::tableColGroupFrame == aType;
-}
-#endif
-
 static bool
 AnyTablePartHasBorderOrBackground(nsIFrame* aStart, nsIFrame* aEnd)
 {
@@ -1227,8 +1265,7 @@ nsTableFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       // in its own display item, so do that to take advantage of
       // opacity and visibility optimizations
       if (deflate == nsMargin(0, 0, 0, 0)) {
-        nsDisplayBackgroundImage* bg;
-        DisplayBackgroundUnconditional(aBuilder, aLists, false, &bg);
+        DisplayBackgroundUnconditional(aBuilder, aLists, false);
       }
     }
     
@@ -1292,7 +1329,7 @@ nsTableFrame::PaintTableBorderBackground(nsRenderingContext& aRenderingContext,
 }
 
 int
-nsTableFrame::GetSkipSides() const
+nsTableFrame::GetSkipSides(const nsHTMLReflowState* aReflowState) const
 {
   int skip = 0;
   // frame attribute was accounted for in nsHTMLTableElement::MapTableBorderInto
@@ -2644,7 +2681,7 @@ nsTableFrame::SetupHeaderFooterChild(const nsTableReflowState& aReflowState,
   nsHTMLReflowState kidReflowState(presContext, aReflowState.reflowState,
                                    aFrame,
                                    nsSize(aReflowState.availSize.width, NS_UNCONSTRAINEDSIZE),
-                                   -1, -1, false);
+                                   -1, -1, nsHTMLReflowState::CALLER_WILL_INIT);
   InitChildReflowState(kidReflowState);
   kidReflowState.mFlags.mIsTopOfPage = true;
   nsHTMLReflowMetrics desiredSize;
@@ -2671,7 +2708,8 @@ nsTableFrame::PlaceRepeatedFooter(nsTableReflowState& aReflowState,
   nsHTMLReflowState footerReflowState(presContext,
                                       aReflowState.reflowState,
                                       aTfoot, kidAvailSize,
-                                      -1, -1, false);
+                                      -1, -1,
+                                      nsHTMLReflowState::CALLER_WILL_INIT);
   InitChildReflowState(footerReflowState);
   aReflowState.y += GetCellSpacingY();
 
@@ -2791,7 +2829,8 @@ nsTableFrame::ReflowChildren(nsTableReflowState& aReflowState,
       // Reflow the child into the available space
       nsHTMLReflowState kidReflowState(presContext, aReflowState.reflowState,
                                        kidFrame, kidAvailSize,
-                                       -1, -1, false);
+                                       -1, -1,
+                                       nsHTMLReflowState::CALLER_WILL_INIT);
       InitChildReflowState(kidReflowState);
 
       // If this isn't the first row group, and the previous row group has a

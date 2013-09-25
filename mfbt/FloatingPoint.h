@@ -1,17 +1,19 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* Various predicates and operations on IEEE-754 floating point types. */
 
-#ifndef mozilla_FloatingPoint_h_
-#define mozilla_FloatingPoint_h_
+#ifndef mozilla_FloatingPoint_h
+#define mozilla_FloatingPoint_h
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Casting.h"
-#include "mozilla/StandardInteger.h"
+
+#include <stdint.h>
 
 namespace mozilla {
 
@@ -36,7 +38,7 @@ namespace mozilla {
  * the case.  But we required this in implementations of these algorithms that
  * preceded this header, so we shouldn't break anything if we continue doing so.
  */
-MOZ_STATIC_ASSERT(sizeof(double) == sizeof(uint64_t), "double must be 64 bits");
+static_assert(sizeof(double) == sizeof(uint64_t), "double must be 64 bits");
 
 const unsigned DoubleExponentBias = 1023;
 const unsigned DoubleExponentShift = 52;
@@ -45,16 +47,40 @@ const uint64_t DoubleSignBit         = 0x8000000000000000ULL;
 const uint64_t DoubleExponentBits    = 0x7ff0000000000000ULL;
 const uint64_t DoubleSignificandBits = 0x000fffffffffffffULL;
 
-MOZ_STATIC_ASSERT((DoubleSignBit & DoubleExponentBits) == 0,
-                  "sign bit doesn't overlap exponent bits");
-MOZ_STATIC_ASSERT((DoubleSignBit & DoubleSignificandBits) == 0,
-                  "sign bit doesn't overlap significand bits");
-MOZ_STATIC_ASSERT((DoubleExponentBits & DoubleSignificandBits) == 0,
-                  "exponent bits don't overlap significand bits");
+static_assert((DoubleSignBit & DoubleExponentBits) == 0,
+              "sign bit doesn't overlap exponent bits");
+static_assert((DoubleSignBit & DoubleSignificandBits) == 0,
+              "sign bit doesn't overlap significand bits");
+static_assert((DoubleExponentBits & DoubleSignificandBits) == 0,
+              "exponent bits don't overlap significand bits");
 
-MOZ_STATIC_ASSERT((DoubleSignBit | DoubleExponentBits | DoubleSignificandBits) ==
-                  ~uint64_t(0),
-                  "all bits accounted for");
+static_assert((DoubleSignBit | DoubleExponentBits | DoubleSignificandBits) ==
+              ~uint64_t(0),
+              "all bits accounted for");
+
+/*
+ * Ditto for |float| that must be a 32-bit double format number type, compatible
+ * with the IEEE-754 standard.
+ */
+static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32bits");
+
+const unsigned FloatExponentBias = 127;
+const unsigned FloatExponentShift = 23;
+
+const uint32_t FloatSignBit         = 0x80000000UL;
+const uint32_t FloatExponentBits    = 0x7F800000UL;
+const uint32_t FloatSignificandBits = 0x007FFFFFUL;
+
+static_assert((FloatSignBit & FloatExponentBits) == 0,
+              "sign bit doesn't overlap exponent bits");
+static_assert((FloatSignBit & FloatSignificandBits) == 0,
+              "sign bit doesn't overlap significand bits");
+static_assert((FloatExponentBits & FloatSignificandBits) == 0,
+              "exponent bits don't overlap significand bits");
+
+static_assert((FloatSignBit | FloatExponentBits | FloatSignificandBits) ==
+              ~uint32_t(0),
+              "all bits accounted for");
 
 /** Determines whether a double is NaN. */
 static MOZ_ALWAYS_INLINE bool
@@ -188,9 +214,28 @@ DoubleIsInt32(double d, int32_t* i)
 static MOZ_ALWAYS_INLINE double
 UnspecifiedNaN()
 {
-  return SpecificNaN(0, 0xfffffffffffffULL);
+  /*
+   * If we can use any quiet NaN, we might as well use the all-ones NaN,
+   * since it's cheap to materialize on common platforms (such as x64, where
+   * this value can be represented in a 32-bit signed immediate field, allowing
+   * it to be stored to memory in a single instruction).
+   */
+  return SpecificNaN(1, 0xfffffffffffffULL);
+}
+
+/**
+ * Compare two doubles for equality, *without* equating -0 to +0, and equating
+ * any NaN value to any other NaN value.  (The normal equality operators equate
+ * -0 with +0, and they equate NaN to no other value.)
+ */
+static inline bool
+DoublesAreIdentical(double d1, double d2)
+{
+  if (IsNaN(d1))
+    return IsNaN(d2);
+  return BitwiseCast<uint64_t>(d1) == BitwiseCast<uint64_t>(d2);
 }
 
 } /* namespace mozilla */
 
-#endif  /* mozilla_FloatingPoint_h_ */
+#endif /* mozilla_FloatingPoint_h */

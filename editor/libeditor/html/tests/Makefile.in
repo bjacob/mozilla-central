@@ -3,14 +3,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH		= @DEPTH@
-topsrcdir	= @top_srcdir@
-srcdir		= @srcdir@
-VPATH		= @srcdir@
-relativesrcdir  = @relativesrcdir@
-
-include $(DEPTH)/config/autoconf.mk
-
 MOCHITEST_FILES = \
 		green.png \
 		test_bug200416.html \
@@ -47,6 +39,7 @@ MOCHITEST_FILES = \
 		test_bug552782.html \
 		test_bug570144.html \
 		test_bug578771.html \
+		test_bug587461.html \
 		test_bug592592.html \
 		test_bug597784.html \
 		test_bug599322.html \

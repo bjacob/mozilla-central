@@ -10,19 +10,22 @@
 interface DummyInterface {
   readonly attribute OnErrorEventHandlerNonNull onErrorEventHandler;
   FilePropertyBag fileBag();
-  CFStateChangeEventDict cfstateChangeEvent();
-  USSDReceivedEventDict ussdReceivedEvent();
   InspectorRGBTriple rgbTriple();
   Function getFunction();
   void funcSocketsDict(optional SocketsDict arg);
   void funcHttpConnDict(optional HttpConnDict arg);
   void funcWebSocketDict(optional WebSocketDict arg);
   void funcDNSCacheDict(optional DNSCacheDict arg);
+  void funcDNSLookupDict(optional DNSLookupDict arg);
+  void funcConnStatusDict(optional ConnStatusDict arg);
   void frameRequestCallback(FrameRequestCallback arg);
-  void idbObjectStoreParams(optional IDBObjectStoreParameters arg);
-  void CameraPictureOptions(optional CameraPictureOptions arg);
   void MmsParameters(optional MmsParameters arg);
   void MmsAttachment(optional MmsAttachment arg);
+  void AsyncScrollEventDetail(optional AsyncScrollEventDetail arg);
+  void OpenWindowEventDetail(optional OpenWindowEventDetail arg);
+  void DOMWindowResizeEventDetail(optional DOMWindowResizeEventDetail arg);
+  void WifiOptions(optional WifiCommandOptions arg1,
+                   optional WifiResultOptions arg2);
 };
 
 interface DummyInterfaceWorkers {

@@ -6,6 +6,8 @@
 package org.mozilla.gecko;
 
 import org.mozilla.gecko.db.BrowserDB;
+import org.mozilla.gecko.home.HomePager;
+import org.mozilla.gecko.ReaderModeUtils;
 import org.mozilla.gecko.sync.setup.SyncAccounts;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.ThreadUtils;
@@ -17,10 +19,12 @@ import android.accounts.AccountManager;
 import android.accounts.OnAccountsUpdateListener;
 import android.app.Activity;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.database.ContentObserver;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Handler;
+import android.text.TextUtils;
 import android.util.Log;
 
 import java.util.ArrayList;
@@ -44,33 +48,32 @@ public class Tabs implements GeckoEventListener {
     // All accesses to mTabs must be synchronized on the Tabs instance.
     private final HashMap<Integer, Tab> mTabs = new HashMap<Integer, Tab>();
 
-    // Keeps track of how much has happened since we last updated our persistent tab store.
-    private volatile int mScore = 0;
-
     private AccountManager mAccountManager;
     private OnAccountsUpdateListener mAccountListener = null;
 
-    public static final int LOADURL_NONE = 0;
-    public static final int LOADURL_NEW_TAB = 1;
-    public static final int LOADURL_USER_ENTERED = 2;
-    public static final int LOADURL_PRIVATE = 4;
-    public static final int LOADURL_PINNED = 8;
-    public static final int LOADURL_DELAY_LOAD = 16;
-    public static final int LOADURL_DESKTOP = 32;
-    public static final int LOADURL_BACKGROUND = 64;
+    public static final int LOADURL_NONE         = 0;
+    public static final int LOADURL_NEW_TAB      = 1 << 0;
+    public static final int LOADURL_USER_ENTERED = 1 << 1;
+    public static final int LOADURL_PRIVATE      = 1 << 2;
+    public static final int LOADURL_PINNED       = 1 << 3;
+    public static final int LOADURL_DELAY_LOAD   = 1 << 4;
+    public static final int LOADURL_DESKTOP      = 1 << 5;
+    public static final int LOADURL_BACKGROUND   = 1 << 6;
+    public static final int LOADURL_EXTERNAL     = 1 << 7;
+    public static final int LOADURL_READING_LIST = 1 << 8;
 
     private static final long PERSIST_TABS_AFTER_MILLISECONDS = 1000 * 5;
 
     private static AtomicInteger sTabId = new AtomicInteger(0);
     private volatile boolean mInitialTabsAdded;
 
-    private Activity mActivity;
+    private Context mAppContext;
     private ContentObserver mContentObserver;
 
     private final Runnable mPersistTabsRunnable = new Runnable() {
         @Override
         public void run() {
-            boolean syncIsSetup = SyncAccounts.syncAccountsExist(getActivity());
+            boolean syncIsSetup = SyncAccounts.syncAccountsExist(getAppContext());
             if (syncIsSetup) {
                 TabsAccessor.persistLocalTabs(getContentResolver(), getTabsInOrder());
             }
@@ -100,17 +103,19 @@ public class Tabs implements GeckoEventListener {
         registerEventListener("DesktopMode:Changed");
     }
 
-    public synchronized void attachToActivity(Activity activity) {
-        if (mActivity == activity) {
+    public synchronized void attachToContext(Context context) {
+        final Context appContext = context.getApplicationContext();
+        if (mAppContext == appContext) {
             return;
         }
 
-        if (mActivity != null) {
-            detachFromActivity(mActivity);
+        if (mAppContext != null) {
+            // This should never happen.
+            Log.w(LOGTAG, "The application context has changed!");
         }
 
-        mActivity = activity;
-        mAccountManager = AccountManager.get(mActivity);
+        mAppContext = appContext;
+        mAccountManager = AccountManager.get(appContext);
 
         mAccountListener = new OnAccountsUpdateListener() {
             @Override
@@ -124,23 +129,6 @@ public class Tabs implements GeckoEventListener {
 
         if (mContentObserver != null) {
             BrowserDB.registerBookmarkObserver(getContentResolver(), mContentObserver);
-        }
-    }
-
-    // Ideally, this would remove the reference to the activity once it's
-    // detached; however, we have lifecycle issues with GeckoApp and Tabs that
-    // requires us to keep it around (see
-    // https://bugzilla.mozilla.org/show_bug.cgi?id=844407).
-    public synchronized void detachFromActivity(Activity activity) {
-        ThreadUtils.getBackgroundHandler().removeCallbacks(mPersistTabsRunnable);
-
-        if (mContentObserver != null) {
-            BrowserDB.unregisterContentObserver(getContentResolver(), mContentObserver);
-        }
-
-        if (mAccountListener != null) {
-            mAccountManager.removeOnAccountsUpdatedListener(mAccountListener);
-            mAccountListener = null;
         }
     }
 
@@ -192,8 +180,8 @@ public class Tabs implements GeckoEventListener {
     }
 
     private Tab addTab(int id, String url, boolean external, int parentId, String title, boolean isPrivate) {
-        final Tab tab = isPrivate ? new PrivateTab(mActivity, id, url, external, parentId, title) :
-                                    new Tab(mActivity, id, url, external, parentId, title);
+        final Tab tab = isPrivate ? new PrivateTab(mAppContext, id, url, external, parentId, title) :
+                                    new Tab(mAppContext, id, url, external, parentId, title);
         synchronized (this) {
             lazyRegisterBookmarkObserver();
             mTabs.put(id, tab);
@@ -258,7 +246,6 @@ public class Tabs implements GeckoEventListener {
     }
 
     private Tab getPreviousTabFrom(Tab tab, boolean getPrivate) {
-        int numTabs = mOrder.size();
         int index = getIndexOf(tab);
         for (int i = index - 1; i >= 0; i--) {
             Tab prev = mOrder.get(i);
@@ -358,15 +345,15 @@ public class Tabs implements GeckoEventListener {
      * @return the current GeckoApp instance, or throws if
      *         we aren't correctly initialized.
      */
-    private synchronized android.app.Activity getActivity() {
-        if (mActivity == null) {
+    private synchronized Context getAppContext() {
+        if (mAppContext == null) {
             throw new IllegalStateException("Tabs not initialized with a GeckoApp instance.");
         }
-        return mActivity;
+        return mAppContext;
     }
 
     public ContentResolver getContentResolver() {
-        return getActivity().getContentResolver();
+        return getAppContext().getContentResolver();
     }
 
     // Make Tabs a singleton class.
@@ -461,6 +448,7 @@ public class Tabs implements GeckoEventListener {
                     // Default to white if no color is given
                     tab.setBackgroundColor(Color.WHITE);
                 }
+                tab.setErrorType(message.optString("errorType"));
                 notifyListeners(tab, Tabs.TabEvents.LOADED);
             } else if (event.equals("DOMTitleChanged")) {
                 tab.updateTitle(message.getString("title"));
@@ -535,7 +523,7 @@ public class Tabs implements GeckoEventListener {
 
     // Throws if not initialized.
     public void notifyListeners(final Tab tab, final TabEvents msg, final Object data) {
-        getActivity().runOnUiThread(new Runnable() {
+        ThreadUtils.postToUiThread(new Runnable() {
             @Override
             public void run() {
                 onTabChanged(tab, msg, data);
@@ -598,6 +586,22 @@ public class Tabs implements GeckoEventListener {
     }
 
     /**
+     * Looks for an open tab with the given URL.
+     *
+     * @return id of an open tab with the given URL; -1 if the tab doesn't exist.
+     */
+    public int getTabIdForUrl(String url) {
+        for (Tab tab : mOrder) {
+            if (TextUtils.equals(tab.getURL(), url) ||
+                TextUtils.equals(ReaderModeUtils.getUrlFromAboutReader(tab.getURL()), url)) {
+                return tab.getId();
+            }
+        }
+
+        return -1;
+    }
+
+    /**
      * Loads a tab with the given URL in the currently selected tab.
      *
      * @param url URL of page to load, or search term used if searchEngine is given
@@ -641,6 +645,7 @@ public class Tabs implements GeckoEventListener {
             boolean isPrivate = (flags & LOADURL_PRIVATE) != 0;
             boolean userEntered = (flags & LOADURL_USER_ENTERED) != 0;
             boolean desktopMode = (flags & LOADURL_DESKTOP) != 0;
+            boolean external = (flags & LOADURL_EXTERNAL) != 0;
 
             args.put("url", url);
             args.put("engine", searchEngine);
@@ -652,6 +657,7 @@ public class Tabs implements GeckoEventListener {
             args.put("delayLoad", delayLoad);
             args.put("desktopMode", desktopMode);
             args.put("selected", !background);
+            args.put("aboutHomePage", (flags & LOADURL_READING_LIST) != 0 ? HomePager.Page.READING_LIST : "");
 
             if ((flags & LOADURL_NEW_TAB) != 0) {
                 int tabId = getNextTabId();
@@ -662,7 +668,7 @@ public class Tabs implements GeckoEventListener {
                 // long as it's a valid URI.
                 String tabUrl = (url != null && Uri.parse(url).getScheme() != null) ? url : null;
 
-                added = addTab(tabId, tabUrl, false, parentId, url, isPrivate);
+                added = addTab(tabId, tabUrl, external, parentId, url, isPrivate);
                 added.setDesktopMode(desktopMode);
             }
         } catch (Exception e) {

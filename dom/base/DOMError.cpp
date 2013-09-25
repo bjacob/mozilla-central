@@ -6,9 +6,13 @@
 
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/DOMErrorBinding.h"
-#include "nsContentUtils.h"
-#include "nsDOMException.h"
 #include "nsPIDOMWindow.h"
+
+// Implemented in DOMException.cpp
+nsresult
+NS_GetNameAndMessageForDOMNSResult(nsresult aNSResult, const char** aName,
+                                   const char** aMessage,
+                                   uint16_t* aCode = nullptr);
 
 namespace mozilla {
 namespace dom {
@@ -20,6 +24,12 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DOMError)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
+
+DOMError::DOMError(nsPIDOMWindow* aWindow)
+  : mWindow(aWindow)
+{
+  SetIsDOMBinding();
+}
 
 DOMError::DOMError(nsPIDOMWindow* aWindow, nsresult aValue)
   : mWindow(aWindow)
@@ -60,10 +70,11 @@ DOMError::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
 }
 
 /* static */ already_AddRefed<DOMError>
-DOMError::Constructor(const GlobalObject& aGlobal, const nsAString& aName,
-                      const nsAString& aMessage, ErrorResult& aRv)
+DOMError::Constructor(const GlobalObject& aGlobal,
+                      const nsAString& aName, const nsAString& aMessage,
+                      ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.Get());
+  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
 
   // Window is null for chrome code.
 

@@ -2,13 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "tests.h"
-
-#include "jsclass.h"
+#include "js/Class.h"
+#include "jsapi-tests/tests.h"
 
 int count = 0;
 
-static JSBool
+static bool
 IterNext(JSContext *cx, unsigned argc, jsval *vp)
 {
     if (count++ == 100)
@@ -18,7 +17,7 @@ IterNext(JSContext *cx, unsigned argc, jsval *vp)
 }
 
 static JSObject *
-IterHook(JSContext *cx, JS::HandleObject obj, JSBool keysonly)
+IterHook(JSContext *cx, JS::HandleObject obj, bool keysonly)
 {
     JS::RootedObject iterObj(cx, JS_NewObject(cx, NULL, NULL, NULL));
     if (!iterObj)
@@ -28,7 +27,7 @@ IterHook(JSContext *cx, JS::HandleObject obj, JSBool keysonly)
     return iterObj;
 }
 
-js::Class HasCustomIterClass = {
+const js::Class HasCustomIterClass = {
     "HasCustomIter",
     0,
     JS_PropertyStub,
@@ -41,8 +40,8 @@ js::Class HasCustomIterClass = {
     NULL,
     NULL, /* checkAccess */
     NULL, /* call */
-    NULL, /* construct */
     NULL, /* hasInstance */
+    NULL, /* construct */
     NULL, /* mark */
     {
         NULL,       /* outerObject */
@@ -52,7 +51,7 @@ js::Class HasCustomIterClass = {
     }
 };
 
-JSBool
+bool
 IterClassConstructor(JSContext *cx, unsigned argc, jsval *vp)
 {
     JSObject *obj = JS_NewObjectForConstructor(cx, Jsvalify(&HasCustomIterClass), vp);

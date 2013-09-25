@@ -51,7 +51,7 @@ public:
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_URLCLASSIFIERDBSERVICE_CID)
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERDBSERVICE
   NS_DECL_NSIURICLASSIFIER
   NS_DECL_NSIOBSERVER
@@ -70,7 +70,8 @@ private:
   // Disallow copy constructor
   nsUrlClassifierDBService(nsUrlClassifierDBService&);
 
-  nsresult LookupURI(nsIPrincipal* aPrincipal, nsIUrlClassifierCallback* c,
+  nsresult LookupURI(nsIPrincipal* aPrincipal,
+                     nsIUrlClassifierCallback* c,
                      bool forceCheck, bool *didCheck);
 
   // Close db connection and join the background thread if it exists.

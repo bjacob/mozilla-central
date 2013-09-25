@@ -57,3 +57,23 @@ CPP_SOURCES += [
     'TabMessageUtils.cpp',
 ]
 
+IPDL_SOURCES += [
+    'DOMTypes.ipdlh',
+    'PBlob.ipdl',
+    'PBlobStream.ipdl',
+    'PBrowser.ipdl',
+    'PContent.ipdl',
+    'PContentDialog.ipdl',
+    'PContentPermissionRequest.ipdl',
+    'PCrashReporter.ipdl',
+    'PDocumentRenderer.ipdl',
+    'PMemoryReportRequest.ipdl',
+    'PTabContext.ipdlh',
+]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+LIBRARY_NAME = 'domipc_s'
+

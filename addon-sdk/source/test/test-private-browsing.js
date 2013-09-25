@@ -17,6 +17,11 @@ const { LoaderWithHookedConsole } = require("sdk/test/loader");
 const { getMode, isGlobalPBSupported,
         isWindowPBSupported, isTabPBSupported } = require('sdk/private-browsing/utils');
 const { pb } = require('./private-browsing/helper');
+const prefs = require('sdk/preferences/service');
+const { set: setPref } = require("sdk/preferences/service");
+const DEPRECATE_PREF = "devtools.errorconsole.deprecation_warnings";
+
+const kAutoStartPref = "browser.privatebrowsing.autostart";
 
 // is global pb is enabled?
 if (isGlobalPBSupported) {
@@ -52,6 +57,7 @@ exports.testIsPrivateDefaults = function(test) {
 };
 
 exports.testWindowDefaults = function(test) {
+  setPref(DEPRECATE_PREF, true);
   // Ensure that browserWindow still works while being deprecated
   let { loader, messages } = LoaderWithHookedConsole(module);
   let windows = loader.require("sdk/windows").browserWindows;
@@ -105,3 +111,12 @@ exports.testGetOwnerWindow = function(test) {
     }
   });
 };
+
+exports.testNewGlobalPBService = function(test) {
+  test.assertEqual(isPrivate(), false, 'isPrivate() is false by default');
+  prefs.set(kAutoStartPref, true);
+  test.assertEqual(prefs.get(kAutoStartPref, false), true, kAutoStartPref + ' is true now');
+  test.assertEqual(isPrivate(), true, 'isPrivate() is true now');
+  prefs.set(kAutoStartPref, false);
+  test.assertEqual(isPrivate(), false, 'isPrivate() is false again');
+}

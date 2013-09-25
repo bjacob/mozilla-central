@@ -175,17 +175,16 @@ it.ao
 // aq : http://en.wikipedia.org/wiki/.aq
 aq
 
-// ar : http://en.wikipedia.org/wiki/.ar
-*.ar
-!congresodelalengua3.ar
-!educ.ar
-!gobiernoelectronico.ar
-!mecon.ar
-!nacion.ar
-!nic.ar
-!promocion.ar
-!retina.ar
-!uba.ar
+// ar : https://nic.ar/normativa-vigente.xhtml
+ar
+com.ar
+edu.ar
+gob.ar
+int.ar
+mil.ar
+net.ar
+org.ar
+tur.ar
 
 // arpa : http://en.wikipedia.org/wiki/.arpa
 // Confirmed by registry <iana-questions@icann.org> 2008-06-18
@@ -221,6 +220,7 @@ edu.au
 gov.au
 asn.au
 id.au
+csiro.au
 // Historic 2LDs (closed to new registration, but sites still exist)
 info.au
 conf.au
@@ -4230,13 +4230,16 @@ other.nf
 store.nf
 
 // ng : http://psg.com/dns/ng/
-// Submitted by registry <randy@psg.com> 2008-06-17
-ac.ng
+ng
 com.ng
 edu.ng
-gov.ng
+name.ng
 net.ng
 org.ng
+sch.ng
+gov.ng
+mil.ng
+mobi.ng
 
 // ni : http://www.nic.ni/dominios.htm
 *.ni
@@ -5037,7 +5040,16 @@ nu
 *.nz
 
 // om : http://en.wikipedia.org/wiki/.om
-*.om
+om
+co.om
+com.om
+edu.om
+gov.om
+med.om
+museum.om
+net.om
+org.om
+pro.om
 !mediaphone.om
 !nawrastelecom.om
 !nawras.om
@@ -5741,8 +5753,13 @@ store.st
 // su : http://en.wikipedia.org/wiki/.su
 su
 
-// sv : http://www.svnet.org.sv/svpolicy.html
-*.sv
+// sv : http://www.svnet.org.sv/niveldos.pdf
+sv
+com.sv
+edu.sv
+gob.sv
+org.sv
+red.sv
 
 // sx : http://en.wikipedia.org/wiki/.sx
 // Confirmed by registry <jcvignes@openregistry.com> 2012-05-31
@@ -6644,6 +6661,11 @@ za.com
 // c.la : http://www.c.la/
 c.la
 
+// cloudControl : https://www.cloudcontrol.com/
+// Requested by Tobias Wilken <tw@cloudcontrol.com> 2013-07-23
+cloudcontrolled.com
+cloudcontrolapp.com
+
 // co.ca : http://registry.co.ca/
 co.ca
 
@@ -6936,9 +6958,21 @@ webhop.org
 worse-than.tv
 writesthisblog.com
 
+// Fastly Inc. http://www.fastly.com/
+// Requested by Vladimir Vuksan <vladimir@fastly.com> 2013-05-31
+a.ssl.fastly.net
+b.ssl.fastly.net
+global.ssl.fastly.net
+a.prod.fastly.net
+global.prod.fastly.net
+
 // GitHub, Inc.
 // Requested by Ben Toews <btoews@github.com> 2013-04-18
 github.io
+
+// GlobeHosting, Inc.
+// Requested by Zoltan Egresi <egresi@globehosting.com> 2013-07-12
+ro.com
 
 // Google, Inc.
 // Requested by Eduardo Vela <evn@google.com> 2012-10-24

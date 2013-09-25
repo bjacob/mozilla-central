@@ -13,6 +13,7 @@
 #include "nsCompatibility.h"             // for member
 #include "nsCOMPtr.h"                    // for member
 #include "nsGkAtoms.h"                   // for static class members
+#include "nsIChannel.h"                  // for member
 #include "nsIDocumentEncoder.h"          // for member (in nsCOMPtr)
 #include "nsIDocumentObserver.h"         // for typedef (nsUpdateType)
 #include "nsIFrameRequestCallback.h"     // for member (in nsCOMPtr)
@@ -25,12 +26,14 @@
 #include "nsPropertyTable.h"             // for member
 #include "nsTHashtable.h"                // for member
 #include "mozilla/dom/DocumentBinding.h"
+#include "Units.h"
 
 class imgIRequest;
 class nsAString;
 class nsBindingManager;
 class nsCSSStyleSheet;
 class nsDOMNavigationTiming;
+class nsDOMTouchList;
 class nsEventStates;
 class nsFrameLoader;
 class nsHTMLCSSStyleSheet;
@@ -48,10 +51,11 @@ class nsIDOMDocument;
 class nsIDOMDocumentFragment;
 class nsIDOMDocumentType;
 class nsIDOMElement;
+class nsIDOMNodeFilter;
 class nsIDOMNodeList;
-class nsIDOMTouchList;
 class nsIDOMXPathExpression;
 class nsIDOMXPathNSResolver;
+class nsIHTMLCollection;
 class nsILayoutHistoryState;
 class nsIObjectLoadingContent;
 class nsIObserver;
@@ -96,15 +100,16 @@ class Element;
 struct ElementRegistrationOptions;
 class EventTarget;
 class FrameRequestCallback;
-class GlobalObject;
 class HTMLBodyElement;
 class Link;
+class GlobalObject;
 class NodeFilter;
 class NodeIterator;
 class ProcessingInstruction;
 class Touch;
 class TreeWalker;
 class UndoManager;
+class XPathEvaluator;
 template<typename> class OwningNonNull;
 template<typename> class Sequence;
 
@@ -114,8 +119,8 @@ typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0x308f8444, 0x7679, 0x445a, \
- { 0xa6, 0xcc, 0xb9, 0x5c, 0x61, 0xff, 0xe2, 0x66 } }
+{ 0x56a350f4, 0xc286, 0x440c, \
+  { 0x85, 0xb1, 0xb6, 0x55, 0x77, 0xeb, 0x63, 0xfd } }
 
 // Flag for AddStyleSheet().
 #define NS_STYLESHEET_FROM_CATALOG                (1 << 0)
@@ -147,6 +152,7 @@ NS_GetContentList(nsINode* aRootNode,
 // Gecko.
 class nsIDocument : public nsINode
 {
+  typedef mozilla::dom::GlobalObject GlobalObject;
 public:
   typedef mozilla::dom::Element Element;
 
@@ -255,18 +261,17 @@ public:
   /**
    * Return the base URI for relative URIs in the document (the document uri
    * unless it's overridden by SetBaseURI, HTML <base> tags, etc.).  The
-   * returned URI could be null if there is no document URI.
+   * returned URI could be null if there is no document URI.  If the document
+   * is a srcdoc document, return the parent document's base URL.
    */
   nsIURI* GetDocBaseURI() const
   {
+    if (mIsSrcdocDocument && mParentDocument) {
+      return mParentDocument->GetDocBaseURI();
+    }
     return mDocumentBaseURI ? mDocumentBaseURI : mDocumentURI;
   }
-  virtual already_AddRefed<nsIURI> GetBaseURI() const MOZ_OVERRIDE
-  {
-    nsCOMPtr<nsIURI> uri = GetDocBaseURI();
-
-    return uri.forget();
-  }
+  virtual already_AddRefed<nsIURI> GetBaseURI() const MOZ_OVERRIDE;
 
   virtual nsresult SetBaseURI(nsIURI* aURI) = 0;
 
@@ -618,14 +623,38 @@ public:
    */
   Element* GetRootElement() const;
 
-  virtual nsViewportInfo GetViewportInfo(uint32_t aDisplayWidth,
-                                         uint32_t aDisplayHeight) = 0;
+  virtual nsViewportInfo GetViewportInfo(const mozilla::ScreenIntSize& aDisplaySize) = 0;
 
   /**
    * True iff this doc will ignore manual character encoding overrides.
    */
   virtual bool WillIgnoreCharsetOverride() {
     return true;
+  }
+
+  /**
+   * Return whether the document was created by a srcdoc iframe.
+   */
+  bool IsSrcdocDocument() const {
+    return mIsSrcdocDocument;
+  }
+
+  /**
+   * Sets whether the document was created by a srcdoc iframe.
+   */
+  void SetIsSrcdocDocument(bool aIsSrcdocDocument) {
+    mIsSrcdocDocument = aIsSrcdocDocument;
+  }
+
+  /*
+   * Gets the srcdoc string from within the channel (assuming both exist).
+   * Returns a void string if this isn't a srcdoc document or if
+   * the channel has not been set.
+   */
+  nsresult GetSrcdocData(nsAString& aSrcdocData);
+
+  bool DidDocumentOpen() {
+    return mDidDocumentOpen;
   }
 
 protected:
@@ -770,13 +799,6 @@ public:
     return mStyleAttrStyleSheet;
   }
 
-  /**
-   * Get/set the object from which a document can get a script context
-   * and scope. This is the context within which all scripts (during
-   * document creation and during event handling) will run. Note that
-   * this is the *inner* window object.
-   */
-  virtual nsIScriptGlobalObject* GetScriptGlobalObject() const = 0;
   virtual void SetScriptGlobalObject(nsIScriptGlobalObject* aGlobalObject) = 0;
 
   /**
@@ -1322,18 +1344,6 @@ public:
   }
 
   /**
-   * See GetXBLChildNodesFor on nsBindingManager
-   */
-  virtual nsresult GetXBLChildNodesFor(nsIContent* aContent,
-                                       nsIDOMNodeList** aResult) = 0;
-
-  /**
-   * See GetContentListFor on nsBindingManager
-   */
-  virtual nsresult GetContentListFor(nsIContent* aContent,
-                                     nsIDOMNodeList** aResult) = 0;
-
-  /**
    * See GetAnonymousElementByAttribute on nsIDOMDocumentXBL.
    */
   virtual Element*
@@ -1475,8 +1485,7 @@ public:
   {
     NS_PRECONDITION(!GetShell() &&
                     !nsCOMPtr<nsISupports>(GetContainer()) &&
-                    !GetWindow() &&
-                    !GetScriptGlobalObject(),
+                    !GetWindow(),
                     "Shouldn't set mDisplayDocument on documents that already "
                     "have a presentation or a docshell or a window");
     NS_PRECONDITION(aDisplayDocument != this, "Should be different document");
@@ -1912,7 +1921,7 @@ public:
     return GetScopeObject();
   }
   static already_AddRefed<nsIDocument>
-    Constructor(const mozilla::dom::GlobalObject& aGlobal,
+    Constructor(const GlobalObject& aGlobal,
                 mozilla::ErrorResult& rv);
   virtual mozilla::dom::DOMImplementation*
     GetImplementation(mozilla::ErrorResult& rv) = 0;
@@ -2092,11 +2101,11 @@ public:
                 int32_t aScreenX, int32_t aScreenY, int32_t aClientX,
                 int32_t aClientY, int32_t aRadiusX, int32_t aRadiusY,
                 float aRotationAngle, float aForce);
-  already_AddRefed<nsIDOMTouchList> CreateTouchList();
-  already_AddRefed<nsIDOMTouchList>
+  already_AddRefed<nsDOMTouchList> CreateTouchList();
+  already_AddRefed<nsDOMTouchList>
     CreateTouchList(mozilla::dom::Touch& aTouch,
                     const mozilla::dom::Sequence<mozilla::dom::OwningNonNull<mozilla::dom::Touch> >& aTouches);
-  already_AddRefed<nsIDOMTouchList>
+  already_AddRefed<nsDOMTouchList>
     CreateTouchList(const mozilla::dom::Sequence<mozilla::dom::OwningNonNull<mozilla::dom::Touch> >& aTouches);
 
   void SetStyleSheetChangeEventsEnabled(bool aValue)
@@ -2108,6 +2117,14 @@ public:
   {
     return mStyleSheetChangeEventsEnabled;
   }
+
+  void ObsoleteSheet(nsIURI *aSheetURI, mozilla::ErrorResult& rv);
+
+  void ObsoleteSheet(const nsAString& aSheetURI, mozilla::ErrorResult& rv);
+
+  // ParentNode
+  nsIHTMLCollection* Children();
+  uint32_t ChildElementCount();
 
   virtual nsHTMLDocument* AsHTMLDocument() { return nullptr; }
 
@@ -2155,6 +2172,8 @@ protected:
     return mContentType;
   }
 
+  mozilla::dom::XPathEvaluator* XPathEvaluator();
+
   nsCString mReferrer;
   nsString mLastModified;
 
@@ -2199,6 +2218,9 @@ protected:
   // Table of element properties for this document.
   nsPropertyTable mPropertyTable;
   nsTArray<nsAutoPtr<nsPropertyTable> > mExtraPropertyTables;
+
+  // Our cached .children collection
+  nsCOMPtr<nsIHTMLCollection> mChildrenCollection;
 
   // Compatibility mode
   nsCompatibility mCompatMode;
@@ -2316,6 +2338,14 @@ protected:
   // Whether style sheet change events will be dispatched for this document
   bool mStyleSheetChangeEventsEnabled;
 
+  // Whether the document was created by a srcdoc iframe.
+  bool mIsSrcdocDocument;
+
+  // Records whether we've done a document.open. If this is true, it's possible
+  // for nodes from this document to have outdated wrappers in their wrapper
+  // caches.
+  bool mDidDocumentOpen;
+
   // The document's script global object, the object from which the
   // document can get its script context and scope. This is the
   // *inner* window object.
@@ -2335,6 +2365,9 @@ protected:
   uint32_t mSandboxFlags;
 
   nsCString mContentLanguage;
+
+  // The channel that got passed to nsDocument::StartDocumentLoad(), if any.
+  nsCOMPtr<nsIChannel> mChannel;
 private:
   nsCString mContentType;
 protected:
@@ -2396,6 +2429,8 @@ protected:
   uint8_t mDefaultElementType;
 
   uint32_t mInSyncOperationCount;
+
+  nsRefPtr<mozilla::dom::XPathEvaluator> mXPathEvaluator;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIDocument, NS_IDOCUMENT_IID)

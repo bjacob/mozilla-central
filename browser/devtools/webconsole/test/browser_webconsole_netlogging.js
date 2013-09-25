@@ -32,7 +32,7 @@ function test()
     openConsole(null, function(aHud) {
       hud = aHud;
 
-      HUDService.lastFinishedRequestCallback = requestCallbackWrapper;
+      HUDService.lastFinishedRequest.callback = requestCallbackWrapper;
 
       executeSoon(testPageLoad);
     });
@@ -85,16 +85,11 @@ function testPageLoad()
 function testPageLoadBody()
 {
   // Turn on logging of request bodies and check again.
-  hud.ui.saveRequestAndResponseBodies = true;
+  hud.ui.setSaveRequestAndResponseBodies(true).then(() => {
+    ok(hud.ui._saveRequestAndResponseBodies,
+      "The saveRequestAndResponseBodies property was successfully set.");
 
-  waitForSuccess({
-    name: "saveRequestAndResponseBodies update",
-    validatorFn: function()
-    {
-      return hud.ui.saveRequestAndResponseBodies;
-    },
-    successFn: testPageLoadBodyAfterSettingUpdate,
-    failureFn: finishTest,
+    testPageLoadBodyAfterSettingUpdate();
   });
 }
 
@@ -209,7 +204,7 @@ function testNetworkPanel()
     // All tests are done. Shutdown.
     networkPanel.panel.hidePopup();
     lastRequest = null;
-    HUDService.lastFinishedRequestCallback = null;
+    HUDService.lastFinishedRequest.callback = null;
     executeSoon(finishTest);
   }, true);
 }

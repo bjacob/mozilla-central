@@ -27,3 +27,7 @@ CPP_SOURCES += [
     'os2FrameWindow.cpp',
 ]
 
+LIBRARY_NAME = 'wdgtos2'
+
+LIBXUL_LIBRARY = True
+

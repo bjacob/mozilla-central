@@ -125,6 +125,28 @@ class GeckoInputConnection
             }
         }
 
+        public void runOnIcThread(final Handler uiHandler,
+                                  final GeckoEditableClient client,
+                                  final Runnable runnable) {
+            final Handler icHandler = client.getInputConnectionHandler();
+            if (icHandler.getLooper() == uiHandler.getLooper()) {
+                // IC thread is UI thread; safe to run directly
+                runnable.run();
+                return;
+            }
+            runOnIcThread(icHandler, runnable);
+        }
+
+        public void sendEventFromUiThread(final Handler uiHandler,
+                                          final GeckoEditableClient client,
+                                          final GeckoEvent event) {
+            runOnIcThread(uiHandler, client, new Runnable() {
+                @Override public void run() {
+                    client.sendEvent(event);
+                }
+            });
+        }
+
         public Editable getEditableForUiThread(final Handler uiHandler,
                                                final GeckoEditableClient client) {
             if (DEBUG) {
@@ -406,6 +428,13 @@ class GeckoInputConnection
     public void onTextChange(String text, int start, int oldEnd, int newEnd) {
 
         if (mUpdateRequest == null) {
+            // Android always expects selection updates when not in extracted mode;
+            // in extracted mode, the selection is reported through updateExtractedText
+            final Editable editable = getEditable();
+            if (editable != null) {
+                onSelectionChange(Selection.getSelectionStart(editable),
+                                  Selection.getSelectionEnd(editable));
+            }
             return;
         }
 
@@ -782,7 +811,8 @@ class GeckoInputConnection
 
         View view = getView();
         if (view == null) {
-            mEditableClient.sendEvent(GeckoEvent.createKeyEvent(event, 0));
+            InputThreadUtils.sInstance.sendEventFromUiThread(ThreadUtils.getUiHandler(),
+                mEditableClient, GeckoEvent.createKeyEvent(event, 0));
             return true;
         }
 
@@ -799,7 +829,7 @@ class GeckoInputConnection
         if (skip ||
             (down && !keyListener.onKeyDown(view, uiEditable, keyCode, event)) ||
             (!down && !keyListener.onKeyUp(view, uiEditable, keyCode, event))) {
-            mEditableClient.sendEvent(
+            InputThreadUtils.sInstance.sendEventFromUiThread(uiHandler, mEditableClient,
                 GeckoEvent.createKeyEvent(event, TextKeyListener.getMetaState(uiEditable)));
             if (skip && down) {
                 // Usually, the down key listener call above adjusts meta states for us.
@@ -825,10 +855,22 @@ class GeckoInputConnection
     }
 
     @Override
-    public boolean onKeyMultiple(int keyCode, int repeatCount, KeyEvent event) {
+    public boolean onKeyMultiple(int keyCode, int repeatCount, final KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
             // KEYCODE_UNKNOWN means the characters are in KeyEvent.getCharacters()
-            return commitText(event.getCharacters(), 1);
+            View view = getView();
+            if (view != null) {
+                InputThreadUtils.sInstance.runOnIcThread(
+                    view.getRootView().getHandler(), mEditableClient,
+                    new Runnable() {
+                        @Override public void run() {
+                            // Don't call GeckoInputConnection.commitText because it can
+                            // post a key event back to onKeyMultiple, causing a loop
+                            GeckoInputConnection.super.commitText(event.getCharacters(), 1);
+                        }
+                    });
+            }
+            return true;
         }
         while ((repeatCount--) != 0) {
             if (!processKey(keyCode, event, true) ||
@@ -879,6 +921,10 @@ class GeckoInputConnection
             case NOTIFY_IME_OF_BLUR:
                 // Showing/hiding vkb is done in notifyIMEContext
                 resetInputConnection();
+                break;
+
+            case NOTIFY_IME_OPEN_VKB:
+                showSoftInput();
                 break;
 
             default:

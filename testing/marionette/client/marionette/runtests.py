@@ -3,8 +3,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from datetime import datetime
-import imp
-import inspect
 import logging
 from optparse import OptionParser
 import os
@@ -13,13 +11,12 @@ import socket
 import sys
 import time
 import traceback
-import platform
+import random
 import moznetwork
 import xml.dom.minidom as dom
 
 from manifestparser import TestManifest
 from mozhttpd import MozHttpd
-from telnetlib import Telnet
 
 from marionette import Marionette
 from marionette_test import MarionetteJSTestCase, MarionetteTestCase
@@ -32,12 +29,42 @@ class MarionetteTestResult(unittest._TextTestResult):
         del kwargs['marionette']
         super(MarionetteTestResult, self).__init__(*args, **kwargs)
         self.passed = 0
+        self.skipped = []
+        self.expectedFailures = []
+        self.unexpectedSuccesses = []
         self.tests_passed = []
 
     def addSuccess(self, test):
         super(MarionetteTestResult, self).addSuccess(test)
         self.passed += 1
         self.tests_passed.append(test)
+
+    def addExpectedFailure(self, test, err):
+        """Called when an expected failure/error occured."""
+        self.expectedFailures.append(
+            (test, self._exc_info_to_string(err, test)))
+        if self.showAll:
+            self.stream.writeln("expected failure")
+        elif self.dots:
+            self.stream.write("x")
+            self.stream.flush()
+
+    def addUnexpectedSuccess(self, test):
+        """Called when a test was expected to fail, but succeed."""
+        self.unexpectedSuccesses.append(test)
+        if self.showAll:
+            self.stream.writeln("unexpected success")
+        elif self.dots:
+            self.stream.write("u")
+            self.stream.flush()
+
+    def addSkip(self, test, reason):
+        self.skipped.append((test, reason))
+        if self.showAll:
+            self.stream.writeln("skipped {0!r}".format(reason))
+        elif self.dots:
+            self.stream.write("s")
+            self.stream.flush()
 
     def getInfo(self, test):
         return test.test_name
@@ -65,7 +92,7 @@ class MarionetteTestResult(unittest._TextTestResult):
                         break
                 if skip_log:
                     return
-                self.stream.writeln('START LOG:')
+                self.stream.writeln('\nSTART LOG:')
                 for line in testcase.loglines:
                     self.stream.writeln(' '.join(line).encode('ascii', 'replace'))
                 self.stream.writeln('END LOG:')
@@ -77,13 +104,19 @@ class MarionetteTestResult(unittest._TextTestResult):
             self.stream.writeln("%s: %s" % (flavour, self.getDescription(test)))
             self.stream.writeln(self.separator2)
             errlines = err.strip().split('\n')
-            for line in errlines[0:-1]:
-                self.stream.writeln("%s" % line)
-            if "TEST-UNEXPECTED-FAIL" in errlines[-1]:
-                self.stream.writeln(errlines[-1])
-            else:
-                self.stream.writeln("TEST-UNEXPECTED-FAIL | %s | %s" %
-                                    (self.getInfo(test), errlines[-1]))
+            lastline = None
+            fail_present = None
+            for line in errlines:
+                if not line.startswith('\t'):
+                    lastline = line
+                if 'TEST-UNEXPECTED-FAIL' in line:
+                    fail_present = True
+            for line in errlines:
+                if line != lastline or fail_present:
+                    self.stream.writeln("%s" % line)
+                else:
+                    self.stream.writeln("TEST-UNEXPECTED-FAIL | %s | %s" %
+                                        (self.getInfo(test), line))
 
     def stopTest(self, *args, **kwargs):
         unittest._TextTestResult.stopTest(self, *args, **kwargs)
@@ -126,8 +159,8 @@ class MarionetteTextTestRunner(unittest.TextTestRunner):
                 stopTestRun()
         stopTime = time.time()
         timeTaken = stopTime - startTime
-        result.printErrors()
         result.printLogs(test)
+        result.printErrors()
         if hasattr(result, 'separator2'):
             self.stream.writeln(result.separator2)
         run = result.testsRun
@@ -174,12 +207,12 @@ class MarionetteTestRunner(object):
 
     def __init__(self, address=None, emulator=None, emulatorBinary=None,
                  emulatorImg=None, emulator_res='480x800', homedir=None,
-                 app=None, bin=None, profile=None, autolog=False, revision=None,
-                 es_server=None, rest_server=None, logger=None,
-                 testgroup="marionette", noWindow=False, logcat_dir=None,
-                 xml_output=None, repeat=0, gecko_path=None, testvars=None,
-                 tree=None, type=None, device=None, symbols_path=None, timeout=None,
-                 **kwargs):
+                 app=None, app_args=None, bin=None, profile=None, autolog=False,
+                 revision=None, logger=None, testgroup="marionette", noWindow=False,
+                 logcat_dir=None, xml_output=None, repeat=0, gecko_path=None,
+                 testvars=None, tree=None, type=None, device_serial=None,
+                 symbols_path=None, timeout=None, es_servers=None, shuffle=False,
+                 sdcard=None, **kwargs):
         self.address = address
         self.emulator = emulator
         self.emulatorBinary = emulatorBinary
@@ -187,13 +220,12 @@ class MarionetteTestRunner(object):
         self.emulator_res = emulator_res
         self.homedir = homedir
         self.app = app
+        self.app_args = app_args or []
         self.bin = bin
         self.profile = profile
         self.autolog = autolog
         self.testgroup = testgroup
         self.revision = revision
-        self.es_server = es_server
-        self.rest_server = rest_server
         self.logger = logger
         self.noWindow = noWindow
         self.httpd = None
@@ -207,9 +239,15 @@ class MarionetteTestRunner(object):
         self.test_kwargs = kwargs
         self.tree = tree
         self.type = type
-        self.device = device
+        self.device_serial = device_serial
         self.symbols_path = symbols_path
         self.timeout = timeout
+        self._device = None
+        self._capabilities = None
+        self._appName = None
+        self.es_servers = es_servers
+        self.shuffle = shuffle
+        self.sdcard = sdcard
 
         if testvars:
             if not os.path.exists(testvars):
@@ -238,6 +276,32 @@ class MarionetteTestRunner(object):
         self.testvars['xml_output'] = self.xml_output
         self.results = []
 
+    @property
+    def capabilities(self):
+        if self._capabilities:
+            return self._capabilities
+
+        self.marionette.start_session()
+        self._capabilities = self.marionette.session_capabilities
+        self.marionette.delete_session()
+        return self._capabilities
+
+    @property
+    def device(self):
+        if self._device:
+            return self._device
+
+        self._device = self.capabilities.get('device')
+        return self._device
+
+    @property
+    def appName(self):
+        if self._appName:
+            return self._appName
+
+        self._appName = self.capabilities.get('browserName')
+        return self._appName
+
     def reset_test_stats(self):
         self.passed = 0
         self.failed = 0
@@ -264,18 +328,22 @@ class MarionetteTestRunner(object):
             self.marionette = Marionette(host=host,
                                          port=int(port),
                                          app=self.app,
+                                         app_args=self.app_args,
                                          bin=self.bin,
                                          profile=self.profile,
                                          baseurl=self.baseurl,
-                                         timeout=self.timeout)
+                                         timeout=self.timeout,
+                                         device_serial=self.device_serial)
         elif self.address:
             host, port = self.address.split(':')
             try:
-		#establish a telnet connection so we can vertify the data come back
-		tlconnection = Telnet(host, port)
-	    except:
-		raise Exception("could not connect to given marionette host/port")
-	    if self.emulator:
+                #establish a socket connection so we can vertify the data come back
+                connection = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+                connection.connect((host,int(port)))
+                connection.close()
+            except Exception, e:
+                raise Exception("Could not connect to given marionette host:port: %s" % e)
+            if self.emulator:
                 self.marionette = Marionette.getMarionetteOrExit(
                                              host=host, port=int(port),
                                              connectToRunningEmulator=True,
@@ -302,7 +370,8 @@ class MarionetteTestRunner(object):
                                          logcat_dir=self.logcat_dir,
                                          gecko_path=self.gecko_path,
                                          symbols_path=self.symbols_path,
-                                         timeout=self.timeout)
+                                         timeout=self.timeout,
+                                         sdcard=self.sdcard)
         else:
             raise Exception("must specify binary, address or emulator")
 
@@ -316,42 +385,47 @@ class MarionetteTestRunner(object):
             if os.access(filename, os.F_OK):
                 logfile = filename
 
-        # This is all autolog stuff.
-        # See: https://wiki.mozilla.org/Auto-tools/Projects/Autolog
-        from mozautolog import RESTfulAutologTestGroup
-        testgroup = RESTfulAutologTestGroup(
-            testgroup = self.testgroup,
-            os = 'android',
-            platform = 'emulator',
-            harness = 'marionette',
-            server = self.es_server,
-            restserver = self.rest_server,
-            machine = socket.gethostname(),
-            logfile = logfile)
+        for es_server in self.es_servers:
 
-        testgroup.set_primary_product(
-            tree = self.tree,
-            buildtype = 'opt',
-            revision = self.revision)
+            # This is all autolog stuff.
+            # See: https://wiki.mozilla.org/Auto-tools/Projects/Autolog
+            from mozautolog import RESTfulAutologTestGroup
+            testgroup = RESTfulAutologTestGroup(
+                testgroup=self.testgroup,
+                os='android',
+                platform='emulator',
+                harness='marionette',
+                server=es_server,
+                restserver=None,
+                machine=socket.gethostname(),
+                logfile=logfile)
 
-        testgroup.add_test_suite(
-            testsuite = 'b2g emulator testsuite',
-            elapsedtime = elapsedtime.seconds,
-            cmdline = '',
-            passed = self.passed,
-            failed = self.failed,
-            todo = self.todo)
+            testgroup.set_primary_product(
+                tree=self.tree,
+                buildtype='opt',
+                revision=self.revision)
 
-        # Add in the test failures.
-        for f in self.failures:
-            testgroup.add_test_failure(test=f[0], text=f[1], status=f[2])
+            testgroup.add_test_suite(
+                testsuite='b2g emulator testsuite',
+                elapsedtime=elapsedtime.seconds,
+                cmdline='',
+                passed=self.passed,
+                failed=self.failed,
+                todo=self.todo)
 
-        testgroup.submit()
+            # Add in the test failures.
+            for f in self.failures:
+                testgroup.add_test_failure(test=f[0], text=f[1], status=f[2])
+
+            testgroup.submit()
 
     def run_tests(self, tests):
         self.reset_test_stats()
         starttime = datetime.utcnow()
         while self.repeat >=0:
+            self.logger.info('\nROUND %d\n-------' % self.repeat)
+            if self.shuffle:
+                random.shuffle(tests)
             for test in tests:
                 self.run_test(test)
             self.repeat -= 1
@@ -359,6 +433,12 @@ class MarionetteTestRunner(object):
         self.logger.info('passed: %d' % self.passed)
         self.logger.info('failed: %d' % self.failed)
         self.logger.info('todo: %d' % self.todo)
+
+        if self.failed > 0:
+            self.logger.info('\nFAILED TESTS\n-------')
+            for failed_test in self.failures:
+                self.logger.info('%s' % failed_test[0])
+
         try:
             self.marionette.check_for_crash()
         except:
@@ -392,8 +472,10 @@ class MarionetteTestRunner(object):
 
         if os.path.isdir(filepath):
             for root, dirs, files in os.walk(filepath):
+                if self.shuffle:
+                    random.shuffle(files)
                 for filename in files:
-                    if ((filename.startswith('test_') or filename.startswith('browser_')) and 
+                    if ((filename.startswith('test_') or filename.startswith('browser_')) and
                         (filename.endswith('.py') or filename.endswith('.js'))):
                         filepath = os.path.join(root, filename)
                         self.run_test(filepath)
@@ -421,9 +503,23 @@ class MarionetteTestRunner(object):
             manifest = TestManifest()
             manifest.read(filepath)
 
-            manifest_tests = manifest.active_tests(disabled=False)
+            all_tests = manifest.active_tests(disabled=False)
+            manifest_tests = manifest.active_tests(disabled=False,
+                                                   device=self.device,
+                                                   app=self.appName)
+            skip_tests = list(set([x['path'] for x in all_tests]) -
+                              set([x['path'] for x in manifest_tests]))
+            for skipped in skip_tests:
+                self.logger.info('TEST-SKIP | %s | device=%s, app=%s' %
+                                 (os.path.basename(skipped),
+                                  self.device,
+                                  self.appName))
+                self.todo += 1
 
-            for i in manifest.get(tests=manifest_tests, **testargs):
+            target_tests = manifest.get(tests=manifest_tests, **testargs)
+            if self.shuffle:
+                random.shuffle(target_tests)
+            for i in target_tests:
                 self.run_test(i["path"])
                 if self.marionette.check_for_crash():
                     return
@@ -450,14 +546,16 @@ class MarionetteTestRunner(object):
 
             self.failed += len(results.failures) + len(results.errors)
             if hasattr(results, 'skipped'):
-                self.todo += len(results.skipped) + len(results.expectedFailures)
+                self.todo += len(results.skipped)
             self.passed += results.passed
             for failure in results.failures + results.errors:
                 self.failures.append((results.getInfo(failure[0]), failure[1], 'TEST-UNEXPECTED-FAIL'))
-            if hasattr(results, 'unexpectedSuccess'):
+            if hasattr(results, 'unexpectedSuccesses'):
                 self.failed += len(results.unexpectedSuccesses)
                 for failure in results.unexpectedSuccesses:
-                    self.failures.append((results.getInfo(failure[0]), failure[1], 'TEST-UNEXPECTED-PASS'))
+                    self.failures.append((results.getInfo(failure), 'TEST-UNEXPECTED-PASS'))
+            if hasattr(results, 'expectedFailures'):
+                self.passed += len(results.expectedFailures)
 
     def register_handlers(self):
         self.test_handlers.extend([MarionetteTestCase, MarionetteJSTestCase])
@@ -511,10 +609,10 @@ class MarionetteTestRunner(object):
         for results in results_list:
 
             for tup in results.errors:
-                _extract_xml(*tup, result='error')
+                _extract_xml(tup[0], text=tup[1], result='error')
 
             for tup in results.failures:
-                _extract_xml(*tup, result='failure')
+                _extract_xml(tup[0], text=tup[1], result='failure')
 
             if hasattr(results, 'unexpectedSuccesses'):
                 for test in results.unexpectedSuccesses:
@@ -523,11 +621,11 @@ class MarionetteTestRunner(object):
 
             if hasattr(results, 'skipped'):
                 for tup in results.skipped:
-                    _extract_xml(*tup, result='skipped')
+                    _extract_xml(tup[0], text=tup[1], result='skipped')
 
             if hasattr(results, 'expectedFailures'):
                 for tup in results.expectedFailures:
-                    _extract_xml(*tup, result='skipped')
+                    _extract_xml(tup[0], text=tup[1], result='skipped')
 
             for test in results.tests_passed:
                 _extract_xml(test)
@@ -576,6 +674,10 @@ class MarionetteTestOptions(OptionParser):
                         type='str',
                         help='set a custom resolution for the emulator'
                              'Example: "480x800"')
+        self.add_option('--sdcard',
+                        action='store',
+                        dest='sdcard',
+                        help='size of sdcard to create for the emulator')
         self.add_option('--no-window',
                         action='store_true',
                         dest='noWindow',
@@ -590,7 +692,7 @@ class MarionetteTestOptions(OptionParser):
                         action='store',
                         help='host:port of running Gecko instance to connect to')
         self.add_option('--device',
-                        dest='device',
+                        dest='device_serial',
                         action='store',
                         help='serial ID of a device to use for adb / fastboot')
         self.add_option('--type',
@@ -610,6 +712,11 @@ class MarionetteTestOptions(OptionParser):
                         dest='app',
                         action='store',
                         help='application to use')
+        self.add_option('--app-arg',
+                        dest='app_args',
+                        action='append',
+                        default=[],
+                        help='specify a command line argument to be passed onto the application')
         self.add_option('--binary',
                         dest='bin',
                         action='store',
@@ -650,6 +757,15 @@ class MarionetteTestOptions(OptionParser):
                         dest='timeout',
                         type=int,
                         help='if a --timeout value is given, it will set the default page load timeout, search timeout and script timeout to the given value. If not passed in, it will use the default values of 30000ms for page load, 0ms for search timeout and 10000ms for script timeout')
+        self.add_option('--es-server',
+                        dest='es_servers',
+                        action='append',
+                        help='the ElasticSearch server to use for autolog submission')
+        self.add_option('--shuffle',
+                        action='store_true',
+                        dest='shuffle',
+                        default=False,
+                        help='run tests in a random order')
 
     def verify_usage(self, options, tests):
         if not tests:
@@ -659,6 +775,10 @@ class MarionetteTestOptions(OptionParser):
         if not options.emulator and not options.address and not options.bin:
             print 'must specify --binary, --emulator or --address'
             sys.exit(1)
+
+        if not options.es_servers:
+            options.es_servers = ['elasticsearch-zlb.dev.vlan81.phx.mozilla.com:9200',
+                                  'elasticsearch-zlb.webapp.scl3.mozilla.com:9200']
 
         # default to storing logcat output for emulator runs
         if options.emulator and not options.logcat_dir:

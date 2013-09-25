@@ -55,7 +55,8 @@ public:
   virtual void LoadWait() = 0;
 
 protected:
-  nsAutoRefCnt mRefCnt;
+  ThreadSafeAutoRefCnt mRefCnt;
+  NS_DECL_OWNINGTHREAD
 };
 
 // Implementation of scope cache that is responsible for preloading data
@@ -121,7 +122,7 @@ public:
   class Data
   {
   public:
-    Data() : mOriginQuotaUsage(0) { mKeys.Init(); }
+    Data() : mOriginQuotaUsage(0) {}
     int64_t mOriginQuotaUsage;
     nsDataHashtable<nsStringHashKey, nsString> mKeys;
   };

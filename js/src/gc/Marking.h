@@ -4,24 +4,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef gc_marking_h___
-#define gc_marking_h___
-
-#include "jsgc.h"
-#include "jscntxt.h"
-#include "jslock.h"
+#ifndef gc_Marking_h
+#define gc_Marking_h
 
 #include "gc/Barrier.h"
-#include "gc/Nursery.h"
-#include "js/TemplateLib.h"
-#include "ion/IonCode.h"
-
-extern "C" {
-struct JSContext;
-class JSFunction;
-class JSObject;
-class JSScript;
-}
+#include "js/TypeDecls.h"
 
 class JSAtom;
 class JSLinearString;
@@ -30,12 +17,27 @@ namespace js {
 
 class ArgumentsObject;
 class ArrayBufferObject;
+class ArrayBufferViewObject;
 class BaseShape;
+class DebugScopeObject;
+struct GCMarker;
 class GlobalObject;
-class UnownedBaseShape;
+class LazyScript;
+class ScopeObject;
 class Shape;
+class UnownedBaseShape;
 
 template<class, typename> class HeapPtr;
+
+namespace jit {
+class IonCode;
+class IonScript;
+class VMFunction;
+}
+
+namespace types {
+class Type;
+}
 
 namespace gc {
 
@@ -92,9 +94,10 @@ bool Is##base##AboutToBeFinalized(EncapsulatedPtr<type> *thingp);
 
 DeclMarker(BaseShape, BaseShape)
 DeclMarker(BaseShape, UnownedBaseShape)
-DeclMarker(IonCode, ion::IonCode)
+DeclMarker(IonCode, jit::IonCode)
 DeclMarker(Object, ArgumentsObject)
 DeclMarker(Object, ArrayBufferObject)
+DeclMarker(Object, ArrayBufferViewObject)
 DeclMarker(Object, DebugScopeObject)
 DeclMarker(Object, GlobalObject)
 DeclMarker(Object, JSObject)
@@ -182,9 +185,6 @@ MarkValueRootRange(JSTracer *trc, Value *begin, Value *end, const char *name)
 }
 
 void
-MarkValueRootRangeMaybeNullPayload(JSTracer *trc, size_t len, Value *vec, const char *name);
-
-void
 MarkTypeRoot(JSTracer *trc, types::Type *v, const char *name);
 
 bool
@@ -194,6 +194,9 @@ bool
 IsValueAboutToBeFinalized(Value *v);
 
 /*** Slot Marking ***/
+
+bool
+IsSlotMarked(HeapSlot *s);
 
 void
 MarkSlot(JSTracer *trc, HeapSlot *s, const char *name);
@@ -228,10 +231,6 @@ MarkCrossCompartmentSlot(JSTracer *trc, JSObject *src, HeapSlot *dst_slot, const
  */
 void
 MarkObject(JSTracer *trc, HeapPtr<GlobalObject, JSScript *> *thingp, const char *name);
-
-/* Direct value access used by the write barriers and the methodjit. */
-void
-MarkValueUnbarriered(JSTracer *trc, Value *v, const char *name);
 
 /*
  * MarkChildren<JSObject> is exposed solely for preWriteBarrier on
@@ -277,7 +276,7 @@ Mark(JSTracer *trc, EncapsulatedPtrScript *o, const char *name)
 }
 
 inline void
-Mark(JSTracer *trc, HeapPtr<ion::IonCode> *code, const char *name)
+Mark(JSTracer *trc, HeapPtr<jit::IonCode> *code, const char *name)
 {
     MarkIonCode(trc, code, name);
 }
@@ -346,7 +345,7 @@ IsAboutToBeFinalized(EncapsulatedPtrScript *scriptp)
 /* Nonsense to get WeakCache to work with new Marking semantics. */
 
 inline bool
-IsAboutToBeFinalized(const js::ion::VMFunction **vmfunc)
+IsAboutToBeFinalized(const js::jit::VMFunction **vmfunc)
 {
     /*
      * Preserves entries in the WeakCache<VMFunction, IonCode>
@@ -356,7 +355,7 @@ IsAboutToBeFinalized(const js::ion::VMFunction **vmfunc)
 }
 
 inline bool
-IsAboutToBeFinalized(ReadBarriered<js::ion::IonCode> code)
+IsAboutToBeFinalized(ReadBarriered<js::jit::IonCode> code)
 {
     return IsIonCodeAboutToBeFinalized(code.unsafeGet());
 }
@@ -410,4 +409,4 @@ TraceChildren(JSTracer *trc, void *thing, JSGCTraceKind kind);
 
 } /* namespace js */
 
-#endif /* gc_marking_h___ */
+#endif /* gc_Marking_h */

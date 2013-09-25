@@ -11,7 +11,6 @@
 #include "MediaDecoderOwner.h"
 #include "nsIChannel.h"
 #include "nsIHttpChannel.h"
-#include "nsThreadUtils.h"
 #include "nsIDOMRange.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsILoadGroup.h"
@@ -45,11 +44,13 @@ class MediaDecoder;
 
 class nsITimer;
 class nsRange;
+class nsIRunnable;
 
 namespace mozilla {
 namespace dom {
 
 class MediaError;
+class MediaSource;
 
 class HTMLMediaElement : public nsGenericHTMLElement,
                          public nsIObserver,
@@ -321,6 +322,13 @@ public:
   void SetRequestHeaders(nsIHttpChannel* aChannel);
 
   /**
+   * Asynchronously awaits a stable state, whereupon aRunnable runs on the main
+   * thread. This adds an event which run aRunnable to the appshell's list of
+   * sections synchronous the next time control returns to the event loop.
+   */
+  void RunInStableState(nsIRunnable* aRunnable);
+
+  /**
    * Fires a timeupdate event. If aPeriodic is true, the event will only
    * be fired if we've not fired a timeupdate event (for any reason) in the
    * last 250ms, as required by the spec when the current time is periodically
@@ -520,6 +528,12 @@ public:
 
   void AddTextTrack(TextTrack* aTextTrack) {
     mTextTracks->AddTextTrack(aTextTrack);
+  }
+
+  void RemoveTextTrack(TextTrack* aTextTrack) {
+    if (mTextTracks) {
+      mTextTracks->RemoveTextTrack(*aTextTrack);
+    }
   }
 
 protected:
@@ -804,7 +818,7 @@ protected:
   void SetMutedInternal(uint32_t aMuted);
   /**
    * Update the volume of the output audio stream to match the element's
-   * current mMuted/mVolume state.
+   * current mMuted/mVolume/mAudioChannelFaded state.
    */
   void SetVolumeInternal();
 
@@ -833,8 +847,8 @@ protected:
   // Check the permissions for audiochannel.
   bool CheckAudioChannelPermissions(const nsAString& aType);
 
-  // This method does the check for muting/unmuting the audio channel.
-  nsresult UpdateChannelMuteState(bool aCanPlay);
+  // This method does the check for muting/fading/unmuting the audio channel.
+  nsresult UpdateChannelMuteState(mozilla::dom::AudioChannelState aCanPlay);
 
   // Update the audio channel playing state
   virtual void UpdateAudioChannelPlayingState();
@@ -866,6 +880,9 @@ protected:
 
   // Holds a reference to the MediaStreamListener attached to mSrcStream.
   nsRefPtr<StreamListener> mSrcStreamListener;
+
+  // Holds a reference to the MediaSource supplying data for playback.
+  nsRefPtr<MediaSource> mMediaSource;
 
   // Holds a reference to the first channel we open to the media resource.
   // Once the decoder is created, control over the channel passes to the
@@ -1115,6 +1132,9 @@ protected:
 
   // Audio Channel Type.
   AudioChannelType mAudioChannelType;
+
+  // The audio channel has been faded.
+  bool mAudioChannelFaded;
 
   // Is this media element playing?
   bool mPlayingThroughTheAudioChannel;

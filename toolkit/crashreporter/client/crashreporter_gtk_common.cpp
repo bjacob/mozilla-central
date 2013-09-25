@@ -51,7 +51,7 @@ string gURLParameter;
 vector<string> gRestartArgs;
 GThread* gSendThreadID;
 
-// From crashreporter_linux.cpp or crashreporter_maemo_gtk.cpp
+// From crashreporter_linux.cpp
 void SaveSettings();
 void SendReport();
 void TryInitGnome();
@@ -145,7 +145,7 @@ void LoadProxyinfo()
     host = gconf_client_get_string(conf, HTTP_PROXY_DIR "/host", NULL);
     port = gconf_client_get_int(conf, HTTP_PROXY_DIR "/port", NULL);
 
-    if (port && host && host != '\0') {
+    if (port && host && *host != '\0') {
       httpproxy = g_strdup_printf("http://%s:%d/", host, port);
       gHttpProxy = httpproxy;
     }
@@ -284,9 +284,6 @@ bool UIInit()
         gStrings["isRTL"] == "yes")
       gtk_widget_set_default_direction(GTK_TEXT_DIR_RTL);
 
-#ifndef MOZ_PLATFORM_MAEMO
-    TryInitGnome();
-#endif
     return true;
   }
 

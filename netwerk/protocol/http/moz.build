@@ -13,16 +13,13 @@ XPIDL_SOURCES += [
     'nsIHttpChannelAuthProvider.idl',
     'nsIHttpChannelChild.idl',
     'nsIHttpChannelInternal.idl',
+    'nsIHttpDataUsage.idl',
     'nsIHttpEventSink.idl',
     'nsIHttpHeaderVisitor.idl',
     'nsIHttpProtocolHandler.idl',
 ]
 
 XPIDL_MODULE = 'necko_http'
-
-XPIDL_FLAGS += [
-    '-I$(topsrcdir)/netwerk/base/public',
-]
 
 MODULE = 'necko'
 
@@ -76,4 +73,25 @@ CPP_SOURCES += [
     'nsHttpResponseHead.cpp',
     'nsHttpTransaction.cpp',
 ]
+
+IPDL_SOURCES += [
+    'PHttpChannel.ipdl',
+]
+EXTRA_JS_MODULES += [
+    'UserAgentOverrides.jsm',
+    'UserAgentUpdates.jsm',
+]
+
+EXTRA_COMPONENTS += [
+    'HttpDataUsage.js',
+    'HttpDataUsage.manifest',
+]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+MSVC_ENABLE_PGO = True
+
+LIBRARY_NAME = 'nkhttp_s'
 

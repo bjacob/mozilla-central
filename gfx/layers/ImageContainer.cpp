@@ -4,20 +4,21 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
-#include "mozilla/layers/ImageBridgeChild.h"
-
 #include "ImageContainer.h"
-#include "GonkIOSurfaceImage.h"
+#include <string.h>                     // for memcpy, memset
+#include "SharedTextureImage.h"         // for SharedTextureImage
+#include "gfxImageSurface.h"            // for gfxImageSurface
+#include "gfxPlatform.h"                // for gfxPlatform
+#include "gfxUtils.h"                   // for gfxUtils
+#include "mozilla/RefPtr.h"             // for TemporaryRef
+#include "mozilla/ipc/CrossProcessMutex.h"  // for CrossProcessMutex, etc
+#include "mozilla/layers/CompositorTypes.h"
+#include "mozilla/layers/ImageBridgeChild.h"  // for ImageBridgeChild
+#include "mozilla/layers/ImageClient.h"  // for ImageClient
+#include "nsISupportsUtils.h"           // for NS_IF_ADDREF
+#ifdef MOZ_WIDGET_GONK
 #include "GrallocImages.h"
-#include "mozilla/ipc/Shmem.h"
-#include "mozilla/ipc/CrossProcessMutex.h"
-#include "SharedTextureImage.h"
-#include "gfxImageSurface.h"
-#include "gfxSharedImageSurface.h"
-#include "yuv_convert.h"
-#include "gfxUtils.h"
-#include "gfxPlatform.h"
-#include "mozilla/layers/ImageClient.h"
+#endif
 
 #ifdef XP_MACOSX
 #include "mozilla/gfx/QuartzSupport.h"
@@ -40,7 +41,10 @@ using mozilla::gfx::SourceSurface;
 namespace mozilla {
 namespace layers {
 
-int32_t Image::sSerialCounter = 0;
+class DataSourceSurface;
+class SourceSurface;
+
+Atomic<int32_t> Image::sSerialCounter(0);
 
 already_AddRefed<Image>
 ImageFactory::CreateImage(const ImageFormat *aFormats,
@@ -54,7 +58,7 @@ ImageFactory::CreateImage(const ImageFormat *aFormats,
   nsRefPtr<Image> img;
 #ifdef MOZ_WIDGET_GONK
   if (FormatInList(aFormats, aNumFormats, GRALLOC_PLANAR_YCBCR)) {
-    img = new GrallocPlanarYCbCrImage();
+    img = new GrallocImage();
     return img.forget();
   }
 #endif
@@ -70,12 +74,6 @@ ImageFactory::CreateImage(const ImageFormat *aFormats,
     img = new SharedTextureImage();
     return img.forget();
   }
-#ifdef MOZ_WIDGET_GONK
-  if (FormatInList(aFormats, aNumFormats, GONK_IO_SURFACE)) {
-    img = new GonkIOSurfaceImage();
-    return img.forget();
-  }
-#endif
 #ifdef XP_WIN
   if (FormatInList(aFormats, aNumFormats, D3D9_RGB32_TEXTURE)) {
     img = new D3D9SurfaceImage();
@@ -179,21 +177,25 @@ ImageContainer::SetCurrentImageInternal(Image *aImage)
 }
 
 void
-ImageContainer::SetCurrentImage(Image *aImage)
+ImageContainer::ClearCurrentImage()
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-  if (IsAsync()) {
-    if (aImage) {
-      ImageBridgeChild::DispatchImageClientUpdate(mImageClient, this);
-    } else {
-      // here we used to have a SetIdle() call on the image bridge to tell
-      // the compositor that the video element is not going to be seen for
-      // moment and that it can release its shared memory. It was causing
-      // crashes so it has been removed.
-      // This may be reimplemented after 858914 lands.
-    }
+  SetCurrentImageInternal(nullptr);
+}
+
+void
+ImageContainer::SetCurrentImage(Image *aImage)
+{
+  if (IsAsync() && !aImage) {
+    // Let ImageClient to release all TextureClients.
+    ImageBridgeChild::FlushImage(mImageClient, this);
+    return;
   }
 
+  ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+  if (IsAsync()) {
+    ImageBridgeChild::DispatchImageClientUpdate(mImageClient, this);
+  }
   SetCurrentImageInternal(aImage);
 }
 
@@ -276,8 +278,8 @@ ImageContainer::LockCurrentAsSurface(gfxIntSize *aSize, Image** aCurrentImage)
       nsRefPtr<gfxImageSurface> newSurf =
         new gfxImageSurface(mRemoteData->mBitmap.mData, mRemoteData->mSize, mRemoteData->mBitmap.mStride,
                             mRemoteData->mFormat == RemoteImageData::BGRX32 ?
-                                                   gfxASurface::ImageFormatARGB32 :
-                                                   gfxASurface::ImageFormatRGB24);
+                                                   gfxImageFormatARGB32 :
+                                                   gfxImageFormatRGB24);
 
       *aSize = newSurf->GetSize();
     
@@ -408,7 +410,7 @@ ImageContainer::EnsureActiveImage()
 PlanarYCbCrImage::PlanarYCbCrImage(BufferRecycleBin *aRecycleBin)
   : Image(nullptr, PLANAR_YCBCR)
   , mBufferSize(0)
-  , mOffscreenFormat(gfxASurface::ImageFormatUnknown)
+  , mOffscreenFormat(gfxImageFormatUnknown)
   , mRecycleBin(aRecycleBin)
 {
 }
@@ -484,10 +486,10 @@ PlanarYCbCrImage::SetData(const Data &aData)
   CopyData(aData);
 }
 
-gfxASurface::gfxImageFormat
+gfxImageFormat
 PlanarYCbCrImage::GetOffscreenFormat()
 {
-  return mOffscreenFormat == gfxASurface::ImageFormatUnknown ?
+  return mOffscreenFormat == gfxImageFormatUnknown ?
     gfxPlatform::GetPlatform()->GetOffscreenFormat() :
     mOffscreenFormat;
 }
@@ -518,7 +520,7 @@ PlanarYCbCrImage::GetAsSurface()
     return result.forget();
   }
 
-  gfxASurface::gfxImageFormat format = GetOffscreenFormat();
+  gfxImageFormat format = GetOffscreenFormat();
   gfxIntSize size(mSize);
   gfxUtils::GetYCbCrToRGBDestFormatAndSize(mData, format, size);
   if (size.width > PlanarYCbCrImage::MAX_DIMENSION ||
@@ -544,7 +546,7 @@ RemoteBitmapImage::GetAsSurface()
 {
   nsRefPtr<gfxImageSurface> newSurf =
     new gfxImageSurface(mSize,
-    mFormat == RemoteImageData::BGRX32 ? gfxASurface::ImageFormatRGB24 : gfxASurface::ImageFormatARGB32);
+    mFormat == RemoteImageData::BGRX32 ? gfxImageFormatRGB24 : gfxImageFormatARGB32);
 
   for (int y = 0; y < mSize.height; y++) {
     memcpy(newSurf->Data() + newSurf->Stride() * y,

@@ -6,13 +6,19 @@
 
 const {Cc, Ci, Cu} = require("chrome");
 const MAX_ORDINAL = 99;
-let Promise = require("sdk/core/promise");
+const ZOOM_PREF = "devtools.toolbox.zoomValue";
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 2;
+
+let promise = require("sdk/core/promise");
 let EventEmitter = require("devtools/shared/event-emitter");
 let Telemetry = require("devtools/shared/telemetry");
+let HUDService = require("devtools/webconsole/hudservice");
 
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource:///modules/devtools/gDevTools.jsm");
+Cu.import("resource:///modules/devtools/scratchpad-manager.jsm");
 
 loader.lazyGetter(this, "Hosts", () => require("devtools/framework/toolbox-hosts").Hosts);
 
@@ -188,10 +194,17 @@ Toolbox.prototype = {
   },
 
   /**
+   * Get current zoom level of toolbox
+   */
+  get zoomValue() {
+    return parseFloat(Services.prefs.getCharPref(ZOOM_PREF));
+  },
+
+  /**
    * Open the toolbox
    */
   open: function TBOX_open() {
-    let deferred = Promise.defer();
+    let deferred = promise.defer();
 
     this._host.create().then(iframe => {
       let domReady = () => {
@@ -207,6 +220,9 @@ Toolbox.prototype = {
         this._buildTabs();
         this._buildButtons();
         this._addKeysToWindow();
+        this._addToolSwitchingKeys();
+        this._addZoomKeys();
+        this._loadInitialZoom();
 
         this._telemetry.toolOpened("toolbox");
 
@@ -228,6 +244,77 @@ Toolbox.prototype = {
     key.addEventListener("command", function(toolId) {
       this.selectTool(toolId);
     }.bind(this, "options"), true);
+  },
+
+  _addToolSwitchingKeys: function TBOX__addToolSwitchingKeys() {
+    let nextKey = this.doc.getElementById("toolbox-next-tool-key");
+    nextKey.addEventListener("command", this.selectNextTool.bind(this), true);
+    let prevKey = this.doc.getElementById("toolbox-previous-tool-key");
+    prevKey.addEventListener("command", this.selectPreviousTool.bind(this), true);
+  },
+
+  /**
+   * Wire up the listeners for the zoom keys.
+   */
+  _addZoomKeys: function TBOX__addZoomKeys() {
+    let inKey = this.doc.getElementById("toolbox-zoom-in-key");
+    inKey.addEventListener("command", this.zoomIn.bind(this), true);
+
+    let inKey2 = this.doc.getElementById("toolbox-zoom-in-key2");
+    inKey2.addEventListener("command", this.zoomIn.bind(this), true);
+
+    let outKey = this.doc.getElementById("toolbox-zoom-out-key");
+    outKey.addEventListener("command", this.zoomOut.bind(this), true);
+
+    let resetKey = this.doc.getElementById("toolbox-zoom-reset-key");
+    resetKey.addEventListener("command", this.zoomReset.bind(this), true);
+  },
+
+  /**
+   * Set zoom on toolbox to whatever the last setting was.
+   */
+  _loadInitialZoom: function TBOX__loadInitialZoom() {
+    this.setZoom(this.zoomValue);
+  },
+
+  /**
+   * Increase zoom level of toolbox window - make things bigger.
+   */
+  zoomIn: function TBOX__zoomIn() {
+    this.setZoom(this.zoomValue + 0.1);
+  },
+
+  /**
+   * Decrease zoom level of toolbox window - make things smaller.
+   */
+  zoomOut: function TBOX__zoomOut() {
+    this.setZoom(this.zoomValue - 0.1);
+  },
+
+  /**
+   * Reset zoom level of the toolbox window.
+   */
+  zoomReset: function TBOX__zoomReset() {
+    this.setZoom(1);
+  },
+
+  /**
+   * Set zoom level of the toolbox window.
+   *
+   * @param {number} zoomValue
+   *        Zoom level e.g. 1.2
+   */
+  setZoom: function TBOX__setZoom(zoomValue) {
+    // cap zoom value
+    zoomValue = Math.max(zoomValue, MIN_ZOOM);
+    zoomValue = Math.min(zoomValue, MAX_ZOOM);
+
+    let contViewer = this.frame.docShell.contentViewer;
+    let docViewer = contViewer.QueryInterface(Ci.nsIMarkupDocumentViewer);
+
+    docViewer.fullZoom = zoomValue;
+
+    Services.prefs.setCharPref(ZOOM_PREF, zoomValue);
   },
 
   /**
@@ -256,10 +343,55 @@ Toolbox.prototype = {
         key.setAttribute("modifiers", toolDefinition.modifiers);
         key.setAttribute("oncommand", "void(0);"); // needed. See bug 371900
         key.addEventListener("command", function(toolId) {
-          this.selectTool(toolId);
+          this.selectTool(toolId).then(() => {
+              this.fireCustomKey(toolId);
+          });
         }.bind(this, id), true);
         doc.getElementById("toolbox-keyset").appendChild(key);
       }
+    }
+
+    // Add key for opening Scratchpad from the detached window
+    if(doc.getElementById("key_scratchpad") == null) {
+      let key = doc.createElement("key");
+      key.id = "key_scratchpad";
+
+      key.setAttribute("keycode", toolboxStrings("scratchpad.keycode"));
+      key.setAttribute("modifiers", "shift");
+      key.setAttribute("oncommand", "void(0)"); // needed. See bug 371900
+      key.addEventListener("command", function() {
+        ScratchpadManager.openScratchpad();
+      }, true);
+      doc.getElementById("toolbox-keyset").appendChild(key);
+    }
+
+    // Add key for toggling the browser console from the detached window
+    if(doc.getElementById("key_browserconsole") == null) {
+      let key = doc.createElement("key");
+      key.id = "key_browserconsole";
+
+      key.setAttribute("key", toolboxStrings("browserConsoleCmd.commandkey"));
+      key.setAttribute("modifiers", "accel,shift");
+      key.setAttribute("oncommand", "void(0)"); // needed. See bug 371900
+      key.addEventListener("command", function() {
+        HUDService.toggleBrowserConsole();
+      }, true);
+      doc.getElementById("toolbox-keyset").appendChild(key);
+    }
+  },
+
+
+  /**
+   * Handle any custom key events.  Returns true if there was a custom key binding run
+   * @param {string} toolId
+   *        Which tool to run the command on (skip if not current)
+   */
+  fireCustomKey: function TBOX_fireCustomKey(toolId) {
+    let tools = gDevTools.getToolDefinitionMap();
+    let activeToolDefinition = tools.get(toolId);
+
+    if (activeToolDefinition.onkey && this.currentToolId === toolId) {
+        activeToolDefinition.onkey(this.getCurrentPanel());
     }
   },
 
@@ -351,6 +483,9 @@ Toolbox.prototype = {
     let id = toolDefinition.id;
 
     let radio = this.doc.createElement("radio");
+    // The radio element is not being used in the conventional way, thus
+    // the devtools-tab class replaces the radio XBL binding with its base
+    // binding (the control-item binding).
     radio.className = "toolbox-tab devtools-tab";
     radio.id = "toolbox-tab-" + id;
     radio.setAttribute("toolid", id);
@@ -371,7 +506,15 @@ Toolbox.prototype = {
 
     if (toolDefinition.icon) {
       let image = this.doc.createElement("image");
-      image.setAttribute("src", toolDefinition.icon);
+      image.className = "default-icon";
+      image.setAttribute("src",
+                         toolDefinition.icon || toolDefinition.highlightedicon);
+      radio.appendChild(image);
+      // Adding the highlighted icon image
+      image = this.doc.createElement("image");
+      image.className = "highlighted-icon";
+      image.setAttribute("src",
+                         toolDefinition.highlightedicon || toolDefinition.icon);
       radio.appendChild(image);
     }
 
@@ -410,21 +553,32 @@ Toolbox.prototype = {
   },
 
   /**
-   * Load a tool with a given id.
+   * Ensure the tool with the given id is loaded.
    *
    * @param {string} id
    *        The id of the tool to load.
    */
   loadTool: function TBOX_loadTool(id) {
-    let deferred = Promise.defer();
+    let deferred = promise.defer();
     let iframe = this.doc.getElementById("toolbox-panel-iframe-" + id);
 
     if (iframe) {
-      this.once(id + "-ready", () => { deferred.resolve() });
+      let panel = this._toolPanels.get(id);
+      if (panel) {
+        deferred.resolve(panel);
+      } else {
+        this.once(id + "-ready", (panel) => {
+          deferred.resolve(panel);
+        });
+      }
       return deferred.promise;
     }
 
     let definition = gDevTools.getToolDefinitionMap().get(id);
+    if (!definition) {
+      deferred.reject(new Error("no such tool id "+id));
+      return deferred.promise;
+    }
     iframe = this.doc.createElement("iframe");
     iframe.className = "toolbox-panel-iframe";
     iframe.id = "toolbox-panel-iframe-" + id;
@@ -439,7 +593,7 @@ Toolbox.prototype = {
       iframe.removeEventListener("DOMContentLoaded", onLoad, true);
 
       let built = definition.build(iframe.contentWindow, this);
-      Promise.resolve(built).then((panel) => {
+      promise.resolve(built).then((panel) => {
         this._toolPanels.set(id, panel);
         this.emit(id + "-ready", panel);
         gDevTools.emit(id + "-ready", this, panel);
@@ -459,8 +613,6 @@ Toolbox.prototype = {
    *        The id of the tool to switch to
    */
   selectTool: function TBOX_selectTool(id) {
-    let deferred = Promise.defer();
-
     let selected = this.doc.querySelector(".devtools-tab[selected]");
     if (selected) {
       selected.removeAttribute("selected");
@@ -471,8 +623,11 @@ Toolbox.prototype = {
     let prevToolId = this._currentToolId;
 
     if (this._currentToolId == id) {
+      // re-focus tool to get key events again
+      this.focusTool(id);
+
       // Return the existing panel in order to have a consistent return value.
-      return Promise.resolve(this._toolPanels.get(id));
+      return promise.resolve(this._toolPanels.get(id));
     }
 
     if (!this.isReady) {
@@ -508,41 +663,70 @@ Toolbox.prototype = {
     deck.selectedIndex = index;
 
     this._currentToolId = id;
-
-    let resolveSelected = panel => {
-      this.emit("select", id);
-      this.emit(id + "-selected", panel);
-      deferred.resolve(panel);
-    };
-
-    let iframe = this.doc.getElementById("toolbox-panel-iframe-" + id);
-    if (!iframe) {
-      this.loadTool(id).then((panel) => {
-        this.emit("select", id);
-        this.emit(id + "-selected", panel);
-        deferred.resolve(panel);
-      });
-    } else {
-      let panel = this._toolPanels.get(id);
-      // only emit 'select' event if the iframe has been loaded
-      if (panel && (!panel.contentDocument ||
-                    panel.contentDocument.readyState == "complete")) {
-        resolveSelected(panel);
-      }
-      else if (panel) {
-        let boundLoad = function() {
-          panel.removeEventListener("DOMContentLoaded", boundLoad, true);
-          resolveSelected(panel);
-        };
-        panel.addEventListener("DOMContentLoaded", boundLoad, true);
-      }
-    }
-
     if (id != "options") {
       Services.prefs.setCharPref(this._prefs.LAST_TOOL, id);
     }
 
-    return deferred.promise;
+    return this.loadTool(id).then((panel) => {
+      // focus the tool's frame to start receiving key events
+      this.focusTool(id);
+
+      this.emit("select", id);
+      this.emit(id + "-selected", panel);
+      return panel;
+    });
+  },
+
+  /**
+   * Focus a tool's panel by id
+   * @param  {string} id
+   *         The id of tool to focus
+   */
+  focusTool: function(id) {
+    let iframe = this.doc.getElementById("toolbox-panel-iframe-" + id);
+    iframe.focus();
+  },
+
+  /**
+   * Loads the tool next to the currently selected tool.
+   */
+  selectNextTool: function TBOX_selectNextTool() {
+    let selected = this.doc.querySelector(".devtools-tab[selected]");
+    let next = selected.nextSibling || selected.parentNode.firstChild;
+    let tool = next.getAttribute("toolid");
+    return this.selectTool(tool);
+  },
+
+  /**
+   * Loads the tool just left to the currently selected tool.
+   */
+  selectPreviousTool: function TBOX_selectPreviousTool() {
+    let selected = this.doc.querySelector(".devtools-tab[selected]");
+    let previous = selected.previousSibling || selected.parentNode.lastChild;
+    let tool = previous.getAttribute("toolid");
+    return this.selectTool(tool);
+  },
+
+  /**
+   * Highlights the tool's tab if it is not the currently selected tool.
+   *
+   * @param {string} id
+   *        The id of the tool to highlight
+   */
+  highlightTool: function TBOX_highlightTool(id) {
+    let tab = this.doc.getElementById("toolbox-tab-" + id);
+    tab && tab.classList.add("highlighted");
+  },
+
+  /**
+   * De-highlights the tool's tab.
+   *
+   * @param {string} id
+   *        The id of the tool to unhighlight
+   */
+  unhighlightTool: function TBOX_unhighlightTool(id) {
+    let tab = this.doc.getElementById("toolbox-tab-" + id);
+    tab && tab.classList.remove("highlighted");
   },
 
   /**
@@ -718,7 +902,7 @@ Toolbox.prototype = {
     // Assign the "_destroyer" property before calling the other
     // destroyer methods to guarantee that the Toolbox's destroy
     // method is only executed once.
-    let deferred = Promise.defer();
+    let deferred = promise.defer();
     this._destroyer = deferred.promise;
 
     this._target.off("navigate", this._refreshHostTitle);
@@ -728,7 +912,7 @@ Toolbox.prototype = {
     gDevTools.off("tool-registered", this._toolRegistered);
     gDevTools.off("tool-unregistered", this._toolUnregistered);
 
-    // Revert docShell.allowJavascript back to it's original value if it was
+    // Revert docShell.allowJavascript back to its original value if it was
     // changed via the Disable JS option.
     if (typeof this._origAllowJavascript != "undefined") {
       let docShell = this._host.hostTab.linkedBrowser.docShell;
@@ -739,7 +923,12 @@ Toolbox.prototype = {
     let outstanding = [];
 
     for (let [id, panel] of this._toolPanels) {
-      outstanding.push(panel.destroy());
+      try {
+        outstanding.push(panel.destroy());
+      } catch(e) {
+        // We don't want to stop here if any panel fail to close.
+        console.error(e);
+      }
     }
 
     let container = this.doc.getElementById("toolbox-buttons");
@@ -751,15 +940,18 @@ Toolbox.prototype = {
 
     this._telemetry.destroy();
 
-    // Targets need to be notified that the toolbox is being torn down, so that
-    // remote protocol connections can be gracefully terminated.
-    if (this._target) {
-      this._target.off("close", this.destroy);
-      outstanding.push(this._target.destroy());
-    }
-    this._target = null;
-
-    Promise.all(outstanding).then(function() {
+    promise.all(outstanding).then(() => {
+      // Targets need to be notified that the toolbox is being torn down.
+      // This is done after other destruction tasks since it may tear down
+      // fronts and the debugger transport which earlier destroy methods may
+      // require to complete.
+      if (this._target) {
+        let target = this._target;
+        this._target = null;
+        target.off("close", this.destroy);
+        return target.destroy();
+      }
+    }).then(function() {
       this.emit("destroyed");
       // Free _host after the call to destroyed in order to let a chance
       // to destroyed listeners to still query toolbox attributes

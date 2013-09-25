@@ -38,16 +38,17 @@ using mozilla::plugins::PluginInstanceParent;
 #include "mozilla/unused.h"
 
 #include "LayerManagerOGL.h"
-#include "BasicLayers.h"
 #ifdef MOZ_ENABLE_D3D9_LAYER
 #include "LayerManagerD3D9.h"
 #endif
 #ifdef MOZ_ENABLE_D3D10_LAYER
 #include "LayerManagerD3D10.h"
 #endif
+#include "mozilla/layers/CompositorParent.h"
 
 #include "nsUXThemeData.h"
 #include "nsUXThemeConstants.h"
+#include "mozilla/gfx/2D.h"
 
 extern "C" {
 #define PIXMAN_DONT_DEFINE_STDINT
@@ -212,6 +213,13 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
     return true;
   }
 
+  // Do an early async composite so that we at least have something on screen
+  // in the right place, even if the content is out of date.
+  if (GetLayerManager()->GetBackendType() == LAYERS_CLIENT &&
+      mCompositorParent) {
+    mCompositorParent->ScheduleRenderOnCompositorThread();
+  }
+
   nsIWidgetListener* listener = GetPaintListener();
   if (listener) {
     listener->WillPaintWindow(this);
@@ -299,10 +307,10 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
               IsRenderMode(gfxWindowsPlatform::RENDER_DIRECT2D))
           {
             if (!mD2DWindowSurface) {
-              gfxASurface::gfxContentType content = gfxASurface::CONTENT_COLOR;
+              gfxContentType content = GFX_CONTENT_COLOR;
 #if defined(MOZ_XUL)
               if (mTransparencyMode != eTransparencyOpaque) {
-                content = gfxASurface::CONTENT_COLOR_ALPHA;
+                content = GFX_CONTENT_COLOR_ALPHA;
               }
 #endif
               mD2DWindowSurface = new gfxD2DSurface(mWnd, content);
@@ -344,7 +352,7 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
             targetSurfaceImage = new gfxImageSurface(sSharedSurfaceData.get(),
                                                      surfaceSize,
                                                      surfaceSize.width * 4,
-                                                     gfxASurface::ImageFormatRGB24);
+                                                     gfxImageFormatRGB24);
 
             if (targetSurfaceImage && !targetSurfaceImage->CairoStatus()) {
               targetSurfaceImage->SetDeviceOffset(gfxPoint(-ps.rcPaint.left, -ps.rcPaint.top));
@@ -357,7 +365,19 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
             return false;
           }
 
-          nsRefPtr<gfxContext> thebesContext = new gfxContext(targetSurface);
+          nsRefPtr<gfxContext> thebesContext;
+          if (gfxPlatform::GetPlatform()->SupportsAzureContentForType(mozilla::gfx::BACKEND_CAIRO)) {
+            RECT paintRect;
+            ::GetClientRect(mWnd, &paintRect);
+            RefPtr<mozilla::gfx::DrawTarget> dt =
+              gfxPlatform::GetPlatform()->CreateDrawTargetForSurface(targetSurface,
+                                                                     mozilla::gfx::IntSize(paintRect.right - paintRect.left,
+                                                                                           paintRect.bottom - paintRect.top));
+            thebesContext = new gfxContext(dt);
+          } else {
+            thebesContext = new gfxContext(targetSurface);
+          }
+
           if (IsRenderMode(gfxWindowsPlatform::RENDER_DIRECT2D)) {
             const nsIntRect* r;
             for (nsIntRegionRectIterator iter(region);
@@ -546,9 +566,8 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
         break;
 #endif
       case LAYERS_CLIENT:
-        // Do nothing, the compositor will handle drawing.
+        result = listener->PaintWindow(this, region);
         break;
-
       default:
         NS_ERROR("Unknown layers backend used!");
         break;
@@ -638,7 +657,7 @@ nsresult nsWindowGfx::CreateIcon(imgIContainer *aContainer,
     NS_ENSURE_ARG(aScaledSize.width > 0);
     NS_ENSURE_ARG(aScaledSize.height > 0);
     // Draw a scaled version of the image to a temporary surface
-    dest = new gfxImageSurface(aScaledSize, gfxASurface::ImageFormatARGB32);
+    dest = new gfxImageSurface(aScaledSize, gfxImageFormatARGB32);
     if (!dest)
       return NS_ERROR_OUT_OF_MEMORY;
 

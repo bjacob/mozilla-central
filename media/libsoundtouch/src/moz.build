@@ -32,3 +32,8 @@ if CONFIG['INTEL_ARCHITECTURE']:
         CPP_SOURCES += [
             'mmx_optimized.cpp',
         ]
+
+LIBRARY_NAME = 'soundtouch'
+
+MSVC_ENABLE_PGO = True
+

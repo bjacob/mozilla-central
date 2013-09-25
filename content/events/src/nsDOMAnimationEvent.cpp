@@ -5,6 +5,7 @@
 
 #include "nsDOMAnimationEvent.h"
 #include "nsGUIEvent.h"
+#include "prtime.h"
 
 nsDOMAnimationEvent::nsDOMAnimationEvent(mozilla::dom::EventTarget* aOwner,
                                          nsPresContext *aPresContext,
@@ -22,7 +23,6 @@ nsDOMAnimationEvent::nsDOMAnimationEvent(mozilla::dom::EventTarget* aOwner,
     mEventIsInternal = true;
     mEvent->time = PR_Now();
   }
-  SetIsDOMBinding();
 }
 
 nsDOMAnimationEvent::~nsDOMAnimationEvent()
@@ -47,7 +47,7 @@ nsDOMAnimationEvent::Constructor(const mozilla::dom::GlobalObject& aGlobal,
                                  const mozilla::dom::AnimationEventInit& aParam,
                                  mozilla::ErrorResult& aRv)
 {
-  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.Get());
+  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.GetAsSupports());
   nsRefPtr<nsDOMAnimationEvent> e = new nsDOMAnimationEvent(t, nullptr, nullptr);
   bool trusted = e->Init(t);
 

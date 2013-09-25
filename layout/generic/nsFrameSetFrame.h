@@ -9,22 +9,16 @@
 #define nsHTMLFrameset_h___
 
 #include "mozilla/Attributes.h"
-#include "nsGkAtoms.h"
 #include "nsContainerFrame.h"
 #include "nsColor.h"
-#include "nsIObserver.h"
-#include "nsWeakPtr.h"
 
 class  nsIContent;
-class  nsIFrame;
 class  nsPresContext;
-class  nsRenderingContext;
 struct nsRect;
 struct nsHTMLReflowState;
 struct nsSize;
 class  nsIAtom;
 class  nsHTMLFramesetBorderFrame;
-class  nsGUIEvent;
 class  nsHTMLFramesetFrame;
 
 #define NO_COLOR 0xFFFFFFFA

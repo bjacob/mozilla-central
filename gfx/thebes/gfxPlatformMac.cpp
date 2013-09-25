@@ -42,7 +42,7 @@ DisableFontActivation()
 {
     // get the main bundle identifier
     CFBundleRef mainBundle = ::CFBundleGetMainBundle();
-    CFStringRef mainBundleID = NULL;
+    CFStringRef mainBundleID = nullptr;
 
     if (mainBundle) {
         mainBundleID = ::CFBundleGetIdentifier(mainBundle);
@@ -71,7 +71,7 @@ gfxPlatformMac::gfxPlatformMac()
     mFontAntiAliasingThreshold = ReadAntiAliasingThreshold();
 
     uint32_t canvasMask = (1 << BACKEND_CAIRO) | (1 << BACKEND_SKIA) | (1 << BACKEND_COREGRAPHICS);
-    uint32_t contentMask = 0;
+    uint32_t contentMask = (1 << BACKEND_COREGRAPHICS);
     InitBackendPrefs(canvasMask, contentMask);
 }
 
@@ -93,7 +93,7 @@ gfxPlatformMac::CreatePlatformFontList()
 
 already_AddRefed<gfxASurface>
 gfxPlatformMac::CreateOffscreenSurface(const gfxIntSize& size,
-                                       gfxASurface::gfxContentType contentType)
+                                       gfxContentType contentType)
 {
     nsRefPtr<gfxASurface> newSurface =
       new gfxQuartzSurface(size, OptimalFormatForContent(contentType));
@@ -102,7 +102,7 @@ gfxPlatformMac::CreateOffscreenSurface(const gfxIntSize& size,
 
 already_AddRefed<gfxASurface>
 gfxPlatformMac::CreateOffscreenImageSurface(const gfxIntSize& aSize,
-                                            gfxASurface::gfxContentType aContentType)
+                                            gfxContentType aContentType)
 {
     nsRefPtr<gfxASurface> surface = CreateOffscreenSurface(aSize, aContentType);
 #ifdef DEBUG
@@ -115,7 +115,7 @@ gfxPlatformMac::CreateOffscreenImageSurface(const gfxIntSize& aSize,
 
 already_AddRefed<gfxASurface>
 gfxPlatformMac::OptimizeImage(gfxImageSurface *aSurface,
-                              gfxASurface::gfxImageFormat format)
+                              gfxImageFormat format)
 {
     const gfxIntSize& surfaceSize = aSurface->GetSize();
     nsRefPtr<gfxImageSurface> isurf = aSurface;
@@ -235,7 +235,6 @@ gfxPlatformMac::UpdateFontList()
 static const char kFontArialUnicodeMS[] = "Arial Unicode MS";
 static const char kFontAppleBraille[] = "Apple Braille";
 static const char kFontAppleSymbols[] = "Apple Symbols";
-static const char kFontAppleMyungjo[] = "AppleMyungjo";
 static const char kFontGeneva[] = "Geneva";
 static const char kFontGeezaPro[] = "Geeza Pro";
 static const char kFontHiraginoKakuGothic[] = "Hiragino Kaku Gothic ProN";
@@ -342,8 +341,8 @@ gfxPlatformMac::OSXVersion()
         OSErr err = ::Gestalt(gestaltSystemVersion, reinterpret_cast<SInt32*>(&mOSXVersion));
         if (err != noErr) {
             //This should probably be changed when our minimum version changes
-            NS_ERROR("Couldn't determine OS X version, assuming 10.4");
-            mOSXVersion = MAC_OS_X_VERSION_10_4_HEX;
+            NS_ERROR("Couldn't determine OS X version, assuming 10.6");
+            mOSXVersion = MAC_OS_X_VERSION_10_6_HEX;
         }
     }
     return mOSXVersion;
@@ -384,8 +383,8 @@ gfxPlatformMac::CreateThebesSurfaceAliasForDrawTarget_hack(mozilla::gfx::DrawTar
     size_t stride = CGBitmapContextGetBytesPerRow(cg);
     gfxIntSize size(aTarget->GetSize().width, aTarget->GetSize().height);
     nsRefPtr<gfxImageSurface> imageSurface = new gfxImageSurface(data, size, stride, bpp == 2
-                                                                                     ? gfxASurface::ImageFormatRGB16_565
-                                                                                     : gfxASurface::ImageFormatARGB32);
+                                                                                     ? gfxImageFormatRGB16_565
+                                                                                     : gfxImageFormatARGB32);
     // Here we should return a gfxQuartzImageSurface but quartz will assumes that image surfaces
     // don't change which wont create a proper alias to the draw target, therefore we have to
     // return a plain image surface.
@@ -403,9 +402,9 @@ gfxPlatformMac::GetThebesSurfaceForDrawTarget(DrawTarget *aTarget)
     RefPtr<DataSourceSurface> sourceData = source->GetDataSurface();
     unsigned char* data = sourceData->GetData();
     nsRefPtr<gfxImageSurface> surf = new gfxImageSurface(data, ThebesIntSize(sourceData->GetSize()), sourceData->Stride(),
-                                                         gfxImageSurface::ImageFormatARGB32);
+                                                         gfxImageFormatARGB32);
     // We could fix this by telling gfxImageSurface it owns data.
-    nsRefPtr<gfxImageSurface> cpy = new gfxImageSurface(ThebesIntSize(sourceData->GetSize()), gfxImageSurface::ImageFormatARGB32);
+    nsRefPtr<gfxImageSurface> cpy = new gfxImageSurface(ThebesIntSize(sourceData->GetSize()), gfxImageFormatARGB32);
     cpy->CopyFrom(surf);
     return cpy.forget();
   } else if (aTarget->GetType() == BACKEND_COREGRAPHICS) {
@@ -429,6 +428,17 @@ gfxPlatformMac::UseAcceleratedCanvas()
 {
   // Lion or later is required
   return OSXVersion() >= 0x1070 && Preferences::GetBool("gfx.canvas.azure.accelerated", false);
+}
+
+bool
+gfxPlatformMac::SupportsOffMainThreadCompositing()
+{
+  // 10.6.X has crashes on tinderbox with OMTC, so disable it
+  // for now.
+  if (OSXVersion() >= 0x1070) {
+    return true;
+  }
+  return GetPrefLayersOffMainThreadCompositionForceEnabled();
 }
 
 qcms_profile *
@@ -459,7 +469,7 @@ gfxPlatformMac::GetPlatformCMSOutputProfile()
         return nullptr;
 
     // get the size of location
-    err = NCMGetProfileLocation(cmProfile, NULL, &locationSize);
+    err = NCMGetProfileLocation(cmProfile, nullptr, &locationSize);
     if (err != noErr)
         return nullptr;
 

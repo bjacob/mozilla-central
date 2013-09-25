@@ -14,3 +14,8 @@ else:
     CPP_SOURCES += [
         'nsUnixSystemProxySettings.cpp',
     ]
+
+LIBRARY_NAME = 'unixproxy'
+
+LIBXUL_LIBRARY = True
+

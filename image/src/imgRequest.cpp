@@ -13,13 +13,8 @@
 #include "ImageFactory.h"
 #include "Image.h"
 
-#include "imgILoader.h"
-
-#include "netCore.h"
-
 #include "nsIChannel.h"
 #include "nsICachingChannel.h"
-#include "nsILoadGroup.h"
 #include "nsIInputStream.h"
 #include "nsIMultiPartChannel.h"
 #include "nsIHttpChannel.h"
@@ -27,22 +22,16 @@
 #include "nsIApplicationCacheChannel.h"
 #include "nsMimeTypes.h"
 
-#include "nsIComponentManager.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsIServiceManager.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIScriptSecurityManager.h"
 
-#include "nsICacheVisitor.h"
+#include "nsICacheEntry.h"
 
-#include "nsString.h"
-#include "nsXPIDLString.h"
 #include "plstr.h" // PL_strcasestr(...)
 #include "nsNetUtil.h"
 #include "nsIProtocolHandler.h"
-
-#include "DiscardTracker.h"
-#include "nsAsyncRedirectVerifyHelper.h"
+#include "imgIRequest.h"
 
 using namespace mozilla;
 using namespace mozilla::image;
@@ -350,7 +339,7 @@ void imgRequest::SetCacheValidation(imgCacheEntry* aCacheEntry, nsIRequest* aReq
       nsCOMPtr<nsISupports> cacheToken;
       cacheChannel->GetCacheToken(getter_AddRefs(cacheToken));
       if (cacheToken) {
-        nsCOMPtr<nsICacheEntryInfo> entryDesc(do_QueryInterface(cacheToken));
+        nsCOMPtr<nsICacheEntry> entryDesc(do_QueryInterface(cacheToken));
         if (entryDesc) {
           uint32_t expiration;
           /* get the expiration time from the caching channel's token */
@@ -674,6 +663,11 @@ imgRequest::OnDataAvailable(nsIRequest *aRequest, nsISupports *ctxt,
 
     mGotData = true;
 
+    // Store and reset this for the invariant that it's always false after
+    // calls to OnDataAvailable (see bug 907575)
+    bool resniffMimeType = mResniffMimeType;
+    mResniffMimeType = false;
+
     mimetype_closure closure;
     nsAutoCString newType;
     closure.newType = &newType;
@@ -706,17 +700,6 @@ imgRequest::OnDataAvailable(nsIRequest *aRequest, nsISupports *ctxt,
       LOG_MSG(GetImgLog(), "imgRequest::OnDataAvailable", "Got content type from the channel");
     }
 
-#ifdef MOZ_WBMP
-#ifdef MOZ_WIDGET_GONK
-    // Only support WBMP in privileged app and certified app, do not support in browser app.
-    if (newType.EqualsLiteral(IMAGE_WBMP) &&
-        (!mLoadingPrincipal || mLoadingPrincipal->GetAppStatus() < nsIPrincipal::APP_STATUS_PRIVILEGED)) {
-      this->Cancel(NS_ERROR_FAILURE);
-      return NS_BINDING_ABORTED;
-    }
-#endif
-#endif
-
     // If we're a regular image and this is the first call to OnDataAvailable,
     // this will always be true. If we've resniffed our MIME type (i.e. we're a
     // multipart/x-mixed-replace image), we have to be able to switch our image
@@ -729,14 +712,12 @@ imgRequest::OnDataAvailable(nsIRequest *aRequest, nsISupports *ctxt,
       // If we've resniffed our MIME type and it changed, we need to create a
       // new status tracker to give to the image, because we don't have one of
       // our own any more.
-      if (mResniffMimeType) {
+      if (resniffMimeType) {
         NS_ABORT_IF_FALSE(mIsMultiPartChannel, "Resniffing a non-multipart image");
 
         imgStatusTracker* freshTracker = new imgStatusTracker(nullptr);
         freshTracker->AdoptConsumers(&GetStatusTracker());
         mStatusTracker = freshTracker;
-
-        mResniffMimeType = false;
       }
 
       /* set our mimetype as a property */

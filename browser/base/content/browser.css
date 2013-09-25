@@ -5,11 +5,19 @@
 @namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
 @namespace html url("http://www.w3.org/1999/xhtml");
 
+#main-window:not([chromehidden~="toolbar"]) {
+%ifdef XP_MACOSX
+  min-width: 425px;
+%else
+  min-width: 390px;
+%endif
+}
+
 searchbar {
   -moz-binding: url("chrome://browser/content/search/search.xml#searchbar");
 }
 
-browser[remote="true"] {
+.browserStack > browser[remote="true"] {
   -moz-binding: url("chrome://global/content/bindings/remote-browser.xml#remote-browser");
 }
 
@@ -386,6 +394,11 @@ window[chromehidden~="toolbar"] toolbar:not(.toolbar-primary):not(.chromeclass-m
 }
 
 /* Identity UI */
+#identity-popup-content-box:not(.chromeUI) > #identity-popup-brandName,
+#identity-popup-content-box:not(.chromeUI) > #identity-popup-chromeLabel,
+#identity-popup-content-box.chromeUI > .identity-popup-label:not(#identity-popup-brandName):not(#identity-popup-chromeLabel),
+#identity-popup-content-box.chromeUI > .identity-popup-description,
+#identity-popup.chromeUI > #identity-popup-button-container,
 #identity-popup-content-box.unknownIdentity > #identity-popup-connectedToLabel ,
 #identity-popup-content-box.unknownIdentity > #identity-popup-runByLabel ,
 #identity-popup-content-box.unknownIdentity > #identity-popup-content-host ,
@@ -506,8 +519,8 @@ window[chromehidden~="toolbar"] toolbar:not(.toolbar-primary):not(.chromeclass-m
   -moz-binding: url("chrome://browser/content/urlbarBindings.xml#click-to-play-plugins-notification");
 }
 
-popupnotification-centeritem {
-  -moz-binding: url("chrome://browser/content/urlbarBindings.xml#center-item");
+.plugin-popupnotification-centeritem {
+  -moz-binding: url("chrome://browser/content/urlbarBindings.xml#plugin-popupnotification-center-item");
 }
 
 /* override hidden="true" for the status bar compatibility shim
@@ -531,7 +544,6 @@ statuspanel {
   -moz-binding: url("chrome://browser/content/tabbrowser.xml#statuspanel");
   position: fixed;
   margin-top: -3em;
-  left: 0;
   max-width: calc(100% - 5px);
   pointer-events: none;
 }
@@ -598,8 +610,7 @@ html|*#gcli-output-frame,
 }
 
 .gclitoolbar-input-node,
-.gclitoolbar-complete-node,
-.gclitoolbar-prompt {
+.gclitoolbar-complete-node {
   direction: ltr;
 }
 
@@ -644,6 +655,14 @@ toolbarbutton[type="badged"] {
   -moz-binding: url("chrome://browser/content/urlbarBindings.xml#toolbarbutton-badged");
 }
 
+toolbarbutton[type="socialmark"] {
+  -moz-binding: url("chrome://browser/content/socialmarks.xml#toolbarbutton-marks");
+}
+toolbarbutton[type="socialmark"] > .toolbarbutton-icon {
+  width: 16px;
+  height: 16px;
+}
+
 /* Note the chatbox 'width' values are duplicated in socialchat.xml */
 chatbox {
   -moz-binding: url("chrome://browser/content/socialchat.xml#chatbox");
@@ -661,6 +680,12 @@ chatbar {
   -moz-binding: url("chrome://browser/content/socialchat.xml#chatbar");
   height: 0;
   max-height: 0;
+}
+
+/** See bug 872317 for why the following rule is necessary. */
+
+#downloads-indicator {
+  -moz-binding: url("chrome://browser/content/downloads/download.xml#download-toolbarbutton");
 }
 
 /* full screen chat window support */
@@ -695,4 +720,19 @@ chatbox:-moz-full-screen-ancestor > .chat-titlebar {
 /* hide sidebar when fullscreen */
 *:-moz-full-screen-ancestor #social-sidebar-box:not(:-moz-full-screen-ancestor) {
   display: none;
+}
+
+/* Combobox dropdown renderer */
+#ContentSelectDropdown {
+  max-height: 400px;
+}
+
+.contentSelectDropdown-optgroup {
+  font-weight: bold;
+  /* color: menutext used to overwrite the disabled color */
+  color: menutext;
+}
+
+.contentSelectDropdown-ingroup {
+  -moz-margin-start: 2em;
 }

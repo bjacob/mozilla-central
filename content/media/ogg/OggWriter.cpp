@@ -3,6 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "OggWriter.h"
+#include "prtime.h"
 
 #undef LOG
 #ifdef MOZ_WIDGET_GONK
@@ -48,6 +49,11 @@ nsresult
 OggWriter::WriteEncodedTrack(const nsTArray<uint8_t>& aBuffer, int aDuration,
                              uint32_t aFlags)
 {
+  if (!mInitialized) {
+    LOG("[OggWriter] OggWriter has not initialized!");
+    return NS_ERROR_FAILURE;
+  }
+
   MOZ_ASSERT(!ogg_stream_eos(&mOggStreamState),
              "No data can be written after eos has marked.");
 

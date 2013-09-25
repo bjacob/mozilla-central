@@ -11,8 +11,15 @@ pref("nglayout.debug.disable_xul_fastload", true);
 pref("devtools.errorconsole.enabled", true);
 #endif
 
-// Enable headless crash reporting by default
-pref("app.reportCrashes", true);
+// Automatically submit crash reports
+#ifdef RELEASE_BUILD
+pref("app.crashreporter.autosubmit", false);
+#else
+// For Nightly and Aurora we turn this on by default
+pref("app.crashreporter.autosubmit", true);
+#endif
+// Has the user been prompted about crash reporting?
+pref("app.crashreporter.prompted", false);
 
 // Debug prefs, see input.js
 pref("metro.debug.treatmouseastouch", false);
@@ -21,8 +28,18 @@ pref("metro.debug.selection.displayRanges", false);
 pref("metro.debug.selection.dumpRanges", false);
 pref("metro.debug.selection.dumpEvents", false);
 
+// Enable tab-modal prompts
+pref("prompts.tab_modal.enabled", true);
+
+
 // Enable off main thread compositing
-pref("layers.offmainthreadcomposition.enabled", false);
+pref("layers.offmainthreadcomposition.enabled", true);
+pref("layers.async-pan-zoom.enabled", true);
+pref("layers.componentalpha.enabled", false);
+pref("gfx.azpc.touch_start_tolerance", "0.1"); // dpi * tolerance = pixel threshold
+pref("gfx.azpc.pan_repaint_interval", "50");   // prefer 20 fps
+pref("gfx.azpc.fling_repaint_interval", "50"); // prefer 20 fps
+pref("gfx.axis.fling_friction", "0.002");
 
 // Enable Microsoft TSF support by default for imes.
 pref("intl.enable_tsf_support", true);
@@ -83,6 +100,9 @@ pref("network.protocol-handler.warn-external.mailto", false);
 pref("network.protocol-handler.warn-external.vnd.youtube", false);
 pref("network.protocol-handler.warn-external.ms-windows-store", false);
 pref("network.protocol-handler.external.ms-windows-store", true);
+
+// display the overlay nav buttons
+pref("browser.display.overlaynavbuttons", true);
 
 /* history max results display */
 pref("browser.display.history.maxresults", 100);
@@ -214,7 +234,7 @@ pref("accessibility.browsewithcaret", false);
 pref("app.update.showInstalledUI", false);
 
 // pointer to the default engine name
-pref("browser.search.defaultenginename", "chrome://browser/locale/browser.properties");
+pref("browser.search.defaultenginename", "chrome://browser/locale/region.properties");
 
 // SSL error page behaviour
 pref("browser.ssl_override_behavior", 2);
@@ -224,9 +244,9 @@ pref("browser.xul.error_pages.expert_bad_cert", false);
 pref("browser.search.log", false);
 
 // ordering of search engines in the engine list.
-pref("browser.search.order.1", "chrome://browser/locale/browser.properties");
-pref("browser.search.order.2", "chrome://browser/locale/browser.properties");
-pref("browser.search.order.3", "chrome://browser/locale/browser.properties");
+pref("browser.search.order.1", "chrome://browser/locale/region.properties");
+pref("browser.search.order.2", "chrome://browser/locale/region.properties");
+pref("browser.search.order.3", "chrome://browser/locale/region.properties");
 
 // send ping to the server to update
 pref("browser.search.update", true);
@@ -352,9 +372,13 @@ pref("privacy.sanitize.migrateFx3Prefs",    false);
 
 // enable geo
 pref("geo.enabled", true);
+pref("geo.wifi.uri", "https://www.googleapis.com/geolocation/v1/geolocate?key=%GOOGLE_API_KEY%");
 
 // JS error console
 pref("devtools.errorconsole.enabled", false);
+
+// snapped view
+pref("browser.ui.snapped.maxWidth", 600);
 
 // kinetic tweakables
 pref("browser.ui.kinetic.updateInterval", 16);
@@ -385,7 +409,7 @@ pref("breakpad.reportURL", "https://crash-stats.mozilla.com/report/index/");
 // TODO: This is not the correct article for metro!!!
 pref("app.sync.tutorialURL", "https://support.mozilla.org/kb/sync-firefox-between-desktop-and-mobile");
 pref("app.support.baseURL", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/");
-pref("app.privacyURL", "https://www.mozilla.org/legal/privacy/");
+pref("app.privacyURL", "http://www.mozilla.org/%LOCALE%/legal/privacy/firefox.html");
 pref("app.creditsURL", "http://www.mozilla.org/credits/");
 pref("app.channelURL", "http://www.mozilla.org/%LOCALE%/firefox/channel/");
 
@@ -408,13 +432,6 @@ pref("app.update.enabled", true);
 // the UI easier to construct.
 pref("app.update.auto", true);
 
-// Defines how the Application Update Service notifies the user about updates:
-//
-// AUM Set to:        Minor Releases:     Major Releases:
-// 0                  download no prompt  download no prompt
-// 1                  download no prompt  download no prompt if no incompatibilities
-// 2                  download no prompt  prompt
-//
 // See chart in nsUpdateService.js source for more details
 pref("app.update.mode", 0);
 
@@ -640,3 +657,10 @@ pref("full-screen-api.content-only", true);
 // the window, the window size doesn't change. This pref has no effect when
 // running in actual Metro mode, as the widget will already be fullscreen then.
 pref("full-screen-api.ignore-widgets", true);
+
+// image visibility prefs.
+// image visibility tries to only keep images near the viewport decoded instead
+// of keeping all images decoded.
+pref("layout.imagevisibility.enabled", true);
+pref("layout.imagevisibility.numscrollportwidths", 1);
+pref("layout.imagevisibility.numscrollportheights", 1);

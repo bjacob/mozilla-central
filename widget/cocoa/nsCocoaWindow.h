@@ -222,8 +222,6 @@ public:
 
     NS_IMETHOD              Destroy();
 
-    virtual nsIWidget*      GetParent(void);
-
     NS_IMETHOD              Show(bool aState);
     virtual nsIWidget*      GetSheetWindowParent(void);
     NS_IMETHOD              Enable(bool aState);
@@ -259,6 +257,7 @@ public:
     CGFloat                 BackingScaleFactor();
     void                    BackingScaleFactorChanged();
     virtual double          GetDefaultScaleInternal();
+    virtual int32_t         RoundsWidgetCoordinatesTo() MOZ_OVERRIDE;
 
     NS_IMETHOD              SetTitle(const nsAString& aTitle);
 

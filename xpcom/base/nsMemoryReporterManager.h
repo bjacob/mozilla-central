@@ -6,8 +6,6 @@
 
 #include "nsIMemoryReporter.h"
 #include "mozilla/Mutex.h"
-#include "mozilla/Attributes.h"
-#include "nsString.h"
 #include "nsTHashtable.h"
 #include "nsHashKeys.h"
 
@@ -16,7 +14,7 @@ using mozilla::Mutex;
 class nsMemoryReporterManager : public nsIMemoryReporterManager
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIMEMORYREPORTERMANAGER
 
   nsMemoryReporterManager();
@@ -24,11 +22,8 @@ public:
 
 private:
   nsresult RegisterReporterHelper(nsIMemoryReporter *reporter, bool aForce);
-  nsresult RegisterMultiReporterHelper(nsIMemoryMultiReporter *reporter,
-                                       bool aForce);
 
   nsTHashtable<nsISupportsHashKey> mReporters;
-  nsTHashtable<nsISupportsHashKey> mMultiReporters;
   Mutex mMutex;
   bool mIsRegistrationBlocked;
 };

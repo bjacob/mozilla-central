@@ -69,8 +69,6 @@ GStreamerReader::GStreamerReader(AbstractMediaDecoder* aDecoder)
   mAudioSinkBufferCount(0),
   mGstThreadsMonitor("media.gst.threads"),
   mReachedEos(false),
-  mByteOffset(0),
-  mLastReportedByteOffset(0),
   fpsNum(0),
   fpsDen(0)
 {
@@ -144,14 +142,14 @@ nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
 
   mAudioSink = gst_parse_bin_from_description("capsfilter name=filter ! "
 #ifdef MOZ_SAMPLE_TYPE_FLOAT32
-        "appsink name=audiosink max-buffers=2 sync=true caps=audio/x-raw-float,"
+        "appsink name=audiosink max-buffers=2 sync=false caps=audio/x-raw-float,"
 #ifdef IS_LITTLE_ENDIAN
         "channels={1,2},width=32,endianness=1234", TRUE, nullptr);
 #else
         "channels={1,2},width=32,endianness=4321", TRUE, nullptr);
 #endif
 #else
-        "appsink name=audiosink max-buffers=2 sync=true caps=audio/x-raw-int,"
+        "appsink name=audiosink max-buffers=2 sync=false caps=audio/x-raw-int,"
 #ifdef IS_LITTLE_ENDIAN
         "channels={1,2},width=16,endianness=1234", TRUE, nullptr);
 #else
@@ -176,6 +174,22 @@ nsresult GStreamerReader::Init(MediaDecoderReader* aCloneDonor)
                    G_CALLBACK(GStreamerReader::PlayBinSourceSetupCb), this);
 
   return NS_OK;
+}
+
+GstBusSyncReply
+GStreamerReader::ErrorCb(GstBus *aBus, GstMessage *aMessage, gpointer aUserData)
+{
+  return static_cast<GStreamerReader*>(aUserData)->Error(aBus, aMessage);
+}
+
+GstBusSyncReply
+GStreamerReader::Error(GstBus *aBus, GstMessage *aMessage)
+{
+  if (GST_MESSAGE_TYPE(aMessage) == GST_MESSAGE_ERROR) {
+    Eos();
+  }
+
+  return GST_BUS_PASS;
 }
 
 void GStreamerReader::PlayBinSourceSetupCb(GstElement* aPlayBin,
@@ -347,6 +361,9 @@ nsresult GStreamerReader::ReadMetadata(VideoInfo* aInfo,
 
   *aTags = nullptr;
 
+  // Watch the pipeline for fatal errors
+  gst_bus_set_sync_handler(mBus, GStreamerReader::ErrorCb, this);
+
   /* set the pipeline to PLAYING so that it starts decoding and queueing data in
    * the appsinks */
   gst_element_set_state(mPlayBin, GST_STATE_PLAYING);
@@ -420,18 +437,8 @@ nsresult GStreamerReader::ResetDecode()
   mVideoSinkBufferCount = 0;
   mAudioSinkBufferCount = 0;
   mReachedEos = false;
-  mLastReportedByteOffset = 0;
-  mByteOffset = 0;
 
   return res;
-}
-
-void GStreamerReader::NotifyBytesConsumed()
-{
-  NS_ASSERTION(mByteOffset >= mLastReportedByteOffset,
-      "current byte offset less than prev offset");
-  mDecoder->NotifyBytesConsumed(mByteOffset - mLastReportedByteOffset);
-  mLastReportedByteOffset = mByteOffset;
 }
 
 bool GStreamerReader::DecodeAudioData()
@@ -444,7 +451,6 @@ bool GStreamerReader::DecodeAudioData()
     ReentrantMonitorAutoEnter mon(mGstThreadsMonitor);
 
     if (mReachedEos) {
-      mAudioQueue.Finish();
       return false;
     }
 
@@ -470,7 +476,6 @@ bool GStreamerReader::DecodeAudioData()
       }
     }
 
-    NotifyBytesConsumed();
     buffer = gst_app_sink_pull_buffer(mAudioAppSink);
     mAudioSinkBufferCount--;
   }
@@ -509,7 +514,6 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
     ReentrantMonitorAutoEnter mon(mGstThreadsMonitor);
 
     if (mReachedEos) {
-      mVideoQueue.Finish();
       return false;
     }
 
@@ -535,7 +539,6 @@ bool GStreamerReader::DecodeVideoFrame(bool &aKeyFrameSkip,
       }
     }
 
-    NotifyBytesConsumed();
     mDecoder->NotifyDecodedFrames(0, 1);
 
     buffer = gst_app_sink_pull_buffer(mVideoAppSink);
@@ -662,12 +665,6 @@ nsresult GStreamerReader::GetBuffered(TimeRanges* aBuffered,
   nsTArray<MediaByteRange> ranges;
   resource->GetCachedRanges(ranges);
 
-  if (mDecoder->OnStateMachineThread())
-    /* Report the position from here while buffering as we can't report it from
-     * the gstreamer threads that are actually reading from the resource
-     */
-    NotifyBytesConsumed();
-
   if (resource->IsDataCachedToEndOfResource(0)) {
     /* fast path for local or completely cached files */
     gint64 duration = 0;
@@ -721,7 +718,6 @@ void GStreamerReader::ReadAndPushData(guint aLength)
   }
 
   GST_BUFFER_SIZE(buffer) = bytesRead;
-  mByteOffset += bytesRead;
 
   GstFlowReturn ret = gst_app_src_push_buffer(mSource, gst_buffer_ref(buffer));
   if (ret != GST_FLOW_OK) {
@@ -814,9 +810,7 @@ gboolean GStreamerReader::SeekData(GstAppSrc* aSrc, guint64 aOffset)
     rv = resource->Seek(SEEK_SET, aOffset);
   }
 
-  if (NS_SUCCEEDED(rv)) {
-    mByteOffset = mLastReportedByteOffset = aOffset;
-  } else {
+  if (NS_FAILED(rv)) {
     LOG(PR_LOG_ERROR, ("seek at %lu failed", aOffset));
   }
 
@@ -1004,10 +998,10 @@ void GStreamerReader::NewAudioBuffer()
 void GStreamerReader::EosCb(GstAppSink* aSink, gpointer aUserData)
 {
   GStreamerReader* reader = reinterpret_cast<GStreamerReader*>(aUserData);
-  reader->Eos(aSink);
+  reader->Eos();
 }
 
-void GStreamerReader::Eos(GstAppSink* aSink)
+void GStreamerReader::Eos()
 {
   /* We reached the end of the stream */
   {
@@ -1020,8 +1014,6 @@ void GStreamerReader::Eos(GstAppSink* aSink)
   {
     ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
     /* Potentially unblock the decode thread in ::DecodeLoop */
-    mVideoQueue.Finish();
-    mAudioQueue.Finish();
     mon.NotifyAll();
   }
 }

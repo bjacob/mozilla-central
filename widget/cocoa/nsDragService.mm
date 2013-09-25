@@ -115,7 +115,8 @@ static nsresult SetUpDragClipboard(nsISupportsArray* aTransferableArray)
       else if (currentKey == NSTIFFPboardType) {
         [dragPBoard setData:currentValue forType:currentKey];
       }
-      else if (currentKey == NSFilesPromisePboardType) {
+      else if (currentKey == NSFilesPromisePboardType ||
+               currentKey == NSFilenamesPboardType) {
         [dragPBoard setPropertyList:currentValue forType:currentKey];        
       }
     }
@@ -162,7 +163,7 @@ nsDragService::ConstructDragImage(nsIDOMNode* aDOMNode,
   uint32_t height = aDragRect->height;
 
   nsRefPtr<gfxImageSurface> imgSurface = new gfxImageSurface(
-    gfxIntSize(width, height), gfxImageSurface::ImageFormatARGB32);
+    gfxIntSize(width, height), gfxImageFormatARGB32);
   if (!imgSurface)
     return nil;
 
@@ -382,9 +383,7 @@ nsDragService::GetData(nsITransferable* aTransferable, uint32_t aItemIndex)
       if (NS_FAILED(rv))
         continue;
 
-      nsCOMPtr<nsISupports> genericDataWrapper;
-      genericDataWrapper = do_QueryInterface(file);
-      aTransferable->SetTransferData(flavorStr, genericDataWrapper, dataLength);
+      aTransferable->SetTransferData(flavorStr, file, dataLength);
       
       break;
     }

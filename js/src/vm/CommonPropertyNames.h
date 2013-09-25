@@ -6,11 +6,10 @@
 
 /* A higher-order macro for enumerating all cached property names. */
 
-#ifndef CommonPropertyNames_h__
-#define CommonPropertyNames_h__
+#ifndef vm_CommonPropertyNames_h
+#define vm_CommonPropertyNames_h
 
 #include "jsprototypes.h"
-#include "jsversion.h"
 
 #define FOR_EACH_COMMON_PROPERTYNAME(macro) \
     macro(anonymous, anonymous, "anonymous") \
@@ -19,7 +18,9 @@
     macro(buffer, buffer, "buffer") \
     macro(builder, builder, "builder") \
     macro(byteLength, byteLength, "byteLength") \
+    macro(byteAlignment, byteAlignment, "byteAlignment") \
     macro(byteOffset, byteOffset, "byteOffset") \
+    macro(bytes, bytes, "bytes") \
     macro(BYTES_PER_ELEMENT, BYTES_PER_ELEMENT, "BYTES_PER_ELEMENT") \
     macro(call, call, "call") \
     macro(callee, callee, "callee") \
@@ -45,7 +46,9 @@
     macro(defineSetter, defineSetter, "__defineSetter__") \
     macro(delete, delete_, "delete") \
     macro(deleteProperty, deleteProperty, "deleteProperty") \
+    macro(done, done, "done") \
     macro(each, each, "each") \
+    macro(elementType, elementType, "elementType") \
     macro(empty, empty, "") \
     macro(encodeURI, encodeURI, "encodeURI") \
     macro(encodeURIComponent, encodeURIComponent, "encodeURIComponent") \
@@ -54,6 +57,9 @@
     macro(escape, escape, "escape") \
     macro(eval, eval, "eval") \
     macro(false, false_, "false") \
+    macro(fieldNames, fieldNames, "fieldNames") \
+    macro(fieldOffsets, fieldOffsets, "fieldOffsets") \
+    macro(fieldTypes, fieldTypes, "fieldTypes") \
     macro(fileName, fileName, "fileName") \
     macro(fix, fix, "fix") \
     macro(format, format, "format") \
@@ -147,9 +153,11 @@
     macro(value, value, "value") \
     macro(valueOf, valueOf, "valueOf") \
     macro(var, var, "var") \
+    macro(variable, variable, "variable") \
     macro(void0, void0, "(void 0)") \
     macro(watch, watch, "watch") \
     macro(writable, writable, "writable") \
+    macro(yield, yield, "yield") \
     /* Type names must be contiguous and ordered; see js::TypeName. */ \
     macro(undefined, undefined, "undefined") \
     macro(object, object, "object") \
@@ -159,4 +167,4 @@
     macro(boolean, boolean, "boolean") \
     macro(null, null, "null")
 
-#endif /* CommonPropertyNames_h__ */
+#endif /* vm_CommonPropertyNames_h */

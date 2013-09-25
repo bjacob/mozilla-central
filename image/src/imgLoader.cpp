@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,8 +11,6 @@
 #include "ImageLogging.h"
 #include "imgLoader.h"
 #include "imgRequestProxy.h"
-
-#include "RasterImage.h"
 
 #include "nsCOMPtr.h"
 
@@ -26,35 +25,23 @@
 #include "nsIProgressEventSink.h"
 #include "nsIChannelEventSink.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
-#include "nsIServiceManager.h"
 #include "nsIFileURL.h"
-#include "nsThreadUtils.h"
-#include "nsXPIDLString.h"
 #include "nsCRT.h"
 #include "nsIDocument.h"
-#include "nsPIDOMWindow.h"
-
-#include "netCore.h"
-
-#include "nsURILoader.h"
-
-#include "nsIComponentRegistrar.h"
 
 #include "nsIApplicationCache.h"
 #include "nsIApplicationCacheContainer.h"
 
 #include "nsIMemoryReporter.h"
+#include "Image.h"
+#include "DiscardTracker.h"
 
 // we want to explore making the document own the load group
 // so we can associate the document URI with the load group.
 // until this point, we have an evil hack:
 #include "nsIHttpChannelInternal.h"
-#include "nsIContentSecurityPolicy.h"
-#include "nsIChannelPolicy.h"
 #include "nsILoadContext.h"
 #include "nsILoadGroupChild.h"
-
-#include "nsContentUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::image;
@@ -62,7 +49,7 @@ using namespace mozilla::image;
 NS_MEMORY_REPORTER_MALLOC_SIZEOF_FUN(ImagesMallocSizeOf)
 
 class imgMemoryReporter MOZ_FINAL :
-  public nsIMemoryMultiReporter
+  public nsIMemoryReporter
 {
 public:
   imgMemoryReporter()
@@ -77,7 +64,7 @@ public:
     return NS_OK;
   }
 
-  NS_IMETHOD CollectReports(nsIMemoryMultiReporterCallback *callback,
+  NS_IMETHOD CollectReports(nsIMemoryReporterCallback *callback,
                             nsISupports *closure)
   {
     AllSizes chrome;
@@ -234,19 +221,27 @@ private:
   }
 };
 
-// This is used by telemetry.
-NS_MEMORY_REPORTER_IMPLEMENT(
-  ImagesContentUsedUncompressed,
-  "images-content-used-uncompressed",
-  KIND_OTHER,
-  UNITS_BYTES,
-  imgMemoryReporter::GetImagesContentUsedUncompressed,
-  "This is the sum of the 'explicit/images/content/used/uncompressed-heap' "
-  "and 'explicit/images/content/used/uncompressed-nonheap' numbers.  However, "
-  "it is measured at a different time and so may give slightly different "
-  "results.")
+NS_IMPL_ISUPPORTS1(imgMemoryReporter, nsIMemoryReporter)
 
-NS_IMPL_ISUPPORTS1(imgMemoryReporter, nsIMemoryMultiReporter)
+// This is used by telemetry.
+class ImagesContentUsedUncompressedReporter MOZ_FINAL
+  : public MemoryUniReporter
+{
+public:
+  ImagesContentUsedUncompressedReporter()
+    : MemoryUniReporter("images-content-used-uncompressed",
+                         KIND_OTHER, UNITS_BYTES,
+"This is the sum of the 'explicit/images/content/used/uncompressed-heap' "
+"and 'explicit/images/content/used/uncompressed-nonheap' numbers.  However, "
+"it is measured at a different time and so may give slightly different "
+"results.")
+  {}
+private:
+  int64_t Amount() MOZ_OVERRIDE
+  {
+    return imgMemoryReporter::GetImagesContentUsedUncompressed();
+  }
+};
 
 NS_IMPL_ISUPPORTS3(nsProgressNotificationProxy,
                      nsIProgressEventSink,
@@ -451,9 +446,9 @@ static nsresult NewImageChannel(nsIChannel **aResult,
     aLoadGroup->GetNotificationCallbacks(getter_AddRefs(callbacks));
   }
 
-  // Pass in a NULL loadgroup because this is the underlying network request.
-  // This request may be referenced by several proxy image requests (psossibly
-  // in different documents).
+  // Pass in a nullptr loadgroup because this is the underlying network
+  // request. This request may be referenced by several proxy image requests
+  // (possibly in different documents).
   // If all of the proxy requests are canceled then this request should be
   // canceled too.
   //
@@ -843,8 +838,8 @@ void imgLoader::GlobalInit()
     sCacheMaxSize = 5 * 1024 * 1024;
 
   sMemReporter = new imgMemoryReporter();
-  NS_RegisterMemoryMultiReporter(sMemReporter);
-  NS_RegisterMemoryReporter(new NS_MEMORY_REPORTER_NAME(ImagesContentUsedUncompressed));
+  NS_RegisterMemoryReporter(sMemReporter);
+  NS_RegisterMemoryReporter(new ImagesContentUsedUncompressedReporter());
 }
 
 nsresult imgLoader::InitCache()
@@ -862,10 +857,7 @@ nsresult imgLoader::InitCache()
 
   mCacheTracker = new imgCacheExpirationTracker();
 
-  mCache.Init();
-  mChromeCache.Init();
-
-    return NS_OK;
+  return NS_OK;
 }
 
 nsresult imgLoader::Init()
@@ -960,7 +952,7 @@ NS_IMETHODIMP imgLoader::FindEntryProperties(nsIURI *uri, nsIProperties **_retva
     if (mCacheTracker && entry->HasNoProxies())
       mCacheTracker->MarkUsed(entry);
 
-    nsRefPtr<imgRequest> request = getter_AddRefs(entry->GetRequest());
+    nsRefPtr<imgRequest> request = entry->GetRequest();
     if (request) {
       *_retval = request->Properties();
       NS_ADDREF(*_retval);
@@ -1007,7 +999,7 @@ bool imgLoader::PutIntoCache(nsIURI *key, imgCacheEntry *entry)
   if (cache.Get(spec, getter_AddRefs(tmpCacheEntry)) && tmpCacheEntry) {
     PR_LOG(GetImgLog(), PR_LOG_DEBUG,
            ("[this=%p] imgLoader::PutIntoCache -- Element already in the cache", nullptr));
-    nsRefPtr<imgRequest> tmpRequest = getter_AddRefs(tmpCacheEntry->GetRequest());
+    nsRefPtr<imgRequest> tmpRequest = tmpCacheEntry->GetRequest();
 
     // If it already exists, and we're putting the same key into the cache, we
     // should remove the old version.
@@ -1040,7 +1032,7 @@ bool imgLoader::PutIntoCache(nsIURI *key, imgCacheEntry *entry)
     }
   }
 
-  nsRefPtr<imgRequest> request(getter_AddRefs(entry->GetRequest()));
+  nsRefPtr<imgRequest> request = entry->GetRequest();
   request->SetIsInCache(true);
 
   return true;
@@ -1409,7 +1401,7 @@ bool imgLoader::RemoveFromCache(nsIURI *aKey)
 
     entry->SetEvicted(true);
 
-    nsRefPtr<imgRequest> request(getter_AddRefs(entry->GetRequest()));
+    nsRefPtr<imgRequest> request = entry->GetRequest();
     request->SetIsInCache(false);
 
     return true;
@@ -1422,7 +1414,7 @@ bool imgLoader::RemoveFromCache(imgCacheEntry *entry)
 {
   LOG_STATIC_FUNC(GetImgLog(), "imgLoader::RemoveFromCache entry");
 
-  nsRefPtr<imgRequest> request(getter_AddRefs(entry->GetRequest()));
+  nsRefPtr<imgRequest> request = entry->GetRequest();
   if (request) {
     nsCOMPtr<nsIURI> key;
     if (NS_SUCCEEDED(request->GetURI(getter_AddRefs(key))) && key) {
@@ -1625,7 +1617,7 @@ nsresult imgLoader::LoadImage(nsIURI *aURI,
     if (ValidateEntry(entry, aURI, aInitialDocumentURI, aReferrerURI,
                       aLoadGroup, aObserver, aCX, requestFlags, true,
                       _retval, aPolicy, aLoadingPrincipal, corsmode)) {
-      request = getter_AddRefs(entry->GetRequest());
+      request = entry->GetRequest();
 
       // If this entry has no proxies, its request has no reference to the entry.
       if (entry->HasNoProxies()) {
@@ -1640,7 +1632,7 @@ nsresult imgLoader::LoadImage(nsIURI *aURI,
       entry->Touch();
 
 #ifdef DEBUG_joe
-      printf("CACHEGET: %d %s %d\n", time(NULL), spec.get(), entry->SizeOfData());
+      printf("CACHEGET: %d %s %d\n", time(nullptr), spec.get(), entry->SizeOfData());
 #endif
     }
     else {
@@ -1851,7 +1843,7 @@ nsresult imgLoader::LoadImageWithChannel(nsIChannel *channel, imgINotificationOb
       if (ValidateEntry(entry, uri, nullptr, nullptr, nullptr, aObserver, aCX,
                         requestFlags, false, nullptr, nullptr, nullptr,
                         imgIRequest::CORS_NONE)) {
-        request = getter_AddRefs(entry->GetRequest());
+        request = entry->GetRequest();
       } else {
         nsCOMPtr<nsICachingChannel> cacheChan(do_QueryInterface(channel));
         bool bUseCacheCopy;
@@ -1861,10 +1853,10 @@ nsresult imgLoader::LoadImageWithChannel(nsIChannel *channel, imgINotificationOb
         else
           bUseCacheCopy = false;
 
-        if (!bUseCacheCopy)
+        if (!bUseCacheCopy) {
           entry = nullptr;
-        else {
-          request = getter_AddRefs(entry->GetRequest());
+        } else {
+          request = entry->GetRequest();
         }
       }
 
@@ -1993,7 +1985,7 @@ nsresult imgLoader::GetMimeTypeFromContent(const char* aContents, uint32_t aLeng
 
   /* or how about ART? */
   /* ART begins with JG (4A 47). Major version offset 2.
-   * Minor version offset 3. Offset 4 must be NULL.
+   * Minor version offset 3. Offset 4 must be nullptr.
    */
   else if (aLength >= 5 &&
    ((unsigned char) aContents[0])==0x4a &&
@@ -2028,7 +2020,6 @@ nsresult imgLoader::GetMimeTypeFromContent(const char* aContents, uint32_t aLeng
 
 #include "nsIRequest.h"
 #include "nsIStreamConverterService.h"
-#include "nsXPIDLString.h"
 
 NS_IMPL_ISUPPORTS2(ProxyListener, nsIStreamListener, nsIRequestObserver)
 

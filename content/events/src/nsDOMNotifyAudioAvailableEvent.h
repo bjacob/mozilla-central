@@ -9,9 +9,10 @@
 
 #include "nsIDOMNotifyAudioAvailableEvent.h"
 #include "nsDOMEvent.h"
-#include "nsPresContext.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/dom/NotifyAudioAvailableEventBinding.h"
+
+class nsPresContext;
 
 class nsDOMNotifyAudioAvailableEvent : public nsDOMEvent,
                                        public nsIDOMNotifyAudioAvailableEvent
@@ -70,7 +71,7 @@ private:
   nsAutoArrayPtr<float> mFrameBuffer;
   uint32_t mFrameBufferLength;
   float mTime;
-  JSObject* mCachedArray;
+  JS::Heap<JSObject*> mCachedArray;
   bool mAllowAudioData;
 };
 

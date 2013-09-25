@@ -8,7 +8,6 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 
-#include "nsCOMPtr.h"
 #include "nsFrameSetFrame.h"
 #include "nsGenericHTMLElement.h"
 #include "nsAttrValueInlines.h"
@@ -16,22 +15,12 @@
 #include "nsContainerFrame.h"
 #include "nsPresContext.h"
 #include "nsIPresShell.h"
-#include "nsIComponentManager.h"
-#include "nsIStreamListener.h"
-#include "nsIURL.h"
-#include "nsIDocument.h"
-#include "nsINodeInfo.h"
-#include "nsView.h"
-#include "nsViewManager.h"
-#include "nsWidgetsCID.h"
 #include "nsGkAtoms.h"
-#include "nsStyleCoord.h"
 #include "nsStyleConsts.h"
 #include "nsStyleContext.h"
 #include "nsHTMLParts.h"
 #include "nsGUIEvent.h"
 #include "nsRenderingContext.h"
-#include "nsIServiceManager.h"
 #include "nsIDOMMutationEvent.h"
 #include "nsINameSpaceManager.h"
 #include "nsCSSAnonBoxes.h"
@@ -972,27 +961,21 @@ nsHTMLFramesetFrame::Reflow(nsPresContext*           aPresContext,
                                                             borderWidth,
                                                             false,
                                                             false);
-        if (MOZ_LIKELY(borderFrame != nullptr)) {
-          borderFrame->Init(mContent, this, nullptr);
-          mChildCount++;
-          mFrames.AppendFrame(nullptr, borderFrame);
-          mHorBorders[cellIndex.y-1] = borderFrame;
-          // set the neighbors for determining drag boundaries
-          borderFrame->mPrevNeighbor = lastRow;
-          borderFrame->mNextNeighbor = cellIndex.y;
-        }
+        borderFrame->Init(mContent, this, nullptr);
+        mChildCount++;
+        mFrames.AppendFrame(nullptr, borderFrame);
+        mHorBorders[cellIndex.y-1] = borderFrame;
+        // set the neighbors for determining drag boundaries
+        borderFrame->mPrevNeighbor = lastRow;
+        borderFrame->mNextNeighbor = cellIndex.y;
       } else {
         borderFrame = (nsHTMLFramesetBorderFrame*)mFrames.FrameAt(borderChildX);
-        if (MOZ_LIKELY(borderFrame != nullptr)) {
-          borderFrame->mWidth = borderWidth;
-          borderChildX++;
-        }
+        borderFrame->mWidth = borderWidth;
+        borderChildX++;
       }
-      if (MOZ_LIKELY(borderFrame != nullptr)) {
-        nsSize borderSize(aDesiredSize.width, borderWidth);
-        ReflowPlaceChild(borderFrame, aPresContext, aReflowState, offset, borderSize);
-        borderFrame = nullptr;
-      }
+      nsSize borderSize(aDesiredSize.width, borderWidth);
+      ReflowPlaceChild(borderFrame, aPresContext, aReflowState, offset, borderSize);
+      borderFrame = nullptr;
       offset.y += borderWidth;
     } else {
       if (cellIndex.x > 0) {  // moved to next col in same row
@@ -1008,27 +991,21 @@ nsHTMLFramesetFrame::Reflow(nsPresContext*           aPresContext,
                                                                 borderWidth,
                                                                 true,
                                                                 false);
-            if (MOZ_LIKELY(borderFrame != nullptr)) {
-              borderFrame->Init(mContent, this, nullptr);
-              mChildCount++;
-              mFrames.AppendFrame(nullptr, borderFrame);
-              mVerBorders[cellIndex.x-1] = borderFrame;
-              // set the neighbors for determining drag boundaries
-              borderFrame->mPrevNeighbor = lastCol;
-              borderFrame->mNextNeighbor = cellIndex.x;
-            }
+            borderFrame->Init(mContent, this, nullptr);
+            mChildCount++;
+            mFrames.AppendFrame(nullptr, borderFrame);
+            mVerBorders[cellIndex.x-1] = borderFrame;
+            // set the neighbors for determining drag boundaries
+            borderFrame->mPrevNeighbor = lastCol;
+            borderFrame->mNextNeighbor = cellIndex.x;
           } else {
             borderFrame = (nsHTMLFramesetBorderFrame*)mFrames.FrameAt(borderChildX);
-            if (MOZ_LIKELY(borderFrame != nullptr)) {
-              borderFrame->mWidth = borderWidth;
-              borderChildX++;
-            }
+            borderFrame->mWidth = borderWidth;
+            borderChildX++;
           }
-          if (MOZ_LIKELY(borderFrame != nullptr)) {
-            nsSize borderSize(borderWidth, aDesiredSize.height);
-            ReflowPlaceChild(borderFrame, aPresContext, aReflowState, offset, borderSize);
-            borderFrame = nullptr;
-          }
+          nsSize borderSize(borderWidth, aDesiredSize.height);
+          ReflowPlaceChild(borderFrame, aPresContext, aReflowState, offset, borderSize);
+          borderFrame = nullptr;
         }
         offset.x += borderWidth;
       }
@@ -1312,7 +1289,7 @@ nsHTMLFramesetFrame::StartMouseDrag(nsPresContext*             aPresContext,
 
   mDragger = aBorder;
 
-  mFirstDragPoint = aEvent->refPoint;
+  mFirstDragPoint = LayoutDeviceIntPoint::ToUntyped(aEvent->refPoint);
 
   // Store the original frame sizes
   if (mDragger->mVertical) {

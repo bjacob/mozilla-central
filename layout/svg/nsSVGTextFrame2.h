@@ -12,7 +12,7 @@
 #include "gfxRect.h"
 #include "gfxSVGGlyphs.h"
 #include "nsStubMutationObserver.h"
-#include "nsSVGGlyphFrame.h" // for SVGTextObjectPaint
+#include "nsSVGGlyphFrame.h" // for SVGTextContextPaint
 #include "nsSVGTextContainerFrame.h"
 
 class nsDisplaySVGText;
@@ -24,6 +24,7 @@ typedef nsSVGDisplayContainerFrame nsSVGTextFrame2Base;
 
 namespace mozilla {
 
+class CharIterator;
 class TextFrameIterator;
 class TextNodeCorrespondenceRecorder;
 struct TextRenderedRun;
@@ -175,12 +176,12 @@ class nsSVGTextFrame2 : public nsSVGTextFrame2Base
   friend nsIFrame*
   NS_NewSVGTextFrame2(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
+  friend class mozilla::CharIterator;
   friend class mozilla::GlyphMetricsUpdater;
   friend class mozilla::TextFrameIterator;
   friend class mozilla::TextNodeCorrespondenceRecorder;
   friend struct mozilla::TextRenderedRun;
   friend class mozilla::TextRenderedRunIterator;
-  friend class AutoCanvasTMForMarker;
   friend class MutationObserver;
   friend class nsDisplaySVGText;
 
@@ -188,10 +189,10 @@ protected:
   nsSVGTextFrame2(nsStyleContext* aContext)
     : nsSVGTextFrame2Base(aContext),
       mFontSizeScaleFactor(1.0f),
-      mGetCanvasTMForFlag(FOR_OUTERSVG_TM),
-      mPositioningDirty(true),
-      mPositioningMayUsePercentages(false)
+      mLastContextScale(1.0f),
+      mLengthAdjustScaleFactor(1.0f)
   {
+    AddStateBits(NS_STATE_SVG_POSITIONING_DIRTY);
   }
 
 public:
@@ -244,7 +245,8 @@ public:
   // nsISVGChildFrame interface:
   virtual void NotifySVGChanged(uint32_t aFlags) MOZ_OVERRIDE;
   NS_IMETHOD PaintSVG(nsRenderingContext* aContext,
-                      const nsIntRect* aDirtyRect) MOZ_OVERRIDE;
+                      const nsIntRect* aDirtyRect,
+                      nsIFrame* aTransformRoot = nullptr) MOZ_OVERRIDE;
   NS_IMETHOD_(nsIFrame*) GetFrameForPoint(const nsPoint& aPoint) MOZ_OVERRIDE;
   virtual void ReflowSVG() MOZ_OVERRIDE;
   NS_IMETHOD_(nsRect) GetCoveredRegion() MOZ_OVERRIDE;
@@ -252,7 +254,8 @@ public:
                                       uint32_t aFlags) MOZ_OVERRIDE;
 
   // nsSVGContainerFrame methods:
-  virtual gfxMatrix GetCanvasTM(uint32_t aFor) MOZ_OVERRIDE;
+  virtual gfxMatrix GetCanvasTM(uint32_t aFor,
+                                nsIFrame* aTransformRoot = nullptr) MOZ_OVERRIDE;
   
   // SVG DOM text methods:
   uint32_t GetNumberOfChars(nsIContent* aContent);
@@ -278,6 +281,12 @@ public:
    * updated.
    */
   void NotifyGlyphMetricsChange();
+
+  /**
+   * Calls ScheduleReflowSVGNonDisplayText if this is a non-display frame,
+   * and nsSVGUtils::ScheduleReflowSVG otherwise.
+   */
+  void ScheduleReflowSVG();
 
   /**
    * Reflows the anonymous block frame of this non-display nsSVGTextFrame2.
@@ -310,8 +319,10 @@ public:
   /**
    * Updates the mFontSizeScaleFactor value by looking at the range of
    * font-sizes used within the <text>.
+   *
+   * @return Whether mFontSizeScaleFactor changed.
    */
-  void UpdateFontSizeScaleFactor();
+  bool UpdateFontSizeScaleFactor();
 
   double GetFontSizeScaleFactor() const;
 
@@ -342,28 +353,6 @@ public:
                                           nsIFrame* aChildFrame);
 
 private:
-  /**
-   * This class exists purely because it would be too messy to pass the "for"
-   * flag for GetCanvasTM through the call chains to the GetCanvasTM() call in
-   * UpdateFontSizeScaleFactor.
-   */
-  class AutoCanvasTMForMarker {
-  public:
-    AutoCanvasTMForMarker(nsSVGTextFrame2* aFrame, uint32_t aFor)
-      : mFrame(aFrame)
-    {
-      mOldFor = mFrame->mGetCanvasTMForFlag;
-      mFrame->mGetCanvasTMForFlag = aFor;
-    }
-    ~AutoCanvasTMForMarker()
-    {
-      mFrame->mGetCanvasTMForFlag = mOldFor;
-    }
-  private:
-    nsSVGTextFrame2* mFrame;
-    uint32_t mOldFor;
-  };
-
   /**
    * Mutation observer used to watch for text positioning attribute changes
    * on descendent text content elements (like <tspan>s).
@@ -396,6 +385,7 @@ private:
     NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
     NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
     NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
+    NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
     NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
 
   private:
@@ -461,9 +451,11 @@ private:
    * was not given for that character.  Also fills aDeltas with values based on
    * dx/dy attributes.
    *
+   * @param aRunPerGlyph Whether mPositions should record that a new run begins
+   *   at each glyph.
    * @return True if we recorded any positions.
    */
-  bool ResolvePositions(nsTArray<gfxPoint>& aDeltas);
+  bool ResolvePositions(nsTArray<gfxPoint>& aDeltas, bool aRunPerGlyph);
 
   /**
    * Determines the position, in app units, of each character in the <text> as
@@ -531,43 +523,43 @@ private:
 
   gfxFont::DrawMode SetupCairoState(gfxContext* aContext,
                                     nsIFrame* aFrame,
-                                    gfxTextObjectPaint* aOuterObjectPaint,
-                                    gfxTextObjectPaint** aThisObjectPaint);
+                                    gfxTextContextPaint* aOuterContextPaint,
+                                    gfxTextContextPaint** aThisContextPaint);
 
   /**
    * Sets up the stroke style for |aFrame| in |aContext| and stores stroke
-   * pattern information in |aThisObjectPaint|.
+   * pattern information in |aThisContextPaint|.
    */
   bool SetupCairoStroke(gfxContext* aContext,
                         nsIFrame* aFrame,
-                        gfxTextObjectPaint* aOuterObjectPaint,
-                        SVGTextObjectPaint* aThisObjectPaint);
+                        gfxTextContextPaint* aOuterContextPaint,
+                        SVGTextContextPaint* aThisContextPaint);
 
   /**
    * Sets up the fill style for |aFrame| in |aContext| and stores fill pattern
-   * information in |aThisObjectPaint|.
+   * information in |aThisContextPaint|.
    */
   bool SetupCairoFill(gfxContext* aContext,
                       nsIFrame* aFrame,
-                      gfxTextObjectPaint* aOuterObjectPaint,
-                      SVGTextObjectPaint* aThisObjectPaint);
+                      gfxTextContextPaint* aOuterContextPaint,
+                      SVGTextContextPaint* aThisContextPaint);
 
   /**
    * Sets the current pattern for |aFrame| to the fill or stroke style of the
-   * outer text object. Will also set the paint opacity to transparent if the
+   * outer text context. Will also set the paint opacity to transparent if the
    * paint is set to "none".
    */
-  bool SetupObjectPaint(gfxContext* aContext,
+  bool SetupContextPaint(gfxContext* aContext,
                         nsIFrame* aFrame,
                         nsStyleSVGPaint nsStyleSVG::*aFillOrStroke,
                         float& aOpacity,
-                        gfxTextObjectPaint* aObjectPaint);
+                        gfxTextContextPaint* aContextPaint);
 
   /**
    * Stores in |aTargetPaint| information on how to reconstruct the current
    * fill or stroke pattern. Will also set the paint opacity to transparent if
    * the paint is set to "none".
-   * @param aOuterObjectPaint pattern information from the outer text object
+   * @param aOuterContextPaint pattern information from the outer text context
    * @param aTargetPaint where to store the current pattern information
    * @param aFillOrStroke member pointer to the paint we are setting up
    * @param aProperty the frame property descriptor of the fill or stroke paint
@@ -576,8 +568,8 @@ private:
   void SetupInheritablePaint(gfxContext* aContext,
                              nsIFrame* aFrame,
                              float& aOpacity,
-                             gfxTextObjectPaint* aOuterObjectPaint,
-                             SVGTextObjectPaint::Paint& aTargetPaint,
+                             gfxTextContextPaint* aOuterContextPaint,
+                             SVGTextContextPaint::Paint& aTargetPaint,
                              nsStyleSVGPaint nsStyleSVG::*aFillOrStroke,
                              const FramePropertyDescriptor* aProperty);
 
@@ -631,54 +623,17 @@ private:
   float mFontSizeScaleFactor;
 
   /**
-   * The flag to pass to GetCanvasTM from UpdateFontSizeScaleFactor.  This is
-   * normally FOR_OUTERSVG_TM, but while painting or hit testing a pattern or
-   * marker, we set it to FOR_PAINTING or FOR_HIT_TESTING appropriately.
-   *
-   * This flag is also used to determine whether in UpdateFontSizeScaleFactor
-   * GetCanvasTM should be called at all.  When the nsSVGTextFrame2 is a
-   * non-display child, and we are not painting or hit testing, there is
-   * no sensible CTM stack to use.  Additionally, when inside a <marker>,
-   * calling GetCanvasTM on the nsSVGMarkerFrame would crash due to not
-   * having a current mMarkedFrame.
+   * The scale of the context that we last used to compute mFontSizeScaleFactor.
+   * We record this so that we can tell when our scale transform has changed
+   * enough to warrant reflowing the text.
    */
-  uint32_t mGetCanvasTMForFlag;
+  float mLastContextScale;
 
   /**
-   * The NS_FRAME_IS_DIRTY and NS_FRAME_HAS_DIRTY_CHILDREN bits indicate
-   * that our anonymous block child needs to be reflowed, and that mPositions
-   * will likely need to be updated as a consequence. These are set, for
-   * example, when the font-family changes. Sometimes we only need to
-   * update mPositions though. For example if the x/y attributes change.
-   * mPositioningDirty is used to indicate this latter "things are dirty" case
-   * to allow us to avoid reflowing the anonymous block when it is not
-   * necessary.
+   * The amount that we need to scale each rendered run to account for
+   * lengthAdjust="spacingAndGlyphs".
    */
-  bool mPositioningDirty;
-
-  /**
-   * Whether the values from x/y/dx/dy attributes have any percentage values
-   * that are used in determining the positions of glyphs.  The value will
-   * be true even if a positioning value is overridden by a descendant element's
-   * attribute with a non-percentage length.  For example,
-   * mPositioningMayUsePercentages would be true for:
-   *
-   *   <text x="10%"><tspan x="0">abc</tspan></text>
-   *
-   * Percentage values beyond the number of addressable characters, however, do
-   * not influence mPositioningMayUsePercentages.  For example,
-   * mPositioningMayUsePercentages would be false for:
-   *
-   *   <text x="10 20 30 40%">abc</text>
-   *
-   * mPositioningMayUsePercentages is used to determine whether to recompute
-   * mPositions when the viewport size changes.  So although the first example
-   * above shows that mPositioningMayUsePercentages can be true even if a viewport
-   * size change will not affect mPositions, determining a completley accurate
-   * value for mPositioningMayUsePercentages would require extra work that is
-   * probably not worth it.
-   */
-  bool mPositioningMayUsePercentages;
+  float mLengthAdjustScaleFactor;
 };
 
 #endif

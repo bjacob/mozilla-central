@@ -10,3 +10,7 @@ CPP_SOURCES += [
     'nsWidgetUtils.cpp',
 ]
 
+LIBRARY_NAME = 'widgetutils'
+
+IS_COMPONENT = True
+

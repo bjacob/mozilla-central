@@ -23,7 +23,10 @@ EXPORTS.mozilla.dom += [
     'SVGAnimateTransformElement.h',
     'SVGAnimatedAngle.h',
     'SVGAnimatedBoolean.h',
+    'SVGAnimatedEnumeration.h',
+    'SVGAnimatedInteger.h',
     'SVGAnimatedLength.h',
+    'SVGAnimatedNumber.h',
     'SVGAnimatedRect.h',
     'SVGAnimatedString.h',
     'SVGAnimatedTransformList.h',
@@ -116,8 +119,11 @@ CPP_SOURCES += [
     'SVGAnimateTransformElement.cpp',
     'SVGAnimatedAngle.cpp',
     'SVGAnimatedBoolean.cpp',
+    'SVGAnimatedEnumeration.cpp',
+    'SVGAnimatedInteger.cpp',
     'SVGAnimatedLength.cpp',
     'SVGAnimatedLengthList.cpp',
+    'SVGAnimatedNumber.cpp',
     'SVGAnimatedNumberList.cpp',
     'SVGAnimatedPathSegList.cpp',
     'SVGAnimatedPointList.cpp',
@@ -237,4 +243,10 @@ CPP_SOURCES += [
     'nsSVGTransform.cpp',
     'nsSVGViewBox.cpp',
 ]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+LIBRARY_NAME = 'gkcontentsvg_s'
 

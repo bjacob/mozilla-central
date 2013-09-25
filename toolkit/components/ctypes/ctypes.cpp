@@ -11,6 +11,7 @@
 #include "nsNativeCharsetUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozJSComponentLoader.h"
+#include "nsZipArchive.h"
 
 #define JSCTYPES_CONTRACTID \
   "@mozilla.org/jsctypes;1"
@@ -63,11 +64,11 @@ Module::~Module()
 #define XPC_MAP_FLAGS nsIXPCScriptable::WANT_CALL
 #include "xpc_map_end.h"
 
-static JSBool
+static bool
 SealObjectAndPrototype(JSContext* cx, JSObject* parent, const char* name)
 {
   JS::Rooted<JS::Value> prop(cx);
-  if (!JS_GetProperty(cx, parent, name, prop.address()))
+  if (!JS_GetProperty(cx, parent, name, &prop))
     return false;
 
   if (prop.isUndefined()) {
@@ -76,14 +77,14 @@ SealObjectAndPrototype(JSContext* cx, JSObject* parent, const char* name)
   }
 
   JS::Rooted<JSObject*> obj(cx, prop.toObjectOrNull());
-  if (!JS_GetProperty(cx, obj, "prototype", prop.address()))
+  if (!JS_GetProperty(cx, obj, "prototype", &prop))
     return false;
 
   JS::Rooted<JSObject*> prototype(cx, prop.toObjectOrNull());
   return JS_FreezeObject(cx, obj) && JS_FreezeObject(cx, prototype);
 }
 
-static JSBool
+static bool
 InitAndSealCTypesClass(JSContext* cx, JS::Handle<JSObject*> global)
 {
   // Init the ctypes object.
@@ -92,7 +93,7 @@ InitAndSealCTypesClass(JSContext* cx, JS::Handle<JSObject*> global)
 
   // Set callbacks for charset conversion and such.
   JS::Rooted<JS::Value> ctypes(cx);
-  if (!JS_GetProperty(cx, global, "ctypes", ctypes.address()))
+  if (!JS_GetProperty(cx, global, "ctypes", &ctypes))
     return false;
 
   JS_SetCTypesCallbacks(JSVAL_TO_OBJECT(ctypes), &sCallbacks);

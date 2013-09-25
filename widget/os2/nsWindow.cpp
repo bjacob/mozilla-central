@@ -1191,6 +1191,7 @@ NS_METHOD nsWindow::SetCursor(nsCursor aCursor)
       break;
 
     case eCursor_standard:
+    case eCursor_context_menu: // XXX See bug 258960.
       newPointer = WinQuerySysPointer(HWND_DESKTOP, SPTR_ARROW, FALSE);
       break;
 
@@ -1248,10 +1249,6 @@ NS_METHOD nsWindow::SetCursor(nsCursor aCursor)
 
     case eCursor_spinning:
       newPointer = sPtrArray[IDC_ARROWWAIT-IDC_BASE];
-      break;
-
-    case eCursor_context_menu:
-      // XXX this CSS3 cursor needs to be implemented
       break;
 
     case eCursor_zoom_in:
@@ -1478,7 +1475,7 @@ HBITMAP nsWindow::CreateBitmapRGB(uint8_t* aImageData,
 //-----------------------------------------------------------------------------
 // Create a monochrome AND/XOR bitmap from 0, 1, or 8-bit alpha data.
 
-HBITMAP nsWindow::CreateTransparencyMask(gfxASurface::gfxImageFormat format,
+HBITMAP nsWindow::CreateTransparencyMask(gfxImageFormat format,
                                          uint8_t* aImageData,
                                          uint32_t aWidth,
                                          uint32_t aHeight)
@@ -1495,7 +1492,7 @@ HBITMAP nsWindow::CreateTransparencyMask(gfxASurface::gfxImageFormat format,
 
   // Non-alpha formats are already taken care of
   // by initializing the XOR and AND masks to zero
-  if (format == gfxASurface::ImageFormatARGB32) {
+  if (format == gfxImageFormatARGB32) {
 
     // make the AND mask the inverse of the 8-bit alpha data
     int32_t* pSrc = (int32_t*)aImageData;
@@ -2157,15 +2154,17 @@ bool nsWindow::OnMouseChord(MPARAM mp1, MPARAM mp2)
     isCopy = true;
   }
 
+  // XXX Using keypress event here is wrong approach, this should be replaced
+  //     with content command event.
   nsKeyEvent event(true, NS_KEY_PRESS, this);
   nsIntPoint point(0,0);
   InitEvent(event, &point);
 
   event.keyCode     = NS_VK_INSERT;
   if (isCopy) {
-    event.modifiers = widget::MODIFIER_CONTROL;
+    event.modifiers = MODIFIER_CONTROL;
   } else {
-    event.modifiers = widget::MODIFIER_SHIFT;
+    event.modifiers = MODIFIER_SHIFT;
   }
   event.eventStructType = NS_KEY_EVENT;
   event.charCode    = 0;
@@ -2174,13 +2173,13 @@ bool nsWindow::OnMouseChord(MPARAM mp1, MPARAM mp2)
   if (SHORT1FROMMP(mp1) & (KC_VIRTUALKEY | KC_KEYUP | KC_LONEKEY)) {
     USHORT usVKey = SHORT2FROMMP(mp2);
     if (usVKey == VK_SHIFT) {
-      event.modifiers |= widget::MODIFIER_SHIFT;
+      event.modifiers |= MODIFIER_SHIFT;
     }
     if (usVKey == VK_CTRL) {
-      event.modifiers |= widget::MODIFIER_CONTROL;
+      event.modifiers |= MODIFIER_CONTROL;
     }
     if (usVKey == VK_ALTGRAF || usVKey == VK_ALT) {
-      event.modifiers |= widget::MODIFIER_ALT;
+      event.modifiers |= MODIFIER_ALT;
     }
   }
 
@@ -2526,8 +2525,7 @@ PlatformToNSAttr(uint8_t aAttr)
       return NS_TEXTRANGE_SELECTEDCONVERTEDTEXT;
 
     default:
-      MOZ_NOT_REACHED("unknown attribute");
-      return NS_TEXTRANGE_RAWINPUT;
+      MOZ_CRASH("unknown attribute");
   }
 }
 
@@ -2794,6 +2792,11 @@ bool nsWindow::DispatchKeyEvent(MPARAM mp1, MPARAM mp2)
     return rc;
   }
 
+  // Don't dispatch keypress event if keydown event is consumed.
+  if (rc) {
+    return rc;
+  }
+
   // Break off if we've got an "invalid composition" -- that is,
   // the user typed a deadkey last time, but has now typed something
   // that doesn't make sense in that context.
@@ -2806,9 +2809,6 @@ bool nsWindow::DispatchKeyEvent(MPARAM mp1, MPARAM mp2)
   // Now we need to dispatch a keypress event which has the unicode char.
   // If keydown default was prevented, do same for keypress
   pressEvent.message = NS_KEY_PRESS;
-  if (rc) {
-    pressEvent.mFlags.mDefaultPrevented = true;
-  }
 
   if (usChar) {
     USHORT inbuf[2];

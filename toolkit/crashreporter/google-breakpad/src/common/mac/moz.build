@@ -17,7 +17,12 @@ CPP_SOURCES += [
     'string_utilities.cc',
 ]
 
+HOST_CPPSRCS += CPP_SOURCES
+
 HOST_LIBRARY_NAME = 'host_breakpad_mac_common_s'
 CMMSRCS += [
     'MachIPC.mm',
 ]
+
+LIBRARY_NAME = 'breakpad_mac_common_s'
+

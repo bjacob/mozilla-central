@@ -30,21 +30,21 @@
 // WebRTC library includes follow
 
 // Audio Engine
-#include "voice_engine/include/voe_base.h"
-#include "voice_engine/include/voe_codec.h"
-#include "voice_engine/include/voe_hardware.h"
-#include "voice_engine/include/voe_network.h"
-#include "voice_engine/include/voe_audio_processing.h"
-#include "voice_engine/include/voe_volume_control.h"
-#include "voice_engine/include/voe_external_media.h"
-#include "voice_engine/include/voe_audio_processing.h"
+#include "webrtc/voice_engine/include/voe_base.h"
+#include "webrtc/voice_engine/include/voe_codec.h"
+#include "webrtc/voice_engine/include/voe_hardware.h"
+#include "webrtc/voice_engine/include/voe_network.h"
+#include "webrtc/voice_engine/include/voe_audio_processing.h"
+#include "webrtc/voice_engine/include/voe_volume_control.h"
+#include "webrtc/voice_engine/include/voe_external_media.h"
+#include "webrtc/voice_engine/include/voe_audio_processing.h"
 
 // Video Engine
-#include "video_engine/include/vie_base.h"
-#include "video_engine/include/vie_codec.h"
-#include "video_engine/include/vie_render.h"
-#include "video_engine/include/vie_capture.h"
-#include "video_engine/include/vie_file.h"
+#include "webrtc/video_engine/include/vie_base.h"
+#include "webrtc/video_engine/include/vie_codec.h"
+#include "webrtc/video_engine/include/vie_render.h"
+#include "webrtc/video_engine/include/vie_capture.h"
+#include "webrtc/video_engine/include/vie_file.h"
 #ifdef MOZ_B2G_CAMERA
 #include "CameraPreviewMediaStream.h"
 #include "DOMCameraManager.h"
@@ -111,7 +111,7 @@ public:
     , mSnapshotPath(nullptr)
   {
     mState = kReleased;
-    NS_NewNamedThread("CameraThread", getter_AddRefs(mCameraThread), nullptr);
+    NS_NewNamedThread("CameraThread", getter_AddRefs(mCameraThread));
     Init();
   }
 #else
@@ -154,7 +154,11 @@ public:
                           StreamTime aDesiredTime,
                           TrackTicks &aLastEndTime);
 
-  NS_DECL_ISUPPORTS
+  virtual bool IsFake() {
+    return false;
+  }
+
+  NS_DECL_THREADSAFE_ISUPPORTS
 #ifdef MOZ_B2G_CAMERA
   NS_DECL_NSICAMERAGETCAMERACALLBACK
   NS_DECL_NSICAMERAPREVIEWSTREAMCALLBACK
@@ -243,9 +247,8 @@ private:
   bool mInSnapshotMode;
   nsString* mSnapshotPath;
 
-  // These are in UTF-8 but webrtc api uses char arrays
-  char mDeviceName[KMaxDeviceNameLength];
-  char mUniqueId[KMaxUniqueIdLength];
+  nsString mDeviceName;
+  nsString mUniqueId;
 
   void ChooseCapability(const MediaEnginePrefs &aPrefs);
 };
@@ -292,12 +295,16 @@ public:
                           StreamTime aDesiredTime,
                           TrackTicks &aLastEndTime);
 
-  // VoEMediaProcess.
-  void Process(const int channel, const webrtc::ProcessingTypes type,
-               WebRtc_Word16 audio10ms[], const int length,
-               const int samplingFreq, const bool isStereo);
+  virtual bool IsFake() {
+    return false;
+  }
 
-  NS_DECL_ISUPPORTS
+  // VoEMediaProcess.
+  void Process(int channel, webrtc::ProcessingTypes type,
+               int16_t audio10ms[], int length,
+               int samplingFreq, bool isStereo);
+
+  NS_DECL_THREADSAFE_ISUPPORTS
 
 private:
   static const unsigned int KMaxDeviceNameLength = 128;
@@ -347,8 +354,7 @@ public:
     , mCameraManager(aCameraManager)
     , mWindowId(aWindowId)
   {
-	mVideoSources.Init();
-	mAudioSources.Init();
+    AsyncLatencyLogger::Get(true)->AddRef();
   }
 #else
   MediaEngineWebRTC()
@@ -358,11 +364,14 @@ public:
     , mVideoEngineInit(false)
     , mAudioEngineInit(false)
   {
-    mVideoSources.Init();
-    mAudioSources.Init();
   }
 #endif
-  ~MediaEngineWebRTC() { Shutdown(); }
+  ~MediaEngineWebRTC() {
+    Shutdown();
+#ifdef MOZ_B2G_CAMERA
+    AsyncLatencyLogger::Get()->Release();
+#endif
+  }
 
   // Clients should ensure to clean-up sources video/audio sources
   // before invoking Shutdown on this class.

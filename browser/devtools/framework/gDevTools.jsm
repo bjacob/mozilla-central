@@ -11,12 +11,14 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource:///modules/devtools/shared/event-emitter.js");
-Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
+let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
 Cu.import("resource://gre/modules/devtools/Loader.jsm");
-Cu.import("resource:///modules/devtools/ProfilerController.jsm");
+
+var ProfilerController = devtools.require("devtools/profiler/controller");
 
 const FORBIDDEN_IDS = new Set(["toolbox", ""]);
 const MAX_ORDINAL = 99;
+
 
 /**
  * DevTools is a class that represents a set of developer tools, it holds a
@@ -186,22 +188,22 @@ DevTools.prototype = {
    *        The toolbox that was opened
    */
   showToolbox: function(target, toolId, hostType) {
-    let deferred = Promise.defer();
+    let deferred = promise.defer();
 
     let toolbox = this._toolboxes.get(target);
     if (toolbox) {
 
-      let promise = (hostType != null && toolbox.hostType != hostType) ?
+      let hostPromise = (hostType != null && toolbox.hostType != hostType) ?
           toolbox.switchHost(hostType) :
-          Promise.resolve(null);
+          promise.resolve(null);
 
       if (toolId != null && toolbox.currentToolId != toolId) {
-        promise = promise.then(function() {
+        hostPromise = hostPromise.then(function() {
           return toolbox.selectTool(toolId);
         });
       }
 
-      return promise.then(function() {
+      return hostPromise.then(function() {
         toolbox.raise();
         return toolbox;
       });
@@ -328,6 +330,75 @@ let gDevToolsBrowser = {
   },
 
   /**
+   * This function ensures the right commands are enabled in a window,
+   * depending on their relevant prefs. It gets run when a window is registered,
+   * or when any of the devtools prefs change.
+   */
+  updateCommandAvailability: function(win) {
+    let doc = win.document;
+
+    function toggleCmd(id, isEnabled) {
+      let cmd = doc.getElementById(id);
+      if (isEnabled) {
+        cmd.removeAttribute("disabled");
+        cmd.removeAttribute("hidden");
+      } else {
+        cmd.setAttribute("disabled", "true");
+        cmd.setAttribute("hidden", "true");
+      }
+    };
+
+    // Enable developer toolbar?
+    let devToolbarEnabled = Services.prefs.getBoolPref("devtools.toolbar.enabled");
+    toggleCmd("Tools:DevToolbar", devToolbarEnabled);
+    let focusEl = doc.getElementById("Tools:DevToolbarFocus");
+    if (devToolbarEnabled) {
+      focusEl.removeAttribute("disabled");
+    } else {
+      focusEl.setAttribute("disabled", "true");
+    }
+    if (devToolbarEnabled && Services.prefs.getBoolPref("devtools.toolbar.visible")) {
+      win.DeveloperToolbar.show(false);
+    }
+
+    // Enable App Manager?
+    let appMgrEnabled = Services.prefs.getBoolPref("devtools.appmanager.enabled");
+    toggleCmd("Tools:DevAppMgr", appMgrEnabled);
+
+    // Enable Chrome Debugger?
+    let chromeEnabled = Services.prefs.getBoolPref("devtools.chrome.enabled");
+    let devtoolsRemoteEnabled = Services.prefs.getBoolPref("devtools.debugger.remote-enabled");
+    let remoteEnabled = chromeEnabled && devtoolsRemoteEnabled &&
+                        Services.prefs.getBoolPref("devtools.debugger.chrome-enabled");
+    toggleCmd("Tools:ChromeDebugger", remoteEnabled);
+
+    // Enable Error Console?
+    let consoleEnabled = Services.prefs.getBoolPref("devtools.errorconsole.enabled");
+    toggleCmd("Tools:ErrorConsole", consoleEnabled);
+
+    // Enable DevTools connection screen, if the preference allows this.
+    toggleCmd("Tools:DevToolsConnect", devtoolsRemoteEnabled);
+  },
+
+  observe: function(subject, topic, prefName) {
+    if (prefName.endsWith("enabled")) {
+      for (let win of this._trackedBrowserWindows) {
+        this.updateCommandAvailability(win);
+      }
+    }
+  },
+
+  _prefObserverRegistered: false,
+
+  ensurePrefObserver: function() {
+    if (!this._prefObserverRegistered) {
+      this._prefObserverRegistered = true;
+      Services.prefs.addObserver("devtools.", this, false);
+    }
+  },
+
+
+  /**
    * This function is for the benefit of Tools:{toolId} commands,
    * triggered from the WebDeveloper menu and keyboard shortcuts.
    *
@@ -344,15 +415,24 @@ let gDevToolsBrowser = {
   selectToolCommand: function(gBrowser, toolId) {
     let target = devtools.TargetFactory.forTab(gBrowser.selectedTab);
     let toolbox = gDevTools.getToolbox(target);
+    let tools = gDevTools.getToolDefinitionMap();
+    let toolDefinition = tools.get(toolId);
 
     if (toolbox && toolbox.currentToolId == toolId) {
-      if (toolbox.hostType == devtools.Toolbox.HostType.WINDOW) {
+      toolbox.fireCustomKey(toolId);
+
+      if (toolDefinition.preventClosingOnKey || toolbox.hostType == devtools.Toolbox.HostType.WINDOW) {
         toolbox.raise();
       } else {
         toolbox.destroy();
       }
     } else {
-      gDevTools.showToolbox(target, toolId);
+      gDevTools.showToolbox(target, toolId).then(() => {
+        let target = devtools.TargetFactory.forTab(gBrowser.selectedTab);
+        let toolbox = gDevTools.getToolbox(target);
+
+        toolbox.fireCustomKey(toolId);
+      });
     }
   },
 
@@ -364,14 +444,28 @@ let gDevToolsBrowser = {
   },
 
   /**
+   * Open the App Manager
+   */
+  openAppManager: function(gBrowser) {
+    gBrowser.selectedTab = gBrowser.addTab("about:app-manager");
+  },
+
+  /**
    * Add this DevTools's presence to a browser window's document
    *
    * @param {XULDocument} doc
    *        The document to which menuitems and handlers are to be added
    */
   registerBrowserWindow: function DT_registerBrowserWindow(win) {
+    this.updateCommandAvailability(win);
+    this.ensurePrefObserver();
     gDevToolsBrowser._trackedBrowserWindows.add(win);
     gDevToolsBrowser._addAllToolsToMenu(win.document);
+
+    if (this._isFirebugInstalled()) {
+      let broadcaster = win.document.getElementById("devtoolsMenuBroadcaster_DevToolbox");
+      broadcaster.removeAttribute("key");
+    }
 
     let tabContainer = win.document.getElementById("tabbrowser-tabs")
     tabContainer.addEventListener("TabSelect",
@@ -391,6 +485,7 @@ let gDevToolsBrowser = {
    */
   attachKeybindingsToBrowser: function DT_attachKeybindingsToBrowser(doc, keys) {
     let devtoolsKeyset = doc.getElementById("devtoolsKeyset");
+
     if (!devtoolsKeyset) {
       devtoolsKeyset = doc.createElement("keyset");
       devtoolsKeyset.setAttribute("id", "devtoolsKeyset");
@@ -398,6 +493,17 @@ let gDevToolsBrowser = {
     devtoolsKeyset.appendChild(keys);
     let mainKeyset = doc.getElementById("mainKeyset");
     mainKeyset.parentNode.insertBefore(devtoolsKeyset, mainKeyset);
+  },
+
+
+  /**
+   * Detect the presence of a Firebug.
+   *
+   * @return promise
+   */
+  _isFirebugInstalled: function DT_isFirebugInstalled() {
+    let bootstrappedAddons = Services.prefs.getCharPref("extensions.bootstrappedAddons");
+    return bootstrappedAddons.indexOf("firebug@software.joehewitt.com") != -1;
   },
 
   /**
@@ -721,9 +827,11 @@ let gDevToolsBrowser = {
    */
   destroy: function() {
     gDevTools.off("toolbox-ready", gDevToolsBrowser._connectToProfiler);
+    Services.prefs.removeObserver("devtools.", gDevToolsBrowser);
     Services.obs.removeObserver(gDevToolsBrowser.destroy, "quit-application");
   },
 }
+
 this.gDevToolsBrowser = gDevToolsBrowser;
 
 gDevTools.on("tool-registered", function(ev, toolId) {

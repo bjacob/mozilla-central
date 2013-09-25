@@ -4,17 +4,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef SPSProfiler_h__
-#define SPSProfiler_h__
-
-#include <stddef.h>
+#ifndef vm_SPSProfiler_h
+#define vm_SPSProfiler_h
 
 #include "mozilla/DebugOnly.h"
 #include "mozilla/GuardObjects.h"
-#include "mozilla/HashFunctions.h"
 
-#include "js/Utility.h"
+#include <stddef.h>
+
 #include "jsscript.h"
+
+#include "js/ProfilingStack.h"
 
 /*
  * SPS Profiler integration with the JS Engine
@@ -102,8 +102,6 @@
  * code to pc which can be accessed safely because they will only be accessed
  * from a signal handler when the JIT code is executing.
  */
-
-class JSFunction;
 
 namespace js {
 
@@ -390,4 +388,4 @@ class SPSInstrumentation
 
 } /* namespace js */
 
-#endif /* SPSProfiler_h__ */
+#endif /* vm_SPSProfiler_h */

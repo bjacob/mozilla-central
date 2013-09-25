@@ -2,17 +2,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH          = @DEPTH@
-topsrcdir      = @top_srcdir@
-srcdir         = @srcdir@
-VPATH          = @srcdir@
-relativesrcdir = @relativesrcdir@
-
-include $(DEPTH)/config/autoconf.mk
-
 MOCHITEST_FILES = \
 		save_restore_radio_groups.sjs \
 		test_save_restore_radio_groups.html \
+		test_set_range_text.html \
 		test_change_event.html \
 		test_mozistextfield.html \
 		test_input_attributes_reflection.html \
@@ -62,7 +55,10 @@ MOCHITEST_FILES = \
 		test_input_event.html \
 		test_input_number_rounding.html \
 		test_valueAsDate_pref.html \
+		test_input_color_picker_initial.html \
+		test_input_color_picker_update.html \
+		test_input_color_picker_popup.html \
+		test_input_color_input_change_events.html \
+		test_restore_form_elements.html \
+		test_select_selectedOptions.html \
 		$(NULL)
-
-include $(topsrcdir)/config/rules.mk
-

@@ -25,3 +25,8 @@ if not CONFIG['MOZ_NATIVE_HUNSPELL']:
         'replist.cpp',
         'suggestmgr.cpp',
     ]
+
+LIBRARY_NAME = 'hunspell_s'
+
+LIBXUL_LIBRARY = True
+

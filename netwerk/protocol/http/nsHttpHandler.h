@@ -8,39 +8,38 @@
 
 #include "nsHttp.h"
 #include "nsHttpAuthCache.h"
-#include "nsHttpConnection.h"
 #include "nsHttpConnectionMgr.h"
 #include "ASpdySession.h"
 
-#include "nsXPIDLString.h"
 #include "nsString.h"
 #include "nsCOMPtr.h"
 #include "nsWeakReference.h"
 
+#include "nsIHttpDataUsage.h"
 #include "nsIHttpProtocolHandler.h"
-#include "nsIProtocolProxyService.h"
-#include "nsIIOService.h"
 #include "nsIObserver.h"
-#include "nsIObserverService.h"
-#include "nsIStreamConverterService.h"
-#include "nsICacheSession.h"
-#include "nsICookieService.h"
-#include "nsITimer.h"
-#include "nsIStrictTransportSecurityService.h"
 #include "nsISpeculativeConnect.h"
+#include "nsICache.h"
 
+class nsHttpConnection;
 class nsHttpConnectionInfo;
 class nsHttpHeaderArray;
 class nsHttpTransaction;
-class nsAHttpTransaction;
 class nsIHttpChannel;
 class nsIPrefBranch;
 class nsICancelable;
+class nsICookieService;
+class nsIIOService;
+class nsIObserverService;
+class nsISiteSecurityService;
+class nsIStreamConverterService;
+class nsITimer;
 
 namespace mozilla {
 namespace net {
 class ATokenBucketEvent;
 class EventTokenBucket;
+class Tickler;
 }
 }
 
@@ -52,14 +51,16 @@ class nsHttpHandler : public nsIHttpProtocolHandler
                     , public nsIObserver
                     , public nsSupportsWeakReference
                     , public nsISpeculativeConnect
+                    , public nsIHttpDataUsage
 {
 public:
-    NS_DECL_ISUPPORTS
+    NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIPROTOCOLHANDLER
     NS_DECL_NSIPROXIEDPROTOCOLHANDLER
     NS_DECL_NSIHTTPPROTOCOLHANDLER
     NS_DECL_NSIOBSERVER
     NS_DECL_NSISPECULATIVECONNECT
+    NS_DECL_NSIHTTPDATAUSAGE
 
     nsHttpHandler();
     virtual ~nsHttpHandler();
@@ -181,9 +182,11 @@ public:
     }
 
     nsresult SpeculativeConnect(nsHttpConnectionInfo *ci,
-                                nsIInterfaceRequestor *callbacks)
+                                nsIInterfaceRequestor *callbacks,
+                                uint32_t caps = 0)
     {
-        return mConnMgr->SpeculativeConnect(ci, callbacks);
+        TickleWifi(callbacks);
+        return mConnMgr->SpeculativeConnect(ci, callbacks, caps);
     }
 
     //
@@ -193,7 +196,7 @@ public:
     nsresult GetStreamConverterService(nsIStreamConverterService **);
     nsresult GetIOService(nsIIOService** service);
     nsICookieService * GetCookieService(); // not addrefed
-    nsIStrictTransportSecurityService * GetSTSService();
+    nsISiteSecurityService * GetSSService();
 
     // callable from socket thread only
     uint32_t Get32BitsOfPseudoRandom();
@@ -301,11 +304,11 @@ private:
 private:
 
     // cached services
-    nsCOMPtr<nsIIOService>              mIOService;
-    nsCOMPtr<nsIStreamConverterService> mStreamConvSvc;
-    nsCOMPtr<nsIObserverService>        mObserverService;
-    nsCOMPtr<nsICookieService>          mCookieService;
-    nsCOMPtr<nsIStrictTransportSecurityService> mSTSService;
+    nsMainThreadPtrHandle<nsIIOService>              mIOService;
+    nsMainThreadPtrHandle<nsIStreamConverterService> mStreamConvSvc;
+    nsMainThreadPtrHandle<nsIObserverService>        mObserverService;
+    nsMainThreadPtrHandle<nsICookieService>          mCookieService;
+    nsMainThreadPtrHandle<nsISiteSecurityService>    mSSService;
 
     // the authentication credentials cache
     nsHttpAuthCache mAuthCache;
@@ -471,6 +474,32 @@ public:
     {
         mRequestTokenBucket = aTokenBucket;
     }
+
+private:
+    // for nsIHttpDataUsage
+    uint64_t mEthernetBytesRead;
+    uint64_t mEthernetBytesWritten;
+    uint64_t mCellBytesRead;
+    uint64_t mCellBytesWritten;
+    bool     mNetworkTypeKnown;
+    bool     mNetworkTypeWasEthernet;
+
+    nsRefPtr<mozilla::net::Tickler> mWifiTickler;
+    nsresult GetNetworkEthernetInfo(nsIInterfaceRequestor *cb,
+                                    bool *ethernet);
+    nsresult GetNetworkEthernetInfoInner(nsIInterfaceRequestor *cb,
+                                         bool *ethernet);
+    nsresult GetNetworkInfo(nsIInterfaceRequestor *cb,
+                            bool *ethernet, uint32_t *gw);
+    nsresult GetNetworkInfoInner(nsIInterfaceRequestor *cb,
+                                 bool *ethernet, uint32_t *gw);
+    void TickleWifi(nsIInterfaceRequestor *cb);
+
+public:
+    // this is called to update the member variables used for nsIHttpDataUsage
+    // it can be called from any thread
+    void UpdateDataUsage(nsIInterfaceRequestor *cb,
+                         uint64_t bytesRead, uint64_t bytesWritten);
 };
 
 extern nsHttpHandler *gHttpHandler;
@@ -488,7 +517,7 @@ public:
     // we basically just want to override GetScheme and GetDefaultPort...
     // all other methods should be forwarded to the nsHttpHandler instance.
 
-    NS_DECL_ISUPPORTS
+    NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIPROTOCOLHANDLER
     NS_FORWARD_NSIPROXIEDPROTOCOLHANDLER (gHttpHandler->)
     NS_FORWARD_NSIHTTPPROTOCOLHANDLER    (gHttpHandler->)

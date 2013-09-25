@@ -7,7 +7,7 @@
 #define CODEC_CONFIG_H_
 
 #include <string>
-
+#include "ccsdp_rtcp_fb.h"
 
 namespace mozilla {
 
@@ -50,23 +50,36 @@ struct AudioCodecConfig
 
 struct VideoCodecConfig
 {
-
   /*
    * The data-types for these properties mimic the
    * corresponding webrtc::VideoCodec data-types.
    */
   int mType;
   std::string mName;
-  int mWidth;
-  int mHeight;
+  uint32_t mRtcpFbTypes;
 
-  VideoCodecConfig(int type, std::string name,int width,
-                    int height): mType(type),
-                                 mName(name),
-                                 mWidth(width),
-                                 mHeight(height)
-
+  VideoCodecConfig(int type,
+                   std::string name,
+                   int rtcpFbTypes): mType(type),
+                                     mName(name),
+                                     mRtcpFbTypes(rtcpFbTypes)
   {
+  }
+
+
+  bool RtcpFbIsSet(sdp_rtcp_fb_nack_type_e type) const
+  {
+    return mRtcpFbTypes & sdp_rtcp_fb_nack_to_bitmap(type);
+  }
+
+  bool RtcpFbIsSet(sdp_rtcp_fb_ack_type_e type) const
+  {
+    return mRtcpFbTypes & sdp_rtcp_fb_ack_to_bitmap(type);
+  }
+
+  bool RtcpFbIsSet(sdp_rtcp_fb_ccm_type_e type) const
+  {
+    return mRtcpFbTypes & sdp_rtcp_fb_ccm_to_bitmap(type);
   }
 
 };

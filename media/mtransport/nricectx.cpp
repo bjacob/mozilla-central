@@ -82,6 +82,7 @@ extern "C" {
 #include "nricectx.h"
 #include "nricemediastream.h"
 #include "nr_socket_prsock.h"
+#include "nrinterfaceprioritizer.h"
 
 namespace mozilla {
 
@@ -242,14 +243,14 @@ nsresult NrIceTurnServer::ToNicerTurnStruct(nr_ice_turn_server *server) const {
 int NrIceCtx::select_pair(void *obj,nr_ice_media_stream *stream,
                    int component_id, nr_ice_cand_pair **potentials,
                    int potential_ct) {
-  MOZ_MTLOG(PR_LOG_DEBUG, "select pair called: potential_ct = "
+  MOZ_MTLOG(ML_DEBUG, "select pair called: potential_ct = "
             << potential_ct);
 
   return 0;
 }
 
 int NrIceCtx::stream_ready(void *obj, nr_ice_media_stream *stream) {
-  MOZ_MTLOG(PR_LOG_DEBUG, "stream_ready called");
+  MOZ_MTLOG(ML_DEBUG, "stream_ready called");
 
   // Get the ICE ctx
   NrIceCtx *ctx = static_cast<NrIceCtx *>(obj);
@@ -265,7 +266,7 @@ int NrIceCtx::stream_ready(void *obj, nr_ice_media_stream *stream) {
 }
 
 int NrIceCtx::stream_failed(void *obj, nr_ice_media_stream *stream) {
-  MOZ_MTLOG(PR_LOG_DEBUG, "stream_failed called");
+  MOZ_MTLOG(ML_DEBUG, "stream_failed called");
 
   // Get the ICE ctx
   NrIceCtx *ctx = static_cast<NrIceCtx *>(obj);
@@ -280,7 +281,7 @@ int NrIceCtx::stream_failed(void *obj, nr_ice_media_stream *stream) {
 }
 
 int NrIceCtx::ice_completed(void *obj, nr_ice_peer_ctx *pctx) {
-  MOZ_MTLOG(PR_LOG_DEBUG, "ice_completed called");
+  MOZ_MTLOG(ML_DEBUG, "ice_completed called");
 
   // Get the ICE ctx
   NrIceCtx *ctx = static_cast<NrIceCtx *>(obj);
@@ -317,12 +318,12 @@ RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
     nr_crypto_vtbl = &nr_ice_crypto_nss_vtbl;
     initialized = true;
 
-    // Set the priorites for candidate type preferences
-    NR_reg_set_uchar((char *)"ice.pref.type.srv_rflx",100);
-    NR_reg_set_uchar((char *)"ice.pref.type.peer_rflx",105);
-    NR_reg_set_uchar((char *)"ice.pref.type.prflx",99);
-    NR_reg_set_uchar((char *)"ice.pref.type.host",125);
-    NR_reg_set_uchar((char *)"ice.pref.type.relayed",126);
+    // Set the priorites for candidate type preferences.
+    // These numbers come from RFC 5245 S. 4.1.2.2
+    NR_reg_set_uchar((char *)"ice.pref.type.srv_rflx", 100);
+    NR_reg_set_uchar((char *)"ice.pref.type.peer_rflx", 110);
+    NR_reg_set_uchar((char *)"ice.pref.type.host", 126);
+    NR_reg_set_uchar((char *)"ice.pref.type.relayed", 0);
 
     if (set_interface_priorities) {
       NR_reg_set_uchar((char *)"ice.pref.interface.rl0", 255);
@@ -364,9 +365,23 @@ RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
   r = nr_ice_ctx_create(const_cast<char *>(name.c_str()), flags,
                         &ctx->ctx_);
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't create ICE ctx for '" << name << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't create ICE ctx for '" << name << "'");
     return nullptr;
   }
+
+#ifdef USE_INTERFACE_PRIORITIZER
+  nr_interface_prioritizer *prioritizer = CreateInterfacePrioritizer();
+  if (!prioritizer) {
+    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't create interface prioritizer.");
+    return nullptr;
+  }
+
+  r = nr_ice_ctx_set_interface_prioritizer(ctx->ctx_, prioritizer);
+  if (r) {
+    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't set interface prioritizer.");
+    return nullptr;
+  }
+#endif  // USE_INTERFACE_PRIORITIZER
 
   // Create the handler objects
   ctx->ice_handler_vtbl_ = new nr_ice_handler_vtbl();
@@ -387,7 +402,7 @@ RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
                              const_cast<char *>(peer_name.c_str()),
                              &ctx->peer_);
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't create ICE peer ctx for '" << name << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't create ICE peer ctx for '" << name << "'");
     return nullptr;
   }
 
@@ -402,7 +417,7 @@ RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
 
 
 NrIceCtx::~NrIceCtx() {
-  MOZ_MTLOG(PR_LOG_DEBUG, "Destroying ICE ctx '" << name_ <<"'");
+  MOZ_MTLOG(ML_DEBUG, "Destroying ICE ctx '" << name_ <<"'");
   nr_ice_peer_ctx_destroy(&peer_);
   nr_ice_ctx_destroy(&ctx_);
   delete ice_handler_vtbl_;
@@ -426,7 +441,7 @@ void NrIceCtx::destroy_peer_ctx() {
 nsresult NrIceCtx::SetControlling(Controlling controlling) {
   peer_->controlling = (controlling == ICE_CONTROLLING)? 1 : 0;
 
-  MOZ_MTLOG(PR_LOG_DEBUG, "ICE ctx " << name_ << " setting controlling to" <<
+  MOZ_MTLOG(ML_DEBUG, "ICE ctx " << name_ << " setting controlling to" <<
             controlling);
   return NS_OK;
 }
@@ -442,14 +457,14 @@ nsresult NrIceCtx::SetStunServers(const std::vector<NrIceStunServer>&
   for (size_t i=0; i < stun_servers.size(); ++i) {
     nsresult rv = stun_servers[i].ToNicerStunStruct(&servers[i]);
     if (NS_FAILED(rv)) {
-      MOZ_MTLOG(PR_LOG_ERROR, "Couldn't set STUN server for '" << name_ << "'");
+      MOZ_MTLOG(ML_ERROR, "Couldn't set STUN server for '" << name_ << "'");
       return NS_ERROR_FAILURE;
     }
   }
 
   int r = nr_ice_ctx_set_stun_servers(ctx_, servers, stun_servers.size());
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't set STUN server for '" << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't set STUN server for '" << name_ << "'");
     return NS_ERROR_FAILURE;
   }
 
@@ -469,14 +484,14 @@ nsresult NrIceCtx::SetTurnServers(const std::vector<NrIceTurnServer>&
   for (size_t i=0; i < turn_servers.size(); ++i) {
     nsresult rv = turn_servers[i].ToNicerTurnStruct(&servers[i]);
     if (NS_FAILED(rv)) {
-      MOZ_MTLOG(PR_LOG_ERROR, "Couldn't set TURN server for '" << name_ << "'");
+      MOZ_MTLOG(ML_ERROR, "Couldn't set TURN server for '" << name_ << "'");
       return NS_ERROR_FAILURE;
     }
   }
 
   int r = nr_ice_ctx_set_turn_servers(ctx_, servers, turn_servers.size());
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't set TURN server for '" << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't set TURN server for '" << name_ << "'");
     return NS_ERROR_FAILURE;
   }
 
@@ -489,7 +504,7 @@ nsresult NrIceCtx::SetResolver(nr_resolver *resolver) {
   int r = nr_ice_ctx_set_resolver(ctx_, resolver);
 
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't set resolver for '" << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't set resolver for '" << name_ << "'");
     return NS_ERROR_FAILURE;
   }
 
@@ -499,8 +514,8 @@ nsresult NrIceCtx::SetResolver(nr_resolver *resolver) {
 nsresult NrIceCtx::StartGathering() {
   MOZ_ASSERT(ctx_->state == ICE_CTX_INIT);
   if (ctx_->state != ICE_CTX_INIT) {
-    MOZ_MTLOG(PR_LOG_ERROR, "ICE ctx in the wrong state for gathering: '"
-      << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "ICE ctx in the wrong state for gathering: '"
+              << name_ << "'");
     SetState(ICE_CTX_FAILED);
     return NS_ERROR_FAILURE;
   }
@@ -509,8 +524,8 @@ nsresult NrIceCtx::StartGathering() {
                             this);
 
   if (r && r != R_WOULDBLOCK) {
-      MOZ_MTLOG(PR_LOG_ERROR, "Couldn't gather ICE candidates for '"
-           << name_ << "'");
+      MOZ_MTLOG(ML_ERROR, "Couldn't gather ICE candidates for '"
+                << name_ << "'");
       SetState(ICE_CTX_FAILED);
       return NS_ERROR_FAILURE;
   }
@@ -521,8 +536,8 @@ nsresult NrIceCtx::StartGathering() {
 }
 
 void NrIceCtx::EmitAllCandidates() {
-  MOZ_MTLOG(PR_LOG_NOTICE, "Gathered all ICE candidates for '"
-       << name_ << "'");
+  MOZ_MTLOG(ML_NOTICE, "Gathered all ICE candidates for '"
+            << name_ << "'");
 
   for(size_t i=0; i<streams_.size(); ++i) {
     streams_[i]->EmitAllCandidates();
@@ -548,8 +563,8 @@ std::vector<std::string> NrIceCtx::GetGlobalAttributes() {
 
   r = nr_ice_get_global_attributes(ctx_, &attrs, &attrct);
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't get ufrag and password for '"
-         << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't get ufrag and password for '"
+              << name_ << "'");
     return ret;
   }
 
@@ -574,8 +589,8 @@ nsresult NrIceCtx::ParseGlobalAttributes(std::vector<std::string> attrs) {
                                                   &attrs_in[0] : nullptr,
                                                   attrs_in.size());
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't parse global attributes for "
-         << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't parse global attributes for "
+              << name_ << "'");
     return NS_ERROR_FAILURE;
   }
 
@@ -587,8 +602,8 @@ nsresult NrIceCtx::StartChecks() {
 
   r=nr_ice_peer_ctx_pair_candidates(peer_);
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't pair candidates on "
-         << name_ << "'");
+    MOZ_MTLOG(ML_ERROR, "Couldn't pair candidates on "
+              << name_ << "'");
     SetState(ICE_CTX_FAILED);
     return NS_ERROR_FAILURE;
   }
@@ -596,11 +611,11 @@ nsresult NrIceCtx::StartChecks() {
   r = nr_ice_peer_ctx_start_checks2(peer_,1);
   if (r) {
     if (r == R_NOT_FOUND) {
-      MOZ_MTLOG(PR_LOG_ERROR, "Couldn't start peer checks on "
-           << name_ << "' assuming trickle ICE");
+      MOZ_MTLOG(ML_ERROR, "Couldn't start peer checks on "
+                << name_ << "' assuming trickle ICE");
     } else {
-      MOZ_MTLOG(PR_LOG_ERROR, "Couldn't start peer checks on "
-           << name_ << "'");
+      MOZ_MTLOG(ML_ERROR, "Couldn't start peer checks on "
+                << name_ << "'");
       SetState(ICE_CTX_FAILED);
       return NS_ERROR_FAILURE;
     }
@@ -624,7 +639,7 @@ nsresult NrIceCtx::Finalize() {
   int r = nr_ice_ctx_finalize(ctx_, peer_);
 
   if (r) {
-    MOZ_MTLOG(PR_LOG_ERROR, "Couldn't finalize "
+    MOZ_MTLOG(ML_ERROR, "Couldn't finalize "
          << name_ << "'");
     return NS_ERROR_FAILURE;
   }
@@ -636,8 +651,8 @@ void NrIceCtx::SetState(State state) {
   if (state == state_)
     return;
 
-  MOZ_MTLOG(PR_LOG_DEBUG, "NrIceCtx(" << name_ << "): state " <<
-    state_ << "->" << state);
+  MOZ_MTLOG(ML_DEBUG, "NrIceCtx(" << name_ << "): state " <<
+            state_ << "->" << state);
   state_ = state;
 
   switch(state_) {

@@ -18,36 +18,52 @@ XPCOMUtils.defineLazyModuleGetter(this, "FileUtils", "resource://gre/modules/Fil
 XPCOMUtils.defineLazyModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "console", "resource://gre/modules/devtools/Console.jsm");
 
-let loader = Cu.import("resource://gre/modules/commonjs/toolkit/loader.js", {}).Loader;
-let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
+let SourceMap = {};
+Cu.import("resource://gre/modules/devtools/SourceMap.jsm", SourceMap);
 
-this.EXPORTED_SYMBOLS = ["devtools"];
+let loader = Cu.import("resource://gre/modules/commonjs/toolkit/loader.js", {}).Loader;
+let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
+
+this.EXPORTED_SYMBOLS = ["DevToolsLoader", "devtools"];
 
 /**
  * Providers are different strategies for loading the devtools.
  */
 
 let loaderGlobals = {
+  btoa: btoa,
   console: console,
   _Iterator: Iterator,
   loader: {
     lazyGetter: XPCOMUtils.defineLazyGetter.bind(XPCOMUtils),
-    lazyImporter: XPCOMUtils.defineLazyModuleGetter.bind(XPCOMUtils)
+    lazyImporter: XPCOMUtils.defineLazyModuleGetter.bind(XPCOMUtils),
+    lazyServiceGetter: XPCOMUtils.defineLazyServiceGetter.bind(XPCOMUtils)
   }
-}
+};
 
 // Used when the tools should be loaded from the Firefox package itself (the default)
 var BuiltinProvider = {
-  load: function(done) {
+  load: function() {
     this.loader = new loader.Loader({
       modules: {
-        "toolkit/loader": loader
+        "toolkit/loader": loader,
+        "source-map": SourceMap,
       },
       paths: {
+        // When you add a line to this mapping, don't forget to make a
+        // corresponding addition to the SrcdirProvider mapping below as well.
         "": "resource://gre/modules/commonjs/",
         "main": "resource:///modules/devtools/main.js",
         "devtools": "resource:///modules/devtools",
         "devtools/server": "resource://gre/modules/devtools/server",
+        "devtools/toolkit/webconsole": "resource://gre/modules/devtools/toolkit/webconsole",
+        "devtools/app-actor-front": "resource://gre/modules/devtools/app-actor-front.js",
+        "devtools/styleinspector/css-logic": "resource://gre/modules/devtools/styleinspector/css-logic",
+        "devtools/css-color": "resource://gre/modules/devtools/css-color",
+        "devtools/client": "resource://gre/modules/devtools/client",
+
+        "escodegen": "resource://gre/modules/devtools/escodegen",
+        "estraverse": "resource://gre/modules/devtools/escodegen/estraverse",
 
         // Allow access to xpcshell test items from the loader.
         "xpcshell-test": "resource://test"
@@ -55,7 +71,7 @@ var BuiltinProvider = {
       globals: loaderGlobals
     });
 
-    return Promise.resolve(undefined);
+    return promise.resolve(undefined);
   },
 
   unload: function(reason) {
@@ -73,24 +89,39 @@ var SrcdirProvider = {
     return Services.io.newFileURI(file).spec;
   },
 
-  load: function(done) {
+  load: function() {
     let srcdir = Services.prefs.getComplexValue("devtools.loader.srcdir",
                                                 Ci.nsISupportsString);
     srcdir = OS.Path.normalize(srcdir.data.trim());
     let devtoolsDir = OS.Path.join(srcdir, "browser", "devtools");
+    let toolkitDir = OS.Path.join(srcdir, "toolkit", "devtools");
+    let mainURI = this.fileURI(OS.Path.join(devtoolsDir, "main.js"));
     let devtoolsURI = this.fileURI(devtoolsDir);
-    let toolkitURI = this.fileURI(OS.Path.join(srcdir, "toolkit", "devtools"));
-    let serverURI = this.fileURI(OS.Path.join(srcdir, "toolkit", "devtools", "server"));
-    let mainURI = this.fileURI(OS.Path.join(srcdir, "browser", "devtools", "main.js"));
+    let serverURI = this.fileURI(OS.Path.join(toolkitDir, "server"));
+    let webconsoleURI = this.fileURI(OS.Path.join(toolkitDir, "webconsole"));
+    let appActorURI = this.fileURI(OS.Path.join(toolkitDir, "apps", "app-actor-front.js"));
+    let cssLogicURI = this.fileURI(OS.Path.join(toolkitDir, "styleinspector", "css-logic"));
+    let cssColorURI = this.fileURI(OS.Path.join(toolkitDir, "css-color"));
+    let clientURI = this.fileURI(OS.Path.join(toolkitDir, "client"));
+    let escodegenURI = this.fileURI(OS.Path.join(toolkitDir, "escodegen"));
+    let estraverseURI = this.fileURI(OS.Path.join(toolkitDir, "escodegen", "estraverse"));
     this.loader = new loader.Loader({
       modules: {
-        "toolkit/loader": loader
+        "toolkit/loader": loader,
+        "source-map": SourceMap,
       },
       paths: {
         "": "resource://gre/modules/commonjs/",
-        "devtools/server": serverURI,
+        "main": mainURI,
         "devtools": devtoolsURI,
-        "main": mainURI
+        "devtools/server": serverURI,
+        "devtools/toolkit/webconsole": webconsoleURI,
+        "devtools/app-actor-front": appActorURI,
+        "devtools/styleinspector/css-logic": cssLogicURI,
+        "devtools/css-color": cssColorURI,
+        "devtools/client": clientURI,
+        "escodegen": escodegenURI,
+        "estraverse": estraverseURI
       },
       globals: loaderGlobals
     });
@@ -104,7 +135,7 @@ var SrcdirProvider = {
   },
 
   _readFile: function(filename) {
-    let deferred = Promise.defer();
+    let deferred = promise.defer();
     let file = new FileUtils.File(filename);
     NetUtil.asyncFetch(file, (inputStream, status) => {
       if (!Components.isSuccessCode(status)) {
@@ -118,7 +149,7 @@ var SrcdirProvider = {
   },
 
   _writeFile: function(filename, data) {
-    let deferred = Promise.defer();
+    let deferred = promise.defer();
     let file = new FileUtils.File(filename);
 
     var ostream = FileUtils.openSafeFileOutputStream(file)
@@ -171,9 +202,15 @@ var SrcdirProvider = {
 /**
  * The main devtools API.
  * In addition to a few loader-related details, this object will also include all
- * exports from the main module.
+ * exports from the main module.  The standard instance of this loader is
+ * exported as |devtools| below, but if a fresh copy of the loader is needed,
+ * then a new one can also be created.
  */
-this.devtools = {
+this.DevToolsLoader = function DevToolsLoader() {
+  this._chooseProvider();
+};
+
+DevToolsLoader.prototype = {
   _provider: null,
 
   /**
@@ -256,5 +293,5 @@ this.devtools = {
   },
 };
 
-// Now load the tools.
-devtools._chooseProvider();
+// Export the standard instance of DevToolsLoader used by the tools.
+this.devtools = new DevToolsLoader();

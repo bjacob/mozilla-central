@@ -8,7 +8,7 @@
 #include "nsDOMClassInfoID.h"
 #include "nsGenericHTMLElement.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
-#include "nsHTMLFormElement.h"
+#include "mozilla/dom/HTMLFormElement.h"
 #include "mozilla/dom/HTMLImageElement.h"
 #include "mozilla/dom/HTMLOptionElement.h"
 #include "HTMLOptGroupElement.h"
@@ -62,7 +62,7 @@ NEW_BINDING(nsDOMUIEvent, UIEvent);
 
 #define DEFINE_UNWRAP_CAST(_interface, _base, _bit)                           \
 template <>                                                                   \
-MOZ_ALWAYS_INLINE JSBool                                                      \
+MOZ_ALWAYS_INLINE bool                                                        \
 xpc_qsUnwrapThis<_interface>(JSContext *cx,                                   \
                              JS::HandleObject obj,                            \
                              _interface **ppThis,                             \
@@ -231,7 +231,7 @@ UnwrapArg<_clazz>(JSContext *cx, jsval v, _clazz **ppArg,                     \
 } /* namespace mozilla */
 
 DEFINE_UNWRAP_CAST_HTML(canvas, mozilla::dom::HTMLCanvasElement)
-DEFINE_UNWRAP_CAST_HTML(form, nsHTMLFormElement)
+DEFINE_UNWRAP_CAST_HTML(form, mozilla::dom::HTMLFormElement)
 DEFINE_UNWRAP_CAST_HTML(img, mozilla::dom::HTMLImageElement)
 DEFINE_UNWRAP_CAST_HTML(optgroup, mozilla::dom::HTMLOptGroupElement)
 DEFINE_UNWRAP_CAST_HTML(option, mozilla::dom::HTMLOptionElement)
@@ -241,18 +241,6 @@ inline nsISupports*
 ToSupports(nsContentList *p)
 {
     return static_cast<nsINodeList*>(p);
-}
-
-inline nsISupports*
-ToCanonicalSupports(nsINode* p)
-{
-    return p;
-}
-
-inline nsISupports*
-ToSupports(nsINode* p)
-{
-  return p;
 }
 
 inline nsISupports*

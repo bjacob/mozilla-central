@@ -25,6 +25,8 @@ public:
                        uint32_t aLength = 0,
                        float aSampleRate = 0.0f);
 
+  virtual void DestroyMediaStream() MOZ_OVERRIDE;
+
   NS_DECL_ISUPPORTS_INHERITED
 
   virtual JSObject* WrapObject(JSContext* aCx,
@@ -39,11 +41,15 @@ public:
   virtual void SetChannelCount(uint32_t aChannelCount,
                                ErrorResult& aRv) MOZ_OVERRIDE;
 
+  void Mute();
+  void Unmute();
+
   void StartRendering();
 
-  void DestroyGraph();
+  void OfflineShutdown();
 
 private:
+  SelfReference<AudioDestinationNode> mOfflineRenderingRef;
   uint32_t mFramesToProduce;
 };
 

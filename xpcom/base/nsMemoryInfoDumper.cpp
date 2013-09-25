@@ -8,19 +8,21 @@
 
 #include "mozilla/nsMemoryInfoDumper.h"
 
-#include "mozilla/ClearOnShutdown.h"
-#include "mozilla/FileUtils.h"
+#ifdef XP_LINUX
 #include "mozilla/Preferences.h"
-#include "mozilla/StaticPtr.h"
+#endif
 #include "mozilla/unused.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/ContentChild.h"
 #include "nsIConsoleService.h"
 #include "nsICycleCollectorListener.h"
+#include "nsIMemoryReporter.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsGZFileWriter.h"
 #include "nsJSEnvironment.h"
 #include "nsPrintfCString.h"
+#include "nsISimpleEnumerator.h"
+#include <errno.h>
 
 #ifdef XP_WIN
 #include <process.h>
@@ -85,21 +87,26 @@ class GCAndCCLogDumpRunnable : public nsRunnable
 {
 public:
   GCAndCCLogDumpRunnable(const nsAString& aIdentifier,
+                         bool aDumpAllTraces,
                          bool aDumpChildProcesses)
     : mIdentifier(aIdentifier)
+    , mDumpAllTraces(aDumpAllTraces)
     , mDumpChildProcesses(aDumpChildProcesses)
   {}
 
   NS_IMETHOD Run()
   {
-    nsCOMPtr<nsIMemoryInfoDumper> dumper = do_GetService("@mozilla.org/memory-info-dumper;1");
+    nsCOMPtr<nsIMemoryInfoDumper> dumper =
+      do_GetService("@mozilla.org/memory-info-dumper;1");
+
     dumper->DumpGCAndCCLogsToFile(
-      mIdentifier, mDumpChildProcesses);
+      mIdentifier, mDumpAllTraces, mDumpChildProcesses);
     return NS_OK;
   }
 
 private:
   const nsString mIdentifier;
+  const bool mDumpAllTraces;
   const bool mDumpChildProcesses;
 };
 
@@ -140,7 +147,7 @@ static int sGCAndCCDumpSignum;             // SIGRTMIN + 2
 
 // This is the write-end of a pipe that we use to notice when a
 // dump-about-memory signal occurs.
-static int sDumpAboutMemoryPipeWriteFd = -1;
+static Atomic<int> sDumpAboutMemoryPipeWriteFd(-1);
 
 void
 DumpAboutMemorySignalHandler(int aSignum)
@@ -188,9 +195,9 @@ public:
    * function is also called when you're at eof (read() returns 0 in this case).
    */
   virtual void OnFileCanReadWithoutBlocking(int aFd) = 0;
-  virtual void OnFileCanWriteWithoutBlocking(int Afd) {};
+  virtual void OnFileCanWriteWithoutBlocking(int aFd) {};
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
 
   /**
    * Initialize this object.  This should be called right after the object is
@@ -257,7 +264,7 @@ public:
   }
 };
 
-NS_IMPL_THREADSAFE_ISUPPORTS1(FdWatcher, nsIObserver);
+NS_IMPL_ISUPPORTS1(FdWatcher, nsIObserver);
 
 class SignalPipeWatcher : public FdWatcher
 {
@@ -327,8 +334,7 @@ public:
     //  2) open a new fd with the same number as sDumpAboutMemoryPipeWriteFd
     //     had.
     //  3) receive a signal, then write to the fd.
-    int pipeWriteFd = sDumpAboutMemoryPipeWriteFd;
-    PR_ATOMIC_SET(&sDumpAboutMemoryPipeWriteFd, -1);
+    int pipeWriteFd = sDumpAboutMemoryPipeWriteFd.exchange(-1);
     close(pipeWriteFd);
 
     FdWatcher::StopWatching();
@@ -361,6 +367,7 @@ public:
       nsRefPtr<GCAndCCLogDumpRunnable> runnable =
         new GCAndCCLogDumpRunnable(
             /* identifier = */ EmptyString(),
+            /* allTraces = */ true,
             /* dumpChildProcesses = */ true);
       NS_DispatchToMainThread(runnable);
     }
@@ -504,7 +511,8 @@ public:
 
     bool doMemoryReport = inputStr == NS_LITERAL_CSTRING("memory report");
     bool doMMUMemoryReport = inputStr == NS_LITERAL_CSTRING("minimize memory report");
-    bool doGCCCDump = inputStr == NS_LITERAL_CSTRING("gc log");
+    bool doAllTracesGCCCDump = inputStr == NS_LITERAL_CSTRING("gc log");
+    bool doSmallGCCCDump = inputStr == NS_LITERAL_CSTRING("abbreviated gc log");
 
     if (doMemoryReport || doMMUMemoryReport) {
       LOG("FifoWatcher dispatching memory report runnable.");
@@ -513,11 +521,12 @@ public:
                                             doMMUMemoryReport,
                                             /* dumpChildProcesses = */ true);
       NS_DispatchToMainThread(runnable);
-    } else if (doGCCCDump) {
+    } else if (doAllTracesGCCCDump || doSmallGCCCDump) {
       LOG("FifoWatcher dispatching GC/CC log runnable.");
       nsRefPtr<GCAndCCLogDumpRunnable> runnable =
         new GCAndCCLogDumpRunnable(
             /* identifier = */ EmptyString(),
+            doAllTracesGCCCDump,
             /* dumpChildProcesses = */ true);
       NS_DispatchToMainThread(runnable);
     } else {
@@ -565,6 +574,7 @@ EnsureNonEmptyIdentifier(nsAString& aIdentifier)
 NS_IMETHODIMP
 nsMemoryInfoDumper::DumpGCAndCCLogsToFile(
   const nsAString& aIdentifier,
+  bool aDumpAllTraces,
   bool aDumpChildProcesses)
 {
   nsString identifier(aIdentifier);
@@ -575,13 +585,19 @@ nsMemoryInfoDumper::DumpGCAndCCLogsToFile(
     ContentParent::GetAll(children);
     for (uint32_t i = 0; i < children.Length(); i++) {
       unused << children[i]->SendDumpGCAndCCLogsToFile(
-          identifier, aDumpChildProcesses);
+        identifier, aDumpAllTraces, aDumpChildProcesses);
     }
   }
 
   nsCOMPtr<nsICycleCollectorListener> logger =
     do_CreateInstance("@mozilla.org/cycle-collector-logger;1");
   logger->SetFilenameIdentifier(identifier);
+
+  if (aDumpAllTraces) {
+    nsCOMPtr<nsICycleCollectorListener> allTracesLogger;
+    logger->AllTraces(getter_AddRefs(allTracesLogger));
+    logger = allTracesLogger;
+  }
 
   nsJSContext::CycleCollectNow(logger);
   return NS_OK;
@@ -659,32 +675,35 @@ DumpReport(nsIGZFileWriter *aWriter, bool aIsFirst,
   return NS_OK;
 }
 
-class DumpMultiReporterCallback MOZ_FINAL : public nsIMemoryMultiReporterCallback
+class DumpReporterCallback MOZ_FINAL : public nsIMemoryReporterCallback
 {
-  public:
-    NS_DECL_ISUPPORTS
+public:
+  NS_DECL_ISUPPORTS
 
-      NS_IMETHOD Callback(const nsACString &aProcess, const nsACString &aPath,
-          int32_t aKind, int32_t aUnits, int64_t aAmount,
-          const nsACString &aDescription,
-          nsISupports *aData)
-      {
-        nsCOMPtr<nsIGZFileWriter> writer = do_QueryInterface(aData);
-        NS_ENSURE_TRUE(writer, NS_ERROR_FAILURE);
+  DumpReporterCallback(bool* aIsFirstPtr) : mIsFirstPtr(aIsFirstPtr) {}
 
-        // The |isFirst = false| assumes that at least one single reporter is
-        // present and so will have been processed in
-        // DumpProcessMemoryReportsToGZFileWriter() below.
-        return DumpReport(writer, /* isFirst = */ false, aProcess, aPath,
-            aKind, aUnits, aAmount, aDescription);
-        return NS_OK;
-      }
+  NS_IMETHOD Callback(const nsACString &aProcess, const nsACString &aPath,
+      int32_t aKind, int32_t aUnits, int64_t aAmount,
+      const nsACString &aDescription,
+      nsISupports *aData)
+  {
+    nsCOMPtr<nsIGZFileWriter> writer = do_QueryInterface(aData);
+    NS_ENSURE_TRUE(writer, NS_ERROR_FAILURE);
+
+    // The |isFirst = false| assumes that at least one single reporter is
+    // present and so will have been processed in
+    // DumpProcessMemoryReportsToGZFileWriter() below.
+    bool isFirst = *mIsFirstPtr;
+    *mIsFirstPtr = false;
+    return DumpReport(writer, isFirst, aProcess, aPath, aKind, aUnits, aAmount,
+                      aDescription);
+  }
+
+private:
+  bool* mIsFirstPtr;
 };
 
-NS_IMPL_ISUPPORTS1(
-    DumpMultiReporterCallback
-    , nsIMemoryMultiReporterCallback
-    )
+NS_IMPL_ISUPPORTS1(DumpReporterCallback, nsIMemoryReporterCallback)
 
 } // namespace mozilla
 
@@ -782,8 +801,6 @@ DMDWrite(void* aState, const char* aFmt, va_list ap)
 static nsresult
 DumpProcessMemoryReportsToGZFileWriter(nsIGZFileWriter *aWriter)
 {
-  nsresult rv;
-
   // Increment this number if the format changes.
   //
   // This is the first write to the file, and it causes |aWriter| to allocate
@@ -801,53 +818,15 @@ DumpProcessMemoryReportsToGZFileWriter(nsIGZFileWriter *aWriter)
   DUMP(aWriter, ",\n");
   DUMP(aWriter, "  \"reports\": ");
 
-  // Process single reporters.
+  // Process reporters.
   bool isFirst = true;
   bool more;
   nsCOMPtr<nsISimpleEnumerator> e;
   mgr->EnumerateReporters(getter_AddRefs(e));
+  nsRefPtr<DumpReporterCallback> cb = new DumpReporterCallback(&isFirst);
   while (NS_SUCCEEDED(e->HasMoreElements(&more)) && more) {
     nsCOMPtr<nsIMemoryReporter> r;
     e->GetNext(getter_AddRefs(r));
-
-    nsCString process;
-    rv = r->GetProcess(process);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCString path;
-    rv = r->GetPath(path);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    int32_t kind;
-    rv = r->GetKind(&kind);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    int32_t units;
-    rv = r->GetUnits(&units);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    int64_t amount;
-    rv = r->GetAmount(&amount);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCString description;
-    rv = r->GetDescription(description);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    rv = DumpReport(aWriter, isFirst, process, path, kind, units, amount,
-                    description);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    isFirst = false;
-  }
-
-  // Process multi-reporters.
-  nsCOMPtr<nsISimpleEnumerator> e2;
-  mgr->EnumerateMultiReporters(getter_AddRefs(e2));
-  nsRefPtr<DumpMultiReporterCallback> cb = new DumpMultiReporterCallback();
-  while (NS_SUCCEEDED(e2->HasMoreElements(&more)) && more) {
-    nsCOMPtr<nsIMemoryMultiReporter> r;
-    e2->GetNext(getter_AddRefs(r));
     r->CollectReports(cb, aWriter);
   }
 

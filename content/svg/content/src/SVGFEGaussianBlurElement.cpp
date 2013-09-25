@@ -43,13 +43,13 @@ SVGFEGaussianBlurElement::In1()
   return mStringAttributes[IN1].ToDOMAnimatedString(this);
 }
 
-already_AddRefed<nsIDOMSVGAnimatedNumber>
+already_AddRefed<SVGAnimatedNumber>
 SVGFEGaussianBlurElement::StdDeviationX()
 {
   return mNumberPairAttributes[STD_DEV].ToDOMAnimatedNumber(nsSVGNumberPair::eFirst, this);
 }
 
-already_AddRefed<nsIDOMSVGAnimatedNumber>
+already_AddRefed<SVGAnimatedNumber>
 SVGFEGaussianBlurElement::StdDeviationY()
 {
   return mNumberPairAttributes[STD_DEV].ToDOMAnimatedNumber(nsSVGNumberPair::eSecond, this);
@@ -236,7 +236,8 @@ SVGFEGaussianBlurElement::GaussianBlur(const Image* aSource,
   NS_ASSERTION(nsIntRect(0, 0, aTarget->mImage->Width(), aTarget->mImage->Height()).Contains(aDataRect),
                "aDataRect out of bounds");
 
-  nsAutoArrayPtr<uint8_t> tmp(new uint8_t[aTarget->mImage->GetDataSize()]);
+  const fallible_t fallible = fallible_t();
+  nsAutoArrayPtr<uint8_t> tmp(new (fallible) uint8_t[aTarget->mImage->GetDataSize()]);
   if (!tmp)
     return;
   memset(tmp, 0, aTarget->mImage->GetDataSize());

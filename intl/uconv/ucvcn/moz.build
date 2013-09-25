@@ -21,3 +21,10 @@ CPP_SOURCES += [
     'nsUnicodeToISO2022CN.cpp',
 ]
 
+LIBRARY_NAME = 'ucvcn_s'
+
+LIBXUL_LIBRARY = True
+
+LOCAL_INCLUDES += [
+    '../util',
+]

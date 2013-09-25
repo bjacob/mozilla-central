@@ -12,7 +12,6 @@
 #include "nsIContent.h"
 #include "nsIMEStateManager.h"
 #include "nsIPresShell.h"
-#include "nsIWidget.h"
 #include "nsPresContext.h"
 
 namespace mozilla {
@@ -140,8 +139,7 @@ TextComposition::CompositionEventDispatcher::Run()
       break;
     }
     default:
-      MOZ_NOT_REACHED("Unsupported event");
-      break;
+      MOZ_CRASH("Unsupported event");
   }
   return NS_OK;
 }

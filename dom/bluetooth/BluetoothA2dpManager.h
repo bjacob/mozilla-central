@@ -12,51 +12,89 @@
 
 BEGIN_BLUETOOTH_NAMESPACE
 
-enum SinkState {
-  SINK_DISCONNECTED = 1,
-  SINK_CONNECTING,
-  SINK_CONNECTED,
-  SINK_PLAYING,
-  SINK_DISCONNECTING
-};
-
-class BluetoothA2dpManagerObserver;
-class BluetoothValue;
-class BluetoothSocket;
-
 class BluetoothA2dpManager : public BluetoothProfileManagerBase
 {
 public:
   NS_DECL_ISUPPORTS
+  NS_DECL_NSIOBSERVER
+
+  enum SinkState {
+    SINK_DISCONNECTED = 1,
+    SINK_CONNECTING,
+    SINK_CONNECTED,
+    SINK_PLAYING,
+    SINK_DISCONNECTING
+  };
 
   static BluetoothA2dpManager* Get();
   ~BluetoothA2dpManager();
+  void ResetA2dp();
+  void ResetAvrcp();
 
-  bool Connect(const nsAString& aDeviceAddress);
-  void Disconnect();
-  void HandleSinkPropertyChanged(const BluetoothSignal& aSignal);
-  nsresult HandleShutdown();
-
+  // The following functions are inherited from BluetoothProfileManagerBase
   virtual void OnGetServiceChannel(const nsAString& aDeviceAddress,
                                    const nsAString& aServiceUuid,
                                    int aChannel) MOZ_OVERRIDE;
   virtual void OnUpdateSdpRecords(const nsAString& aDeviceAddress) MOZ_OVERRIDE;
   virtual void GetAddress(nsAString& aDeviceAddress) MOZ_OVERRIDE;
+  virtual bool IsConnected() MOZ_OVERRIDE;
+  virtual void Connect(const nsAString& aDeviceAddress,
+                       BluetoothProfileController* aController) MOZ_OVERRIDE;
+  virtual void Disconnect(BluetoothProfileController* aController) MOZ_OVERRIDE;
+  virtual void OnConnect(const nsAString& aErrorStr) MOZ_OVERRIDE;
+  virtual void OnDisconnect(const nsAString& aErrorStr) MOZ_OVERRIDE;
+
+  virtual void GetName(nsACString& aName)
+  {
+    aName.AssignLiteral("A2DP");
+  }
+
+  // A2DP-specific functions
+  void HandleSinkPropertyChanged(const BluetoothSignal& aSignal);
+
+  // AVRCP-specific functions
+  void SetAvrcpConnected(bool aConnected);
+  bool IsAvrcpConnected();
+  void UpdateMetaData(const nsAString& aTitle,
+                      const nsAString& aArtist,
+                      const nsAString& aAlbum,
+                      uint32_t aMediaNumber,
+                      uint32_t aTotalMediaCount,
+                      uint32_t aDuration);
+  void UpdatePlayStatus(uint32_t aDuration,
+                        uint32_t aPosition,
+                        ControlPlayStatus aPlayStatus);
+  void GetAlbum(nsAString& aAlbum);
+  uint32_t GetDuration();
+  ControlPlayStatus GetPlayStatus();
+  uint32_t GetPosition();
+  uint32_t GetMediaNumber();
+  void GetTitle(nsAString& aTitle);
 
 private:
   BluetoothA2dpManager();
   bool Init();
-  void Cleanup();
 
-  void HandleSinkStateChanged(SinkState aState);
+  void HandleShutdown();
+  void NotifyConnectionStatusChanged();
 
-  void NotifyStatusChanged();
-  void NotifyAudioManager();
-
-  bool mConnected;
-  bool mPlaying;
   nsString mDeviceAddress;
+  BluetoothProfileController* mController;
+
+  // A2DP data member
+  bool mA2dpConnected;
   SinkState mSinkState;
+
+  // AVRCP data member
+  bool mAvrcpConnected;
+  nsString mAlbum;
+  nsString mArtist;
+  nsString mTitle;
+  uint32_t mDuration;
+  uint32_t mMediaNumber;
+  uint32_t mTotalMediaCount;
+  uint32_t mPosition;
+  ControlPlayStatus mPlayStatus;
 };
 
 END_BLUETOOTH_NAMESPACE

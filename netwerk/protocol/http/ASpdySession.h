@@ -8,7 +8,6 @@
 #define mozilla_net_ASpdySession_h
 
 #include "nsAHttpTransaction.h"
-#include "nsAHttpConnection.h"
 #include "prinrval.h"
 #include "nsString.h"
 
@@ -66,11 +65,6 @@ public:
   // lookup a version enum based on an npn string. returns NS_OK if
   // string was known.
   nsresult GetNPNVersionIndex(const nsACString &npnString, uint8_t *result);
-
-  enum {
-    SPDY_VERSION_2 = 2,
-    SPDY_VERSION_3 = 3
-  };
 
   uint8_t   Version[2];
   nsCString VersionString[2];

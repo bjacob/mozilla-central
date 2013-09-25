@@ -377,7 +377,7 @@ function openModalWindow(domWin, uri, args) {
         // a domWin was passed, so we can apply the check for it being hidden.
         let winUtils = domWin.QueryInterface(Ci.nsIInterfaceRequestor)
                              .getInterface(Ci.nsIDOMWindowUtils);
-        if (!winUtils.isParentWindowMainWidgetVisible) {
+        if (winUtils && !winUtils.isParentWindowMainWidgetVisible) {
             throw Components.Exception("Cannot call openModalWindow on a hidden window",
                                        Cr.NS_ERROR_NOT_AVAILABLE);
         }
@@ -399,7 +399,7 @@ function openTabPrompt(domWin, tabPrompt, args) {
 
     let winUtils = domWin.QueryInterface(Ci.nsIInterfaceRequestor)
                          .getInterface(Ci.nsIDOMWindowUtils);
-    let callerWin = winUtils.enterModalStateWithWindow();
+    winUtils.enterModalState();
 
     // We provide a callback so the prompt can close itself. We don't want to
     // wait for this event loop to return... Otherwise the presence of other
@@ -413,7 +413,7 @@ function openTabPrompt(domWin, tabPrompt, args) {
         if (newPrompt)
             tabPrompt.removePrompt(newPrompt);
 
-        winUtils.leaveModalStateWithWindow(callerWin);
+        winUtils.leaveModalState();
 
         PromptUtils.fireDialogEvent(domWin, "DOMModalDialogClosed");
     }

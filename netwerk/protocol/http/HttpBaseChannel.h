@@ -33,6 +33,9 @@
 #include "nsThreadUtils.h"
 #include "PrivateBrowsingChannel.h"
 #include "mozilla/net/DNS.h"
+#include "nsISecurityConsoleMessage.h"
+
+extern PRLogModuleInfo *gHttpLog;
 
 namespace mozilla {
 namespace net {
@@ -149,6 +152,8 @@ public:
   NS_IMETHOD SetLoadAsBlocking(bool aLoadAsBlocking);
   NS_IMETHOD GetLoadUnblocked(bool *aLoadUnblocked);
   NS_IMETHOD SetLoadUnblocked(bool aLoadUnblocked);
+  NS_IMETHOD AddSecurityMessage(const nsAString &aMessageTag, const nsAString &aMessageCategory);
+  NS_IMETHOD TakeAllSecurityMessages(nsCOMArray<nsISecurityConsoleMessage> &aMessages);
 
   inline void CleanRedirectCacheChainIfNecessary()
   {
@@ -197,6 +202,7 @@ public:
 public: /* Necko internal use only... */
 
 protected:
+    nsCOMArray<nsISecurityConsoleMessage> mSecurityConsoleMessages;
 
   // Handle notifying listener, removing from loadgroup if request failed.
   void     DoNotifyListener();
@@ -301,6 +307,8 @@ protected:
 
   uint32_t                          mContentDispositionHint;
   nsAutoPtr<nsString>               mContentDispositionFilename;
+
+  nsRefPtr<nsHttpHandler>           mHttpHandler;  // keep gHttpHandler alive
 };
 
 // Share some code while working around C++'s absurd inability to handle casting
@@ -339,7 +347,8 @@ protected:
 template <class T>
 nsresult HttpAsyncAborter<T>::AsyncAbort(nsresult status)
 {
-  LOG(("HttpAsyncAborter::AsyncAbort [this=%p status=%x]\n", mThis, status));
+  PR_LOG(gHttpLog, 4,
+         ("HttpAsyncAborter::AsyncAbort [this=%p status=%x]\n", mThis, status));
 
   mThis->mStatus = status;
   mThis->mIsPending = false;
@@ -356,8 +365,8 @@ inline void HttpAsyncAborter<T>::HandleAsyncAbort()
   NS_PRECONDITION(!mCallOnResume, "How did that happen?");
 
   if (mThis->mSuspendCount) {
-    LOG(("Waiting until resume to do async notification [this=%p]\n",
-         mThis));
+    PR_LOG(gHttpLog, 4,
+           ("Waiting until resume to do async notification [this=%p]\n", mThis));
     mCallOnResume = &T::HandleAsyncAbort;
     return;
   }

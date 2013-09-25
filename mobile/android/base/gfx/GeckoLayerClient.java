@@ -380,6 +380,9 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
                 if (!oldMetrics.fuzzyEquals(newMetrics)) {
                     abortPanZoomAnimation();
                 }
+                mPanZoomController.updateScrollOffset(
+                		messageMetrics.viewportRectLeft / messageMetrics.zoomFactor,
+                		messageMetrics.viewportRectTop / messageMetrics.zoomFactor);
                 break;
             case PAGE_SIZE:
                 // adjust the page dimensions to account for differences in zoom
@@ -560,10 +563,12 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
             Tab tab = Tabs.getInstance().getSelectedTab();
 
             RectF cssPageRect = new RectF(cssPageLeft, cssPageTop, cssPageRight, cssPageBottom);
+            RectF pageRect = RectUtils.scaleAndRound(cssPageRect, zoom);
+
             final ImmutableViewportMetrics newMetrics = currentMetrics
                 .setViewportOrigin(offsetX, offsetY)
                 .setZoomFactor(zoom)
-                .setPageRect(RectUtils.scale(cssPageRect, zoom), cssPageRect)
+                .setPageRect(pageRect, cssPageRect)
                 .setIsRTL(tab.getIsRTL());
             // Since we have switched to displaying a different document, we need to update any
             // viewport-related state we have lying around. This includes mGeckoViewport and
@@ -773,6 +778,12 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
 
     /** Implementation of PanZoomTarget */
     @Override
+    public RectF getMaxMargins() {
+        return mMarginsAnimator.getMaxMargins();
+    }
+
+    /** Implementation of PanZoomTarget */
+    @Override
     public void setAnimationTarget(ImmutableViewportMetrics metrics) {
         if (mGeckoIsReady) {
             // We know what the final viewport of the animation is going to be, so
@@ -852,6 +863,21 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
         viewportMetricsChanged(true);
     }
 
+    /** Implementation of PanZoomTarget
+     * Notification that a subdocument has been scrolled by a certain amount.
+     * This is used here to make sure that the margins are still accessible
+     * during subdocument scrolling.
+     *
+     * You must hold the monitor while calling this.
+     */
+    @Override
+    public void onSubdocumentScrollBy(float dx, float dy) {
+        ImmutableViewportMetrics newMarginsMetrics =
+            mMarginsAnimator.scrollBy(mViewportMetrics, dx, dy);
+        mViewportMetrics = mViewportMetrics.setMarginsFrom(newMarginsMetrics);
+        viewportMetricsChanged(true);
+    }
+
     /** Implementation of PanZoomTarget */
     @Override
     public void panZoomStopped() {
@@ -892,6 +918,19 @@ public class GeckoLayerClient implements LayerView.Listener, PanZoomTarget
     public boolean post(Runnable action) {
         return mView.post(action);
     }
+
+    /** Implementation of PanZoomTarget */
+    @Override
+    public void postRenderTask(RenderTask task) {
+        mView.postRenderTask(task);
+    }
+
+    /** Implementation of PanZoomTarget */
+    @Override
+    public void removeRenderTask(RenderTask task) {
+        mView.removeRenderTask(task);
+    }
+
 
     /** Implementation of PanZoomTarget */
     @Override

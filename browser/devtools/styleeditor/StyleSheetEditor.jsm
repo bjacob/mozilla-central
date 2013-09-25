@@ -11,12 +11,12 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
-Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
+let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource:///modules/devtools/shared/event-emitter.js");
-Cu.import("resource:///modules/source-editor.jsm");
+Cu.import("resource:///modules/devtools/sourceeditor/source-editor.jsm");
 Cu.import("resource:///modules/devtools/StyleEditorUtil.jsm");
 
 
@@ -241,10 +241,10 @@ StyleSheetEditor.prototype = {
    *         Promise that will resolve with the editor.
    */
   getSourceEditor: function() {
-    let deferred = Promise.defer();
+    let deferred = promise.defer();
 
     if (this.sourceEditor) {
-      return Promise.resolve(this);
+      return promise.resolve(this);
     }
     this.on("source-editor-load", (event) => {
       deferred.resolve(this);
@@ -538,8 +538,10 @@ function setupBracketCompletion(sourceEditor)
     let utils = editorElement.ownerDocument.defaultView.
                   QueryInterface(Ci.nsIInterfaceRequestor).
                   getInterface(Ci.nsIDOMWindowUtils);
-    let handled = utils.sendKeyEvent("keydown", keyCode, 0, modifiers);
-    utils.sendKeyEvent("keypress", 0, charCode, modifiers, !handled);
+                  
+    if (utils.sendKeyEvent("keydown", keyCode, 0, modifiers)) {
+      utils.sendKeyEvent("keypress", 0, charCode, modifiers);
+    }
     utils.sendKeyEvent("keyup", keyCode, 0, modifiers);
     // and rewind caret
     sourceEditor.setCaretOffset(sourceEditor.getCaretOffset() - 1);

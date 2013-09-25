@@ -38,6 +38,13 @@ pref("general.warnOnAboutConfig", true);
 // maximum number of dated backups to keep at any time
 pref("browser.bookmarks.max_backups",       5);
 
+// Preference for switching the cache backend, can be changed freely at runtime
+// 0 - use the old (Darin's) cache [DEFAULT]
+// 1 - use the new cache back-end (cache v2)
+// 2 - do a random choise for A/B testing (browser chooses old or new back-end at startup
+//     and keeps it per session)
+pref("browser.cache.use_new_backend",       0);
+
 pref("browser.cache.disk.enable",           true);
 // Is this the first-time smartsizing has been introduced?
 pref("browser.cache.disk.smart_size.first_run", true);
@@ -60,7 +67,12 @@ pref("browser.cache.disk_cache_ssl",        true);
 // 0 = once-per-session, 1 = each-time, 2 = never, 3 = when-appropriate/automatically
 pref("browser.cache.check_doc_frequency",   3);
 
+// Limit for how much memory the cache can consume, for any data, in Kb
+pref("browser.cache.memory_limit", 51200); // 50 MB
+
 pref("browser.cache.offline.enable",           true);
+// enable offline apps by default, disable prompt
+pref("offline-apps.allow_by_default",          true);
 
 // offline cache capacity in kilobytes
 pref("browser.cache.offline.capacity",         512000);
@@ -76,10 +88,15 @@ pref("offline-apps.quota.warn",        51200);
 // cache compression turned off for now - see bug #715198
 pref("browser.cache.compression_level", 0);
 
+// Whether or not testing features are enabled.
+pref("dom.quotaManager.testing", false);
+
 // Whether or not indexedDB is enabled.
 pref("dom.indexedDB.enabled", true);
 // Space to allow indexedDB databases before prompting (in MB).
 pref("dom.indexedDB.warningQuota", 50);
+// Whether or not indexedDB experimental features are enabled.
+pref("dom.indexedDB.experimental", false);
 
 // Whether or not Web Workers are enabled.
 pref("dom.workers.enabled", true);
@@ -88,6 +105,15 @@ pref("dom.workers.maxPerDomain", 20);
 
 // Whether nonzero values can be returned from performance.timing.*
 pref("dom.enable_performance", true);
+
+// Whether the Gamepad API is enabled
+#ifdef RELEASE_BUILD
+pref("dom.gamepad.enabled", false);
+pref("dom.gamepad.non_standard_events.enabled", false);
+#else
+pref("dom.gamepad.enabled", true);
+pref("dom.gamepad.non_standard_events.enabled", true);
+#endif
 
 // Fastback caching - if this pref is negative, then we calculate the number
 // of content viewers to cache based on the amount of available memory.
@@ -135,6 +161,14 @@ pref("browser.display.focus_ring_style", 1);
 pref("browser.helperApps.alwaysAsk.force",  false);
 pref("browser.helperApps.neverAsk.saveToDisk", "");
 pref("browser.helperApps.neverAsk.openFile", "");
+pref("browser.helperApps.deleteTempFileOnExit", false);
+
+#ifdef XP_WIN
+// By default, security zone information is stored in the Alternate Data Stream
+// of downloaded executable files on Windows.  This preference allows disabling
+// this feature, and thus the associated system-level execution prompts.
+pref("browser.download.saveZoneInformation", true);
+#endif
 
 // xxxbsmedberg: where should prefs for the toolkit go?
 pref("browser.chrome.toolbar_tips",         true);
@@ -158,6 +192,10 @@ pref("media.wakelock_timeout", 2000);
 #ifdef MOZ_WMF
 pref("media.windows-media-foundation.enabled", true);
 pref("media.windows-media-foundation.use-dxva", true);
+pref("media.windows-media-foundation.play-stand-alone", true);
+#endif
+#ifdef MOZ_DIRECTSHOW
+pref("media.directshow.enabled", true);
 #endif
 #ifdef MOZ_RAW
 pref("media.raw.enabled", true);
@@ -179,6 +217,9 @@ pref("media.dash.enabled", false);
 #endif
 #ifdef MOZ_GSTREAMER
 pref("media.gstreamer.enabled", true);
+#endif
+#ifdef MOZ_APPLEMEDIA
+pref("media.apple.mp3.enabled", true);
 #endif
 #ifdef MOZ_WEBRTC
 pref("media.navigator.enabled", true);
@@ -208,12 +249,15 @@ pref("media.navigator.enabled", true);
 // TextTrack support
 pref("media.webvtt.enabled", false);
 
+// Whether to enable MediaSource support
+pref("media.mediasource.enabled", false);
+
 #ifdef MOZ_WEBSPEECH
 pref("media.webspeech.recognition.enable", false);
 #endif
 
 // Whether to enable Web Audio support
-pref("media.webaudio.enabled", false);
+pref("media.webaudio.enabled", true);
 
 // Whether to autostart a media element with an |autoplay| attribute
 pref("media.autoplay.enabled", true);
@@ -221,6 +265,9 @@ pref("media.autoplay.enabled", true);
 // The default number of decoded video frames that are enqueued in
 // MediaDecoderReader's mVideoQueue.
 pref("media.video-queue.default-size", 10);
+
+// Whether to disable the video stats to prevent fingerprinting
+pref("media.video_stats.enabled", true);
 
 // Whether to enable the audio writing APIs on the audio element
 pref("media.audio_data.enabled", true);
@@ -243,6 +290,11 @@ pref("gfx.color_management.enablev4", false);
 pref("gfx.downloadable_fonts.enabled", true);
 pref("gfx.downloadable_fonts.fallback_delay", 3000);
 
+#ifdef ANDROID
+pref("gfx.bundled_fonts.enabled", true);
+pref("gfx.bundled_fonts.force-enabled", false);
+#endif
+
 pref("gfx.filter.nearest.force-enabled", false);
 
 // prefs controlling the font (name/cmap) loader that runs shortly after startup
@@ -258,6 +310,12 @@ pref("gfx.font_loader.interval", 50);          // run every 50 ms
 
 // whether to always search all font cmaps during system font fallback
 pref("gfx.font_rendering.fallback.always_use_cmaps", false);
+
+// cache shaped word results
+pref("gfx.font_rendering.wordcache.charlimit", 32);
+
+// cache shaped word results
+pref("gfx.font_rendering.wordcache.maxentries", 10000);
 
 pref("gfx.font_rendering.graphite.enabled", true);
 
@@ -287,18 +345,20 @@ pref("gfx.font_rendering.directwrite.enabled", false);
 pref("gfx.font_rendering.directwrite.use_gdi_table_loading", true);
 #endif
 
-pref("gfx.font_rendering.opentype_svg.enabled", false);
+pref("gfx.font_rendering.opentype_svg.enabled", true);
 
 #ifdef XP_WIN
 // comma separated list of backends to use in order of preference
 // e.g., pref("gfx.canvas.azure.backends", "direct2d,skia,cairo");
 pref("gfx.canvas.azure.backends", "direct2d,skia,cairo");
-pref("gfx.content.azure.backends", "direct2d");
+pref("gfx.content.azure.backends", "direct2d,cairo");
 pref("gfx.content.azure.enabled", true);
 #else
 pref("gfx.content.azure.enabled", false);
 #ifdef XP_MACOSX
+pref("gfx.content.azure.backends", "cg");
 pref("gfx.canvas.azure.backends", "cg");
+pref("gfx.content.azure.enabled", true);
 // Accelerated cg canvas where available (10.7+)
 pref("gfx.canvas.azure.accelerated", false);
 #else
@@ -309,6 +369,8 @@ pref("gfx.content.azure.backends", "cairo");
 
 #ifdef ANDROID
 pref("gfx.textures.poweroftwo.force-enabled", false);
+pref("gfx.content.azure.backends", "cairo");
+pref("gfx.content.azure.enabled", true);
 #endif
 
 pref("gfx.work-around-driver-bugs", true);
@@ -407,7 +469,7 @@ pref("toolkit.telemetry.enabledPreRelease", true);
 #else
 pref("toolkit.telemetry.enabled", false);
 #endif
-pref("toolkit.telemetry.server", "https://data.mozilla.com");
+pref("toolkit.telemetry.server", "https://incoming.telemetry.mozilla.org");
 // Telemetry server owner. Please change if you set toolkit.telemetry.server to a different server
 pref("toolkit.telemetry.server_owner", "Mozilla");
 // Information page about telemetry (temporary ; will be about:telemetry in the end)
@@ -430,6 +492,15 @@ pref("devtools.debugger.remote-enabled", false);
 pref("devtools.debugger.remote-port", 6000);
 // Force debugger server binding on the loopback interface
 pref("devtools.debugger.force-local", true);
+// Display a prompt when a new connection starts to accept/reject it
+pref("devtools.debugger.prompt-connection", true);
+// Temporary setting to enable webapps actors
+pref("devtools.debugger.enable-content-actors", true);
+// Block tools from seeing / interacting with certified apps
+pref("devtools.debugger.forbid-certified-apps", true);
+
+// DevTools default color unit
+pref("devtools.defaultColorUnit", "hex");
 
 // view source
 pref("view_source.syntax_highlight", true);
@@ -443,18 +514,21 @@ pref("view_source.editor.args", "");
 // When true this will word-wrap plain text documents.
 pref("plain_text.wrap_long_lines", false);
 
-// dispatch left clicks only to content in browser (still allows clicks to chrome/xul)
-pref("nglayout.events.dispatchLeftClickOnly", true);
-
 // whether or not to draw images while dragging
 pref("nglayout.enable_drag_images", true);
 
 // enable/disable paint flashing --- useful for debugging
+// the first one applies to everything, the second one only to chrome
 pref("nglayout.debug.paint_flashing", false);
+pref("nglayout.debug.paint_flashing_chrome", false);
 
 // enable/disable widget update area flashing --- only supported with 
 // BasicLayers (other layer managers always update the entire widget area)
 pref("nglayout.debug.widget_update_flashing", false);
+
+pref("layout.imagevisibility.enabled", true);
+pref("layout.imagevisibility.numscrollportwidths", 0);
+pref("layout.imagevisibility.numscrollportheights", 1);
 
 // scrollbar snapping region
 // 0 - off
@@ -745,20 +819,18 @@ pref("dom.min_timeout_value", 4);
 // And for background windows
 pref("dom.min_background_timeout_value", 1000);
 
-// Stop defining the Components object in content.
-pref("dom.omit_components_in_content", true);
-
 // Don't use new input types
 pref("dom.experimental_forms", false);
-
-// Don't enable <input type=range> yet:
-pref("dom.experimental_forms_range", true);
+pref("dom.forms.number", false);
 
 // Don't enable <input type=color> yet:
 pref("dom.forms.color", false);
 
 // Enables system messages and activities
 pref("dom.sysmsg.enabled", false);
+
+// Enable pre-installed applications.
+pref("dom.webapps.useCurrentProfile", false);
 
 // Parsing perf prefs. For now just mimic what the old code did.
 #ifndef XP_WIN
@@ -788,12 +860,13 @@ pref("javascript.options.strict.debug",     true);
 pref("javascript.options.baselinejit.content", true);
 pref("javascript.options.baselinejit.chrome",  true);
 pref("javascript.options.ion.content",      true);
+pref("javascript.options.ion.chrome",       false);
 pref("javascript.options.asmjs",            true);
+pref("javascript.options.parallel_parsing", true);
 pref("javascript.options.ion.parallel_compilation", true);
-pref("javascript.options.pccounts.content", false);
-pref("javascript.options.pccounts.chrome",  false);
 pref("javascript.options.jit_hardening", true);
-pref("javascript.options.typeinference", true);
+pref("javascript.options.typeinference.content", true);
+pref("javascript.options.typeinference.chrome", false);
 // This preference limits the memory usage of javascript.
 // If you want to change these values for your device,
 // please find Bug 417052 comment 17 and Bug 456721
@@ -801,7 +874,6 @@ pref("javascript.options.typeinference", true);
 pref("javascript.options.mem.high_water_mark", 128);
 pref("javascript.options.mem.max", -1);
 pref("javascript.options.mem.gc_per_compartment", true);
-pref("javascript.options.mem.disable_explicit_compartment_gc", true);
 pref("javascript.options.mem.gc_incremental", true);
 pref("javascript.options.mem.gc_incremental_slice_ms", 10);
 pref("javascript.options.mem.log", false);
@@ -817,8 +889,7 @@ pref("javascript.options.mem.gc_low_frequency_heap_growth", 150);
 pref("javascript.options.mem.gc_dynamic_heap_growth", true);
 pref("javascript.options.mem.gc_dynamic_mark_slice", true);
 pref("javascript.options.mem.gc_allocation_threshold_mb", 30);
-
-pref("javascript.options.mem.analysis_purge_mb", 100);
+pref("javascript.options.mem.gc_decommit_threshold_mb", 32);
 
 pref("javascript.options.showInConsole", false);
 
@@ -841,6 +912,12 @@ pref("security.fileuri.strict_origin_policy", true);
 // telemetry is also enabled as otherwise there is no way to report
 // the results
 pref("network.allow-experiments", true);
+
+// Transmit UDP busy-work to the LAN when anticipating low latency
+// network reads and on wifi to mitigate 802.11 Power Save Polling delays
+pref("network.tickle-wifi.enabled", false);
+pref("network.tickle-wifi.duration", 400);
+pref("network.tickle-wifi.delay", 16);
 
 // Turn off interprocess security checks. Needed to run xpcshell tests.
 pref("network.disable.ipc.security", false);
@@ -875,6 +952,9 @@ pref("network.protocol-handler.external.moz-icon", false);
 // This pref controls the default settings.  Per protocol settings can be used
 // to override this value.
 pref("network.protocol-handler.expose-all", true);
+
+// Warning for about:networking page
+pref("network.warnOnAboutNetworking", true);
 
 // Example: make IMAP an exposed protocol
 // pref("network.protocol-handler.expose.imap", true);
@@ -1344,7 +1424,11 @@ pref("network.proxy.socks_remote_dns",      false);
 pref("network.proxy.no_proxies_on",         "localhost, 127.0.0.1");
 pref("network.proxy.failover_timeout",      1800); // 30 minutes
 pref("network.online",                      true); //online/offline
+#ifdef RELEASE_BUILD
+pref("network.cookie.cookieBehavior",       0); // 0-Accept, 1-dontAcceptForeign, 2-dontUse, 3-limitForeign
+#else
 pref("network.cookie.cookieBehavior",       3); // 0-Accept, 1-dontAcceptForeign, 2-dontUse, 3-limitForeign
+#endif
 #ifdef ANDROID
 pref("network.cookie.cookieBehavior",       0); // Keep the old default of accepting all cookies
 #endif
@@ -1740,11 +1824,27 @@ pref("layout.css.masking.enabled", false);
 pref("layout.css.masking.enabled", true);
 #endif
 
+// Is support for mix-blend-mode enabled? 
+pref("layout.css.mix-blend-mode.enabled", false);
+
 // Is support for the the @supports rule enabled?
 pref("layout.css.supports-rule.enabled", true);
 
+// Is support for CSS Filters enabled?
+pref("layout.css.filters.enabled", false);
+
 // Is support for CSS Flexbox enabled?
 pref("layout.css.flexbox.enabled", true);
+
+// Is support for CSS sticky positioning enabled?
+#ifdef RELEASE_BUILD
+pref("layout.css.sticky.enabled", false);
+#else
+pref("layout.css.sticky.enabled", true);
+#endif
+
+// Is support for the CSS4 image-orientation property enabled?
+pref("layout.css.image-orientation.enabled", true);
 
 // Is support for CSS3 Fonts features enabled?
 // (includes font-variant-*, font-kerning, font-synthesis
@@ -1775,6 +1875,14 @@ pref("layout.css.scope-pseudo.enabled", true);
 // Is support for CSS vertical text enabled?
 pref("layout.css.vertical-text.enabled", false);
 
+// Is -moz-osx-font-smoothing enabled?
+// Only supported in OSX builds
+#ifdef XP_MACOSX
+pref("layout.css.osx-font-smoothing.enabled", true);
+#else
+pref("layout.css.osx-font-smoothing.enabled", false);
+#endif
+
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
 // 1 = end-side in document/content direction
@@ -1804,7 +1912,6 @@ pref("capability.policy.default.SOAPCall.invokeVerifySourceHeader", "allAccess")
 
 // if true, allow plug-ins to override internal imglib decoder mime types in full-page mode
 pref("plugin.override_internal_types", false);
-pref("plugin.expose_full_path", false); // if true navigator.plugins reveals full path
 
 // See bug 136985.  Gives embedders a pref to hook into to show
 // a popup blocker if they choose.
@@ -1820,17 +1927,18 @@ pref("gestures.enable_single_finger_input", true);
 pref("editor.resizing.preserve_ratio",       true);
 pref("editor.positioning.offset",            0);
 
+pref("dom.use_watchdog", true);
 pref("dom.max_chrome_script_run_time", 20);
 pref("dom.max_script_run_time", 10);
 
 // If true, ArchiveReader will be enabled
 pref("dom.archivereader.enabled", false);
 
-// If true, Future will be enabled
+// If true, Promise will be enabled
 #ifdef RELEASE_BUILD
-pref("dom.future.enabled", false);
+pref("dom.promise.enabled", false);
 #else
-pref("dom.future.enabled", true);
+pref("dom.promise.enabled", true);
 #endif
 
 // Hang monitor timeout after which we kill the browser, in seconds
@@ -1844,6 +1952,13 @@ pref("plugins.load_appdir_plugins", false);
 pref("plugins.click_to_play", false);
 // The default value for nsIPluginTag.enabledState (STATE_ENABLED = 2)
 pref("plugin.default.state", 2);
+
+// How long in minutes we will allow a plugin to work after the user has chosen
+// to allow it "now"
+pref("plugin.sessionPermissionNow.intervalInMinutes", 60);
+// How long in days we will allow a plugin to work after the user has chosen
+// to allow it persistently.
+pref("plugin.persistentPermissionAlways.intervalInDays", 90);
 
 #ifndef DEBUG
 // How long a plugin is allowed to process a synchronous IPC message
@@ -1901,8 +2016,16 @@ pref("svg.paint-order.enabled", false);
 pref("svg.paint-order.enabled", true);
 #endif
 
+// Is support for the new marker features from SVG 2 enabled?  Currently
+// this just includes <marker orient="auto-start-reverse">.
+#ifdef RELEASE_BUILD
+pref("svg.marker-improvements.enabled", false);
+#else
+pref("svg.marker-improvements.enabled", true);
+#endif
+
 // Is support for the new SVG text implementation enabled?
-pref("svg.text.css-frames.enabled", false);
+pref("svg.text.css-frames.enabled", true);
 
 pref("font.minimum-size.ar", 0);
 pref("font.minimum-size.x-armn", 0);
@@ -3216,74 +3339,68 @@ pref("font.alias-list", "sans,sans-serif,serif,monospace");
 // ar
 
 pref("font.name.serif.el", "Droid Serif");
-pref("font.name.sans-serif.el", "Roboto");
-pref("font.name.monospace.el", "Source Code Pro");
+pref("font.name.sans-serif.el", "Fira Sans OT");
+pref("font.name.monospace.el", "Fira Mono OT");
 
 pref("font.name.serif.he", "Charis SIL Compact");
-pref("font.name.sans-serif.he", "Feura Sans");
-pref("font.name.monospace.he", "Source Code Pro");
-pref("font.name-list.sans-serif.he", "Droid Sans Hebrew, Feura Sans");
+pref("font.name.sans-serif.he", "Fira Sans OT");
+pref("font.name.monospace.he", "Fira Mono OT");
+pref("font.name-list.sans-serif.he", "Droid Sans Hebrew, Fira Sans OT");
 
 pref("font.name.serif.ja", "Charis SIL Compact");
-pref("font.name.sans-serif.ja", "Feura Sans");
+pref("font.name.sans-serif.ja", "Fira Sans OT");
 pref("font.name.monospace.ja", "MotoyaLMaru");
-pref("font.name-list.sans-serif.ja", "Feura Sans, Roboto, MotoyaLMaru, MotoyaLCedar, Droid Sans Japanese");
-pref("font.name-list.monospace.ja", "MotoyaLMaru, MotoyaLCedar, Source Code Pro");
+pref("font.name-list.sans-serif.ja", "Fira Sans OT, MotoyaLMaru, MotoyaLCedar, Droid Sans Japanese");
+pref("font.name-list.monospace.ja", "MotoyaLMaru, MotoyaLCedar, Fira Mono OT");
 
 pref("font.name.serif.ko", "Charis SIL Compact");
-pref("font.name.sans-serif.ko", "Feura Sans");
-pref("font.name.monospace.ko", "Source Code Pro");
+pref("font.name.sans-serif.ko", "Fira Sans OT");
+pref("font.name.monospace.ko", "Fira Mono OT");
 
 pref("font.name.serif.th", "Charis SIL Compact");
-pref("font.name.sans-serif.th", "Feura Sans");
-pref("font.name.monospace.th", "Source Code Pro");
-pref("font.name-list.sans-serif.th", "Feura Sans, Droid Sans Thai");
+pref("font.name.sans-serif.th", "Fira Sans OT");
+pref("font.name.monospace.th", "Fira Mono OT");
+pref("font.name-list.sans-serif.th", "Fira Sans OT, Droid Sans Thai");
 
 pref("font.name.serif.tr", "Charis SIL Compact");
-pref("font.name.sans-serif.tr", "Feura Sans");
-pref("font.name.monospace.tr", "Source Code Pro");
-pref("font.name-list.sans-serif.tr", "Feura Sans, Roboto");
+pref("font.name.sans-serif.tr", "Fira Sans OT");
+pref("font.name.monospace.tr", "Fira Mono OT");
 
 pref("font.name.serif.x-baltic", "Charis SIL Compact");
-pref("font.name.sans-serif.x-baltic", "Feura Sans");
-pref("font.name.monospace.x-baltic", "Source Code Pro");
-pref("font.name-list.sans-serif.x-baltic", "Feura Sans, Roboto");
+pref("font.name.sans-serif.x-baltic", "Fira Sans OT");
+pref("font.name.monospace.x-baltic", "Fira Mono OT");
 
 pref("font.name.serif.x-central-euro", "Charis SIL Compact");
-pref("font.name.sans-serif.x-central-euro", "Feura Sans");
-pref("font.name.monospace.x-central-euro", "Source Code Pro");
-pref("font.name-list.sans-serif.x-central-euro", "Feura Sans, Roboto");
+pref("font.name.sans-serif.x-central-euro", "Fira Sans OT");
+pref("font.name.monospace.x-central-euro", "Fira Mono OT");
 
 pref("font.name.serif.x-cyrillic", "Charis SIL Compact");
-pref("font.name.sans-serif.x-cyrillic", "Roboto");
-pref("font.name.monospace.x-cyrillic", "Source Code Pro");
+pref("font.name.sans-serif.x-cyrillic", "Fira Sans OT");
+pref("font.name.monospace.x-cyrillic", "Fira Mono OT");
 
 pref("font.name.serif.x-unicode", "Charis SIL Compact");
-pref("font.name.sans-serif.x-unicode", "Feura Sans");
-pref("font.name.monospace.x-unicode", "Source Code Pro");
-pref("font.name-list.sans-serif.x-unicode", "Feura Sans, Roboto");
+pref("font.name.sans-serif.x-unicode", "Fira Sans OT");
+pref("font.name.monospace.x-unicode", "Fira Mono OT");
 
 pref("font.name.serif.x-user-def", "Charis SIL Compact");
-pref("font.name.sans-serif.x-user-def", "Feura Sans");
-pref("font.name.monospace.x-user-def", "Source Code Pro");
-pref("font.name-list.sans-serif.x-user-def", "Feura Sans, Roboto");
+pref("font.name.sans-serif.x-user-def", "Fira Sans OT");
+pref("font.name.monospace.x-user-def", "Fira Mono OT");
 
 pref("font.name.serif.x-western", "Charis SIL Compact");
-pref("font.name.sans-serif.x-western", "Feura Sans");
-pref("font.name.monospace.x-western", "Source Code Pro");
-pref("font.name-list.sans-serif.x-western", "Feura Sans, Roboto");
+pref("font.name.sans-serif.x-western", "Fira Sans OT");
+pref("font.name.monospace.x-western", "Fira Mono OT");
 
 pref("font.name.serif.zh-CN", "Charis SIL Compact");
-pref("font.name.sans-serif.zh-CN", "Feura Sans");
-pref("font.name.monospace.zh-CN", "Source Code Pro");
+pref("font.name.sans-serif.zh-CN", "Fira Sans OT");
+pref("font.name.monospace.zh-CN", "Fira Mono OT");
 
 pref("font.name.serif.zh-HK", "Charis SIL Compact");
-pref("font.name.sans-serif.zh-HK", "Feura Sans");
-pref("font.name.monospace.zh-HK", "Source Code Pro");
+pref("font.name.sans-serif.zh-HK", "Fira Sans OT");
+pref("font.name.monospace.zh-HK", "Fira Mono OT");
 
 pref("font.name.serif.zh-TW", "Charis SIL Compact");
-pref("font.name.sans-serif.zh-TW", "Feura Sans");
-pref("font.name.monospace.zh-TW", "Source Code Pro");
+pref("font.name.sans-serif.zh-TW", "Fira Sans OT");
+pref("font.name.monospace.zh-TW", "Fira Mono OT");
 
 #else
 
@@ -3304,73 +3421,82 @@ pref("font.name-list.sans-serif.he", "Droid Sans Hebrew, Open Sans, Droid Sans")
 pref("font.name.serif.ja", "Charis SIL Compact");
 pref("font.name.sans-serif.ja", "Open Sans");
 pref("font.name.monospace.ja", "MotoyaLMaru");
+pref("font.name-list.serif.ja", "Droid Serif");
 pref("font.name-list.sans-serif.ja", "Open Sans, Roboto, Droid Sans, MotoyaLMaru, MotoyaLCedar, Droid Sans Japanese");
 pref("font.name-list.monospace.ja", "MotoyaLMaru, MotoyaLCedar, Droid Sans Mono");
 
 pref("font.name.serif.ko", "Charis SIL Compact");
 pref("font.name.sans-serif.ko", "Open Sans");
 pref("font.name.monospace.ko", "Droid Sans Mono");
-pref("font.name-list.serif.ko", "HYSerif");
+pref("font.name-list.serif.ko", "Droid Serif, HYSerif");
 pref("font.name-list.sans-serif.ko", "SmartGothic, NanumGothic, DroidSansFallback, Droid Sans Fallback");
 
 pref("font.name.serif.th", "Charis SIL Compact");
 pref("font.name.sans-serif.th", "Open Sans");
 pref("font.name.monospace.th", "Droid Sans Mono");
+pref("font.name-list.serif.th", "Droid Serif");
 pref("font.name-list.sans-serif.th", "Droid Sans Thai, Open Sans, Droid Sans");
 
 pref("font.name.serif.tr", "Charis SIL Compact");
 pref("font.name.sans-serif.tr", "Open Sans");
 pref("font.name.monospace.tr", "Droid Sans Mono");
+pref("font.name-list.serif.tr", "Droid Serif");
 pref("font.name-list.sans-serif.tr", "Open Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.x-baltic", "Charis SIL Compact");
 pref("font.name.sans-serif.x-baltic", "Open Sans");
 pref("font.name.monospace.x-baltic", "Droid Sans Mono");
+pref("font.name-list.serif.x-baltic", "Droid Serif");
 pref("font.name-list.sans-serif.x-baltic", "Open Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.x-central-euro", "Charis SIL Compact");
 pref("font.name.sans-serif.x-central-euro", "Open Sans");
 pref("font.name.monospace.x-central-euro", "Droid Sans Mono");
+pref("font.name-list.serif.x-central-euro", "Droid Serif");
 pref("font.name-list.sans-serif.x-central-euro", "Open Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.x-cyrillic", "Charis SIL Compact");
 pref("font.name.sans-serif.x-cyrillic", "Open Sans");
 pref("font.name.monospace.x-cyrillic", "Droid Sans Mono");
+pref("font.name-list.serif.x-cyrillic", "Droid Serif");
 pref("font.name-list.sans-serif.x-cyrillic", "Open Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.x-unicode", "Charis SIL Compact");
 pref("font.name.sans-serif.x-unicode", "Open Sans");
 pref("font.name.monospace.x-unicode", "Droid Sans Mono");
+pref("font.name-list.serif.x-unicode", "Droid Serif");
 pref("font.name-list.sans-serif.x-unicode", "Open Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.x-user-def", "Charis SIL Compact");
 pref("font.name.sans-serif.x-user-def", "Open Sans");
 pref("font.name.monospace.x-user-def", "Droid Sans Mono");
+pref("font.name-list.serif.x-user-def", "Droid Serif");
 pref("font.name-list.sans-serif.x-user-def", "Open Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.x-western", "Charis SIL Compact");
 pref("font.name.sans-serif.x-western", "Open Sans");
 pref("font.name.monospace.x-western", "Droid Sans Mono");
+pref("font.name-list.serif.x-western", "Droid Serif");
 pref("font.name-list.sans-serif.x-western", "Open Sans, Roboto, Droid Sans");
 
 pref("font.name.serif.zh-CN", "Charis SIL Compact");
 pref("font.name.sans-serif.zh-CN", "Open Sans");
 pref("font.name.monospace.zh-CN", "Droid Sans Mono");
-pref("font.name-list.serif.zh-CN", "Droid Sans Fallback");
+pref("font.name-list.serif.zh-CN", "Droid Serif, Droid Sans Fallback");
 pref("font.name-list.sans-serif.zh-CN", "Roboto, Droid Sans, Droid Sans Fallback");
 pref("font.name-list.monospace.zh-CN", "Droid Sans Fallback");
 
 pref("font.name.serif.zh-HK", "Charis SIL Compact");
 pref("font.name.sans-serif.zh-HK", "Open Sans");
 pref("font.name.monospace.zh-HK", "Droid Sans Mono");
-pref("font.name-list.serif.zh-HK", "Droid Sans Fallback");
+pref("font.name-list.serif.zh-HK", "Droid Serif, Droid Sans Fallback");
 pref("font.name-list.sans-serif.zh-HK", "Roboto, Droid Sans, Droid Sans Fallback");
 pref("font.name-list.monospace.zh-HK", "Droid Sans Fallback");
 
 pref("font.name.serif.zh-TW", "Charis SIL Compact");
 pref("font.name.sans-serif.zh-TW", "Open Sans");
 pref("font.name.monospace.zh-TW", "Droid Sans Mono");
-pref("font.name-list.serif.zh-TW", "Droid Sans Fallback");
+pref("font.name-list.serif.zh-TW", "Droid Serif, Droid Sans Fallback");
 pref("font.name-list.sans-serif.zh-TW", "Roboto, Droid Sans, Droid Sans Fallback");
 pref("font.name-list.monospace.zh-TW", "Droid Sans Fallback");
 
@@ -3828,6 +3954,7 @@ pref("signon.SignonFileName3",              "signons3.txt"); // obsolete
 pref("signon.autofillForms",                true);
 pref("signon.autologin.proxy",              false);
 pref("signon.debug",                        false);
+pref("signon.useDOMFormHasPassword",        true);
 
 // Satchel (Form Manager) prefs
 pref("browser.formfill.debug",            false);
@@ -3877,14 +4004,6 @@ pref("browser.zoom.reflowZoom.reflowTimeout", 500);
  * a page load inhbits this debugging.
  */
 pref("browser.zoom.reflowZoom.reflowTextOnPageLoad", true);
-
-
-/**
- * The minimum font size to maintain when double-tap zooming into an element, in
- * twips. The browser will attempt to make the frame large enough to enlarge the
- * font size to this value.
- */
-pref("browser.zoom.reflowZoom.minFontSizeTwips", 120);
 
 // Image-related prefs
 // The maximum size, in bytes, of the decoded images we cache
@@ -3973,6 +4092,7 @@ pref("webgl.force-layers-readback", false);
 pref("webgl.lose-context-on-heap-minimize", false);
 pref("webgl.can-lose-context-in-foreground", true);
 pref("webgl.max-warnings-per-context", 32);
+pref("webgl.enable-draft-extensions", false);
 #ifdef MOZ_WIDGET_GONK
 pref("gfx.gralloc.fence-with-readpixels", false);
 #endif
@@ -4006,16 +4126,47 @@ pref("layers.acceleration.force-enabled", false);
 pref("layers.acceleration.draw-fps", false);
 
 pref("layers.draw-borders", false);
+pref("layers.draw-tile-borders", false);
+pref("layers.draw-bigimage-borders", false);
+pref("layers.frame-counter", false);
+// Max number of layers per container. See Overwrite in mobile prefs.
+pref("layers.max-active", -1);
 
+// Whether to use the deprecated texture architecture rather than the new one.
+#ifdef XP_MACOSX
+pref("layers.offmainthreadcomposition.enabled", true);
+pref("layers.use-deprecated-textures", false);
+#else
+#ifdef MOZ_WIDGET_GONK
+pref("layers.use-deprecated-textures", false);
+#else
 pref("layers.offmainthreadcomposition.enabled", false);
+pref("layers.use-deprecated-textures", true);
+#endif
+#endif
+
 // same effect as layers.offmainthreadcomposition.enabled, but specifically for
 // use with tests.
 pref("layers.offmainthreadcomposition.testing.enabled", false);
+
+// whether to allow use of the basic compositor
+pref("layers.offmainthreadcomposition.force-basic", false);
+
 // Whether to animate simple opacity and transforms on the compositor
 pref("layers.offmainthreadcomposition.async-animations", false);
+// Whether to prefer normal memory over shared memory. Ignored with cross-process compositing
+pref("layers.prefer-memory-over-shmem", true);
+
+pref("layers.bufferrotation.enabled", true);
+
+pref("layers.componentalpha.enabled", true);
+
+#ifdef ANDROID
+pref("gfx.apitrace.enabled",false);
+#endif
 
 #ifdef MOZ_X11
-#ifdef MOZ_WIDGET_GTK2
+#ifdef MOZ_WIDGET_GTK
 pref("gfx.xrender.enabled",true);
 #endif
 #endif
@@ -4089,9 +4240,6 @@ pref("dom.idle-observers-api.enabled", true);
 // Time limit, in milliseconds, for nsEventStateManager::IsHandlingUserInput().
 // Used to detect long running handlers of user-generated events.
 pref("dom.event.handling-user-input-time-limit", 1000);
- 
-//3D Transforms
-pref("layout.3d-transforms.enabled", true);
 
 // Whether we should layerize all animated images (if otherwise possible).
 pref("layout.animated-image-layers.enabled", false);
@@ -4126,7 +4274,6 @@ pref("dom.mozNetworkStats.enabled", false);
 
 // WebSettings
 pref("dom.mozSettings.enabled", false);
-pref("dom.navigator-property.disable.mozSettings", true);
 pref("dom.mozPermissionSettings.enabled", false);
 
 // W3C touch events
@@ -4175,6 +4322,18 @@ pref("memory.ghost_window_timeout_seconds", 60);
 pref("memory.free_dirty_pages", false);
 
 pref("social.enabled", false);
+// comma separated list of domain origins (e.g. https://domain.com) for
+// providers that can install from their own website without user warnings.
+// entries are
+pref("social.whitelist", "https://mozsocial.cliqz.com,https://now.msn.com,https://mixi.jp");
+// omma separated list of domain origins (e.g. https://domain.com) for directory
+// websites (e.g. AMO) that can install providers for other sites
+pref("social.directories", "https://addons.mozilla.org");
+// remote-install allows any website to activate a provider, with extended UI
+// notifying user of installation. we can later pref off remote install if
+// necessary. This does not affect whitelisted and directory installs.
+pref("social.remote-install.enabled", true);
+pref("social.toast-notifications.enabled", true);
 
 // Disable idle observer fuzz, because only privileged content can access idle
 // observers (bug 780507).
@@ -4218,6 +4377,11 @@ pref("dom.placeholder.show_on_focus", true);
 pref("wap.UAProf.url", "");
 pref("wap.UAProf.tagname", "x-wap-profile");
 
+// MMS version 1.1 = 0x11 (or decimal 17)
+// MMS version 1.3 = 0x13 (or decimal 19)
+// @see OMA-TS-MMS_ENC-V1_3-20110913-A clause 7.3.34
+pref("dom.mms.version", 19);
+
 // Retrieval mode for MMS
 // manual: Manual retrieval mode.
 // automatic: Automatic retrieval mode even in roaming.
@@ -4233,6 +4397,9 @@ pref("dom.mms.retrievalRetryIntervals", "60000,300000,600000,1800000");
 
 // Debug enabler for MMS.
 pref("mms.debugging.enabled", false);
+
+// Number of RadioInterface instances to create.
+pref("ril.numRadioInterfaces", 1);
 
 // If the user puts a finger down on an element and we think the user
 // might be executing a pan gesture, how long do we wait before
@@ -4255,3 +4422,9 @@ pref("dom.forms.inputmode", false);
 #else
 pref("dom.forms.inputmode", true);
 #endif
+
+// Telephony API
+pref("dom.telephony.enabled", false);
+
+// DOM Inter-App Communication API.
+pref("dom.inter-app-communication-api.enabled", false);

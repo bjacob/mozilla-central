@@ -19,6 +19,7 @@
 #include "GonkDisplay.h"
 #include "FramebufferSurface.h"
 #include "hardware/hwcomposer.h"
+#include "hardware/power.h"
 #include "utils/RefBase.h"
 
 namespace mozilla {
@@ -32,7 +33,11 @@ public:
 
     virtual void SetEnabled(bool enabled);
 
+    virtual void OnEnabled(OnEnabledCallbackType callback);
+
     virtual void* GetHWCDevice();
+
+    virtual void* GetFBSurface();
 
     virtual bool SwapBuffers(EGLDisplay dpy, EGLSurface sur);
 
@@ -44,7 +49,10 @@ public:
 
 private:
     hw_module_t const*        mModule;
+    hw_module_t const*        mFBModule;
     hwc_composer_device_1_t*  mHwc;
+    framebuffer_device_t*     mFBDevice;
+    power_module_t*           mPowerModule;
     android::sp<android::FramebufferSurface> mFBSurface;
     android::sp<ANativeWindow> mSTClient;
     android::sp<android::IGraphicBufferAlloc> mAlloc;
@@ -52,6 +60,7 @@ private:
     hwc_display_contents_1_t* mList;
     uint32_t mWidth;
     uint32_t mHeight;
+    OnEnabledCallbackType mEnabledCallback;
 };
 
 }

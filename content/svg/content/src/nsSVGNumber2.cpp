@@ -3,16 +3,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsError.h"
-#include "nsSVGAttrTearoffTable.h"
 #include "nsSVGNumber2.h"
-#include "prdtoa.h"
-#include "nsMathUtils.h"
-#include "nsContentUtils.h" // NS_ENSURE_FINITE
-#include "nsSMILValue.h"
-#include "nsSMILFloatType.h"
-#include "nsIDOMSVGNumber.h"
 #include "mozilla/Attributes.h"
+#include "nsContentUtils.h" // NS_ENSURE_FINITE
+#include "nsError.h"
+#include "nsIDOMSVGNumber.h"
+#include "nsSMILFloatType.h"
+#include "nsSMILValue.h"
+#include "nsSVGAttrTearoffTable.h"
+#include "prdtoa.h"
+#include "SVGContentUtils.h"
+
+using namespace mozilla;
+using namespace mozilla::dom;
 
 class DOMSVGNumber MOZ_FINAL : public nsIDOMSVGNumber
 {
@@ -33,21 +36,8 @@ private:
   float mVal;
 };
 
-NS_SVG_VAL_IMPL_CYCLE_COLLECTION(nsSVGNumber2::DOMAnimatedNumber, mSVGElement)
-
-NS_IMPL_CYCLE_COLLECTING_ADDREF(nsSVGNumber2::DOMAnimatedNumber)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(nsSVGNumber2::DOMAnimatedNumber)
-
 NS_IMPL_ADDREF(DOMSVGNumber)
 NS_IMPL_RELEASE(DOMSVGNumber)
-
-DOMCI_DATA(SVGAnimatedNumber, nsSVGNumber2::DOMAnimatedNumber)
-
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsSVGNumber2::DOMAnimatedNumber)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMSVGAnimatedNumber)
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
-  NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(SVGAnimatedNumber)
-NS_INTERFACE_MAP_END
 
 NS_INTERFACE_MAP_BEGIN(DOMSVGNumber)
   NS_INTERFACE_MAP_ENTRY(nsIDOMSVGNumber)
@@ -68,7 +58,7 @@ GetValueFromString(const nsAString &aValueAsString,
   NS_ConvertUTF16toUTF8 value(aValueAsString);
   const char *str = value.get();
 
-  if (NS_IsAsciiWhitespace(*str))
+  if (IsSVGWhitespace(*str))
     return NS_ERROR_DOM_SYNTAX_ERR;
   
   char *rest;
@@ -150,7 +140,7 @@ nsSVGNumber2::SetAnimValue(float aValue, nsSVGElement *aSVGElement)
   aSVGElement->DidAnimateNumber(mAttrEnum);
 }
 
-already_AddRefed<nsIDOMSVGAnimatedNumber>
+already_AddRefed<SVGAnimatedNumber>
 nsSVGNumber2::ToDOMAnimatedNumber(nsSVGElement* aSVGElement)
 {
   nsRefPtr<DOMAnimatedNumber> domAnimatedNumber =
@@ -161,14 +151,6 @@ nsSVGNumber2::ToDOMAnimatedNumber(nsSVGElement* aSVGElement)
   }
 
   return domAnimatedNumber.forget();
-}
-
-nsresult
-nsSVGNumber2::ToDOMAnimatedNumber(nsIDOMSVGAnimatedNumber **aResult,
-                                  nsSVGElement *aSVGElement)
-{
-  *aResult = ToDOMAnimatedNumber(aSVGElement).get();
-  return NS_OK;
 }
 
 nsSVGNumber2::DOMAnimatedNumber::~DOMAnimatedNumber()

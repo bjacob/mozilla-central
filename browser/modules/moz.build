@@ -6,3 +6,29 @@
 
 TEST_DIRS += ['test']
 
+EXTRA_JS_MODULES += [
+    'BrowserNewTabPreloader.jsm',
+    'ContentClick.jsm',
+    'NetworkPrioritizer.jsm',
+    'SharedFrame.jsm',
+    'SignInToWebsite.jsm',
+    'SitePermissions.jsm',
+    'Social.jsm',
+    'TabCrashReporter.jsm',
+    'offlineAppCache.jsm',
+    'openLocationLastURL.jsm',
+    'webappsUI.jsm',
+    'webrtcUI.jsm',
+]
+
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+    EXTRA_JS_MODULES += [
+        'WindowsJumpLists.jsm',
+        'WindowsPreviewPerTab.jsm',
+    ]
+
+EXTRA_PP_JS_MODULES += [
+    'AboutHome.jsm',
+    'RecentWindow.jsm',
+]
+

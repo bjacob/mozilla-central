@@ -592,6 +592,13 @@ public:
     return HandleKeyboardNavigationInPopup(nullptr, aFrame, aDir);
   }
 
+  /**
+   * Handles the keyboard event with keyCode value. Returns true if the event
+   * has been handled.
+   */
+  bool HandleKeyboardEventWithKeyCode(nsIDOMKeyEvent* aKeyEvent,
+                                      nsMenuChainItem* aTopVisibleMenuItem);
+
   nsresult KeyUp(nsIDOMKeyEvent* aKeyEvent);
   nsresult KeyDown(nsIDOMKeyEvent* aKeyEvent);
   nsresult KeyPress(nsIDOMKeyEvent* aKeyEvent);
@@ -729,7 +736,7 @@ protected:
   nsIntPoint mCachedMousePoint;
 
   // cached modifiers
-  mozilla::widget::Modifiers mCachedModifiers;
+  mozilla::Modifiers mCachedModifiers;
 
   // set to the currently active menu bar, if any
   nsMenuBarFrame* mActiveMenuBar;

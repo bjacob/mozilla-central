@@ -9,14 +9,17 @@
 #include "nsISupports.h"
 #include "nsWeakReference.h"
 #include "nsIGlobalObject.h"
+#include "nsIScriptObjectPrincipal.h"
+#include "nsIXPCScriptable.h"
 
 class BackstagePass : public nsIGlobalObject,
+                      public nsIScriptObjectPrincipal,
                       public nsIXPCScriptable,
                       public nsIClassInfo,
                       public nsSupportsWeakReference
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIXPCSCRIPTABLE
   NS_DECL_NSICLASSINFO
 

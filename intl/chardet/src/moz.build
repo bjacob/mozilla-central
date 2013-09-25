@@ -11,3 +11,7 @@ CPP_SOURCES += [
     'nsCyrillicDetector.cpp',
 ]
 
+LIBRARY_NAME = 'chardet'
+
+LIBXUL_LIBRARY = True
+

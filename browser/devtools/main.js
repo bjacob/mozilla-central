@@ -19,14 +19,16 @@ Object.defineProperty(exports, "TargetFactory", {
 
 loader.lazyGetter(this, "osString", () => Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS);
 
+let events = require("sdk/system/events");
+
 // Panels
-loader.lazyGetter(this, "OptionsPanel", function() require("devtools/framework/toolbox-options").OptionsPanel);
-loader.lazyGetter(this, "InspectorPanel", function() require("devtools/inspector/inspector-panel").InspectorPanel);
-loader.lazyImporter(this, "WebConsolePanel", "resource:///modules/WebConsolePanel.jsm");
-loader.lazyImporter(this, "DebuggerPanel", "resource:///modules/devtools/DebuggerPanel.jsm");
+loader.lazyGetter(this, "OptionsPanel", () => require("devtools/framework/toolbox-options").OptionsPanel);
+loader.lazyGetter(this, "InspectorPanel", () => require("devtools/inspector/inspector-panel").InspectorPanel);
+loader.lazyGetter(this, "WebConsolePanel", () => require("devtools/webconsole/panel").WebConsolePanel);
+loader.lazyGetter(this, "DebuggerPanel", () => require("devtools/debugger/debugger-panel").DebuggerPanel);
 loader.lazyImporter(this, "StyleEditorPanel", "resource:///modules/devtools/StyleEditorPanel.jsm");
-loader.lazyImporter(this, "ProfilerPanel", "resource:///modules/devtools/ProfilerPanel.jsm");
-loader.lazyImporter(this, "NetMonitorPanel", "resource:///modules/devtools/NetMonitorPanel.jsm");
+loader.lazyGetter(this, "ProfilerPanel", () => require("devtools/profiler/panel"));
+loader.lazyGetter(this, "NetMonitorPanel", () => require("devtools/netmonitor/netmonitor-panel").NetMonitorPanel);
 
 // Strings
 const toolboxProps = "chrome://browser/locale/devtools/toolbox.properties";
@@ -95,8 +97,15 @@ Tools.inspector = {
   label: l10n("inspector.label", inspectorStrings),
   tooltip: l10n("inspector.tooltip", inspectorStrings),
 
+  preventClosingOnKey: true,
+  onkey: function(panel) {
+    if (panel.highlighter) {
+      panel.highlighter.toggleLockState();
+    }
+  },
+
   isTargetSupported: function(target) {
-    return !target.isRemote;
+    return true;
   },
 
   build: function(iframeWindow, toolbox) {
@@ -107,12 +116,13 @@ Tools.inspector = {
 
 Tools.jsdebugger = {
   id: "jsdebugger",
-  key: l10n("open.commandkey", debuggerStrings),
+  key: l10n("debuggerMenu.commandkey", debuggerStrings),
   accesskey: l10n("debuggerMenu.accesskey", debuggerStrings),
   modifiers: osString == "Darwin" ? "accel,alt" : "accel,shift",
   ordinal: 3,
   visibilityswitch: "devtools.debugger.enabled",
   icon: "chrome://browser/skin/devtools/tool-debugger.png",
+  highlightedicon: "chrome://browser/skin/devtools/tool-debugger-paused.png",
   url: "chrome://browser/content/devtools/debugger.xul",
   label: l10n("ToolboxDebugger.label", debuggerStrings),
   tooltip: l10n("ToolboxDebugger.tooltip", debuggerStrings),
@@ -136,7 +146,7 @@ Tools.styleEditor = {
   icon: "chrome://browser/skin/devtools/tool-styleeditor.png",
   url: "chrome://browser/content/devtools/styleeditor.xul",
   label: l10n("ToolboxStyleEditor.label", styleEditorStrings),
-  tooltip: l10n("ToolboxStyleEditor.tooltip", styleEditorStrings),
+  tooltip: l10n("ToolboxStyleEditor.tooltip2", styleEditorStrings),
 
   isTargetSupported: function(target) {
     return true;
@@ -158,7 +168,7 @@ Tools.jsprofiler = {
   icon: "chrome://browser/skin/devtools/tool-profiler.png",
   url: "chrome://browser/content/devtools/profiler.xul",
   label: l10n("profiler.label", profilerStrings),
-  tooltip: l10n("profiler.tooltip", profilerStrings),
+  tooltip: l10n("profiler.tooltip2", profilerStrings),
 
   isTargetSupported: function (target) {
     return true;
@@ -183,7 +193,7 @@ Tools.netMonitor = {
   tooltip: l10n("netmonitor.tooltip", netMonitorStrings),
 
   isTargetSupported: function(target) {
-    return true;
+    return !target.isApp;
   },
 
   build: function(iframeWindow, toolbox) {
@@ -219,6 +229,8 @@ var unloadObserver = {
   }
 };
 Services.obs.addObserver(unloadObserver, "sdk:loader:destroy", false);
+
+events.emit("devtools-loaded", {});
 
 /**
  * Lookup l10n string from a string bundle.

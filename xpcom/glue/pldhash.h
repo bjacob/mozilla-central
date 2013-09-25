@@ -7,9 +7,8 @@
 #define pldhash_h___
 /*
  * Double hashing, a la Knuth 6.
- *
- * Try to keep this file in sync with js/src/jsdhash.h.
  */
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/Types.h"
 #include "nscore.h"
 #include "mozilla/RefgraphInstrumentation.h"
@@ -74,7 +73,7 @@ typedef struct PLDHashTableOps  PLDHashTableOps;
  * maintained automatically by PL_DHashTableOperate -- users should never set
  * it, and its only uses should be via the entry macros below.
  *
- * The PL_DHASH_ENTRY_IS_LIVE macro tests whether entry is neither free nor
+ * The PL_DHASH_ENTRY_IS_LIVE function tests whether entry is neither free nor
  * removed.  An entry may be either busy or free; if busy, it may be live or
  * removed.  Consumers of this API should not access members of entries that
  * are not live.
@@ -88,9 +87,23 @@ struct PLDHashEntryHdr {
     PLDHashNumber       keyHash;        /* every entry must begin like this */
 };
 
-#define PL_DHASH_ENTRY_IS_FREE(entry)   ((entry)->keyHash == 0)
-#define PL_DHASH_ENTRY_IS_BUSY(entry)   (!PL_DHASH_ENTRY_IS_FREE(entry))
-#define PL_DHASH_ENTRY_IS_LIVE(entry)   ((entry)->keyHash >= 2)
+MOZ_ALWAYS_INLINE bool
+PL_DHASH_ENTRY_IS_FREE(PLDHashEntryHdr* entry)
+{
+    return entry->keyHash == 0;
+}
+
+MOZ_ALWAYS_INLINE bool
+PL_DHASH_ENTRY_IS_BUSY(PLDHashEntryHdr* entry)
+{
+    return !PL_DHASH_ENTRY_IS_FREE(entry);
+}
+
+MOZ_ALWAYS_INLINE bool
+PL_DHASH_ENTRY_IS_LIVE(PLDHashEntryHdr* entry)
+{
+    return entry->keyHash >= 2;
+}
 
 /*
  * A PLDHashTable is currently 8 words (without the PL_DHASHMETER overhead)
@@ -553,7 +566,7 @@ PL_DHashTableEnumerate(PLDHashTable *table, PLDHashEnumerator etor, void *arg);
 
 typedef size_t
 (* PLDHashSizeOfEntryExcludingThisFun)(PLDHashEntryHdr *hdr,
-                                       nsMallocSizeOfFun mallocSizeOf,
+                                       mozilla::MallocSizeOf mallocSizeOf,
                                        void *arg);
 
 /**
@@ -565,7 +578,7 @@ typedef size_t
 NS_COM_GLUE size_t
 PL_DHashTableSizeOfExcludingThis(const PLDHashTable *table,
                                  PLDHashSizeOfEntryExcludingThisFun sizeOfEntryExcludingThis,
-                                 nsMallocSizeOfFun mallocSizeOf,
+                                 mozilla::MallocSizeOf mallocSizeOf,
                                  void *arg = NULL);
 
 /**
@@ -574,7 +587,7 @@ PL_DHashTableSizeOfExcludingThis(const PLDHashTable *table,
 NS_COM_GLUE size_t
 PL_DHashTableSizeOfIncludingThis(const PLDHashTable *table,
                                  PLDHashSizeOfEntryExcludingThisFun sizeOfEntryExcludingThis,
-                                 nsMallocSizeOfFun mallocSizeOf,
+                                 mozilla::MallocSizeOf mallocSizeOf,
                                  void *arg = NULL);
 
 #ifdef DEBUG

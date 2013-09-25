@@ -6,14 +6,45 @@
 #ifndef GFX_CONTENTHOST_H
 #define GFX_CONTENTHOST_H
 
-#include "ThebesLayerBuffer.h"
-#include "CompositableHost.h"
+#include <stdint.h>                     // for uint32_t
+#include <stdio.h>                      // for FILE
+#include "mozilla-config.h"             // for MOZ_DUMP_PAINTING
+#include "CompositableHost.h"           // for CompositableHost, etc
+#include "ThebesLayerBuffer.h"          // for ThebesLayerBuffer, etc
+#include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
+#include "mozilla/RefPtr.h"             // for RefPtr
+#include "mozilla/gfx/BasePoint.h"      // for BasePoint
+#include "mozilla/gfx/Point.h"          // for Point
+#include "mozilla/gfx/Rect.h"           // for Rect
+#include "mozilla/gfx/Types.h"          // for Filter
+#include "mozilla/layers/CompositorTypes.h"  // for TextureInfo, etc
+#include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
+#include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
+#include "mozilla/layers/LayersTypes.h"  // for MOZ_LAYERS_HAVE_LOG, etc
+#include "mozilla/layers/TextureHost.h"  // for DeprecatedTextureHost
+#include "mozilla/mozalloc.h"           // for operator delete
+#include "nsAutoPtr.h"                  // for nsAutoPtr
+#include "nsCOMPtr.h"                   // for already_AddRefed
+#include "nsDebug.h"                    // for NS_RUNTIMEABORT
+#include "nsPoint.h"                    // for nsIntPoint
+#include "nsRect.h"                     // for nsIntRect
+#include "nsRegion.h"                   // for nsIntRegion
+#include "nsTArray.h"                   // for nsTArray
+#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
+#include "nscore.h"                     // for nsACString
+
+class gfxImageSurface;
 
 namespace mozilla {
+namespace gfx {
+class Matrix4x4;
+}
 namespace layers {
+class Compositor;
+class ThebesBufferData;
+class TiledLayerComposer;
+struct EffectChain;
 
-class ThebesBuffer;
-class OptionalThebesBuffer;
 struct TexturedEffect;
 
 /**
@@ -46,8 +77,8 @@ protected:
  * Base class for non-tiled ContentHosts.
  *
  * Ownership of the SurfaceDescriptor and the resources it represents is passed
- * from the ContentClient to the ContentHost when the TextureClient/Hosts are
- * created, that is recevied here by SetTextureHosts which assigns one or two
+ * from the ContentClient to the ContentHost when the DeprecatedTextureClient/Hosts are
+ * created, that is recevied here by SetDeprecatedTextureHosts which assigns one or two
  * texture hosts (for single and double buffering) to the ContentHost.
  *
  * It is the responsibility of the ContentHost to destroy its resources when
@@ -77,30 +108,19 @@ public:
     return PaintState();
   }
 
-  virtual LayerRenderState GetRenderState() MOZ_OVERRIDE
-  {
-    LayerRenderState result = mTextureHost->GetRenderState();
-
-    result.mFlags = (mBufferRotation != nsIntPoint()) ?
-                    LAYER_RENDER_STATE_BUFFER_ROTATION : 0;
-    result.SetOffset(GetOriginOffset());
-    return result;
-  }
+  virtual LayerRenderState GetRenderState() MOZ_OVERRIDE;
 
   virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
 
 #ifdef MOZ_DUMP_PAINTING
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface()
-  {
-    return mTextureHost->GetAsSurface();
-  }
-#endif
+  virtual already_AddRefed<gfxImageSurface> GetAsSurface();
 
-  virtual void Dump(FILE* aFile=NULL,
+  virtual void Dump(FILE* aFile=nullptr,
                     const char* aPrefix="",
                     bool aDumpHtml=false) MOZ_OVERRIDE;
+#endif
 
-  virtual TextureHost* GetTextureHost() MOZ_OVERRIDE;
+  virtual DeprecatedTextureHost* GetDeprecatedTextureHost() MOZ_OVERRIDE;
 
   virtual void SetPaintWillResample(bool aResample) { mPaintWillResample = aResample; }
   // The client has destroyed its texture clients and we should destroy our
@@ -122,19 +142,19 @@ protected:
 
   nsIntRect mBufferRect;
   nsIntPoint mBufferRotation;
-  RefPtr<TextureHost> mTextureHost;
-  RefPtr<TextureHost> mTextureHostOnWhite;
-  // When we set a new front buffer TextureHost, we don't want to stomp on
+  RefPtr<DeprecatedTextureHost> mDeprecatedTextureHost;
+  RefPtr<DeprecatedTextureHost> mDeprecatedTextureHostOnWhite;
+  // When we set a new front buffer DeprecatedTextureHost, we don't want to stomp on
   // the old one which might still be used for compositing. So we store it
-  // here and move it to mTextureHost once we do the first buffer swap.
-  RefPtr<TextureHost> mNewFrontHost;
-  RefPtr<TextureHost> mNewFrontHostOnWhite;
+  // here and move it to mDeprecatedTextureHost once we do the first buffer swap.
+  RefPtr<DeprecatedTextureHost> mNewFrontHost;
+  RefPtr<DeprecatedTextureHost> mNewFrontHostOnWhite;
   bool mPaintWillResample;
   bool mInitialised;
 };
 
 /**
- * Double buffering is implemented by swapping the front and back TextureHosts.
+ * Double buffering is implemented by swapping the front and back DeprecatedTextureHosts.
  */
 class ContentHostDoubleBuffered : public ContentHostBase
 {
@@ -152,15 +172,17 @@ public:
                             const nsIntRegion& aOldValidRegionBack,
                             nsIntRegion* aUpdatedRegionBack);
 
-  virtual void EnsureTextureHost(TextureIdentifier aTextureId,
+  virtual void EnsureDeprecatedTextureHost(TextureIdentifier aTextureId,
                                  const SurfaceDescriptor& aSurface,
                                  ISurfaceAllocator* aAllocator,
                                  const TextureInfo& aTextureInfo) MOZ_OVERRIDE;
   virtual void DestroyTextures() MOZ_OVERRIDE;
 
-  virtual void Dump(FILE* aFile=NULL,
+#ifdef MOZ_DUMP_PAINTING
+  virtual void Dump(FILE* aFile=nullptr,
                     const char* aPrefix="",
                     bool aDumpHtml=false) MOZ_OVERRIDE;
+#endif
 
 #ifdef MOZ_LAYERS_HAVE_LOG
   virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
@@ -168,15 +190,15 @@ public:
 protected:
   nsIntRegion mValidRegionForNextBackBuffer;
   // Texture host for the back buffer. We never read or write this buffer. We
-  // only swap it with the front buffer (mTextureHost) when we are told by the
+  // only swap it with the front buffer (mDeprecatedTextureHost) when we are told by the
   // content thread.
-  RefPtr<TextureHost> mBackHost;
-  RefPtr<TextureHost> mBackHostOnWhite;
+  RefPtr<DeprecatedTextureHost> mBackHost;
+  RefPtr<DeprecatedTextureHost> mBackHostOnWhite;
 };
 
 /**
  * Single buffered, therefore we must synchronously upload the image from the
- * TextureHost in the layers transaction (i.e., in UpdateThebes).
+ * DeprecatedTextureHost in the layers transaction (i.e., in UpdateThebes).
  */
 class ContentHostSingleBuffered : public ContentHostBase
 {
@@ -193,7 +215,7 @@ public:
                             const nsIntRegion& aOldValidRegionBack,
                             nsIntRegion* aUpdatedRegionBack);
 
-  virtual void EnsureTextureHost(TextureIdentifier aTextureId,
+  virtual void EnsureDeprecatedTextureHost(TextureIdentifier aTextureId,
                                  const SurfaceDescriptor& aSurface,
                                  ISurfaceAllocator* aAllocator,
                                  const TextureInfo& aTextureInfo) MOZ_OVERRIDE;
@@ -224,11 +246,11 @@ public:
 
   virtual CompositableType GetType() { return BUFFER_CONTENT; }
 
-  virtual void EnsureTextureHostIncremental(ISurfaceAllocator* aAllocator,
+  virtual void EnsureDeprecatedTextureHostIncremental(ISurfaceAllocator* aAllocator,
                                             const TextureInfo& aTextureInfo,
                                             const nsIntRect& aBufferRect) MOZ_OVERRIDE;
 
-  virtual void EnsureTextureHost(TextureIdentifier aTextureId,
+  virtual void EnsureDeprecatedTextureHost(TextureIdentifier aTextureId,
                                  const SurfaceDescriptor& aSurface,
                                  ISurfaceAllocator* aAllocator,
                                  const TextureInfo& aTextureInfo)
@@ -269,8 +291,8 @@ public:
 
   virtual void DestroyTextures()
   {
-    mTextureHost = nullptr;
-    mTextureHostOnWhite = nullptr;
+    mDeprecatedTextureHost = nullptr;
+    mDeprecatedTextureHostOnWhite = nullptr;
     mUpdateList.Clear();
   }
 

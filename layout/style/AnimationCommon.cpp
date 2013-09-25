@@ -6,7 +6,6 @@
 #include "gfxPlatform.h"
 #include "AnimationCommon.h"
 #include "nsRuleData.h"
-#include "nsCSSFrameConstructor.h"
 #include "nsCSSValue.h"
 #include "nsStyleContext.h"
 #include "nsIFrame.h"
@@ -15,7 +14,8 @@
 #include "Layers.h"
 #include "FrameLayerBuilder.h"
 #include "nsDisplayList.h"
-#include "mozilla/Preferences.h"
+#include "mozilla/MemoryReporting.h"
+#include "RestyleManager.h"
 
 using namespace mozilla::layers;
 
@@ -59,28 +59,6 @@ CommonAnimationManager::Disconnect()
 }
 
 void
-CommonAnimationManager::AddElementData(CommonElementAnimationData* aData)
-{
-  if (PR_CLIST_IS_EMPTY(&mElementData)) {
-    // We need to observe the refresh driver.
-    nsRefreshDriver *rd = mPresContext->RefreshDriver();
-    rd->AddRefreshObserver(this, Flush_Style);
-  }
-
-  PR_INSERT_BEFORE(aData, &mElementData);
-}
-
-void
-CommonAnimationManager::ElementDataRemoved()
-{
-  // If we have no transitions or animations left, remove ourselves from
-  // the refresh driver.
-  if (PR_CLIST_IS_EMPTY(&mElementData)) {
-    mPresContext->RefreshDriver()->RemoveRefreshObserver(this, Flush_Style);
-  }
-}
-
-void
 CommonAnimationManager::RemoveAllElementData()
 {
   while (!PR_CLIST_IS_EMPTY(&mElementData)) {
@@ -121,7 +99,7 @@ CommonAnimationManager::MediumFeaturesChanged(nsPresContext* aPresContext)
 }
 
 /* virtual */ size_t
-CommonAnimationManager::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+CommonAnimationManager::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   // Measurement of the following members may be added later if DMD finds it is
   // worthwhile:
@@ -134,7 +112,7 @@ CommonAnimationManager::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) con
 }
 
 /* virtual */ size_t
-CommonAnimationManager::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+CommonAnimationManager::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
@@ -260,7 +238,7 @@ CommonElementAnimationData::CanAnimatePropertyOnCompositor(const dom::Element *a
     return false;
   }
 
-  nsIFrame* frame = aElement->GetPrimaryFrame();
+  nsIFrame* frame = nsLayoutUtils::GetStyleFrame(aElement);
   if (IsGeometricProperty(aProperty)) {
     if (shouldLog) {
       nsCString message;
@@ -304,7 +282,10 @@ CommonElementAnimationData::CanAnimatePropertyOnCompositor(const dom::Element *a
     message.AppendLiteral("Performance warning: Async animations are disabled");
     LogAsyncAnimationFailure(message);
   }
-  return enabled && (aFlags & CanAnimate_AllowPartial);
+  bool propertyAllowed = (aProperty == eCSSProperty_transform) ||
+                         (aProperty == eCSSProperty_opacity) ||
+                         (aFlags & CanAnimate_AllowPartial);
+  return enabled && propertyAllowed;
 }
 
 /* static */ void
@@ -349,13 +330,13 @@ CommonElementAnimationData::CanThrottleTransformChanges(TimeStamp aTime)
 
   // If the nearest scrollable ancestor has overflow:hidden,
   // we don't care about overflow.
-  nsIScrollableFrame* scrollable =
-    nsLayoutUtils::GetNearestScrollableFrame(mElement->GetPrimaryFrame());
+  nsIScrollableFrame* scrollable = nsLayoutUtils::GetNearestScrollableFrame(
+                                     nsLayoutUtils::GetStyleFrame(mElement));
   if (!scrollable) {
     return true;
   }
 
-  nsPresContext::ScrollbarStyles ss = scrollable->GetScrollbarStyles();
+  ScrollbarStyles ss = scrollable->GetScrollbarStyles();
   if (ss.mVertical == NS_STYLE_OVERFLOW_HIDDEN &&
       ss.mHorizontal == NS_STYLE_OVERFLOW_HIDDEN &&
       scrollable->GetLogicalScrollPosition() == nsPoint(0, 0)) {
@@ -368,7 +349,7 @@ CommonElementAnimationData::CanThrottleTransformChanges(TimeStamp aTime)
 bool
 CommonElementAnimationData::CanThrottleAnimation(TimeStamp aTime)
 {
-  nsIFrame* frame = mElement->GetPrimaryFrame();
+  nsIFrame* frame = nsLayoutUtils::GetStyleFrame(mElement);
   if (!frame) {
     return false;
   }
@@ -400,7 +381,7 @@ void
 CommonElementAnimationData::UpdateAnimationGeneration(nsPresContext* aPresContext)
 {
   mAnimationGeneration =
-    aPresContext->PresShell()->FrameConstructor()->GetAnimationGeneration();
+    aPresContext->RestyleManager()->GetAnimationGeneration();
 }
 
 }

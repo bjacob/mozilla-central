@@ -6,19 +6,16 @@
 /* rendering object for CSS display:inline objects */
 
 #include "nsInlineFrame.h"
-#include "nsCOMPtr.h"
 #include "nsLineLayout.h"
 #include "nsBlockFrame.h"
 #include "nsPlaceholderFrame.h"
 #include "nsGkAtoms.h"
-#include "nsHTMLParts.h"
 #include "nsStyleContext.h"
-#include "nsIPresShell.h"
 #include "nsPresContext.h"
 #include "nsRenderingContext.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsAutoPtr.h"
-#include "nsFrameManager.h"
+#include "RestyleManager.h"
 #include "nsDisplayList.h"
 #include "mozilla/Likely.h"
 
@@ -284,11 +281,11 @@ ReparentChildListStyle(nsPresContext* aPresContext,
                        const nsFrameList::Slice& aFrames,
                        nsIFrame* aParentFrame)
 {
-  nsFrameManager *frameManager = aPresContext->FrameManager();
+  RestyleManager* restyleManager = aPresContext->RestyleManager();
 
   for (nsFrameList::Enumerator e(aFrames); !e.AtEnd(); e.Next()) {
     NS_ASSERTION(e.get()->GetParent() == aParentFrame, "Bogus parentage");
-    frameManager->ReparentStyleContext(e.get());
+    restyleManager->ReparentStyleContext(e.get());
   }
 }
 
@@ -384,11 +381,11 @@ nsInlineFrame::Reflow(nsPresContext*          aPresContext,
           ReparentFloatsForInlineChild(lineContainer, firstChild, true);
         }
         const bool inFirstLine = aReflowState.mLineLayout->GetInFirstLine();
-        nsFrameManager* fm = PresContext()->FrameManager();
+        RestyleManager* restyleManager = PresContext()->RestyleManager();
         for (nsIFrame* f = firstChild; f; f = f->GetNextSibling()) {
           f->SetParent(this);
           if (inFirstLine) {
-            fm->ReparentStyleContext(f);
+            restyleManager->ReparentStyleContext(f);
           }
         }
       }
@@ -461,7 +458,7 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
 
   nsLineLayout* lineLayout = aReflowState.mLineLayout;
   bool inFirstLine = aReflowState.mLineLayout->GetInFirstLine();
-  nsFrameManager* frameManager = aPresContext->FrameManager();
+  RestyleManager* restyleManager = aPresContext->RestyleManager();
   bool ltr = (NS_STYLE_DIRECTION_LTR == aReflowState.mStyleVisibility->mDirection);
   nscoord leftEdge = 0;
   // Don't offset by our start borderpadding if we have a prev continuation or
@@ -506,7 +503,7 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
         }
         child->SetParent(this);
         if (inFirstLine) {
-          frameManager->ReparentStyleContext(child);
+          restyleManager->ReparentStyleContext(child);
         }
         // We also need to do the same for |frame|'s next-in-flows that are in
         // the sibling list. Otherwise, if we reflow |frame| and it's complete
@@ -540,7 +537,7 @@ nsInlineFrame::ReflowFrames(nsPresContext* aPresContext,
             if (mFrames.ContainsFrame(nextInFlow)) {
               nextInFlow->SetParent(this);
               if (inFirstLine) {
-                frameManager->ReparentStyleContext(nextInFlow);
+                restyleManager->ReparentStyleContext(nextInFlow);
               }
             }
             else {
@@ -847,7 +844,7 @@ nsInlineFrame::PushFrames(nsPresContext* aPresContext,
 //////////////////////////////////////////////////////////////////////
 
 int
-nsInlineFrame::GetSkipSides() const
+nsInlineFrame::GetSkipSides(const nsHTMLReflowState* aReflowState) const
 {
   int skip = 0;
   if (!IsLeftMost()) {
@@ -919,8 +916,6 @@ nsInlineFrame::AccessibleType()
     return a11y::eHTMLButtonType;
   if (tagAtom == nsGkAtoms::img)  // Create accessible for broken <img>
     return a11y::eHyperTextType;
-  if (tagAtom == nsGkAtoms::label)  // Creat accessible for <label>
-    return a11y::eHTMLLabelType;
 
   return a11y::eNoType;
 }
@@ -990,7 +985,7 @@ nsFirstLineFrame::PullOneFrame(nsPresContext* aPresContext, InlineReflowState& i
     // We are a first-line frame. Fixup the child frames
     // style-context that we just pulled.
     NS_ASSERTION(frame->GetParent() == this, "Incorrect parent?");
-    aPresContext->FrameManager()->ReparentStyleContext(frame);
+    aPresContext->RestyleManager()->ReparentStyleContext(frame);
   }
   return frame;
 }

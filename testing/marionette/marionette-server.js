@@ -14,7 +14,9 @@ logger.info('marionette-server.js loaded');
 let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
                .getService(Ci.mozIJSSubScriptLoader);
 loader.loadSubScript("chrome://marionette/content/marionette-simpletest.js");
-loader.loadSubScript("chrome://marionette/content/marionette-log-obj.js");
+loader.loadSubScript("chrome://marionette/content/marionette-common.js");
+Cu.import("resource://gre/modules/Services.jsm");
+loader.loadSubScript("chrome://marionette/content/marionette-frame-manager.js");
 Cu.import("chrome://marionette/content/marionette-elements.js");
 let utils = {};
 loader.loadSubScript("chrome://marionette/content/EventUtils.js", utils);
@@ -27,7 +29,6 @@ loader.loadSubScript("chrome://specialpowers/content/SpecialPowersObserver.js",
 specialpowers.specialPowersObserver = new specialpowers.SpecialPowersObserver();
 specialpowers.specialPowersObserver.init();
 
-Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");  
 
@@ -42,6 +43,8 @@ loader.loadSubScript("resource://gre/modules/devtools/DevToolsUtils.js");
 loader.loadSubScript("resource://gre/modules/devtools/server/transport.js");
 
 let bypassOffline = false;
+let qemu = "0";
+let device = null;
 
 try {
   XPCOMUtils.defineLazyGetter(this, "libcutils", function () {
@@ -49,11 +52,11 @@ try {
     return libcutils;
   });
   if (libcutils) {
-    let qemu = libcutils.property_get("ro.kernel.qemu");
+    qemu = libcutils.property_get("ro.kernel.qemu");
     logger.info("B2G emulator: " + (qemu == "1" ? "yes" : "no"));
-    let platform = libcutils.property_get("ro.product.device");
-    logger.info("Platform detected is " + platform);
-    bypassOffline = (qemu == "1" || platform == "panda");
+    device = libcutils.property_get("ro.product.device");
+    logger.info("Device detected is " + device);
+    bypassOffline = (qemu == "1" || device == "panda");
   }
 }
 catch(e) {}
@@ -73,20 +76,6 @@ let systemMessageListenerReady = false;
 Services.obs.addObserver(function() {
   systemMessageListenerReady = true;
 }, "system-message-listener-ready", false);
-
-/**
- * An object representing a frame that Marionette has loaded a
- * frame script in.
- */
-function MarionetteRemoteFrame(windowId, frameId) {
-  this.windowId = windowId;
-  this.frameId = frameId;
-  this.targetFrameId = null;
-  this.messageManager = null;
-  this.command_id = null;
-}
-// persistent list of remote frames that Marionette has loaded a frame script in
-let remoteFrames = [];
 
 /*
  * Custom exceptions
@@ -139,20 +128,23 @@ function MarionetteServerConnection(aPrefix, aTransport, aServer)
   this.searchTimeout = null;
   this.pageTimeout = null;
   this.timer = null;
+  this.inactivityTimer = null;
+  this.heartbeatCallback = function () {}; // called by simpletest methods
   this.marionetteLog = new MarionetteLogObj();
   this.command_id = null;
   this.mainFrame = null; //topmost chrome frame
-  this.curFrame = null; //subframe that currently has focus
+  this.curFrame = null; // chrome iframe that currently has focus
   this.importedScripts = FileUtils.getFile('TmpD', ['marionettescriptchrome']);
-  this.currentRemoteFrame = null; // a member of remoteFrames
+  this.currentFrameElement = null;
   this.testName = null;
   this.mozBrowserClose = null;
-
-  //register all message listeners
-  this.addMessageManagerListeners(this.messageManager);
 }
 
 MarionetteServerConnection.prototype = {
+
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIMessageListener,
+                                         Ci.nsIObserver,
+                                         Ci.nsISupportsWeakReference]),
 
   /**
    * Debugger transport callbacks:
@@ -165,7 +157,7 @@ MarionetteServerConnection.prototype = {
       } catch(e) {
         this.conn.send({ error: ("error occurred while processing '" +
                                  aPacket.type),
-                        message: e });
+                        message: e.message });
       }
     } else {
       this.conn.send({ error: "unrecognizedPacketType",
@@ -177,7 +169,7 @@ MarionetteServerConnection.prototype = {
 
   onClosed: function MSC_onClosed(aStatus) {
     this.server._connectionClosed(this);
-    this.deleteSession();
+    this.sessionTearDown();
   },
 
   /**
@@ -192,12 +184,12 @@ MarionetteServerConnection.prototype = {
    * which removes most of the message listeners from it as well.
    */
   switchToGlobalMessageManager: function MDA_switchToGlobalMM() {
-    if (this.currentRemoteFrame !== null) {
-      this.removeMessageManagerListeners(this.messageManager);
+    if (this.curBrowser && this.curBrowser.frameManager.currentRemoteFrame !== null) {
+      this.curBrowser.frameManager.removeMessageManagerListeners(this.messageManager);
       this.sendAsync("sleepSession", null, null, true);
+      this.curBrowser.frameManager.currentRemoteFrame = null;
     }
     this.messageManager = this.globalMessageManager;
-    this.currentRemoteFrame = null;
   },
 
   /**
@@ -213,10 +205,10 @@ MarionetteServerConnection.prototype = {
     if (values instanceof Object && commandId) {
       values.command_id = commandId;
     }
-    if (this.currentRemoteFrame !== null) {
+    if (this.curBrowser.frameManager.currentRemoteFrame !== null) {
       try {
         this.messageManager.sendAsyncMessage(
-          "Marionette:" + name + this.currentRemoteFrame.targetFrameId, values);
+          "Marionette:" + name + this.curBrowser.frameManager.currentRemoteFrame.targetFrameId, values);
       }
       catch(e) {
         if (!ignoreFailure) {
@@ -224,10 +216,10 @@ MarionetteServerConnection.prototype = {
           let error = e;
           switch(e.result) {
             case Components.results.NS_ERROR_FAILURE:
-              error = new FrameSendFailureError(this.currentRemoteFrame);
+              error = new FrameSendFailureError(this.curBrowser.frameManager.currentRemoteFrame);
               break;
             case Components.results.NS_ERROR_NOT_INITIALIZED:
-              error = new FrameSendNotInitializedError(this.currentRemoteFrame);
+              error = new FrameSendNotInitializedError(this.curBrowser.frameManager.currentRemoteFrame);
               break;
             default:
               break;
@@ -242,42 +234,6 @@ MarionetteServerConnection.prototype = {
         "Marionette:" + name + this.curBrowser.curFrameId, values);
     }
     return success;
-  },
-
-  /**
-   * Adds listeners for messages from content frame scripts.
-   *
-   * @param object messageManager
-   *        The messageManager object (ChromeMessageBroadcaster or ChromeMessageSender)
-   *        to which the listeners should be added.
-   */
-  addMessageManagerListeners: function MDA_addMessageManagerListeners(messageManager) {
-    messageManager.addMessageListener("Marionette:ok", this);
-    messageManager.addMessageListener("Marionette:done", this);
-    messageManager.addMessageListener("Marionette:error", this);
-    messageManager.addMessageListener("Marionette:log", this);
-    messageManager.addMessageListener("Marionette:shareData", this);
-    messageManager.addMessageListener("Marionette:register", this);
-    messageManager.addMessageListener("Marionette:runEmulatorCmd", this);
-    messageManager.addMessageListener("Marionette:switchToFrame", this);
-  },
-
-  /**
-   * Removes listeners for messages from content frame scripts.
-   *
-   * @param object messageManager
-   *        The messageManager object (ChromeMessageBroadcaster or ChromeMessageSender)
-   *        from which the listeners should be removed.
-   */
-  removeMessageManagerListeners: function MDA_removeMessageManagerListeners(messageManager) {
-    messageManager.removeMessageListener("Marionette:ok", this);
-    messageManager.removeMessageListener("Marionette:done", this);
-    messageManager.removeMessageListener("Marionette:error", this);
-    messageManager.removeMessageListener("Marionette:log", this);
-    messageManager.removeMessageListener("Marionette:shareData", this);
-    messageManager.removeMessageListener("Marionette:register", this);
-    messageManager.removeMessageListener("Marionette:runEmulatorCmd", this);
-    messageManager.removeMessageListener("Marionette:switchToFrame", this);
   },
 
   logRequest: function MDA_logRequest(type, data) {
@@ -424,7 +380,7 @@ MarionetteServerConnection.prototype = {
    *        Returns the unique server-assigned ID of the window
    */
   addBrowser: function MDA_addBrowser(win) {
-    let browser = new BrowserObj(win);
+    let browser = new BrowserObj(win, this);
     let winId = win.QueryInterface(Ci.nsIInterfaceRequestor).
                     getInterface(Ci.nsIDOMWindowUtils).outerWindowID;
     winId = winId + ((appName == "B2G") ? '-b2g' : '');
@@ -547,7 +503,6 @@ MarionetteServerConnection.prototype = {
       }
     }
 
-    this.switchToGlobalMessageManager();
 
     if (!Services.prefs.getBoolPref("marionette.contentListener")) {
       waitForWindow.call(this);
@@ -561,6 +516,7 @@ MarionetteServerConnection.prototype = {
     else {
       this.sendError("Session already running", 500, null, this.command_id);
     }
+    this.switchToGlobalMessageManager();
   },
 
   getSessionCapabilities: function MDA_getSessionCapabilities(){
@@ -577,6 +533,7 @@ MarionetteServerConnection.prototype = {
           'javascriptEnabled': true,
           'nativeEvents': false,
           'platform': Services.appinfo.OS,
+          'device': qemu == "1" ? "qemu" : (!device ? "desktop" : device),
           'rotatable': rotatable,
           'takesScreenshot': false,
           'version': Services.appinfo.version
@@ -734,7 +691,7 @@ MarionetteServerConnection.prototype = {
       script = data + script;
     }
 
-    let res = Cu.evalInSandbox(script, sandbox, "1.8");
+    let res = Cu.evalInSandbox(script, sandbox, "1.8", "dummy file", 0);
 
     if (directInject && !async &&
         (res == undefined || res.passed == undefined)) {
@@ -760,8 +717,10 @@ MarionetteServerConnection.prototype = {
    *        function body
    */
   execute: function MDA_execute(aRequest, directInject) {
+    let inactivityTimeout = aRequest.inactivityTimeout;
     let timeout = aRequest.scriptTimeout ? aRequest.scriptTimeout : this.scriptTimeout;
     let command_id = this.command_id = this.getCommandId();
+    let script;
     this.logRequest("execute", aRequest);
     if (aRequest.newSandbox == undefined) {
       //if client does not send a value in newSandbox, 
@@ -775,16 +734,41 @@ MarionetteServerConnection.prototype = {
                        args: aRequest.args,
                        newSandbox: aRequest.newSandbox,
                        timeout: timeout,
-                       specialPowers: aRequest.specialPowers
+                       specialPowers: aRequest.specialPowers,
+                       filename: aRequest.filename,
+                       line: aRequest.line
                      },
                      command_id);
       return;
     }
 
+    // handle the inactivity timeout
+    let that = this;
+    if (inactivityTimeout) {
+     let inactivityTimeoutHandler = function(message, status) {
+      let error_msg = {message: value, status: status};
+      that.sendToClient({from: that.actorID, error: error_msg},
+                        marionette.command_id);
+     };
+     let setTimer = function() {
+      that.inactivityTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+      if (that.inactivityTimer != null) {
+       that.inactivityTimer.initWithCallback(function() {
+        inactivityTimeoutHandler("timed out due to inactivity", 28);
+       }, inactivityTimeout, Ci.nsITimer.TYPE_ONESHOT);
+      }
+     }
+     setTimer();
+     this.heartbeatCallback = function resetInactivityTimer() {
+      that.inactivityTimer.cancel();
+      setTimer();
+     }
+    }
+
     let curWindow = this.getCurrentWindow();
     let marionette = new Marionette(this, curWindow, "chrome",
                                     this.marionetteLog,
-                                    timeout, this.testName);
+                                    timeout, this.heartbeatCallback, this.testName);
     let _chromeSandbox = this.createExecuteSandbox(curWindow,
                                                    marionette,
                                                    aRequest.args,
@@ -795,10 +779,12 @@ MarionetteServerConnection.prototype = {
 
     try {
       _chromeSandbox.finish = function chromeSandbox_finish() {
+        if (that.inactivityTimer != null) {
+          that.inactivityTimer.cancel();
+        }
         return marionette.generate_results();
       };
 
-      let script;
       if (directInject) {
         script = aRequest.value;
       }
@@ -812,7 +798,12 @@ MarionetteServerConnection.prototype = {
                                   false, command_id, timeout);
     }
     catch (e) {
-      this.sendError(e.name + ': ' + e.message, 17, e.stack, command_id);
+      let error = createStackMessage(e,
+                                     "execute_script",
+                                     aRequest.filename,
+                                     aRequest.line,
+                                     script);
+      this.sendError(error[0], 17, error[1], command_id);
     }
   },
 
@@ -845,6 +836,7 @@ MarionetteServerConnection.prototype = {
   executeJSScript: function MDA_executeJSScript(aRequest) {
     let timeout = aRequest.scriptTimeout ? aRequest.scriptTimeout : this.scriptTimeout;
     let command_id = this.command_id = this.getCommandId();
+
     //all pure JS scripts will need to call Marionette.finish() to complete the test.
     if (aRequest.newSandbox == undefined) {
       //if client does not send a value in newSandbox, 
@@ -867,7 +859,10 @@ MarionetteServerConnection.prototype = {
                        newSandbox: aRequest.newSandbox,
                        async: aRequest.async,
                        timeout: timeout,
-                       specialPowers: aRequest.specialPowers
+                       inactivityTimeout: aRequest.inactivityTimeout,
+                       specialPowers: aRequest.specialPowers,
+                       filename: aRequest.filename,
+                       line: aRequest.line,
                      },
                      command_id);
    }
@@ -889,8 +884,10 @@ MarionetteServerConnection.prototype = {
    *        function body
    */
   executeWithCallback: function MDA_executeWithCallback(aRequest, directInject) {
+    let inactivityTimeout = aRequest.inactivityTimeout;
     let timeout = aRequest.scriptTimeout ? aRequest.scriptTimeout : this.scriptTimeout;
     let command_id = this.command_id = this.getCommandId();
+    let script;
     this.logRequest("executeWithCallback", aRequest);
     if (aRequest.newSandbox == undefined) {
       //if client does not send a value in newSandbox, 
@@ -906,10 +903,33 @@ MarionetteServerConnection.prototype = {
                        id: this.command_id,
                        newSandbox: aRequest.newSandbox,
                        timeout: timeout,
-                       specialPowers: aRequest.specialPowers
+                       inactivityTimeout: inactivityTimeout,
+                       specialPowers: aRequest.specialPowers,
+                       filename: aRequest.filename,
+                       line: aRequest.line
                      },
                      command_id);
       return;
+    }
+
+    // handle the inactivity timeout
+    let that = this;
+    if (inactivityTimeout) {
+     this.inactivityTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+     if (this.inactivityTimer != null) {
+      this.inactivityTimer.initWithCallback(function() {
+       chromeAsyncReturnFunc("timed out due to inactivity", 28);
+      }, inactivityTimeout, Ci.nsITimer.TYPE_ONESHOT);
+     }
+     this.heartbeatCallback = function resetInactivityTimer() {
+      that.inactivityTimer.cancel();
+      that.inactivityTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+      if (that.inactivityTimer != null) {
+       that.inactivityTimer.initWithCallback(function() {
+        chromeAsyncReturnFunc("timed out due to inactivity", 28);
+       }, inactivityTimeout, Ci.nsITimer.TYPE_ONESHOT);
+      }
+     }
     }
 
     let curWindow = this.getCurrentWindow();
@@ -918,10 +938,10 @@ MarionetteServerConnection.prototype = {
     that.timeout = timeout;
     let marionette = new Marionette(this, curWindow, "chrome",
                                     this.marionetteLog,
-                                    timeout, this.testName);
+                                    timeout, this.heartbeatCallback, this.testName);
     marionette.command_id = this.command_id;
 
-    function chromeAsyncReturnFunc(value, status) {
+    function chromeAsyncReturnFunc(value, status, stacktrace) {
       if (that._emu_cbs && Object.keys(that._emu_cbs).length) {
         value = "Emulator callback still pending when finish() called";
         status = 500;
@@ -943,10 +963,13 @@ MarionetteServerConnection.prototype = {
                             marionette.command_id);
         }
         else {
-          let error_msg = {message: value, status: status, stacktrace: null};
+          let error_msg = {message: value, status: status, stacktrace: stacktrace};
           that.sendToClient({from: that.actorID, error: error_msg},
                             marionette.command_id);
         }
+      }
+      if (that.inactivityTimer != null) {
+        that.inactivityTimer.cancel();
       }
     }
 
@@ -979,7 +1002,6 @@ MarionetteServerConnection.prototype = {
       _chromeSandbox.returnFunc = chromeAsyncReturnFunc;
       _chromeSandbox.finish = chromeAsyncFinish;
 
-      let script;
       if (directInject) {
         script = aRequest.value;
       }
@@ -993,7 +1015,12 @@ MarionetteServerConnection.prototype = {
       this.executeScriptInSandbox(_chromeSandbox, script, directInject,
                                   true, command_id, timeout);
     } catch (e) {
-      chromeAsyncReturnFunc(e.name + ": " + e.message, 17);
+      let error = createStackMessage(e,
+                                     "execute_async_script",
+                                     aRequest.filename,
+                                     aRequest.line,
+                                     script);
+      chromeAsyncReturnFunc(error[0], 17, error[1]);
     }
   },
 
@@ -1175,6 +1202,23 @@ MarionetteServerConnection.prototype = {
                    command_id);
   },
  
+  getActiveFrame: function MDA_getActiveFrame() {
+    this.command_id = this.getCommandId();
+
+    if (this.context == "chrome") {
+      if (this.curFrame) {
+        let frameUid = this.curBrowser.elementManager.addToKnownElements(this.curFrame.frameElement);
+        this.sendResponse(frameUid, this.command_id);
+      } else {
+        // no current frame, we're at toplevel
+        this.sendResponse(null, this.command_id);
+      }
+    } else {
+      // not chrome
+      this.sendResponse(this.currentFrameElement, this.command_id);
+    }
+  },
+
   /**
    * Switch to a given frame within the current window
    *
@@ -1268,7 +1312,7 @@ MarionetteServerConnection.prototype = {
     }
     else {
       if ((!aRequest.value) && (!aRequest.element) &&
-          (this.currentRemoteFrame !== null)) {
+          (this.curBrowser.frameManager.currentRemoteFrame !== null)) {
         // We're currently using a ChromeMessageSender for a remote frame, so this
         // request indicates we need to switch back to the top-level (parent) frame.
         // We'll first switch to the parent's (global) ChromeMessageBroadcaster, so
@@ -1889,7 +1933,8 @@ MarionetteServerConnection.prototype = {
 
       // if there is only 1 window left, delete the session
       if (numOpenWindows === 1){
-        this.deleteSession();
+        this.sessionTearDown();
+        this.sendOk(command_id);
         return;
       }
 
@@ -1914,8 +1959,7 @@ MarionetteServerConnection.prototype = {
    * all other listeners. The main content listener persists after disconnect (it's the homescreen),
    * and can safely be reused.
    */
-  deleteSession: function MDA_deleteSession() {
-    let command_id = this.command_id = this.getCommandId();
+  sessionTearDown: function MDA_sessionTearDown() {
     if (this.curBrowser != null) {
       if (appName == "B2G") {
         this.globalMessageManager.broadcastAsyncMessage(
@@ -1938,21 +1982,29 @@ MarionetteServerConnection.prototype = {
       while (winEnum.hasMoreElements()) {
         winEnum.getNext().messageManager.removeDelayedFrameScript(FRAME_SCRIPT); 
       }
+      this.curBrowser.frameManager.removeMessageManagerListeners(this.globalMessageManager);
     }
-    this.sendOk(command_id);
-    this.removeMessageManagerListeners(this.globalMessageManager);
     this.switchToGlobalMessageManager();
     // reset frame to the top-most frame
     this.curFrame = null;
     if (this.mainFrame) {
       this.mainFrame.focus();
     }
-    this.curBrowser = null;
     try {
       this.importedScripts.remove(false);
     }
     catch (e) {
     }
+  },
+
+  /**
+   * Processes the 'deleteSession' request from the client by tearing down
+   * the session and responding 'ok'.
+   */
+  deleteSession: function MDA_sessionTearDown() {
+    let command_id = this.command_id = this.getCommandId();
+    this.sessionTearDown();
+    this.sendOk(command_id);
   },
 
   /**
@@ -2085,56 +2137,50 @@ MarionetteServerConnection.prototype = {
         this.sendToClient(message.json, -1);
         break;
       case "Marionette:switchToFrame":
-        // Switch to a remote frame.
-        let frameWindow = Services.wm.getOuterWindowWithId(message.json.win);
-        let thisFrame = frameWindow.document.getElementsByTagName("iframe")[message.json.frame];
-        let mm = thisFrame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader.messageManager;
-
-        // See if this frame already has our frame script loaded in it; if so,
-        // just wake it up.
-        for (let i = 0; i < remoteFrames.length; i++) {
-          let frame = remoteFrames[i];
-          if ((frame.messageManager == mm)) {
-            this.currentRemoteFrame = frame;
-            this.currentRemoteFrame.command_id = message.json.command_id;
-            this.messageManager = frame.messageManager;
-            this.addMessageManagerListeners(this.messageManager);
-            this.messageManager.sendAsyncMessage("Marionette:restart", {});
-            return;
-          }
+        this.curBrowser.frameManager.switchToFrame(message);
+        this.messageManager = this.curBrowser.frameManager.currentRemoteFrame.messageManager.get();
+        break;
+      case "Marionette:switchToModalOrigin":
+        this.curBrowser.frameManager.switchToModalOrigin(message);
+        this.messageManager = this.curBrowser.frameManager.currentRemoteFrame.messageManager.get();
+        break;
+      case "Marionette:switchedToFrame":
+        logger.info("Switched to frame: " + JSON.stringify(message.json));
+        if (message.json.restorePrevious) {
+          this.currentFrameElement = this.previousFrameElement;
         }
-
-        // Load the frame script in this frame, and set the frame's ChromeMessageSender
-        // as the active message manager.
-        this.addMessageManagerListeners(mm);
-        mm.loadFrameScript(FRAME_SCRIPT, true);
-        this.messageManager = mm;
-        let aFrame = new MarionetteRemoteFrame(message.json.win, message.json.frame);
-        aFrame.messageManager = this.messageManager;
-        aFrame.command_id = message.json.command_id;
-        remoteFrames.push(aFrame);
-        this.currentRemoteFrame = aFrame;
+        else {
+          if (message.json.storePrevious) {
+            // we don't arbitrarily save previousFrameElement, since
+            // we allow frame switching after modals appear, which would
+            // override this value and we'd lose our reference
+            this.previousFrameElement = this.currentFrameElement;
+          }
+          this.currentFrameElement = message.json.frameValue;
+        }
         break;
       case "Marionette:register":
         // This code processes the content listener's registration information
         // and either accepts the listener, or ignores it
         let nullPrevious = (this.curBrowser.curFrameId == null);
-        let listenerWindow =
-          Services.wm.getOuterWindowWithId(message.json.value);
+        let listenerWindow = 
+                            Services.wm.getOuterWindowWithId(message.json.value);
 
+        //go in here if we're already in a remote frame.
         if (!listenerWindow || (listenerWindow.location.href != message.json.href) &&
-            (this.currentRemoteFrame !== null)) {
+            (this.curBrowser.frameManager.currentRemoteFrame !== null)) {
           // The outerWindowID from an OOP frame will not be meaningful to
           // the parent process here, since each process maintains its own
           // independent window list.  So, it will either be null (!listenerWindow)
+          // if we're already in a remote frame,
           // or it will point to some random window, which will hopefully 
-          // cause an href mistmach.  Currently this only happens
+          // cause an href mismatch.  Currently this only happens
           // in B2G for OOP frames registered in Marionette:switchToFrame, so
           // we'll acknowledge the switchToFrame message here.
           // XXX: Should have a better way of determining that this message
           // is from a remote frame.
-          this.currentRemoteFrame.targetFrameId = this.generateFrameId(message.json.value);
-          this.sendOk(this.currentRemoteFrame.command_id);
+          this.curBrowser.frameManager.currentRemoteFrame.targetFrameId = this.generateFrameId(message.json.value);
+          this.sendOk(this.command_id);
         }
 
         let browserType;
@@ -2145,6 +2191,7 @@ MarionetteServerConnection.prototype = {
         }
         let reg = {};
         if (!browserType || browserType != "content") {
+          //curBrowser holds all the registered frames in knownFrames
           reg.id = this.curBrowser.register(this.generateFrameId(message.json.value),
                                             listenerWindow);
         }
@@ -2208,6 +2255,7 @@ MarionetteServerConnection.prototype.requestTypes = {
   "refresh":  MarionetteServerConnection.prototype.refresh,
   "getWindow":  MarionetteServerConnection.prototype.getWindow,
   "getWindows":  MarionetteServerConnection.prototype.getWindows,
+  "getActiveFrame": MarionetteServerConnection.prototype.getActiveFrame,
   "switchToFrame": MarionetteServerConnection.prototype.switchToFrame,
   "switchToWindow": MarionetteServerConnection.prototype.switchToWindow,
   "deleteSession": MarionetteServerConnection.prototype.deleteSession,
@@ -2232,11 +2280,11 @@ MarionetteServerConnection.prototype.requestTypes = {
  *        The window whose browser needs to be accessed
  */
 
-function BrowserObj(win) {
+function BrowserObj(win, server) {
   this.DESKTOP = "desktop";
   this.B2G = "B2G";
   this.browser;
-  this.tab = null;
+  this.tab = null; //Holds a reference to the created tab, if any
   this.window = win;
   this.knownFrames = [];
   this.curFrameId = null;
@@ -2245,6 +2293,10 @@ function BrowserObj(win) {
   this.newSession = true; //used to set curFrameId upon new session
   this.elementManager = new ElementManager([SELECTOR, NAME, LINK_TEXT, PARTIAL_LINK_TEXT]);
   this.setBrowser(win);
+  this.frameManager = new FrameManager(server); //We should have one FM per BO so that we can handle modals in each Browser
+
+  //register all message listeners
+  this.frameManager.addMessageManagerListeners(server.messageManager);
 }
 
 BrowserObj.prototype = {
@@ -2369,7 +2421,7 @@ this.MarionetteServer = function MarionetteServer(port, forceLocal) {
   if (forceLocal) {
     flags |= Ci.nsIServerSocket.LoopbackOnly;
   }
-  let socket = new ServerSocket(port, flags, 4);
+  let socket = new ServerSocket(port, flags, 0);
   logger.info("Listening on port " + socket.port + "\n");
   socket.asyncListen(this);
   this.listener = socket;

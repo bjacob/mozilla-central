@@ -111,7 +111,7 @@ public:
 
   virtual already_AddRefed<gfxASurface>
     CreateOptimalSurface(const gfxIntSize &aSize,
-                         gfxASurface::gfxImageFormat imageFormat);
+                         gfxImageFormat imageFormat);
 
   virtual already_AddRefed<gfxASurface>
     CreateOptimalMaskSurface(const gfxIntSize &aSize);
@@ -170,6 +170,8 @@ private:
 
   nsIWidget *mWidget;
 
+  bool mDisableSequenceForNextFrame;
+
   CallbackInfo mCurrentCallbackInfo;
 
   nsIntSize mViewport;
@@ -178,7 +180,7 @@ private:
   nsAutoPtr<Nv3DVUtils> mNv3DVUtils; 
 
   /*
-   * Context target, NULL when drawing directly to our swap chain.
+   * Context target, nullptr when drawing directly to our swap chain.
    */
   nsRefPtr<gfxContext> mTarget;
 

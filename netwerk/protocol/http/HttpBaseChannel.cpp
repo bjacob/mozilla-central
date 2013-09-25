@@ -5,6 +5,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "mozilla/net/HttpBaseChannel.h"
 
 #include "nsHttpHandler.h"
@@ -15,13 +18,15 @@
 #include "nsISeekableStream.h"
 #include "nsITimedChannel.h"
 #include "nsIEncodedChannel.h"
-#include "nsIResumableChannel.h"
 #include "nsIApplicationCacheChannel.h"
-#include "nsILoadContext.h"
 #include "nsEscape.h"
 #include "nsStreamListenerWrapper.h"
+#include "nsISecurityConsoleMessage.h"
+#include "nsURLHelper.h"
+#include "nsICookieService.h"
+#include "nsIStreamConverterService.h"
+#include "nsCRT.h"
 
-#include "prnetdb.h"
 #include <algorithm>
 
 namespace mozilla {
@@ -55,11 +60,9 @@ HttpBaseChannel::HttpBaseChannel()
   , mSuspendCount(0)
   , mProxyResolveFlags(0)
   , mContentDispositionHint(UINT32_MAX)
+  , mHttpHandler(gHttpHandler)
 {
   LOG(("Creating HttpBaseChannel @%x\n", this));
-
-  // grab a reference to the handler to ensure that it doesn't go away.
-  NS_ADDREF(gHttpHandler);
 
   // Subfields of unions cannot be targeted in an initializer list
   mSelfAddr.raw.family = PR_AF_UNSPEC;
@@ -72,8 +75,6 @@ HttpBaseChannel::~HttpBaseChannel()
 
   // Make sure we don't leak
   CleanRedirectCacheChainIfNecessary();
-
-  gHttpHandler->Release();
 }
 
 nsresult
@@ -87,9 +88,6 @@ HttpBaseChannel::Init(nsIURI *aURI,
 
   NS_PRECONDITION(aURI, "null uri");
 
-  nsresult rv = nsHashPropertyBag::Init();
-  if (NS_FAILED(rv)) return rv;
-
   mURI = aURI;
   mOriginalURI = aURI;
   mDocumentURI = nullptr;
@@ -102,7 +100,7 @@ HttpBaseChannel::Init(nsIURI *aURI,
   int32_t port = -1;
   bool usingSSL = false;
 
-  rv = mURI->SchemeIs("https", &usingSSL);
+  nsresult rv = mURI->SchemeIs("https", &usingSSL);
   if (NS_FAILED(rv)) return rv;
 
   rv = mURI->GetAsciiHost(host);
@@ -199,6 +197,8 @@ HttpBaseChannel::GetLoadGroup(nsILoadGroup **aLoadGroup)
 NS_IMETHODIMP
 HttpBaseChannel::SetLoadGroup(nsILoadGroup *aLoadGroup)
 {
+  MOZ_ASSERT(NS_IsMainThread(), "Should only be called on the main thread.");
+  
   if (!CanSetLoadGroup(aLoadGroup)) {
     return NS_ERROR_FAILURE;
   }
@@ -283,6 +283,8 @@ HttpBaseChannel::GetNotificationCallbacks(nsIInterfaceRequestor **aCallbacks)
 NS_IMETHODIMP
 HttpBaseChannel::SetNotificationCallbacks(nsIInterfaceRequestor *aCallbacks)
 {
+  MOZ_ASSERT(NS_IsMainThread(), "Should only be called on the main thread.");
+  
   if (!CanSetCallbacks(aCallbacks)) {
     return NS_ERROR_FAILURE;
   }
@@ -1295,6 +1297,38 @@ HttpBaseChannel::GetLocalAddress(nsACString& addr)
 }
 
 NS_IMETHODIMP
+HttpBaseChannel::TakeAllSecurityMessages(
+    nsCOMArray<nsISecurityConsoleMessage> &aMessages)
+{
+  aMessages.Clear();
+  aMessages.SwapElements(mSecurityConsoleMessages);
+  return NS_OK;
+}
+
+/* Please use this method with care. This can cause the message
+ * queue to grow large and cause the channel to take up a lot
+ * of memory. Use only static string messages and do not add
+ * server side data to the queue, as that can be large.
+ * Add only a limited number of messages to the queue to keep
+ * the channel size down and do so only in rare erroneous situations.
+ * More information can be found here:
+ * https://bugzilla.mozilla.org/show_bug.cgi?id=846918
+ */
+NS_IMETHODIMP
+HttpBaseChannel::AddSecurityMessage(const nsAString &aMessageTag,
+    const nsAString &aMessageCategory)
+{
+  nsresult rv;
+  nsCOMPtr<nsISecurityConsoleMessage> message =
+    do_CreateInstance(NS_SECURITY_CONSOLE_MESSAGE_CONTRACTID, &rv);
+  NS_ENSURE_SUCCESS(rv, rv);
+  message->SetTag(aMessageTag);
+  message->SetCategory(aMessageCategory);
+  mSecurityConsoleMessages.AppendElement(message);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 HttpBaseChannel::GetLocalPort(int32_t* port)
 {
   NS_ENSURE_ARG_POINTER(port);
@@ -1491,6 +1525,8 @@ HttpBaseChannel::SetNewListener(nsIStreamListener *aListener, nsIStreamListener 
 void
 HttpBaseChannel::ReleaseListeners()
 {
+  MOZ_ASSERT(NS_IsMainThread(), "Should only be called on the main thread.");
+  
   mListener = nullptr;
   mListenerContext = nullptr;
   mCallbacks = nullptr;

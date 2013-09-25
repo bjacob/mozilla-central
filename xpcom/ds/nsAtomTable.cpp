@@ -7,12 +7,11 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/HashFunctions.h"
+#include "mozilla/MemoryReporting.h"
 
 #include "nsAtomTable.h"
 #include "nsStaticAtom.h"
 #include "nsString.h"
-#include "nsReadableUtils.h"
-#include "nsUTF8Utils.h"
 #include "nsCRT.h"
 #include "pldhash.h"
 #include "prenv.h"
@@ -21,9 +20,6 @@
 #include "nsHashKeys.h"
 #include "nsAutoPtr.h"
 #include "nsUnicharUtils.h"
-
-#define PL_ARENA_CONST_ALIGN_MASK 3
-#include "plarena.h"
 
 using namespace mozilla;
 
@@ -96,7 +92,7 @@ public:
   // for |#ifdef NS_BUILD_REFCNT_LOGGING| access to reference count
   nsrefcnt GetRefCount() { return mRefCnt; }
 
-  size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const;
 };
 
 /**
@@ -435,7 +431,7 @@ AtomImpl::IsStaticAtom()
 }
 
 size_t
-AtomImpl::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+AtomImpl::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
   return aMallocSizeOf(this) +
          nsStringBuffer::FromData(mString)->
@@ -446,7 +442,7 @@ AtomImpl::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
 
 static size_t
 SizeOfAtomTableEntryExcludingThis(PLDHashEntryHdr *aHdr,
-                                  nsMallocSizeOfFun aMallocSizeOf,
+                                  MallocSizeOf aMallocSizeOf,
                                   void *aArg)
 {
   AtomTableEntry* entry = static_cast<AtomTableEntry*>(aHdr);
@@ -456,14 +452,14 @@ SizeOfAtomTableEntryExcludingThis(PLDHashEntryHdr *aHdr,
 static size_t
 SizeOfStaticAtomTableEntryExcludingThis(const nsAString& aKey,
                                         nsIAtom* const& aData,
-                                        nsMallocSizeOfFun aMallocSizeOf,
+                                        MallocSizeOf aMallocSizeOf,
                                         void* aArg)
 {
   return aKey.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
 }
 
 size_t
-NS_SizeOfAtomTablesIncludingThis(nsMallocSizeOfFun aMallocSizeOf) {
+NS_SizeOfAtomTablesIncludingThis(MallocSizeOf aMallocSizeOf) {
   size_t n = 0;
   if (gAtomTable.ops) {
       n += PL_DHashTableSizeOfExcludingThis(&gAtomTable,
@@ -483,7 +479,6 @@ static void HandleOOM()
 {
   fputs("Out of memory allocating atom hashtable.\n", stderr);
   MOZ_CRASH();
-  MOZ_NOT_REACHED();
 }
 
 static inline void
@@ -530,17 +525,17 @@ GetAtomHashEntry(const PRUnichar* aString, uint32_t aLength)
 class CheckStaticAtomSizes
 {
   CheckStaticAtomSizes() {
-    MOZ_STATIC_ASSERT((sizeof(nsFakeStringBuffer<1>().mRefCnt) ==
-                       sizeof(nsStringBuffer().mRefCount)) &&
-                      (sizeof(nsFakeStringBuffer<1>().mSize) ==
-                       sizeof(nsStringBuffer().mStorageSize)) &&
-                      (offsetof(nsFakeStringBuffer<1>, mRefCnt) ==
-                       offsetof(nsStringBuffer, mRefCount)) &&
-                      (offsetof(nsFakeStringBuffer<1>, mSize) ==
-                       offsetof(nsStringBuffer, mStorageSize)) &&
-                      (offsetof(nsFakeStringBuffer<1>, mStringData) ==
-                       sizeof(nsStringBuffer)),
-                      "mocked-up strings' representations should be compatible");
+    static_assert((sizeof(nsFakeStringBuffer<1>().mRefCnt) ==
+                   sizeof(nsStringBuffer().mRefCount)) &&
+                  (sizeof(nsFakeStringBuffer<1>().mSize) ==
+                   sizeof(nsStringBuffer().mStorageSize)) &&
+                  (offsetof(nsFakeStringBuffer<1>, mRefCnt) ==
+                   offsetof(nsStringBuffer, mRefCount)) &&
+                  (offsetof(nsFakeStringBuffer<1>, mSize) ==
+                   offsetof(nsStringBuffer, mStorageSize)) &&
+                  (offsetof(nsFakeStringBuffer<1>, mStringData) ==
+                   sizeof(nsStringBuffer)),
+                  "mocked-up strings' representations should be compatible");
   }
 };
 
@@ -554,16 +549,9 @@ RegisterStaticAtoms(const nsStaticAtom* aAtoms, uint32_t aAtomCount)
   
   if (!gStaticAtomTable && !gStaticAtomTableSealed) {
     gStaticAtomTable = new nsDataHashtable<nsStringHashKey, nsIAtom*>();
-    if (!gStaticAtomTable) {
-      delete gStaticAtomTable;
-      gStaticAtomTable = nullptr;
-      return NS_ERROR_OUT_OF_MEMORY;
-    }
-    gStaticAtomTable->Init();
   }
   
   for (uint32_t i=0; i<aAtomCount; i++) {
-#ifdef NS_STATIC_ATOM_USE_WIDE_STRINGS
     NS_ASSERTION(nsCRT::IsAscii((PRUnichar*)aAtoms[i].mStringBuffer->Data()),
                  "Static atoms must be ASCII!");
 
@@ -597,22 +585,6 @@ RegisterStaticAtoms(const nsStaticAtom* aAtoms, uint32_t aAtomCount)
         gStaticAtomTable->Put(nsAtomString(atom), atom);
       }
     }
-#else // NS_STATIC_ATOM_USE_WIDE_STRINGS
-    NS_ASSERTION(nsCRT::IsAscii((char*)aAtoms[i].mStringBuffer->Data()),
-                 "Static atoms must be ASCII!");
-
-    uint32_t stringLen = aAtoms[i].mStringBuffer->StorageSize() - 1;
-
-    NS_ConvertASCIItoUTF16 str((char*)aAtoms[i].mStringBuffer->Data(),
-                               stringLen);
-    nsIAtom* atom = NS_NewPermanentAtom(str);
-    *aAtoms[i].mAtom = atom;
-
-    if (!gStaticAtomTableSealed) {
-      gStaticAtomTable->Put(str, atom);
-    }
-#endif
-
   }
   return NS_OK;
 }

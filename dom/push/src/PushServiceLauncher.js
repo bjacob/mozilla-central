@@ -18,6 +18,8 @@ function PushServiceLauncher() {
 PushServiceLauncher.prototype = {
   classID: Components.ID("{4b8caa3b-3c58-4f3c-a7f5-7bd9cb24c11d}"),
 
+  contractID: "@mozilla.org/push/ServiceLauncher;1",
+
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
                                          Ci.nsISupportsWeakReference]),
 
@@ -27,6 +29,7 @@ PushServiceLauncher.prototype = {
         Services.obs.addObserver(this, "final-ui-startup", true);
         break;
       case "final-ui-startup":
+        Services.obs.removeObserver(this, "final-ui-startup");
         if (!Services.prefs.getBoolPref("services.push.enabled")) {
           return;
         }

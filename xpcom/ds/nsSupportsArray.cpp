@@ -7,7 +7,6 @@
 #include "prbit.h"
 #include "nsSupportsArray.h"
 #include "nsSupportsArrayEnumerator.h"
-#include "nsAString.h"
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
 
@@ -174,7 +173,7 @@ nsSupportsArray::Create(nsISupports *aOuter, REFNSIID aIID, void **aResult)
   return it->QueryInterface(aIID, aResult);
 }
 
-NS_IMPL_THREADSAFE_ISUPPORTS3(nsSupportsArray, nsISupportsArray, nsICollection, nsISerializable)
+NS_IMPL_ISUPPORTS3(nsSupportsArray, nsISupportsArray, nsICollection, nsISerializable)
 
 NS_IMETHODIMP
 nsSupportsArray::Read(nsIObjectInputStream *aStream)

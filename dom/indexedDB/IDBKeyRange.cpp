@@ -38,7 +38,7 @@ ReturnKeyRange(JSContext* aCx,
   nsIXPConnect* xpc = nsContentUtils::XPConnect();
   NS_ASSERTION(xpc, "This should never be null!");
 
-  JSObject* global = JS_GetGlobalForScopeChain(aCx);
+  JSObject* global = JS::CurrentGlobalOrNull(aCx);
   if (!global) {
     NS_WARNING("Couldn't get global object!");
     return false;
@@ -106,7 +106,7 @@ GetKeyFromJSValOrThrow(JSContext* aCx,
   return true;
 }
 
-JSBool
+bool
 MakeOnlyKeyRange(JSContext* aCx,
                  unsigned aArgc,
                  jsval* aVp)
@@ -127,7 +127,7 @@ MakeOnlyKeyRange(JSContext* aCx,
   return ReturnKeyRange(aCx, aVp, keyRange);
 }
 
-JSBool
+bool
 MakeLowerBoundKeyRange(JSContext* aCx,
                        unsigned aArgc,
                        jsval* aVp)
@@ -135,7 +135,7 @@ MakeLowerBoundKeyRange(JSContext* aCx,
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   JS::Rooted<JS::Value> val(aCx);
-  JSBool open = false;
+  bool open = false;
   if (!JS_ConvertArguments(aCx, aArgc, JS_ARGV(aCx, aVp), "v/b", val.address(),
                            &open)) {
     return false;
@@ -150,7 +150,7 @@ MakeLowerBoundKeyRange(JSContext* aCx,
   return ReturnKeyRange(aCx, aVp, keyRange);
 }
 
-JSBool
+bool
 MakeUpperBoundKeyRange(JSContext* aCx,
                        unsigned aArgc,
                        jsval* aVp)
@@ -158,7 +158,7 @@ MakeUpperBoundKeyRange(JSContext* aCx,
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   JS::Rooted<JS::Value> val(aCx);
-  JSBool open = false;
+  bool open = false;
   if (!JS_ConvertArguments(aCx, aArgc, JS_ARGV(aCx, aVp), "v/b", val.address(),
                            &open)) {
     return false;
@@ -173,7 +173,7 @@ MakeUpperBoundKeyRange(JSContext* aCx,
   return ReturnKeyRange(aCx, aVp, keyRange);
 }
 
-JSBool
+bool
 MakeBoundKeyRange(JSContext* aCx,
                   unsigned aArgc,
                   jsval* aVp)
@@ -181,7 +181,7 @@ MakeBoundKeyRange(JSContext* aCx,
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   JS::Rooted<JS::Value> lowerVal(aCx), upperVal(aCx);
-  JSBool lowerOpen = false, upperOpen = false;
+  bool lowerOpen = false, upperOpen = false;
   if (!JS_ConvertArguments(aCx, aArgc, JS_ARGV(aCx, aVp), "vv/bb",
                            lowerVal.address(), upperVal.address(),
                            &lowerOpen, &upperOpen)) {
@@ -219,7 +219,7 @@ const JSFunctionSpec gKeyRangeConstructors[] = {
 } // anonymous namespace
 
 // static
-JSBool
+bool
 IDBKeyRange::DefineConstructors(JSContext* aCx,
                                 JSObject* aObject)
 {
@@ -240,39 +240,38 @@ IDBKeyRange::FromJSVal(JSContext* aCx,
   nsresult rv;
   nsRefPtr<IDBKeyRange> keyRange;
 
-  if (JSVAL_IS_VOID(aVal) || JSVAL_IS_NULL(aVal)) {
+  if (!aVal.isNullOrUndefined()) {
     // undefined and null returns no IDBKeyRange.
-  }
-  else if (JSVAL_IS_PRIMITIVE(aVal) ||
-           JS_IsArrayObject(aCx, JSVAL_TO_OBJECT(aVal)) ||
-           JS_ObjectIsDate(aCx, JSVAL_TO_OBJECT(aVal))) {
-    // A valid key returns an 'only' IDBKeyRange.
-    keyRange = new IDBKeyRange(false, false, true);
 
-    rv = GetKeyFromJSVal(aCx, aVal, keyRange->Lower());
-    if (NS_FAILED(rv)) {
-      return rv;
+    JS::RootedObject obj(aCx, aVal.isObject() ? &aVal.toObject() : NULL);
+    if (aVal.isPrimitive() || JS_IsArrayObject(aCx, obj) || JS_ObjectIsDate(aCx, obj)) {
+      // A valid key returns an 'only' IDBKeyRange.
+      keyRange = new IDBKeyRange(false, false, true);
+
+      rv = GetKeyFromJSVal(aCx, aVal, keyRange->Lower());
+      if (NS_FAILED(rv)) {
+        return rv;
+      }
     }
-  }
-  else {
-    // An object is not permitted unless it's another IDBKeyRange.
-    nsIXPConnect* xpc = nsContentUtils::XPConnect();
-    NS_ASSERTION(xpc, "This should never be null!");
+    else {
+      // An object is not permitted unless it's another IDBKeyRange.
+      nsIXPConnect* xpc = nsContentUtils::XPConnect();
+      NS_ASSERTION(xpc, "This should never be null!");
 
-    nsCOMPtr<nsIXPConnectWrappedNative> wrapper;
-    rv = xpc->GetWrappedNativeOfJSObject(aCx, JSVAL_TO_OBJECT(aVal),
-                                         getter_AddRefs(wrapper));
-    if (NS_FAILED(rv)) {
-      return NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
+      nsCOMPtr<nsIXPConnectWrappedNative> wrapper;
+      rv = xpc->GetWrappedNativeOfJSObject(aCx, obj, getter_AddRefs(wrapper));
+      if (NS_FAILED(rv)) {
+        return NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
+      }
+
+      nsCOMPtr<nsIIDBKeyRange> iface;
+      if (!wrapper || !(iface = do_QueryInterface(wrapper->Native()))) {
+        // Some random JS object?
+        return NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
+      }
+
+      keyRange = static_cast<IDBKeyRange*>(iface.get());
     }
-
-    nsCOMPtr<nsIIDBKeyRange> iface;
-    if (!wrapper || !(iface = do_QueryInterface(wrapper->Native()))) {
-      // Some random JS object?
-      return NS_ERROR_DOM_INDEXEDDB_DATA_ERR;
-    }
-
-    keyRange = static_cast<IDBKeyRange*>(iface.get());
   }
 
   keyRange.forget(aKeyRange);
@@ -307,6 +306,8 @@ IDBKeyRange::ToSerializedKeyRange(T& aKeyRange)
     aKeyRange.upper() = Upper();
   }
 }
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(IDBKeyRange)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(IDBKeyRange)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
@@ -343,7 +344,7 @@ IDBKeyRange::DropJSObjects()
   mHaveCachedLowerVal = false;
   mHaveCachedUpperVal = false;
   mRooted = false;
-  NS_DROP_JS_OBJECTS(this, IDBKeyRange);
+  mozilla::DropJSObjects(this);
 }
 
 IDBKeyRange::~IDBKeyRange()
@@ -359,11 +360,11 @@ IDBKeyRange::GetLower(JSContext* aCx,
 
   if (!mHaveCachedLowerVal) {
     if (!mRooted) {
-      NS_HOLD_JS_OBJECTS(this, IDBKeyRange);
+      mozilla::HoldJSObjects(this);
       mRooted = true;
     }
 
-    nsresult rv = Lower().ToJSVal(aCx, &mCachedLowerVal);
+    nsresult rv = Lower().ToJSVal(aCx, mCachedLowerVal);
     NS_ENSURE_SUCCESS(rv, rv);
 
     mHaveCachedLowerVal = true;
@@ -381,11 +382,11 @@ IDBKeyRange::GetUpper(JSContext* aCx,
 
   if (!mHaveCachedUpperVal) {
     if (!mRooted) {
-      NS_HOLD_JS_OBJECTS(this, IDBKeyRange);
+      mozilla::HoldJSObjects(this);
       mRooted = true;
     }
 
-    nsresult rv = Upper().ToJSVal(aCx, &mCachedUpperVal);
+    nsresult rv = Upper().ToJSVal(aCx, mCachedUpperVal);
     NS_ENSURE_SUCCESS(rv, rv);
 
     mHaveCachedUpperVal = true;
@@ -416,17 +417,7 @@ IDBKeyRange::GetUpperOpen(bool* aUpperOpen)
 
 // Explicitly instantiate for all our key range types... Grumble.
 template already_AddRefed<IDBKeyRange>
-IDBKeyRange::FromSerializedKeyRange<FIXME_Bug_521898_objectstore::KeyRange>
-(const FIXME_Bug_521898_objectstore::KeyRange& aKeyRange);
-
-template already_AddRefed<IDBKeyRange>
-IDBKeyRange::FromSerializedKeyRange<FIXME_Bug_521898_index::KeyRange>
-(const FIXME_Bug_521898_index::KeyRange& aKeyRange);
+IDBKeyRange::FromSerializedKeyRange<KeyRange> (const KeyRange& aKeyRange);
 
 template void
-IDBKeyRange::ToSerializedKeyRange<FIXME_Bug_521898_objectstore::KeyRange>
-(FIXME_Bug_521898_objectstore::KeyRange& aKeyRange);
-
-template void
-IDBKeyRange::ToSerializedKeyRange<FIXME_Bug_521898_index::KeyRange>
-(FIXME_Bug_521898_index::KeyRange& aKeyRange);
+IDBKeyRange::ToSerializedKeyRange<KeyRange> (KeyRange& aKeyRange);

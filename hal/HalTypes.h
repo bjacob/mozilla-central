@@ -6,8 +6,8 @@
 #ifndef mozilla_hal_Types_h
 #define mozilla_hal_Types_h
 
-#include "IPCMessageUtils.h"
-#include "Observer.h"
+#include "ipc/IPCMessageUtils.h"
+#include "mozilla/Observer.h"
 
 namespace mozilla {
 namespace hal {
@@ -128,6 +128,7 @@ enum FMRadioOperation {
   FM_RADIO_OPERATION_ENABLE,
   FM_RADIO_OPERATION_DISABLE,
   FM_RADIO_OPERATION_SEEK,
+  FM_RADIO_OPERATION_TUNE,
   NUM_FM_RADIO_OPERATION
 };
 

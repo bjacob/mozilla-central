@@ -24,7 +24,7 @@ function test() {
       is(NetMonitorView.detailsPaneHidden, false,
         "The details pane should not be hidden after toggle button was pressed.");
 
-      testButtons();
+      testButtons("all");
       testContents([1, 1, 1, 1, 1, 1, 1, 1])
         .then(() => {
           info("Testing html filtering.");
@@ -82,7 +82,7 @@ function test() {
       is(NetMonitorView.detailsPaneHidden, false,
         "The details pane should still be visible after filtering.");
 
-      is(RequestsMenu.orderedItems.length, aVisibility.length,
+      is(RequestsMenu.items.length, aVisibility.length,
         "There should be a specific amount of items in the requests menu.");
       is(RequestsMenu.visibleItems.length, aVisibility.filter(e => e).length,
         "There should be a specific amount of visbile items in the requests menu.");
@@ -173,7 +173,7 @@ function test() {
         });
       }
 
-      return Promise.resolve(null);
+      return promise.resolve(null);
     }
 
     aDebuggee.performRequests('{ "getMedia": true, "getFlash": true }');

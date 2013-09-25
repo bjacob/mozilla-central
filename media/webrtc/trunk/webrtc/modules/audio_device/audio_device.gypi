@@ -10,10 +10,9 @@
   'targets': [
     {
       'target_name': 'audio_device',
-      'type': '<(library)',
+      'type': 'static_library',
       'dependencies': [
-        '<(webrtc_root)/common_audio/common_audio.gyp:resampler',
-        '<(webrtc_root)/common_audio/common_audio.gyp:signal_processing',
+        '<(webrtc_root)/common_audio/common_audio.gyp:common_audio',
         '<(webrtc_root)/system_wrappers/source/system_wrappers.gyp:system_wrappers',
       ],
       'include_dirs': [
@@ -71,6 +70,12 @@
             'android',
           ],
         }], # OS==android
+        ['moz_widget_toolkit_gonk==1', {
+          'include_dirs': [
+            '$(ANDROID_SOURCE)/frameworks/wilhelm/include',
+            '$(ANDROID_SOURCE)/system/media/wilhelm/include',
+          ],
+        }], # moz_widget_toolkit_gonk==1
         ['include_internal_audio_device==0', {
           'defines': [
             'WEBRTC_DUMMY_AUDIO_BUILD',
@@ -105,13 +110,16 @@
             'win/audio_mixer_manager_win.h',
             'android/audio_device_utility_android.cc',
             'android/audio_device_utility_android.h',
-            'android/audio_device_opensles_android.cc',
-            'android/audio_device_opensles_android.h',
+# opensles is shared with gonk, so isn't here
             'android/audio_device_jni_android.cc',
             'android/audio_device_jni_android.h',
           ],
           'conditions': [
             ['OS=="android"', {
+              'sources': [
+                'audio_device_opensles.cc',
+                'audio_device_opensles.h',
+              ],
               'link_settings': {
                 'libraries': [
                   '-llog',
@@ -119,10 +127,16 @@
                 ],
               },
             }],
+            ['moz_widget_toolkit_gonk==1', {
+              'sources': [
+                'audio_device_opensles.cc',
+                'audio_device_opensles.h',
+              ],
+            }],
             ['OS=="linux"', {
               'link_settings': {
                 'libraries': [
-                  '-ldl',
+                  '-ldl','-lX11',
                 ],
               },
             }],
@@ -186,7 +200,7 @@
     ['include_tests==1', {
       'targets': [
         {
-          'target_name': 'audio_device_test_api',
+          'target_name': 'audio_device_integrationtests',
          'type': 'executable',
          'dependencies': [
             'audio_device',
@@ -206,7 +220,7 @@
           'dependencies': [
             'audio_device',
             'webrtc_utility',
-            '<(webrtc_root)/common_audio/common_audio.gyp:resampler',
+            '<(webrtc_root)/common_audio/common_audio.gyp:common_audio',
             '<(webrtc_root)/system_wrappers/source/system_wrappers.gyp:system_wrappers',
             '<(webrtc_root)/test/test.gyp:test_support',
             '<(DEPTH)/testing/gtest.gyp:gtest',

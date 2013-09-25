@@ -512,10 +512,19 @@ NS_IMETHODIMP nsCocoaWindow::CreatePopupContentView(const nsIntRect &aRect,
 
 NS_IMETHODIMP nsCocoaWindow::Destroy()
 {
+  // If we don't hide here we run into problems with panels, this is not ideal.
+  // (Bug 891424)
+  Show(false);
+
   if (mPopupContentView)
     mPopupContentView->Destroy();
 
   nsBaseWidget::Destroy();
+  // nsBaseWidget::Destroy() calls GetParent()->RemoveChild(this). But we
+  // don't implement GetParent(), so we need to do the equivalent here.
+  if (mParent) {
+    mParent->RemoveChild(this);
+  }
   nsBaseWidget::OnDestroy();
 
   if (mFullScreen) {
@@ -534,11 +543,6 @@ NS_IMETHODIMP nsCocoaWindow::Destroy()
   }
 
   return NS_OK;
-}
-
-nsIWidget* nsCocoaWindow::GetParent()
-{
-  return mParent;
 }
 
 nsIWidget* nsCocoaWindow::GetSheetWindowParent(void)
@@ -1395,7 +1399,7 @@ NS_IMETHODIMP nsCocoaWindow::Resize(double aX, double aY,
 // Coordinates are global display pixels
 NS_IMETHODIMP nsCocoaWindow::Resize(double aWidth, double aHeight, bool aRepaint)
 {
-  double invScale = 1.0 / GetDefaultScale();
+  double invScale = 1.0 / GetDefaultScale().scale;
   return DoResize(mBounds.x * invScale, mBounds.y * invScale,
                   aWidth, aHeight, aRepaint, true);
 }
@@ -1554,6 +1558,15 @@ nsCocoaWindow::BackingScaleFactorChanged()
   if (presShell) {
     presShell->BackingScaleFactorChanged();
   }
+}
+
+int32_t
+nsCocoaWindow::RoundsWidgetCoordinatesTo()
+{
+  if (BackingScaleFactor() == 2.0) {
+    return 2;
+  }
+  return 1;
 }
 
 NS_IMETHODIMP nsCocoaWindow::SetCursor(nsCursor aCursor)
@@ -2103,15 +2116,21 @@ NS_IMETHODIMP_(void)
 nsCocoaWindow::SetInputContext(const InputContext& aContext,
                                const InputContextAction& aAction)
 {
-  // XXX Ideally, we should check if this instance has focus or not.
-  //     However, this is called only when this widget has focus, so,
-  //     it's not problem at least for now.
-  if (aContext.IsPasswordEditor()) {
-    TextInputHandler::EnableSecureEventInput();
-  } else {
-    TextInputHandler::EnsureSecureEventInputDisabled();
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  if (mWindow &&
+      [mWindow firstResponder] == mWindow &&
+      [mWindow isKeyWindow] &&
+      [[NSApplication sharedApplication] isActive]) {
+    if (aContext.IsPasswordEditor()) {
+      TextInputHandler::EnableSecureEventInput();
+    } else {
+      TextInputHandler::EnsureSecureEventInputDisabled();
+    }
   }
   mInputContext = aContext;
+
+  NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
 @implementation WindowDelegate

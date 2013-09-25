@@ -16,9 +16,10 @@
 #include "imgIRequest.h"
 #include "nsEventStates.h"
 #include "nsEventDispatcher.h"
+#include "nsGUIEvent.h"
 
-class nsGenConImageContent : public nsXMLElement,
-                             public nsImageLoadingContent
+class nsGenConImageContent MOZ_FINAL : public nsXMLElement,
+                                       public nsImageLoadingContent
 {
 public:
   nsGenConImageContent(already_AddRefed<nsINodeInfo> aNodeInfo)

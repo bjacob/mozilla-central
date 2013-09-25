@@ -16,11 +16,11 @@
 
 #include <string.h>
 #include "prlog.h"
+#include "prlock.h"
 #include "nsHashtable.h"
-#include "nsReadableUtils.h"
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
-#include "nsCRT.h"
+#include "nsCRTGlue.h"
 #include "mozilla/HashFunctions.h"
 
 using namespace mozilla;

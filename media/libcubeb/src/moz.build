@@ -34,6 +34,9 @@ if CONFIG['OS_TARGET'] == 'WINNT':
     CSRCS += [
         'cubeb_winmm.c',
     ]
+    CPP_SOURCES += [
+        'cubeb_wasapi.cpp'
+    ]
 
 if CONFIG['OS_TARGET'] == 'Android':
     CSRCS += [
@@ -43,3 +46,8 @@ if CONFIG['OS_TARGET'] == 'Android':
         CSRCS += [
             'cubeb_audiotrack.c',
         ]
+
+LIBRARY_NAME = 'cubeb'
+
+MSVC_ENABLE_PGO = True
+

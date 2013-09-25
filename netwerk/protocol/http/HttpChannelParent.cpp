@@ -4,6 +4,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "mozilla/net/HttpChannelParent.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/net/NeckoParent.h"
@@ -13,15 +16,10 @@
 #include "nsNetUtil.h"
 #include "nsISupportsPriority.h"
 #include "nsIAuthPromptProvider.h"
-#include "nsICacheEntryDescriptor.h"
 #include "nsSerializationHelper.h"
 #include "nsISerializable.h"
 #include "nsIAssociatedContentSecurity.h"
 #include "nsIApplicationCacheService.h"
-#include "nsIOfflineCacheUpdate.h"
-#include "nsIRedirectChannelRegistrar.h"
-#include "mozilla/LoadContext.h"
-#include "prinit.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
 
@@ -45,16 +43,17 @@ HttpChannelParent::HttpChannelParent(PBrowserParent* iframeEmbedding,
   , mLoadContext(aLoadContext)
 {
   // Ensure gHttpHandler is initialized: we need the atom table up and running.
-  nsIHttpProtocolHandler* handler;
-  CallGetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http", &handler);
-  MOZ_ASSERT(handler);
+  nsCOMPtr<nsIHttpProtocolHandler> dummyInitializer =
+    do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http");
+
+  MOZ_ASSERT(gHttpHandler);
+  mHttpHandler = gHttpHandler;
 
   mTabParent = static_cast<mozilla::dom::TabParent*>(iframeEmbedding);
 }
 
 HttpChannelParent::~HttpChannelParent()
 {
-  gHttpHandler->Release();
 }
 
 void
@@ -64,6 +63,33 @@ HttpChannelParent::ActorDestroy(ActorDestroyReason why)
   // yet, but child process has crashed.  We must not try to send any more msgs
   // to child, or IPDL will kill chrome process, too.
   mIPCClosed = true;
+}
+
+bool
+HttpChannelParent::Init(const HttpChannelCreationArgs& aArgs)
+{
+  switch (aArgs.type()) {
+  case HttpChannelCreationArgs::THttpChannelOpenArgs:
+  {
+    const HttpChannelOpenArgs& a = aArgs.get_HttpChannelOpenArgs();
+    return DoAsyncOpen(a.uri(), a.original(), a.doc(), a.referrer(),
+                       a.apiRedirectTo(), a.loadFlags(), a.requestHeaders(),
+                       a.requestMethod(), a.uploadStream(),
+                       a.uploadStreamHasHeaders(), a.priority(),
+                       a.redirectionLimit(), a.allowPipelining(),
+                       a.forceAllowThirdPartyCookie(), a.resumeAt(),
+                       a.startPos(), a.entityID(), a.chooseApplicationCache(),
+                       a.appCacheClientID(), a.allowSpdy());
+  }
+  case HttpChannelCreationArgs::THttpChannelConnectArgs:
+  {
+    const HttpChannelConnectArgs& cArgs = aArgs.get_HttpChannelConnectArgs();
+    return ConnectChannel(cArgs.channelId());
+  }
+  default:
+    NS_NOTREACHED("unknown open type");
+    return false;
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -108,7 +134,7 @@ HttpChannelParent::GetInterface(const nsIID& aIID, void **result)
 //-----------------------------------------------------------------------------
 
 bool
-HttpChannelParent::RecvAsyncOpen(const URIParams&           aURI,
+HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
                                  const OptionalURIParams&   aOriginalURI,
                                  const OptionalURIParams&   aDocURI,
                                  const OptionalURIParams&   aReferrerURI,
@@ -237,7 +263,7 @@ HttpChannelParent::RecvAsyncOpen(const URIParams&           aURI,
 }
 
 bool
-HttpChannelParent::RecvConnectChannel(const uint32_t& channelId)
+HttpChannelParent::ConnectChannel(const uint32_t& channelId)
 {
   nsresult rv;
 
@@ -305,8 +331,8 @@ HttpChannelParent::RecvCancel(const nsresult& status)
 bool
 HttpChannelParent::RecvSetCacheTokenCachedCharset(const nsCString& charset)
 {
-  if (mCacheDescriptor)
-    mCacheDescriptor->SetMetaDataElement("charset", charset.get());
+  if (mCacheEntry)
+    mCacheEntry->SetMetaDataElement("charset", charset.get());
   return true;
 }
 
@@ -376,7 +402,7 @@ HttpChannelParent::RecvDocumentChannelCleanup()
 {
   // From now on only using mAssociatedContentSecurity.  Free everything else.
   mChannel = 0;          // Reclaim some memory sooner.
-  mCacheDescriptor = 0;  // Else we'll block other channels reading same URI
+  mCacheEntry = 0;  // Else we'll block other channels reading same URI
   return true;
 }
 
@@ -433,7 +459,10 @@ HttpChannelParent::OnStartRequest(nsIRequest *aRequest, nsISupports *aContext)
 
   // Keep the cache entry for future use in RecvSetCacheTokenCachedCharset().
   // It could be already released by nsHttpChannel at that time.
-  chan->GetCacheToken(getter_AddRefs(mCacheDescriptor));
+  nsCOMPtr<nsISupports> cacheEntry;
+  chan->GetCacheToken(getter_AddRefs(cacheEntry));
+  mCacheEntry = do_QueryInterface(cacheEntry);
+
 
   nsCString secInfoSerialization;
   nsCOMPtr<nsISupports> secInfoSupp;
@@ -451,7 +480,7 @@ HttpChannelParent::OnStartRequest(nsIRequest *aRequest, nsISupports *aContext)
                           !!responseHead,
                           requestHead->Headers(),
                           isFromCache,
-                          mCacheDescriptor ? true : false,
+                          mCacheEntry ? true : false,
                           expirationTime, cachedCharset, secInfoSerialization,
                           httpChan->GetSelfAddr(), httpChan->GetPeerAddr()))
   {

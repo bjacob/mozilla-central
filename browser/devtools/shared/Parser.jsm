@@ -93,6 +93,16 @@ Parser.prototype = {
     this._cache.clear();
   },
 
+  /**
+   * Clears the AST for a particular source.
+   *
+   * @param String aUrl
+   *        The URL of the source that is being cleared.
+   */
+  clearSource: function P_clearSource(aUrl) {
+    this._cache.delete(aUrl);
+  },
+
   _cache: null
 };
 
@@ -1474,7 +1484,9 @@ let SyntaxTreeVisitor = {
       aCallbacks.onArrayExpression(aNode);
     }
     for (let element of aNode.elements) {
-      if (element) {
+      // TODO: remove the typeof check when support for SpreadExpression is
+      // added (bug 890913).
+      if (element && typeof this[element.type] == "function") {
         this[element.type](element, aNode, aCallbacks);
       }
     }

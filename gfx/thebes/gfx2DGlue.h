@@ -32,6 +32,11 @@ inline Rect ToRect(const gfxRect &aRect)
               Float(aRect.width), Float(aRect.height));
 }
 
+inline IntRect ToIntRect(const nsIntRect &aRect)
+{
+  return IntRect(aRect.x, aRect.y, aRect.width, aRect.height);
+}
+
 inline Color ToColor(const gfxRGBA &aRGBA)
 {
   return Color(Float(aRGBA.r), Float(aRGBA.g),
@@ -54,11 +59,18 @@ inline Size ToSize(const gfxSize &aSize)
   return Size(Float(aSize.width), Float(aSize.height));
 }
 
+inline IntSize ToIntSize(const gfxIntSize &aSize)
+{
+  return IntSize(aSize.width, aSize.height);
+}
+
 inline Filter ToFilter(gfxPattern::GraphicsFilter aFilter)
 {
   switch (aFilter) {
   case gfxPattern::FILTER_NEAREST:
     return FILTER_POINT;
+  case gfxPattern::FILTER_GOOD:
+    return FILTER_GOOD;
   default:
     return FILTER_LINEAR;
   }
@@ -118,6 +130,11 @@ inline gfxRect ThebesRect(const Rect &aRect)
   return gfxRect(aRect.x, aRect.y, aRect.width, aRect.height);
 }
 
+inline nsIntRect ThebesIntRect(const IntRect &aRect)
+{
+  return nsIntRect(aRect.x, aRect.y, aRect.width, aRect.height);
+}
+
 inline gfxRGBA ThebesRGBA(const Color &aColor)
 {
   return gfxRGBA(aColor.r, aColor.g, aColor.b, aColor.a);
@@ -133,7 +150,7 @@ inline gfxContext::GraphicsLineCap ThebesLineCap(CapStyle aStyle)
   case CAP_SQUARE:
     return gfxContext::LINE_CAP_SQUARE;
   }
-  MOZ_NOT_REACHED("Incomplete switch");
+  MOZ_CRASH("Incomplete switch");
 }
 
 inline CapStyle ToCapStyle(gfxContext::GraphicsLineCap aStyle)
@@ -146,7 +163,7 @@ inline CapStyle ToCapStyle(gfxContext::GraphicsLineCap aStyle)
   case gfxContext::LINE_CAP_SQUARE:
     return CAP_SQUARE;
   }
-  MOZ_NOT_REACHED("Incomplete switch");
+  MOZ_CRASH("Incomplete switch");
 }
 
 inline gfxContext::GraphicsLineJoin ThebesLineJoin(JoinStyle aStyle)
@@ -173,7 +190,7 @@ inline JoinStyle ToJoinStyle(gfxContext::GraphicsLineJoin aStyle)
   case gfxContext::LINE_JOIN_ROUND:
     return JOIN_ROUND;
   }
-  MOZ_NOT_REACHED("Incomplete switch");
+  MOZ_CRASH("Incomplete switch");
 }
 
 inline gfxMatrix ThebesMatrix(const Matrix &aMatrix)
@@ -182,50 +199,52 @@ inline gfxMatrix ThebesMatrix(const Matrix &aMatrix)
                    aMatrix._22, aMatrix._31, aMatrix._32);
 }
 
-inline gfxASurface::gfxImageFormat SurfaceFormatToImageFormat(SurfaceFormat aFormat)
+inline gfxImageFormat SurfaceFormatToImageFormat(SurfaceFormat aFormat)
 {
   switch (aFormat) {
   case FORMAT_B8G8R8A8:
-    return gfxASurface::ImageFormatARGB32;
+    return gfxImageFormatARGB32;
   case FORMAT_B8G8R8X8:
-    return gfxASurface::ImageFormatRGB24;
+    return gfxImageFormatRGB24;
   case FORMAT_R5G6B5:
-    return gfxASurface::ImageFormatRGB16_565;
+    return gfxImageFormatRGB16_565;
   case FORMAT_A8:
-    return gfxASurface::ImageFormatA8;
+    return gfxImageFormatA8;
   default:
-    return gfxASurface::ImageFormatUnknown;
+    return gfxImageFormatUnknown;
   }
 }
 
-inline SurfaceFormat ImageFormatToSurfaceFormat(gfxASurface::gfxImageFormat aFormat)
+inline SurfaceFormat ImageFormatToSurfaceFormat(gfxImageFormat aFormat)
 {
   switch (aFormat) {
-  case gfxASurface::ImageFormatARGB32:
+  case gfxImageFormatARGB32:
     return FORMAT_B8G8R8A8;
-  case gfxASurface::ImageFormatRGB24:
+  case gfxImageFormatRGB24:
     return FORMAT_B8G8R8X8;
-  case gfxASurface::ImageFormatRGB16_565:
+  case gfxImageFormatRGB16_565:
     return FORMAT_R5G6B5;
-  case gfxASurface::ImageFormatA8:
+  case gfxImageFormatA8:
     return FORMAT_A8;
   default:
-  case gfxASurface::ImageFormatUnknown:
+  case gfxImageFormatUnknown:
     return FORMAT_B8G8R8A8;
   }
 }
 
-inline gfxASurface::gfxContentType ContentForFormat(const SurfaceFormat &aFormat)
+inline gfxContentType ContentForFormat(const SurfaceFormat &aFormat)
 {
   switch (aFormat) {
   case FORMAT_R5G6B5:
   case FORMAT_B8G8R8X8:
-    return gfxASurface::CONTENT_COLOR;
+  case FORMAT_R8G8B8X8:
+    return GFX_CONTENT_COLOR;
   case FORMAT_A8:
-    return gfxASurface::CONTENT_ALPHA;
+    return GFX_CONTENT_ALPHA;
   case FORMAT_B8G8R8A8:
+  case FORMAT_R8G8B8A8:
   default:
-    return gfxASurface::CONTENT_COLOR_ALPHA;
+    return GFX_CONTENT_COLOR_ALPHA;
   }
 }
 

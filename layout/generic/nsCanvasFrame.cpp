@@ -6,26 +6,23 @@
 /* rendering object that goes directly inside the document's scrollbars */
 
 #include "nsCanvasFrame.h"
-#include "nsIServiceManager.h"
-#include "nsHTMLParts.h"
 #include "nsContainerFrame.h"
 #include "nsCSSRendering.h"
 #include "nsPresContext.h"
 #include "nsStyleContext.h"
 #include "nsRenderingContext.h"
-#include "nsGUIEvent.h"
-#include "nsStyleConsts.h"
 #include "nsGkAtoms.h"
-#include "nsEventStateManager.h"
 #include "nsIPresShell.h"
-#include "nsIScrollPositionListener.h"
 #include "nsDisplayList.h"
 #include "nsCSSFrameConstructor.h"
 #include "nsFrameManager.h"
+#include "gfxPlatform.h"
 
 // for focus
 #include "nsIScrollableFrame.h"
+#ifdef DEBUG_CANVAS_FOCUS
 #include "nsIDocShell.h"
+#endif
 
 //#define DEBUG_CANVAS_FOCUS
 
@@ -221,13 +218,32 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
     // to snap for this context, because we checked HasNonIntegerTranslation above.
     destRect.Round();
     surf = static_cast<gfxASurface*>(Frame()->Properties().Get(nsIFrame::CachedBackgroundImage()));
-    nsRefPtr<gfxASurface> destSurf = dest->CurrentSurface();
-    if (surf && surf->GetType() == destSurf->GetType()) {
-      BlitSurface(dest, destRect, surf);
-      return;
+    if (dest->IsCairo()) {
+      nsRefPtr<gfxASurface> destSurf = dest->CurrentSurface();
+      if (surf && surf->GetType() == destSurf->GetType()) {
+        BlitSurface(dest, destRect, surf);
+        return;
+      }
+      surf = destSurf->CreateSimilarSurface(
+          GFX_CONTENT_COLOR_ALPHA,
+          gfxIntSize(ceil(destRect.width), ceil(destRect.height)));
+    } else {
+      if (surf) {
+        mozilla::gfx::DrawTarget* dt = dest->GetDrawTarget();
+        mozilla::RefPtr<mozilla::gfx::SourceSurface> source =
+            gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(dt, surf);
+        if (source) {
+          // Could be non-integer pixel alignment
+          dt->DrawSurface(source,
+                          mozilla::gfx::Rect(destRect.x, destRect.y, destRect.width, destRect.height),
+                          mozilla::gfx::Rect(0, 0, destRect.width, destRect.height));
+          return;
+        }
+      }
+      surf = gfxPlatform::GetPlatform()->CreateOffscreenImageSurface(
+          gfxIntSize(ceil(destRect.width), ceil(destRect.height)),
+          GFX_CONTENT_COLOR_ALPHA);
     }
-    surf = destSurf->CreateSimilarSurface(gfxASurface::CONTENT_COLOR_ALPHA,
-        gfxIntSize(destRect.width, destRect.height));
     if (surf) {
       ctx = new gfxContext(surf);
       ctx->Translate(-gfxPoint(destRect.x, destRect.y));
@@ -245,6 +261,17 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
     BlitSurface(dest, destRect, surf);
     frame->Properties().Set(nsIFrame::CachedBackgroundImage(), surf.forget().get());
   }
+}
+
+void
+nsDisplayCanvasThemedBackground::Paint(nsDisplayListBuilder* aBuilder,
+                                       nsRenderingContext* aCtx)
+{
+  nsCanvasFrame* frame = static_cast<nsCanvasFrame*>(mFrame);
+  nsPoint offset = ToReferenceFrame();
+  nsRect bgClipRect = frame->CanvasArea() + offset;
+
+  PaintInternal(aBuilder, aCtx, mVisibleRect, &bgClipRect);
 }
 
 /**
@@ -309,7 +336,7 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   
     if (isThemed) {
       aLists.BorderBackground()->AppendNewToTop(
-        new (aBuilder) nsDisplayCanvasBackgroundImage(aBuilder, this, 0, isThemed, nullptr));
+        new (aBuilder) nsDisplayCanvasThemedBackground(aBuilder, this));
       return;
     }
 
@@ -323,8 +350,7 @@ nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
         continue;
       }
       aLists.BorderBackground()->AppendNewToTop(
-        new (aBuilder) nsDisplayCanvasBackgroundImage(aBuilder, this, i,
-                                                      isThemed, bg));
+        new (aBuilder) nsDisplayCanvasBackgroundImage(aBuilder, this, i, bg));
     }
   }
 
@@ -476,12 +502,8 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
 
     nsPoint kidPt(kidReflowState.mComputedMargin.left,
                   kidReflowState.mComputedMargin.top);
-    // Apply CSS relative positioning
-    const nsStyleDisplay* styleDisp = kidFrame->StyleDisplay();
-    if (NS_STYLE_POSITION_RELATIVE == styleDisp->mPosition) {
-      kidPt += nsPoint(kidReflowState.mComputedOffsets.left,
-                       kidReflowState.mComputedOffsets.top);
-    }
+
+    kidReflowState.ApplyRelativePositioning(&kidPt);
 
     // Reflow the frame
     ReflowChild(kidFrame, aPresContext, kidDesiredSize, kidReflowState,

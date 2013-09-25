@@ -15,7 +15,13 @@
 <?xul-overlay href="chrome://global/content/editMenuOverlay.xul"?>
 <?xul-overlay href="chrome://browser/content/devtools/source-editor-overlay.xul"?>
 
-<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        macanimationtype="document"
+        fullscreenbutton="true"
+        screenX="4" screenY="4"
+        width="960" height="480"
+        persist="screenX screenY width height sizemode">
+
   <script type="text/javascript" src="chrome://global/content/globalOverlay.js"/>
   <script type="text/javascript" src="debugger-controller.js"/>
   <script type="text/javascript" src="debugger-view.js"/>
@@ -26,6 +32,10 @@
   <commandset id="sourceEditorCommands"/>
 
   <commandset id="debuggerCommands">
+    <command id="prettyPrintCommand"
+             oncommand="DebuggerView.Sources.prettyPrint()"/>
+    <command id="unBlackBoxButton"
+             oncommand="DebuggerView.Sources._onStopBlackBoxing()"/>
     <command id="nextSourceCommand"
              oncommand="DebuggerView.Sources.selectNextItem()"/>
     <command id="prevSourceCommand"
@@ -62,6 +72,8 @@
              oncommand="DebuggerView.WatchExpressions._onCmdRemoveAllExpressions()"/>
     <command id="togglePauseOnExceptions"
              oncommand="DebuggerView.Options._togglePauseOnExceptions()"/>
+    <command id="toggleIgnoreCaughtExceptions"
+             oncommand="DebuggerView.Options._toggleIgnoreCaughtExceptions()"/>
     <command id="toggleShowPanesOnStartup"
              oncommand="DebuggerView.Options._toggleShowPanesOnStartup()"/>
     <command id="toggleShowOnlyEnum"
@@ -114,8 +126,8 @@
                 key="tokenSearchKey"
                 command="tokenSearchCommand"/>
       <menuitem id="se-dbg-cMenu-findLine"
-                label="&debuggerUI.searchLine;"
-                accesskey="&debuggerUI.searchLine.key;"
+                label="&debuggerUI.searchGoToLine;"
+                accesskey="&debuggerUI.searchGoToLine.key;"
                 key="lineSearchKey"
                 command="lineSearchCommand"/>
       <menuseparator/>
@@ -129,6 +141,9 @@
                 accesskey="&debuggerUI.focusVariables.key;"
                 key="variablesFocusKey"
                 command="variablesFocusCommand"/>
+      <menuitem id="se-dbg-cMenu-prettyPrint"
+                label="&debuggerUI.sources.prettyPrint;"
+                command="prettyPrintCommand"/>
     </menupopup>
     <menupopup id="debuggerWatchExpressionsContextMenu">
       <menuitem id="add-watch-expression"
@@ -152,6 +167,11 @@
                 label="&debuggerUI.pauseExceptions;"
                 accesskey="&debuggerUI.pauseExceptions.key;"
                 command="togglePauseOnExceptions"/>
+      <menuitem id="ignore-caught-exceptions"
+                type="checkbox"
+                label="&debuggerUI.ignoreCaughtExceptions;"
+                accesskey="&debuggerUI.ignoreCaughtExceptions.key;"
+                command="toggleIgnoreCaughtExceptions"/>
       <menuitem id="show-panes-on-startup"
                 type="checkbox"
                 label="&debuggerUI.showPanesOnInit;"
@@ -185,17 +205,33 @@
          modifiers="accel alt"
          command="prevSourceCommand"/>
     <key id="resumeKey"
-         keycode="&debuggerUI.stepping.resume;"
+         keycode="&debuggerUI.stepping.resume1;"
+         command="resumeCommand"/>
+    <key id="resumeKey2"
+         keycode="&debuggerUI.stepping.resume2;"
+         modifiers="accel"
          command="resumeCommand"/>
     <key id="stepOverKey"
-         keycode="&debuggerUI.stepping.stepOver;"
+         keycode="&debuggerUI.stepping.stepOver1;"
+         command="stepOverCommand"/>
+    <key id="stepOverKey2"
+         keycode="&debuggerUI.stepping.stepOver2;"
+         modifiers="accel"
          command="stepOverCommand"/>
     <key id="stepInKey"
-         keycode="&debuggerUI.stepping.stepIn;"
+         keycode="&debuggerUI.stepping.stepIn1;"
+         command="stepInCommand"/>
+    <key id="stepInKey2"
+         keycode="&debuggerUI.stepping.stepIn2;"
+         modifiers="accel"
          command="stepInCommand"/>
     <key id="stepOutKey"
-         keycode="&debuggerUI.stepping.stepOut;"
+         keycode="&debuggerUI.stepping.stepOut1;"
          modifiers="shift"
+         command="stepOutCommand"/>
+    <key id="stepOutKey2"
+         keycode="&debuggerUI.stepping.stepOut2;"
+         modifiers="accel shift"
          command="stepOutCommand"/>
     <key id="fileSearchKey"
          key="&debuggerUI.searchFile.key;"
@@ -218,7 +254,7 @@
          modifiers="accel"
          command="tokenSearchCommand"/>
     <key id="lineSearchKey"
-         key="&debuggerUI.searchLine.key;"
+         key="&debuggerUI.searchGoToLine.key;"
          modifiers="accel"
          command="lineSearchCommand"/>
     <key id="variableSearchKey"
@@ -283,11 +319,32 @@
       <scrollbox id="globalsearch" orient="vertical" hidden="true"/>
       <splitter class="devtools-horizontal-splitter" hidden="true"/>
       <hbox flex="1">
-        <vbox id="sources-pane">
-          <vbox id="sources" flex="1"/>
+        <vbox id="sources-container">
+          <vbox id="sources-pane" flex="1">
+            <vbox id="sources" flex="1"/>
+          </vbox>
+          <toolbar id="sources-toolbar" class="devtools-toolbar">
+            <toolbarbutton id="pretty-print"
+                           label="{}"
+                           tooltiptext="&debuggerUI.sources.prettyPrint;"
+                           class="devtools-toolbarbutton devtools-monospace"
+                           command="prettyPrintCommand"/>
+          </toolbar>
         </vbox>
         <splitter class="devtools-side-splitter"/>
-        <vbox id="editor" flex="1"/>
+        <deck id="editor-deck" flex="1" selectedIndex="0">
+          <vbox id="editor" />
+          <vbox id="black-boxed-message" align="center">
+            <label id="black-boxed-message-label">
+              &debuggerUI.blackBoxMessage.label;
+            </label>
+            <button id="black-boxed-message-button"
+                    class="devtools-toolbarbutton"
+                    label="&debuggerUI.blackBoxMessage.unBlackBoxButton;"
+                    image="chrome://browser/skin/devtools/blackBoxMessageEye.png"
+                    command="unBlackBoxCommand"/>
+          </vbox>
+        </deck>
         <splitter class="devtools-side-splitter"/>
         <vbox id="instruments-pane" hidden="true">
           <vbox id="expressions"/>
@@ -304,39 +361,42 @@
          noautofocus="true"
          position="before_start">
     <vbox>
-      <label id="searchbox-panel-description"
-             value="&debuggerUI.searchPanelTitle;"/>
+      <hbox>
+        <label id="filter-label"/>
+      </hbox>
+      <label id="searchbox-panel-operators"
+             value="&debuggerUI.searchPanelOperators;"/>
       <hbox align="center">
         <button id="global-operator-button"
-                class="searchbox-panel-operator-button"
+                class="searchbox-panel-operator-button devtools-monospace"
                 command="globalSearchCommand"/>
         <label id="global-operator-label"
                class="plain searchbox-panel-operator-label"/>
       </hbox>
       <hbox align="center">
         <button id="function-operator-button"
-                class="searchbox-panel-operator-button"
+                class="searchbox-panel-operator-button devtools-monospace"
                 command="functionSearchCommand"/>
         <label id="function-operator-label"
                class="plain searchbox-panel-operator-label"/>
       </hbox>
       <hbox align="center">
         <button id="token-operator-button"
-                class="searchbox-panel-operator-button"
+                class="searchbox-panel-operator-button devtools-monospace"
                 command="tokenSearchCommand"/>
         <label id="token-operator-label"
                class="plain searchbox-panel-operator-label"/>
       </hbox>
       <hbox align="center">
         <button id="line-operator-button"
-                class="searchbox-panel-operator-button"
+                class="searchbox-panel-operator-button devtools-monospace"
                 command="lineSearchCommand"/>
         <label id="line-operator-label"
                class="plain searchbox-panel-operator-label"/>
       </hbox>
       <hbox align="center">
         <button id="variable-operator-button"
-                class="searchbox-panel-operator-button"
+                class="searchbox-panel-operator-button devtools-monospace"
                 command="variableSearchCommand"/>
         <label id="variable-operator-label"
                class="plain searchbox-panel-operator-label"/>

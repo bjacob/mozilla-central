@@ -205,16 +205,6 @@ function setupPanelFrame(frame) {
   }
 }
 
-let EVENT_NAMES = {
-  "popupshowing": "sdk-panel-show",
-  "popuphiding": "sdk-panel-hide",
-  "popupshown": "sdk-panel-shown",
-  "popuphidden": "sdk-panel-hidden",
-  "document-element-inserted": "sdk-panel-content-changed",
-  "DOMContentLoaded": "sdk-panel-content-loaded",
-  "load": "sdk-panel-document-loaded"
-};
-
 function make(document) {
   document = document || getMostRecentBrowserWindow().document;
   let panel = document.createElementNS(XUL_NS, "panel");
@@ -246,32 +236,37 @@ function make(document) {
   let viewFrame = createFrame(panel, frameOptions);
   setupPanelFrame(viewFrame);
 
-  function onDisplayChange({type}) {
+  function onDisplayChange({type, target}) {
+    // Events from child element like <select /> may propagate (dropdowns are
+    // popups too), in which case frame loader shouldn't be swapped.
+    // See Bug 886329
+    if (target !== this) return;
+
     try { swapFrameLoaders(backgroundFrame, viewFrame); }
     catch(error) { console.exception(error); }
-    events.emit(EVENT_NAMES[type], { subject: panel });
+    events.emit(type, { subject: panel });
   }
 
   function onContentReady({target, type}) {
     if (target === getContentDocument(panel)) {
       style(panel);
-      events.emit(EVENT_NAMES[type], { subject: panel });
+      events.emit(type, { subject: panel });
     }
   }
 
   function onContentLoad({target, type}) {
     if (target === getContentDocument(panel))
-      events.emit(EVENT_NAMES[type], { subject: panel });
+      events.emit(type, { subject: panel });
   }
 
   function onContentChange({subject, type}) {
     let document = subject;
     if (document === getContentDocument(panel) && document.defaultView)
-      events.emit(EVENT_NAMES[type], { subject: panel });
+      events.emit(type, { subject: panel });
   }
 
   function onPanelStateChange({type}) {
-    events.emit(EVENT_NAMES[type], { subject: panel })
+    events.emit(type, { subject: panel })
   }
 
   panel.addEventListener("popupshowing", onDisplayChange, false);

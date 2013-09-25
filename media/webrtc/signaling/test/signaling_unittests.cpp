@@ -24,7 +24,6 @@
 #include "PeerConnectionImpl.h"
 #include "PeerConnectionCtx.h"
 #include "runnable_utils.h"
-#include "nsStaticComponents.h"
 #include "nsServiceManagerUtils.h"
 #include "nsNetUtil.h"
 #include "nsIIOService.h"
@@ -38,9 +37,15 @@ MtransportTestUtils *test_utils;
 nsCOMPtr<nsIThread> gThread;
 
 static int kDefaultTimeout = 5000;
+static bool fRtcpMux = true;
 
 static std::string callerName = "caller";
 static std::string calleeName = "callee";
+
+#define ARRAY_TO_STL(container, type, array) \
+        (container<type>((array), (array) + PR_ARRAY_SIZE(array)))
+
+#define ARRAY_TO_SET(type, array) ARRAY_TO_STL(std::set, type, array)
 
 namespace test {
 
@@ -138,6 +143,16 @@ enum offerAnswerFlags
   ANSWER_AV = ANSWER_AUDIO | ANSWER_VIDEO
 };
 
+enum mediaPipelineFlags
+{
+  PIPELINE_LOCAL = (1<<0),
+  PIPELINE_RTCP_MUX = (1<<1),
+  PIPELINE_SEND = (1<<2),
+  PIPELINE_VIDEO = (1<<3),
+  PIPELINE_RTCP_NACK = (1<<4)
+};
+
+
 static bool SetupGlobalThread() {
   if (!gThread) {
     nsIThread *thread;
@@ -178,7 +193,7 @@ public:
 
   std::vector<DOMMediaStream *> GetStreams() { return streams; }
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_IPEERCONNECTIONOBSERVER
 
   ResponseState state;
@@ -194,9 +209,9 @@ private:
   std::vector<DOMMediaStream *> streams;
 };
 
-NS_IMPL_THREADSAFE_ISUPPORTS2(TestObserver,
-                              IPeerConnectionObserver,
-                              nsISupportsWeakReference)
+NS_IMPL_ISUPPORTS2(TestObserver,
+                   IPeerConnectionObserver,
+                   nsISupportsWeakReference)
 
 NS_IMETHODIMP
 TestObserver::OnCreateOfferSuccess(const char* offer)
@@ -362,7 +377,6 @@ TestObserver::OnStateChange(uint32_t state_type)
     break;
   }
 
-  state = stateSuccess;
   lastStateType = state_type;
   return NS_OK;
 }
@@ -456,7 +470,25 @@ class ParsedSDP {
     Parse();
   }
 
+  void DeleteAllLines(std::string objType)
+  {
+    int count = sdp_map_.count(objType);
+    std::cout << "Removing " << count << " lines from SDP (" << objType
+              << ")" << std::endl;
 
+    for (int i = 0; i < count; i++) {
+      DeleteLine(objType);
+    }
+  }
+
+  void DeleteLine(std::string objType)
+  {
+    ReplaceLine(objType, "");
+  }
+
+  // Replaces the first instance of objType in the SDP with
+  // a new string.
+  // If content is an empty string then the line will be removed
   void ReplaceLine(std::string objType, std::string content)
   {
     std::multimap<std::string, SdpLine>::iterator it;
@@ -465,7 +497,10 @@ class ParsedSDP {
       SdpLine sdp_line_pair = (*it).second;
       int line_no = sdp_line_pair.first;
       sdp_map_.erase(it);
-      std::string value = content.substr(objType.length());
+      if(content.empty()) {
+        return;
+      }
+      std::string value = content.substr(objType.length() + 1);
       sdp_map_.insert(std::pair<std::string, SdpLine>(objType,
         std::make_pair(line_no,value)));
     }
@@ -486,6 +521,27 @@ class ParsedSDP {
     sdp_map_.insert(std::pair<std::string, SdpLine>(key,
       std::make_pair(num_lines,value)));
     num_lines++;
+  }
+
+  // Returns the values for all lines of the indicated type
+  // Removes trailing "\r\n" from values.
+  std::vector<std::string> GetLines(std::string objType) const
+  {
+    std::multimap<std::string, SdpLine>::const_iterator it, end;
+    std::vector<std::string> values;
+    it = sdp_map_.lower_bound(objType);
+    end = sdp_map_.upper_bound(objType);
+    while (it != end) {
+      std::string value = it->second.second;
+      if (value.find("\r") != std::string::npos) {
+        value = value.substr(0, value.find("\r"));
+      } else {
+        ADD_FAILURE();
+      }
+      values.push_back(value);
+      ++it;
+    }
+    return values;
   }
 
   //Parse SDP as std::string into map that looks like:
@@ -753,7 +809,7 @@ void CreateAnswer(sipcc::MediaConstraints& constraints, std::string offer,
                                         DONT_CHECK_VIDEO|
                                         DONT_CHECK_DATA,
                     sipcc::PeerConnectionImpl::SignalingState endState =
-                      sipcc::PeerConnectionImpl::kSignalingHaveRemoteOffer) {
+                    sipcc::PeerConnectionImpl::kSignalingHaveRemoteOffer) {
 
     uint32_t aHintContents = 0;
     if (offerAnswerFlags & ANSWER_AUDIO) {
@@ -933,6 +989,72 @@ void CreateAnswer(sipcc::MediaConstraints& constraints, std::string offer,
                             pObserver->GetStreams();
     for (size_t i = 0; i < streams.size(); i++) {
       streams[i]->GetStream()->AsSourceStream()->StopStream();
+    }
+  }
+
+  mozilla::RefPtr<mozilla::MediaPipeline> GetMediaPipeline(
+    bool local, int stream, int track) {
+    sipcc::SourceStreamInfo *streamInfo;
+
+    if (local) {
+      streamInfo = pc->media()->GetLocalStream(stream);
+    } else {
+      streamInfo = pc->media()->GetRemoteStream(stream);
+    }
+
+    if (!streamInfo) {
+      return nullptr;
+    }
+
+    return streamInfo->GetPipeline(track);
+  }
+
+  void CheckMediaPipeline(int stream, int track, uint32_t flags,
+    VideoSessionConduit::FrameRequestType frameRequestMethod =
+      VideoSessionConduit::FrameRequestNone) {
+
+    std::cout << name << ": Checking media pipeline settings for "
+              << ((flags & PIPELINE_LOCAL) ? "local " : "remote ")
+              << ((flags & PIPELINE_SEND) ? "sending " : "receiving ")
+              << ((flags & PIPELINE_VIDEO) ? "video" : "audio")
+              << " pipeline (stream " << stream
+              << ", track " << track << "); expect "
+              << ((flags & PIPELINE_RTCP_MUX) ? "MUX, " : "no MUX, ")
+              << ((flags & PIPELINE_RTCP_NACK) ? "NACK." : "no NACK.")
+              << std::endl;
+
+    mozilla::RefPtr<mozilla::MediaPipeline> pipeline =
+      GetMediaPipeline((flags & PIPELINE_LOCAL), stream, track);
+    ASSERT_TRUE(pipeline);
+    ASSERT_EQ(pipeline->IsDoingRtcpMux(), !!(flags & PIPELINE_RTCP_MUX));
+    // We cannot yet test send/recv with video.
+    if (!(flags & PIPELINE_VIDEO)) {
+      if (flags & PIPELINE_SEND) {
+        ASSERT_TRUE_WAIT(pipeline->rtp_packets_sent() >= 40 &&
+                         pipeline->rtcp_packets_received() >= 1,
+                         kDefaultTimeout);
+        ASSERT_GE(pipeline->rtp_packets_sent(), 40);
+        ASSERT_GE(pipeline->rtcp_packets_received(), 1);
+      } else {
+        ASSERT_TRUE_WAIT(pipeline->rtp_packets_received() >= 40 &&
+                         pipeline->rtcp_packets_sent() >= 1,
+                         kDefaultTimeout);
+        ASSERT_GE(pipeline->rtp_packets_received(), 40);
+        ASSERT_GE(pipeline->rtcp_packets_sent(), 1);
+      }
+    }
+
+
+    // Check feedback method for video
+    if (flags & PIPELINE_VIDEO) {
+        mozilla::MediaSessionConduit *conduit = pipeline->Conduit();
+        ASSERT_TRUE(conduit);
+        ASSERT_EQ(conduit->type(), mozilla::MediaSessionConduit::VIDEO);
+        mozilla::VideoSessionConduit *video_conduit =
+          static_cast<mozilla::VideoSessionConduit*>(conduit);
+        ASSERT_EQ(!!(flags & PIPELINE_RTCP_NACK),
+                  video_conduit->UsingNackBasic());
+        ASSERT_EQ(frameRequestMethod, video_conduit->FrameRequestMethod());
     }
   }
 
@@ -1157,10 +1279,10 @@ public:
   void OfferModifiedAnswer(sipcc::MediaConstraints& aconstraints,
                            sipcc::MediaConstraints& bconstraints,
                            uint32_t offerSdpCheck, uint32_t answerSdpCheck) {
-    a1_.CreateOffer(aconstraints, OFFER_AV, offerSdpCheck);
+    a1_.CreateOffer(aconstraints, OFFER_AUDIO, offerSdpCheck);
     a1_.SetLocal(TestObserver::OFFER, a1_.offer());
     a2_.SetRemote(TestObserver::OFFER, a1_.offer());
-    a2_.CreateAnswer(bconstraints, a1_.offer(), OFFER_AV | ANSWER_AV,
+    a2_.CreateAnswer(bconstraints, a1_.offer(), OFFER_AUDIO | ANSWER_AUDIO,
                      answerSdpCheck);
     a2_.SetLocal(TestObserver::ANSWER, a2_.answer());
     ParsedSDP sdpWrapper(a2_.answer());
@@ -1236,6 +1358,83 @@ public:
   void AddIceCandidateEarly(const char * candidate, const char * mid,
                             unsigned short level) {
     a1_.AddIceCandidate(candidate, mid, level, false);
+  }
+
+  void CheckRtcpFbSdp(const std::string &sdp,
+                      const std::set<std::string>& expected) {
+
+    std::set<std::string>::const_iterator it;
+
+    // Iterate through the list of expected feedback types and ensure
+    // that none of them are missing.
+    for (it = expected.begin(); it != expected.end(); ++it) {
+      std::string attr = std::string("\r\na=rtcp-fb:120 ") + (*it) + "\r\n";
+      std::cout << " - Checking for a=rtcp-fb: '" << *it << "'" << std::endl;
+      ASSERT_NE(sdp.find(attr), std::string::npos);
+    }
+
+    // Iterate through all of the rtcp-fb lines in the SDP and ensure
+    // that all of them are expected.
+    ParsedSDP sdpWrapper(sdp);
+    std::vector<std::string> values = sdpWrapper.GetLines("a=rtcp-fb:120");
+    std::vector<std::string>::iterator it2;
+    for (it2 = values.begin(); it2 != values.end(); ++it2) {
+      std::cout << " - Verifying that rtcp-fb is okay: '" << *it2
+                << "'" << std::endl;
+      ASSERT_NE(0U, expected.count(*it2));
+    }
+  }
+
+  void TestRtcpFb(const std::set<std::string>& feedback,
+                  uint32_t rtcpFbFlags,
+                  VideoSessionConduit::FrameRequestType frameRequestMethod) {
+    sipcc::MediaConstraints constraints;
+
+    a1_.CreateOffer(constraints, OFFER_AV, SHOULD_SENDRECV_AV);
+    a1_.SetLocal(TestObserver::OFFER, a1_.offer());
+
+    ParsedSDP sdpWrapper(a1_.offer());
+
+    // Strip out any existing rtcp-fb lines
+    sdpWrapper.DeleteAllLines("a=rtcp-fb:120");
+
+    // Add rtcp-fb lines for the desired feedback types
+    // We know that the video section is generated second (last),
+    // so appending these to the end of the SDP has the desired effect.
+    std::set<std::string>::const_iterator it;
+    for (it = feedback.begin(); it != feedback.end(); ++it) {
+      sdpWrapper.AddLine(std::string("a=rtcp-fb:120 ") + (*it) + "\r\n");
+    }
+
+    std::cout << "Modified SDP " << std::endl
+              << indent(sdpWrapper.getSdp()) << std::endl;
+
+    // Double-check that the offered SDP matches what we expect
+    CheckRtcpFbSdp(sdpWrapper.getSdp(), feedback);
+
+    a2_.SetRemote(TestObserver::OFFER, sdpWrapper.getSdp());
+    a2_.CreateAnswer(constraints, sdpWrapper.getSdp(), OFFER_AV | ANSWER_AV);
+
+    CheckRtcpFbSdp(a2_.answer(), feedback);
+
+    a2_.SetLocal(TestObserver::ANSWER, a2_.answer());
+    a1_.SetRemote(TestObserver::ANSWER, a2_.answer());
+
+    ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+    ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+    a1_.CloseSendStreams();
+    a1_.CloseReceiveStreams();
+    a2_.CloseSendStreams();
+    a2_.CloseReceiveStreams();
+
+    // Check caller video settings for remote pipeline
+    a1_.CheckMediaPipeline(0, 2, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
+      PIPELINE_SEND | PIPELINE_VIDEO | rtcpFbFlags, frameRequestMethod);
+
+    // Check callee video settings for remote pipeline
+    a2_.CheckMediaPipeline(0, 2, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
+      PIPELINE_VIDEO | rtcpFbFlags, frameRequestMethod);
   }
 
  protected:
@@ -1616,7 +1815,9 @@ TEST_F(SignalingTest, FullCall)
   OfferAnswer(constraints, constraints, OFFER_AV | ANSWER_AV,
               true, SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
 
-  PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
   a1_.CloseSendStreams();
   a2_.CloseReceiveStreams();
@@ -1625,6 +1826,16 @@ TEST_F(SignalingTest, FullCall)
   //ASSERT_GE(a2_.GetPacketsSent(0), 40);
   //ASSERT_GE(a1_.GetPacketsReceived(0), 40);
   ASSERT_GE(a2_.GetPacketsReceived(0), 40);
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  // The first Local pipeline gets stored at 0
+  a1_.CheckMediaPipeline(0, 0, fRtcpMux ?
+    PIPELINE_LOCAL | PIPELINE_RTCP_MUX | PIPELINE_SEND :
+    PIPELINE_LOCAL | PIPELINE_SEND);
+
+  // The first Remote pipeline gets stored at 1
+  a2_.CheckMediaPipeline(0, 1, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
 }
 
 TEST_F(SignalingTest, FullCallAudioOnly)
@@ -1633,7 +1844,9 @@ TEST_F(SignalingTest, FullCallAudioOnly)
   OfferAnswer(constraints, constraints, OFFER_AUDIO | ANSWER_AUDIO,
               true, SHOULD_SENDRECV_AUDIO, SHOULD_SENDRECV_AUDIO);
 
-  PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
   a1_.CloseSendStreams();
   a2_.CloseReceiveStreams();
@@ -1650,7 +1863,10 @@ TEST_F(SignalingTest, FullCallVideoOnly)
   OfferAnswer(constraints, constraints, OFFER_VIDEO | ANSWER_VIDEO,
               true, SHOULD_SENDRECV_VIDEO, SHOULD_SENDRECV_VIDEO);
 
-  PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
+  // If we could check for video packets, we would wait for some to be written
+  // here. Since we can't, we don't.
+  // ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+  //                 a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
   a1_.CloseSendStreams();
   a2_.CloseReceiveStreams();
@@ -1669,9 +1885,8 @@ TEST_F(SignalingTest, FullCallVideoOnly)
 TEST_F(SignalingTest, OfferModifiedAnswer)
 {
   sipcc::MediaConstraints constraints;
-  OfferModifiedAnswer(constraints, constraints, SHOULD_SENDRECV_AV,
-                      SHOULD_SENDRECV_AV);
-  PR_Sleep(kDefaultTimeout * 2); // Wait for completion
+  OfferModifiedAnswer(constraints, constraints, SHOULD_SENDRECV_AUDIO,
+                      SHOULD_SENDRECV_AUDIO);
   a1_.CloseSendStreams();
   a2_.CloseReceiveStreams();
 }
@@ -1683,7 +1898,10 @@ TEST_F(SignalingTest, FullCallTrickle)
                      SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
 
   std::cerr << "ICE handshake completed" << std::endl;
-  PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
   a1_.CloseSendStreams();
   a2_.CloseReceiveStreams();
@@ -1699,7 +1917,10 @@ TEST_F(SignalingTest, FullCallTrickleChrome)
                            SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
 
   std::cerr << "ICE handshake completed" << std::endl;
-  PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
   a1_.CloseSendStreams();
   a2_.CloseReceiveStreams();
@@ -1818,6 +2039,8 @@ TEST_F(SignalingTest, ChromeOfferAnswer)
     "a=rtpmap:100 VP8/90000\r\n"
     "a=rtpmap:101 red/90000\r\n"
     "a=rtpmap:102 ulpfec/90000\r\n"
+    "a=rtcp-fb:100 nack\r\n"
+    "a=rtcp-fb:100 ccm fir\r\n"
     "a=ssrc:3012607008 cname:KIXaNxUlU5DP3fVS\r\n"
     "a=ssrc:3012607008 msid:A5UL339RyGxT7zwgyF12BFqesxkmbUsaycp5 v0\r\n"
     "a=ssrc:3012607008 mslabel:A5UL339RyGxT7zwgyF12BFqesxkmbUsaycp5\r\n"
@@ -1980,7 +2203,6 @@ TEST_F(SignalingTest, CheckTrickleSdpChange)
                      SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
   std::cerr << "ICE handshake completed" << std::endl;
 
-  PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
   a1_.CloseSendStreams();
   a2_.CloseReceiveStreams();
 
@@ -2004,8 +2226,16 @@ TEST_F(SignalingTest, CheckTrickleSdpChange)
             std::string::npos);
   ASSERT_NE(a2_.getRemoteDescription().find("\r\na=candidate"),
             std::string::npos);
+  /* TODO (abr): These checks aren't quite right, since trickle ICE
+   * can easily result in SDP that is semantically identical but
+   * varies syntactically (in particularly, the ordering of attributes
+   * withing an m-line section can be different). This needs to be updated
+   * to be a semantic comparision between the SDP. Currently, these checks
+   * will fail whenever we add any other attributes to the SDP, such as
+   * RTCP MUX or RTCP feedback.
   ASSERT_EQ(a1_.getLocalDescription(),a2_.getRemoteDescription());
   ASSERT_EQ(a2_.getLocalDescription(),a1_.getRemoteDescription());
+  */
 }
 
 TEST_F(SignalingTest, ipAddrAnyOffer)
@@ -2266,7 +2496,7 @@ TEST_F(SignalingTest, missingUfrag)
     "a=candidate:0 2 UDP 2113601790 192.168.178.20 50769 typ host\r\n"
     "a=candidate:1 2 UDP 1694236670 77.9.79.167 50769 typ srflx raddr "
       "192.168.178.20 rport 50769\r\n"
-    "m=application 54054 SCTP/DTLS 5000 \r\n"
+    "m=application 54054 DTLS/SCTP 5000 \r\n"
     "c=IN IP4 77.9.79.167\r\n"
     "a=fmtp:HuRUu]Dtcl\\zM,7(OmEU%O$gU]x/z\tD protocol=webrtc-datachannel;"
       "streams=16\r\n"
@@ -2276,12 +2506,463 @@ TEST_F(SignalingTest, missingUfrag)
   // FSM. This may change in the future.
   a1_.CreateOffer(constraints, OFFER_AV, SHOULD_SENDRECV_AV);
   a1_.SetLocal(TestObserver::OFFER, offer, true);
-  a2_.SetRemote(TestObserver::OFFER, offer, true);
-  a2_.CreateAnswer(constraints, offer, OFFER_AV | ANSWER_AV);
-  a2_.SetLocal(TestObserver::ANSWER, a2_.answer(), true);
-  a1_.SetRemote(TestObserver::ANSWER, a2_.answer(), true);
-  // We don't check anything in particular for success here -- simply not
-  // crashing by now is enough to declare success.
+  // We now detect the missing ICE parameters at SetRemoteDescription
+  a2_.SetRemote(TestObserver::OFFER, offer, true,
+    sipcc::PeerConnectionImpl::kSignalingStable);
+  ASSERT_TRUE(a2_.pObserver->state == TestObserver::stateError);
+}
+
+TEST_F(SignalingTest, AudioOnlyCalleeNoRtcpMux)
+{
+  sipcc::MediaConstraints constraints;
+
+  a1_.CreateOffer(constraints, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
+  a1_.SetLocal(TestObserver::OFFER, a1_.offer(), false);
+  ParsedSDP sdpWrapper(a1_.offer());
+  sdpWrapper.DeleteLine("a=rtcp-mux");
+  std::cout << "Modified SDP " << std::endl
+            << indent(sdpWrapper.getSdp()) << std::endl;
+  a2_.SetRemote(TestObserver::OFFER, sdpWrapper.getSdp(), false);
+  a2_.CreateAnswer(constraints, sdpWrapper.getSdp(),
+    OFFER_AUDIO | ANSWER_AUDIO);
+  a2_.SetLocal(TestObserver::ANSWER, a2_.answer(), false);
+  a1_.SetRemote(TestObserver::ANSWER, a2_.answer(), false);
+
+  // Answer should not have a=rtcp-mux
+  ASSERT_EQ(a2_.getLocalDescription().find("\r\na=rtcp-mux"),
+            std::string::npos);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  ASSERT_GE(a2_.GetPacketsReceived(0), 40);
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  // The first Local pipeline gets stored at 0
+  a1_.CheckMediaPipeline(0, 0, PIPELINE_LOCAL | PIPELINE_SEND);
+
+  // The first Remote pipeline gets stored at 1
+  a2_.CheckMediaPipeline(0, 1, 0);
+}
+
+TEST_F(SignalingTest, FullCallAudioNoMuxVideoMux)
+{
+  sipcc::MediaConstraints constraints;
+
+  a1_.CreateOffer(constraints, OFFER_AV, SHOULD_SENDRECV_AV);
+  a1_.SetLocal(TestObserver::OFFER, a1_.offer(), false);
+  ParsedSDP sdpWrapper(a1_.offer());
+  sdpWrapper.DeleteLine("a=rtcp-mux");
+  std::cout << "Modified SDP " << std::endl
+            << indent(sdpWrapper.getSdp()) << std::endl;
+  a2_.SetRemote(TestObserver::OFFER, sdpWrapper.getSdp(), false);
+  a2_.CreateAnswer(constraints, sdpWrapper.getSdp(), OFFER_AV | ANSWER_AV);
+  a2_.SetLocal(TestObserver::ANSWER, a2_.answer(), false);
+  a1_.SetRemote(TestObserver::ANSWER, a2_.answer(), false);
+
+  // Answer should have only one a=rtcp-mux line
+  size_t match = a2_.getLocalDescription().find("\r\na=rtcp-mux");
+  if (fRtcpMux) {
+    ASSERT_NE(match, std::string::npos);
+    match = a2_.getLocalDescription().find("\r\na=rtcp-mux", match + 1);
+  }
+  ASSERT_EQ(match, std::string::npos);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  ASSERT_GE(a2_.GetPacketsReceived(0), 40);
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  // The first Local pipeline gets stored at 0
+  a1_.CheckMediaPipeline(0, 0, PIPELINE_LOCAL | PIPELINE_SEND);
+
+  // Now check video mux.
+  a1_.CheckMediaPipeline(0, 1,
+    PIPELINE_LOCAL | (fRtcpMux ? PIPELINE_RTCP_MUX : 0) | PIPELINE_SEND |
+    PIPELINE_VIDEO);
+
+  // The first Remote pipeline gets stored at 1
+  a2_.CheckMediaPipeline(0, 1, 0);
+
+  // Now check video mux.
+  a2_.CheckMediaPipeline(0, 2, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
+    PIPELINE_VIDEO | PIPELINE_RTCP_NACK, VideoSessionConduit::FrameRequestPli);
+}
+
+TEST_F(SignalingTest, RtcpFbInOffer)
+{
+  sipcc::MediaConstraints constraints;
+  a1_.CreateOffer(constraints, OFFER_AV, SHOULD_SENDRECV_AV);
+  const char *expected[] = { "nack", "nack pli", "ccm fir" };
+  CheckRtcpFbSdp(a1_.offer(), ARRAY_TO_SET(std::string, expected));
+}
+
+TEST_F(SignalingTest, RtcpFbInAnswer)
+{
+  const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir" };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             PIPELINE_RTCP_NACK,
+             VideoSessionConduit::FrameRequestPli);
+}
+
+TEST_F(SignalingTest, RtcpFbNoNackBasic)
+{
+  const char *feedbackTypes[] = { "nack pli", "ccm fir" };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             0,
+             VideoSessionConduit::FrameRequestPli);
+}
+
+TEST_F(SignalingTest, RtcpFbNoNackPli)
+{
+  const char *feedbackTypes[] = { "nack", "ccm fir" };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             PIPELINE_RTCP_NACK,
+             VideoSessionConduit::FrameRequestFir);
+}
+
+TEST_F(SignalingTest, RtcpFbNoCcmFir)
+{
+  const char *feedbackTypes[] = { "nack", "nack pli" };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             PIPELINE_RTCP_NACK,
+             VideoSessionConduit::FrameRequestPli);
+}
+
+TEST_F(SignalingTest, RtcpFbNoNack)
+{
+  const char *feedbackTypes[] = { "ccm fir" };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             0,
+             VideoSessionConduit::FrameRequestFir);
+}
+
+TEST_F(SignalingTest, RtcpFbNoFrameRequest)
+{
+  const char *feedbackTypes[] = { "nack" };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             PIPELINE_RTCP_NACK,
+             VideoSessionConduit::FrameRequestNone);
+}
+
+TEST_F(SignalingTest, RtcpFbPliOnly)
+{
+  const char *feedbackTypes[] = { "nack pli" };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             0,
+             VideoSessionConduit::FrameRequestPli);
+}
+
+TEST_F(SignalingTest, RtcpFbNoFeedback)
+{
+  const char *feedbackTypes[] = { };
+  TestRtcpFb(ARRAY_TO_SET(std::string, feedbackTypes),
+             0,
+             VideoSessionConduit::FrameRequestNone);
+}
+
+// In this test we will change the offer SDP's a=setup value
+// from actpass to passive.  This will make the answer do active.
+TEST_F(SignalingTest, AudioCallForceDtlsRoles)
+{
+  sipcc::MediaConstraints constraints;
+  size_t match;
+
+  a1_.CreateOffer(constraints, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
+
+  // By default the offer should give actpass
+  std::string offer(a1_.offer());
+  match = offer.find("\r\na=setup:actpass");
+  ASSERT_NE(match, std::string::npos);
+  // Now replace the actpass with passive so that the answer will
+  // return active
+  offer.replace(match, strlen("\r\na=setup:actpass"),
+    "\r\na=setup:passive");
+  std::cout << "Modified SDP " << std::endl
+            << indent(offer) << std::endl;
+
+  a1_.SetLocal(TestObserver::OFFER, offer.c_str(), false);
+  a2_.SetRemote(TestObserver::OFFER, offer.c_str(), false);
+  a2_.CreateAnswer(constraints, offer.c_str(), OFFER_AUDIO | ANSWER_AUDIO);
+
+  // Now the answer should contain a=setup:active
+  std::string answer(a2_.answer());
+  match = answer.find("\r\na=setup:active");
+  ASSERT_NE(match, std::string::npos);
+
+  // This should setup the DTLS with the same roles
+  // as the regular tests above.
+  a2_.SetLocal(TestObserver::ANSWER, a2_.answer(), false);
+  a1_.SetRemote(TestObserver::ANSWER, a2_.answer(), false);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  ASSERT_GE(a2_.GetPacketsReceived(0), 40);
+}
+
+// In this test we will change the offer SDP's a=setup value
+// from actpass to active.  This will make the answer do passive
+TEST_F(SignalingTest, AudioCallReverseDtlsRoles)
+{
+  sipcc::MediaConstraints constraints;
+  size_t match;
+
+  a1_.CreateOffer(constraints, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
+
+  // By default the offer should give actpass
+  std::string offer(a1_.offer());
+  match = offer.find("\r\na=setup:actpass");
+  ASSERT_NE(match, std::string::npos);
+  // Now replace the actpass with active so that the answer will
+  // return passive
+  offer.replace(match, strlen("\r\na=setup:actpass"),
+    "\r\na=setup:active");
+  std::cout << "Modified SDP " << std::endl
+            << indent(offer) << std::endl;
+
+  a1_.SetLocal(TestObserver::OFFER, offer.c_str(), false);
+  a2_.SetRemote(TestObserver::OFFER, offer.c_str(), false);
+  a2_.CreateAnswer(constraints, offer.c_str(), OFFER_AUDIO | ANSWER_AUDIO);
+
+  // Now the answer should contain a=setup:passive
+  std::string answer(a2_.answer());
+  match = answer.find("\r\na=setup:passive");
+  ASSERT_NE(match, std::string::npos);
+
+  // This should setup the DTLS with the opposite roles
+  // than the regular tests above.
+  a2_.SetLocal(TestObserver::ANSWER, a2_.answer(), false);
+  a1_.SetRemote(TestObserver::ANSWER, a2_.answer(), false);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  ASSERT_GE(a2_.GetPacketsReceived(0), 40);
+}
+
+// In this test we will change the answer SDP's a=setup value
+// from active to passive.  This will make both sides do
+// active and should not connect.
+TEST_F(SignalingTest, AudioCallMismatchDtlsRoles)
+{
+  sipcc::MediaConstraints constraints;
+  size_t match;
+
+  a1_.CreateOffer(constraints, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
+
+  // By default the offer should give actpass
+  std::string offer(a1_.offer());
+  match = offer.find("\r\na=setup:actpass");
+  ASSERT_NE(match, std::string::npos);
+  a1_.SetLocal(TestObserver::OFFER, offer.c_str(), false);
+  a2_.SetRemote(TestObserver::OFFER, offer.c_str(), false);
+  a2_.CreateAnswer(constraints, offer.c_str(), OFFER_AUDIO | ANSWER_AUDIO);
+
+  // Now the answer should contain a=setup:active
+  std::string answer(a2_.answer());
+  match = answer.find("\r\na=setup:active");
+  ASSERT_NE(match, std::string::npos);
+
+  // Now replace the active with passive so that the offerer will
+  // also do active.
+  answer.replace(match, strlen("\r\na=setup:active"),
+    "\r\na=setup:passive");
+  std::cout << "Modified SDP " << std::endl
+            << indent(answer) << std::endl;
+
+  // This should setup the DTLS with both sides playing active
+  a2_.SetLocal(TestObserver::ANSWER, answer.c_str(), false);
+  a1_.SetRemote(TestObserver::ANSWER, answer.c_str(), false);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Not using ASSERT_TRUE_WAIT here because we expect failure
+  PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  // In this case we should receive nothing.
+  ASSERT_EQ(a2_.GetPacketsReceived(0), 0);
+}
+
+// In this test we will change the offer SDP's a=setup value
+// from actpass to garbage.  It should ignore the garbage value
+// and respond with setup:active
+TEST_F(SignalingTest, AudioCallGarbageSetup)
+{
+  sipcc::MediaConstraints constraints;
+  size_t match;
+
+  a1_.CreateOffer(constraints, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
+
+  // By default the offer should give actpass
+  std::string offer(a1_.offer());
+  match = offer.find("\r\na=setup:actpass");
+  ASSERT_NE(match, std::string::npos);
+  // Now replace the actpass with a garbage value
+  offer.replace(match, strlen("\r\na=setup:actpass"),
+    "\r\na=setup:G4rb4g3V4lu3");
+  std::cout << "Modified SDP " << std::endl
+            << indent(offer) << std::endl;
+
+  a1_.SetLocal(TestObserver::OFFER, offer.c_str(), false);
+  a2_.SetRemote(TestObserver::OFFER, offer.c_str(), false);
+  a2_.CreateAnswer(constraints, offer.c_str(), OFFER_AUDIO | ANSWER_AUDIO);
+
+  // Now the answer should contain a=setup:active
+  std::string answer(a2_.answer());
+  match = answer.find("\r\na=setup:active");
+  ASSERT_NE(match, std::string::npos);
+
+  // This should setup the DTLS with the same roles
+  // as the regular tests above.
+  a2_.SetLocal(TestObserver::ANSWER, a2_.answer(), false);
+  a1_.SetRemote(TestObserver::ANSWER, a2_.answer(), false);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  ASSERT_GE(a2_.GetPacketsReceived(0), 40);
+}
+
+// In this test we will change the offer SDP to remove the
+// a=setup line.  Answer should respond with a=setup:active.
+TEST_F(SignalingTest, AudioCallOfferNoSetupOrConnection)
+{
+  sipcc::MediaConstraints constraints;
+  size_t match;
+
+  a1_.CreateOffer(constraints, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
+
+  // By default the offer should give setup:actpass
+  std::string offer(a1_.offer());
+  match = offer.find("\r\na=setup:actpass");
+  ASSERT_NE(match, std::string::npos);
+  // Remove the a=setup line
+  offer.replace(match, strlen("\r\na=setup:actpass"), "");
+  std::cout << "Modified SDP " << std::endl
+            << indent(offer) << std::endl;
+
+  a1_.SetLocal(TestObserver::OFFER, offer.c_str(), false);
+  a2_.SetRemote(TestObserver::OFFER, offer.c_str(), false);
+  a2_.CreateAnswer(constraints, offer.c_str(), OFFER_AUDIO | ANSWER_AUDIO);
+
+  // Now the answer should contain a=setup:active
+  std::string answer(a2_.answer());
+  match = answer.find("\r\na=setup:active");
+  ASSERT_NE(match, std::string::npos);
+
+  // This should setup the DTLS with the same roles
+  // as the regular tests above.
+  a2_.SetLocal(TestObserver::ANSWER, a2_.answer(), false);
+  a1_.SetRemote(TestObserver::ANSWER, a2_.answer(), false);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  ASSERT_GE(a2_.GetPacketsReceived(0), 40);
+}
+
+// In this test we will change the answer SDP to remove the
+// a=setup line.  ICE should still connect since active will
+// be assumed.
+TEST_F(SignalingTest, AudioCallAnswerNoSetupOrConnection)
+{
+  sipcc::MediaConstraints constraints;
+  size_t match;
+
+  a1_.CreateOffer(constraints, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
+
+  // By default the offer should give setup:actpass
+  std::string offer(a1_.offer());
+  match = offer.find("\r\na=setup:actpass");
+  ASSERT_NE(match, std::string::npos);
+
+  a1_.SetLocal(TestObserver::OFFER, offer.c_str(), false);
+  a2_.SetRemote(TestObserver::OFFER, offer.c_str(), false);
+  a2_.CreateAnswer(constraints, offer.c_str(), OFFER_AUDIO | ANSWER_AUDIO);
+
+  // Now the answer should contain a=setup:active
+  std::string answer(a2_.answer());
+  match = answer.find("\r\na=setup:active");
+  ASSERT_NE(match, std::string::npos);
+  // Remove the a=setup line
+  answer.replace(match, strlen("\r\na=setup:active"), "");
+  std::cout << "Modified SDP " << std::endl
+            << indent(answer) << std::endl;
+
+  // This should setup the DTLS with the same roles
+  // as the regular tests above.
+  a2_.SetLocal(TestObserver::ANSWER, answer, false);
+  a1_.SetRemote(TestObserver::ANSWER, answer, false);
+
+  ASSERT_TRUE_WAIT(a1_.IceCompleted() == true, kDefaultTimeout);
+  ASSERT_TRUE_WAIT(a2_.IceCompleted() == true, kDefaultTimeout);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_.GetPacketsSent(0) >= 40 &&
+                   a2_.GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  a1_.CloseSendStreams();
+  a2_.CloseReceiveStreams();
+
+  ASSERT_GE(a1_.GetPacketsSent(0), 40);
+  ASSERT_GE(a2_.GetPacketsReceived(0), 40);
 }
 
 } // End namespace test.

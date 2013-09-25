@@ -10,9 +10,8 @@
 // Used for DNLEN and UNLEN
 #include <lm.h>
 
-#include <nsAutoPtr.h>
 #include <nsWindowsHelpers.h>
-#include <nsMemory.h>
+#include "mozilla/Scoped.h"
 
 #include "serviceinstall.h"
 #include "servicebase.h"
@@ -65,7 +64,7 @@ GetVersionNumberFromPath(LPWSTR path, DWORD &A, DWORD &B,
                          DWORD &C, DWORD &D) 
 {
   DWORD fileVersionInfoSize = GetFileVersionInfoSizeW(path, 0);
-  nsAutoArrayPtr<char> fileVersionInfo = new char[fileVersionInfoSize];
+  mozilla::ScopedDeleteArray<char> fileVersionInfo(new char[fileVersionInfoSize]);
   if (!GetFileVersionInfoW(path, 0, fileVersionInfoSize,
                            fileVersionInfo.get())) {
       LOG_WARN(("Could not obtain file info of old service.  (%d)", 
@@ -286,7 +285,7 @@ SvcInstall(SvcInstallAction action)
 
     // Get the service config information, in particular we want the binary 
     // path of the service.
-    nsAutoArrayPtr<char> serviceConfigBuffer = new char[bytesNeeded];
+    mozilla::ScopedDeleteArray<char> serviceConfigBuffer(new char[bytesNeeded]);
     if (!QueryServiceConfigW(schService, 
         reinterpret_cast<QUERY_SERVICE_CONFIGW*>(serviceConfigBuffer.get()), 
         bytesNeeded, &bytesNeeded)) {
@@ -387,10 +386,11 @@ SvcInstall(SvcInstallAction action)
           // Calculate the temp file path that we're moving the file to. This 
           // is the same as the proper service path but with a .old extension.
           LPWSTR oldServiceBinaryTempPath = 
-            new WCHAR[wcslen(serviceConfig.lpBinaryPathName) + 1];
-          wcscpy(oldServiceBinaryTempPath, serviceConfig.lpBinaryPathName);
+            new WCHAR[len + 1];
+          memset(oldServiceBinaryTempPath, 0, (len + 1) * sizeof (WCHAR));
+          wcsncpy(oldServiceBinaryTempPath, serviceConfig.lpBinaryPathName, len);
           // Rename the last 3 chars to 'old'
-          wcscpy(oldServiceBinaryTempPath + len - 3, L"old");
+          wcsncpy(oldServiceBinaryTempPath + len - 3, L"old", 3);
 
           // Move the current (old) service file to the temp path.
           if (MoveFileExW(serviceConfig.lpBinaryPathName, 
@@ -677,8 +677,8 @@ SetUserAccessServiceDACL(SC_HANDLE hService, PACL &pNewAcl,
   // a buffer for the domain name but it's not used since we're using
   // the built in account Sid.
   SID_NAME_USE accountType;
-  WCHAR accountName[UNLEN + 1];
-  WCHAR domainName[DNLEN + 1];
+  WCHAR accountName[UNLEN + 1] = { L'\0' };
+  WCHAR domainName[DNLEN + 1] = { L'\0' };
   DWORD accountNameSize = UNLEN + 1;
   DWORD domainNameSize = DNLEN + 1;
   if (!LookupAccountSidW(NULL, sid, accountName, 
@@ -686,7 +686,7 @@ SetUserAccessServiceDACL(SC_HANDLE hService, PACL &pNewAcl,
                          domainName, &domainNameSize, &accountType)) {
     LOG_WARN(("Could not lookup account Sid, will try Users.  (%d)",
               GetLastError()));
-    wcscpy(accountName, L"Users");
+    wcsncpy(accountName, L"Users", UNLEN);
   }
 
   // We already have the group name so we can get rid of the SID

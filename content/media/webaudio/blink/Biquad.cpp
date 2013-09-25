@@ -30,11 +30,8 @@
 #include "Biquad.h"
 
 #include <algorithm>
-#include <stdio.h>
 
 namespace WebCore {
-
-const int kBufferSize = 1024;
 
 Biquad::Biquad()
 {

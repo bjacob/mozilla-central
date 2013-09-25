@@ -7,10 +7,10 @@
 #define nsIJSEventListener_h__
 
 #include "nsIScriptContext.h"
-#include "jsapi.h"
 #include "xpcpublic.h"
 #include "nsIDOMEventListener.h"
 #include "nsIAtom.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/EventHandlerBinding.h"
 
 #define NS_IJSEVENTLISTENER_IID \
@@ -201,7 +201,12 @@ public:
   // Can return null if we already have a handler.
   JSObject* GetEventScope() const
   {
-    return xpc_UnmarkGrayObject(mScopeObject);
+    if (!mScopeObject) {
+      return nullptr;
+    }
+
+    JS::ExposeObjectToActiveJS(mScopeObject);
+    return mScopeObject;
   }
 
   const nsEventHandler& GetHandler() const
@@ -236,7 +241,7 @@ public:
     mHandler.SetHandler(aHandler);
   }
 
-  virtual size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   {
     return 0;
 
@@ -252,7 +257,7 @@ public:
     // - mEventName: shared with others
   }
 
-  virtual size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+  virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   {
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
   }
@@ -268,7 +273,7 @@ protected:
   virtual void UpdateScopeObject(JS::Handle<JSObject*> aScopeObject) = 0;
 
   nsCOMPtr<nsIScriptContext> mContext;
-  JSObject* mScopeObject;
+  JS::Heap<JSObject*> mScopeObject;
   nsISupports* mTarget;
   nsCOMPtr<nsIAtom> mEventName;
   nsEventHandler mHandler;

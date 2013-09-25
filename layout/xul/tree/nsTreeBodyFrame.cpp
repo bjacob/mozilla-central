@@ -45,7 +45,6 @@
 #include "nsBoxLayoutState.h"
 #include "nsTreeContentView.h"
 #include "nsTreeUtils.h"
-#include "nsChildIterator.h"
 #include "nsITheme.h"
 #include "imgIRequest.h"
 #include "imgIContainer.h"
@@ -112,9 +111,11 @@ NS_QUERYFRAME_TAIL_INHERITING(nsLeafBoxFrame)
 nsTreeBodyFrame::nsTreeBodyFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 :nsLeafBoxFrame(aPresShell, aContext),
  mSlots(nullptr),
+ mImageCache(16),
  mTopRowIndex(0),
  mPageLength(0),
  mHorzPosition(0),
+ mOriginalHorzWidth(-1),
  mHorzWidth(0),
  mAdjustWidth(0),
  mRowHeight(0),
@@ -127,7 +128,8 @@ nsTreeBodyFrame::nsTreeBodyFrame(nsIPresShell* aPresShell, nsStyleContext* aCont
  mHasFixedRowCount(false),
  mVerticalOverflow(false),
  mHorizontalOverflow(false),
- mReflowCallbackPosted(false)
+ mReflowCallbackPosted(false),
+ mCheckingOverflow(false)
 {
   mColumns = new nsTreeColumns(this);
 }
@@ -168,9 +170,6 @@ nsTreeBodyFrame::Init(nsIContent*     aContent,
   mIndentation = GetIndentation();
   mRowHeight = GetRowHeight();
 
-  mCreatedListeners.Init();
-
-  mImageCache.Init(16);
   EnsureBoxObject();
 
   if (LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars) != 0) {
@@ -376,6 +375,7 @@ nsTreeBodyFrame::EnsureView()
         // Scroll to the given row.
         // XXX is this optimal if we haven't laid out yet?
         ScrollToRow(rowIndex);
+        ENSURE_TRUE(weakFrame.IsAlive());
 
         // Clear out the property info for the top row, but we always keep the
         // view current.
@@ -386,15 +386,28 @@ nsTreeBodyFrame::EnsureView()
 }
 
 void
+nsTreeBodyFrame::ManageReflowCallback(const nsRect& aRect, nscoord aHorzWidth)
+{
+  if (!mReflowCallbackPosted &&
+      (!aRect.IsEqualEdges(mRect) || mHorzWidth != aHorzWidth)) {
+    PresContext()->PresShell()->PostReflowCallback(this);
+    mReflowCallbackPosted = true;
+    mOriginalHorzWidth = mHorzWidth;
+  }
+  else if (mReflowCallbackPosted &&
+           mHorzWidth != aHorzWidth && mOriginalHorzWidth == aHorzWidth) {
+    PresContext()->PresShell()->CancelReflowCallback(this);
+    mReflowCallbackPosted = false;
+    mOriginalHorzWidth = -1;
+  }
+}
+
+void
 nsTreeBodyFrame::SetBounds(nsBoxLayoutState& aBoxLayoutState, const nsRect& aRect,
                            bool aRemoveOverflowArea)
 {
   nscoord horzWidth = CalcHorzWidth(GetScrollParts());
-  if ((!aRect.IsEqualEdges(mRect) || mHorzWidth != horzWidth) && !mReflowCallbackPosted) {
-    mReflowCallbackPosted = true;
-    PresContext()->PresShell()->PostReflowCallback(this);
-  }
-
+  ManageReflowCallback(aRect, horzWidth);
   mHorzWidth = horzWidth;
 
   nsLeafBoxFrame::SetBounds(aBoxLayoutState, aRect, aRemoveOverflowArea);
@@ -904,8 +917,11 @@ nsTreeBodyFrame::CheckOverflow(const ScrollParts& aParts)
       }
     }
   }
- 
+
+  nsWeakFrame weakFrame(this);
+
   nsRefPtr<nsPresContext> presContext = PresContext();
+  nsCOMPtr<nsIPresShell> presShell = presContext->GetPresShell();
   nsCOMPtr<nsIContent> content = mContent;
 
   if (verticalOverflowChanged) {
@@ -922,6 +938,22 @@ nsTreeBodyFrame::CheckOverflow(const ScrollParts& aParts)
     event.orient = nsScrollPortEvent::horizontal;
     nsEventDispatcher::Dispatch(content, presContext, &event);
   }
+
+  // The synchronous event dispatch above can trigger reflow notifications.
+  // Flush those explicitly now, so that we can guard against potential infinite
+  // recursion. See bug 905909.
+  if (!weakFrame.IsAlive()) {
+    return;
+  }
+  NS_ASSERTION(!mCheckingOverflow, "mCheckingOverflow should not already be set");
+  // Don't use AutoRestore since we want to not touch mCheckingOverflow if we fail
+  // the weakFrame.IsAlive() check below
+  mCheckingOverflow = true;
+  presShell->FlushPendingNotifications(Flush_Layout);
+  if (!weakFrame.IsAlive()) {
+    return;
+  }
+  mCheckingOverflow = false;
 }
 
 void
@@ -2776,7 +2808,7 @@ nsTreeBodyFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
   // Bail out now if there's no view or we can't run script because the
   // document is a zombie
-  if (!mView || !GetContent()->GetCurrentDoc()->GetScriptGlobalObject())
+  if (!mView || !GetContent()->GetCurrentDoc()->GetWindow())
     return;
 
   aLists.Content()->AppendNewToTop(new (aBuilder)
@@ -3493,7 +3525,7 @@ nsTreeBodyFrame::PaintImage(int32_t              aRowIndex,
 
     gfxContext* ctx = aRenderingContext.ThebesContext();
     if (opacity != 1.0f) {
-      ctx->PushGroup(gfxASurface::CONTENT_COLOR_ALPHA);
+      ctx->PushGroup(GFX_CONTENT_COLOR_ALPHA);
     }
 
     nsLayoutUtils::DrawImage(&aRenderingContext, image,
@@ -3610,7 +3642,7 @@ nsTreeBodyFrame::PaintText(int32_t              aRowIndex,
 
   gfxContext* ctx = aRenderingContext.ThebesContext();
   if (opacity != 1.0f) {
-    ctx->PushGroup(gfxASurface::CONTENT_COLOR_ALPHA);
+    ctx->PushGroup(GFX_CONTENT_COLOR_ALPHA);
   }
 
   nsLayoutUtils::DrawString(this, &aRenderingContext, text.get(), text.Length(),
@@ -4121,9 +4153,12 @@ nsTreeBodyFrame::ScrollHorzInternal(const ScrollParts& aParts, int32_t aPosition
   Invalidate();
 
   // Update the column scroll view
+  nsWeakFrame weakFrame(this);
   aParts.mColumnsScrollFrame->ScrollTo(nsPoint(mHorzPosition, 0),
                                        nsIScrollableFrame::INSTANT);
-
+  if (!weakFrame.IsAlive()) {
+    return NS_ERROR_FAILURE;
+  }
   // And fire off an event about it all
   PostScrollEvent();
   return NS_OK;
@@ -4140,7 +4175,8 @@ nsTreeBodyFrame::ScrollbarButtonPressed(nsScrollbarFrame* aScrollbar, int32_t aO
     else if (aNewIndex < aOldIndex)
       ScrollToRowInternal(parts, mTopRowIndex-1);
   } else {
-    ScrollHorzInternal(parts, aNewIndex);
+    nsresult rv = ScrollHorzInternal(parts, aNewIndex);
+    if (NS_FAILED(rv)) return rv;
   }
 
   UpdateScrollbars(parts);
@@ -4164,7 +4200,8 @@ nsTreeBodyFrame::PositionChanged(nsScrollbarFrame* aScrollbar, int32_t aOldIndex
     ScrollInternal(parts, newrow);
   // Horizontal Scrollbar
   } else if (parts.mHScrollbar == aScrollbar) {
-    ScrollHorzInternal(parts, aNewIndex);
+    nsresult rv = ScrollHorzInternal(parts, aNewIndex);
+    if (NS_FAILED(rv)) return rv;
   }
 
   UpdateScrollbars(parts);
@@ -4434,7 +4471,7 @@ void
 nsTreeBodyFrame::FireScrollEvent()
 {
   mScrollEvent.Forget();
-  nsScrollbarEvent event(true, NS_SCROLL_EVENT, nullptr);
+  nsGUIEvent event(true, NS_SCROLL_EVENT, nullptr);
   // scroll events fired at elements don't bubble
   event.mFlags.mBubbles = false;
   nsEventDispatcher::Dispatch(GetContent(), PresContext(), &event);
@@ -4628,7 +4665,17 @@ nsTreeBodyFrame::FullScrollbarsUpdate(bool aNeedsFullInvalidation)
   }
   InvalidateScrollbars(parts, weakColumnsFrame);
   NS_ENSURE_TRUE(weakFrame.IsAlive(), false);
-  nsContentUtils::AddScriptRunner(new nsOverflowChecker(this));
+
+  // Overflow checking dispatches synchronous events, which can cause infinite
+  // recursion during reflow. Do the first overflow check synchronously, but
+  // force any nested checks to round-trip through the event loop. See bug
+  // 905909.
+  nsRefPtr<nsOverflowChecker> checker = new nsOverflowChecker(this);
+  if (!mCheckingOverflow) {
+    nsContentUtils::AddScriptRunner(checker);
+  } else {
+    NS_DispatchToCurrentThread(checker);
+  }
   return weakFrame.IsAlive();
 }
 

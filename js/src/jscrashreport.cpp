@@ -10,13 +10,14 @@
 
 #include "jsapi.h"
 #include "jscrashformat.h"
+#include "jsutil.h"
 
 using namespace js;
 using namespace js::crash;
 
-const static int stack_snapshot_max_size = 32768;
-
 #if defined(XP_WIN)
+
+static const int stack_snapshot_max_size = 32768;
 
 #include <windows.h>
 
@@ -79,9 +80,9 @@ GetStack(uint64_t *stack, uint64_t *stack_len, CrashRegisters *regs, char *buffe
 
 #elif 0
 
-#include <unistd.h>
-#include <ucontext.h>
 #include <sys/mman.h>
+#include <ucontext.h>
+#include <unistd.h>
 
 static bool
 GetStack(uint64_t *stack, uint64_t *stack_len, CrashRegisters *regs, char *buffer, size_t size)

@@ -10,6 +10,7 @@ import java.util.Set;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.mozilla.gecko.background.common.DateUtils.DateFormatter;
 import org.mozilla.gecko.background.common.log.Logger;
 import org.mozilla.gecko.background.healthreport.HealthReportStorage.Field;
 
@@ -22,9 +23,11 @@ public class HealthReportGenerator {
   private static final String LOG_TAG = "GeckoHealthGen";
 
   private final HealthReportStorage storage;
+  private final DateFormatter dateFormatter;
 
   public HealthReportGenerator(HealthReportStorage storage) {
     this.storage = storage;
+    this.dateFormatter = new DateFormatter();
   }
 
   @SuppressWarnings("static-method")
@@ -76,10 +79,10 @@ public class HealthReportGenerator {
     JSONObject document = new JSONObject();
 
     if (lastPingTime >= HealthReportConstants.EARLIEST_LAST_PING) {
-      document.put("lastPingDate", HealthReportUtils.getDateString(lastPingTime));
+      document.put("lastPingDate", dateFormatter.getDateString(lastPingTime));
     }
 
-    document.put("thisPingDate", HealthReportUtils.getDateString(now()));
+    document.put("thisPingDate", dateFormatter.getDateString(now()));
     document.put("version", PAYLOAD_VERSION);
 
     document.put("environments", getEnvironmentsJSON(currentEnvironment, envs));
@@ -147,7 +150,7 @@ public class HealthReportGenerator {
 
         if (dateChanged) {
           if (dateObject != null) {
-            days.put(HealthReportUtils.getDateStringForDay(lastDate), dateObject);
+            days.put(dateFormatter.getDateStringForDay(lastDate), dateObject);
           }
           dateObject = new JSONObject();
           lastDate = cDate;
@@ -179,7 +182,7 @@ public class HealthReportGenerator {
         cursor.moveToNext();
         continue;
       }
-      days.put(HealthReportUtils.getDateStringForDay(lastDate), dateObject);
+      days.put(dateFormatter.getDateStringForDay(lastDate), dateObject);
     } finally {
       cursor.close();
     }
@@ -427,7 +430,16 @@ public class HealthReportGenerator {
 
   /**
    * Compute the *tree* difference set between the two objects. If the two
-   * objects are identical, returns null.
+   * objects are identical, returns <code>null</code>. If <code>from</code> is
+   * <code>null</code>, returns <code>to</code>. If <code>to</code> is
+   * <code>null</code>, behaves as if <code>to</code> were an empty object.
+   *
+   * (Note that this method does not check for {@link JSONObject#NULL}, because
+   * by definition it can't be provided as input to this method.)
+   *
+   * This behavior is intended to simplify life for callers: a missing object
+   * can be viewed as (and behaves as) an empty map, to a useful extent, rather
+   * than throwing an exception.
    *
    * @param from
    *          a JSONObject.
@@ -445,8 +457,12 @@ public class HealthReportGenerator {
   public static JSONObject diff(JSONObject from,
                                 JSONObject to,
                                 boolean includeNull) throws JSONException {
-    if (from == null || from == JSONObject.NULL) {
+    if (from == null) {
       return to;
+    }
+
+    if (to == null) {
+      return diff(from, new JSONObject(), includeNull);
     }
 
     JSONObject out = new JSONObject();

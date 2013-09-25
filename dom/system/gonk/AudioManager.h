@@ -38,7 +38,8 @@ typedef Observer<SwitchEvent> SwitchObserver;
 
 namespace dom {
 namespace gonk {
-
+class RecoverTask;
+class AudioChannelVolInitCallback;
 class AudioManager : public nsIAudioManager
                    , public nsIObserver
 {
@@ -50,13 +51,25 @@ public:
   AudioManager();
   ~AudioManager();
 
+  // When audio backend is dead, recovery task needs to read all volume
+  // settings then set back into audio backend.
+  friend class RecoverTask;
+  friend class AudioChannelVolInitCallback;
+
 protected:
   int32_t mPhoneState;
   int mCurrentStreamVolumeTbl[AUDIO_STREAM_CNT];
 
+  android::status_t SetStreamVolumeIndex(int32_t aStream, int32_t aIndex);
+  android::status_t GetStreamVolumeIndex(int32_t aStream, int32_t *aIndex);
+
 private:
   nsAutoPtr<mozilla::hal::SwitchObserver> mObserver;
   nsCOMPtr<AudioChannelAgent>             mPhoneAudioAgent;
+
+  void HandleBluetoothStatusChanged(nsISupports* aSubject,
+                                    const char* aTopic,
+                                    const nsCString aAddress);
 };
 
 } /* namespace gonk */

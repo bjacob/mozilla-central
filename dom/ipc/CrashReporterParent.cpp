@@ -4,8 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "CrashReporterParent.h"
-
-#include "base/process_util.h"
+#include "nsXULAppAPI.h"
 
 #include <time.h>
 
@@ -31,14 +30,14 @@ CrashReporterParent::RecvAppendAppNotes(const nsCString& data)
 }
 
 CrashReporterParent::CrashReporterParent()
-: mStartTime(time(NULL))
-, mInitialized(false)
+    :
+#ifdef MOZ_CRASHREPORTER
+      mNotes(4),
+#endif
+      mStartTime(time(NULL))
+    , mInitialized(false)
 {
     MOZ_COUNT_CTOR(CrashReporterParent);
-
-#ifdef MOZ_CRASHREPORTER
-    mNotes.Init(4);
-#endif
 }
 
 CrashReporterParent::~CrashReporterParent()

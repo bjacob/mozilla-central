@@ -7,22 +7,21 @@
 #include "nsISupports.idl"
 
 /**
- * nsIThreadRetargetableListener
+ * nsIThreadRetargetableStreamListener
  *
  * To be used by classes which implement nsIStreamListener and whose
- * OnDataAvailable and OnStopRequest may be retargeted for delivery off the
- * main thread.
+ * OnDataAvailable callback may be retargeted for delivery off the main thread.
  */
 [uuid(fb2304b8-f82f-4433-af68-d874a2ebbdc1)]
 interface nsIThreadRetargetableStreamListener : nsISupports
 {
   /**
    * Checks this listener and any next listeners it may have to verify that
-   * they can receive OnDataAvailable and OnStopRequest off the main thread.
-   * It is the responsibility of the implementing class to decide on the
-   * criteria to determine if retargeted delivery of these methods is
-   * possible, but it must check any and all nsIStreamListener objects that
-   * might be called in the listener chain.
+   * they can receive OnDataAvailable off the main thread. It is the
+   * responsibility of the implementing class to decide on the criteria to
+   * determine if retargeted delivery of these methods is possible, but it must
+   * check any and all nsIStreamListener objects that might be called in the
+   * listener chain.
    *
    * An exception should be thrown if a listener in the chain does not
    * support retargeted delivery, i.e. if the next listener does not implement

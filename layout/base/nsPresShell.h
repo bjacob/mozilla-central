@@ -30,12 +30,12 @@
 #include "nsAutoPtr.h"
 #include "nsIWidget.h"
 #include "nsStyleSet.h"
-#include "nsPresArena.h"
 #include "nsFrameSelection.h"
 #include "nsGUIEvent.h"
 #include "nsContentUtils.h" // For AddScriptBlocker().
 #include "nsRefreshDriver.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/MemoryReporting.h"
 
 class nsRange;
 class nsIDragService;
@@ -250,6 +250,7 @@ public:
   NS_DECL_NSIDOCUMENTOBSERVER_STYLERULEREMOVED
 
   // nsIMutationObserver
+  NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATAWILLCHANGE
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTEWILLCHANGE
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
@@ -312,16 +313,15 @@ public:
       IsLayoutFlushObserver(this);
   }
 
-  void SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+  void SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                            nsArenaMemoryStats *aArenaObjectsSize,
                            size_t *aPresShellSize,
                            size_t *aStyleSetsSize,
                            size_t *aTextRunsSize,
                            size_t *aPresContextSize) MOZ_OVERRIDE;
-  size_t SizeOfTextRuns(nsMallocSizeOfFun aMallocSizeOf) const;
+  size_t SizeOfTextRuns(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   virtual void AddInvalidateHiddenPresShellObserver(nsRefreshDriver *aDriver) MOZ_OVERRIDE;
-
 
   // This data is stored as a content property (nsGkAtoms::scrolling) on
   // mContentToScrollTo when we have a pending ScrollIntoView.
@@ -336,6 +336,10 @@ public:
   virtual void RebuildImageVisibility(const nsDisplayList& aList) MOZ_OVERRIDE;
 
   virtual void EnsureImageInVisibleList(nsIImageLoadingContent* aImage) MOZ_OVERRIDE;
+
+  virtual void RemoveImageFromVisibleList(nsIImageLoadingContent* aImage) MOZ_OVERRIDE;
+
+  virtual bool AssumeAllImagesVisible() MOZ_OVERRIDE;
 
 protected:
   virtual ~PresShell();
@@ -555,13 +559,6 @@ protected:
     }
 
   protected:
-    void Init(nsInputEvent* aEvent)
-    {
-      mEvent->time = aEvent->time;
-      mEvent->refPoint = aEvent->refPoint;
-      mEvent->modifiers = aEvent->modifiers;
-    }
-
     nsDelayedInputEvent()
     : nsDelayedEvent(), mEvent(nullptr) {}
 
@@ -578,8 +575,7 @@ protected:
                                 aEvent->widget,
                                 aEvent->reason,
                                 aEvent->context);
-      Init(aEvent);
-      static_cast<nsMouseEvent*>(mEvent)->clickCount = aEvent->clickCount;
+      static_cast<nsMouseEvent*>(mEvent)->AssignMouseEventData(*aEvent, false);
     }
 
     virtual ~nsDelayedMouseEvent()
@@ -596,12 +592,7 @@ protected:
       mEvent = new nsKeyEvent(aEvent->mFlags.mIsTrusted,
                               aEvent->message,
                               aEvent->widget);
-      Init(aEvent);
-      static_cast<nsKeyEvent*>(mEvent)->keyCode = aEvent->keyCode;
-      static_cast<nsKeyEvent*>(mEvent)->charCode = aEvent->charCode;
-      static_cast<nsKeyEvent*>(mEvent)->alternativeCharCodes =
-        aEvent->alternativeCharCodes;
-      static_cast<nsKeyEvent*>(mEvent)->isChar = aEvent->isChar;
+      static_cast<nsKeyEvent*>(mEvent)->AssignKeyEventData(*aEvent, false);
     }
 
     virtual ~nsDelayedKeyEvent()
@@ -688,7 +679,7 @@ protected:
   // document's root view for element, first ensuring the element is onscreen
   void GetCurrentItemAndPositionForElement(nsIDOMElement *aCurrentEl,
                                            nsIContent **aTargetToUse,
-                                           nsIntPoint& aTargetPt,
+                                           mozilla::LayoutDeviceIntPoint& aTargetPt,
                                            nsIWidget *aRootWidget);
 
   void FireResizeEvent();
@@ -725,7 +716,7 @@ protected:
   static void MarkImagesInListVisible(const nsDisplayList& aList);
 
   // A list of images that are visible or almost visible.
-  nsTArray< nsCOMPtr<nsIImageLoadingContent > > mVisibleImages;
+  nsTHashtable< nsRefPtrHashKey<nsIImageLoadingContent> > mVisibleImages;
 
 #ifdef DEBUG
   // The reflow root under which we're currently reflowing.  Null when

@@ -5,13 +5,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
-#include "tests.h"
-
 #include "jscntxt.h"
 #include "jscompartment.h"
 #include "jsnum.h"
 #include "jsstr.h"
+
+#include "jsapi-tests/tests.h"
 
 #include "vm/String-inl.h"
 
@@ -65,7 +64,7 @@ BEGIN_TEST(testIndexToString)
         if (!js::StaticStrings::hasUint(u))
             CHECK(cx->compartment()->dtoaCache.lookup(10, u) == str);
 
-        JSBool match = JS_FALSE;
+        bool match = false;
         CHECK(JS_StringEqualsAscii(cx, str, tests[i].expected, &match));
         CHECK(match);
     }

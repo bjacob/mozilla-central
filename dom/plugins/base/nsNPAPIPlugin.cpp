@@ -8,6 +8,7 @@
 /* This must occur *after* layers/PLayerTransaction.h to avoid typedefs conflicts. */
 #include "mozilla/Util.h"
 
+#include "pratom.h"
 #include "prmem.h"
 #include "prenv.h"
 #include "prclist.h"
@@ -182,8 +183,6 @@ enum eNPPStreamTypeInternal {
   eNPPStreamTypeInternal_Get,
   eNPPStreamTypeInternal_Post
 };
-
-static NS_DEFINE_IID(kMemoryCID, NS_MEMORY_CID);
 
 PRIntervalTime NS_NotifyBeginPluginCall(NSPluginCallReentry aReentryState)
 {
@@ -644,7 +643,7 @@ GetDocumentFromNPP(NPP npp)
 static JSContext *
 GetJSContextFromDoc(nsIDocument *doc)
 {
-  nsIScriptGlobalObject *sgo = doc->GetScriptGlobalObject();
+  nsCOMPtr<nsIScriptGlobalObject> sgo = do_QueryInterface(doc->GetWindow());
   NS_ENSURE_TRUE(sgo, nullptr);
 
   nsIScriptContext *scx = sgo->GetContext();
@@ -775,7 +774,7 @@ nsPluginThreadRunnable::Run()
     PluginDestructionGuard guard(mInstance);
 
     NS_TRY_SAFE_CALL_VOID(mFunc(mUserData), nullptr,
-                          NS_PLUGIN_CALL_UNSAFE_TO_REENTER_GECKO);
+                          NS_PLUGIN_CALL_SAFE_TO_REENTER_GECKO);
   }
 
   return NS_OK;
@@ -1246,7 +1245,7 @@ _getpluginelement(NPP npp)
   NS_ENSURE_TRUE(xpc, nullptr);
 
   nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
-  xpc->WrapNative(cx, ::JS_GetGlobalForScopeChain(cx), element,
+  xpc->WrapNative(cx, ::JS::CurrentGlobalOrNull(cx), element,
                   NS_GET_IID(nsIDOMElement),
                   getter_AddRefs(holder));
   NS_ENSURE_TRUE(holder, nullptr);
@@ -1923,7 +1922,7 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
         return NPERR_NO_ERROR;
       }
     }
-#ifdef MOZ_WIDGET_GTK2
+#if (MOZ_WIDGET_GTK == 2)
     // adobe nppdf calls XtGetApplicationNameAndClass(display,
     // &instance, &class) we have to init Xt toolkit before get
     // XtDisplay just call gtk_xtbin_new(w,0) once
@@ -1944,7 +1943,7 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
     return NPERR_GENERIC_ERROR;
 #endif
 
-#if defined(XP_WIN) || defined(XP_OS2) || defined(MOZ_WIDGET_GTK2) \
+#if defined(XP_WIN) || defined(XP_OS2) || (MOZ_WIDGET_GTK == 2) \
  || defined(MOZ_WIDGET_QT)
   case NPNVnetscapeWindow: {
     if (!npp || !npp->ndata)

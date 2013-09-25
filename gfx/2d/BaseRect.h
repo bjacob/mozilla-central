@@ -7,8 +7,8 @@
 #define MOZILLA_GFX_BASERECT_H_
 
 #include <cmath>
-#include <mozilla/Assertions.h>
 #include <algorithm>
+#include "nsDebug.h"
 
 namespace mozilla {
 namespace gfx {
@@ -36,7 +36,7 @@ namespace gfx {
  * Do not use this class directly. Subclass it, pass that subclass as the
  * Sub parameter, and only use that subclass.
  */
-template <class T, class Sub, class Point, class SizeT, class Margin>
+template <class T, class Sub, class Point, class SizeT, class MarginT>
 struct BaseRect {
   T x, y, width, height;
 
@@ -55,6 +55,15 @@ struct BaseRect {
   // is <= 0
   bool IsEmpty() const { return height <= 0 || width <= 0; }
   void SetEmpty() { width = height = 0; }
+
+  // "Finite" means not inf and not NaN
+  bool IsFinite() const
+  {
+    return (std::isfinite(x) &&
+            std::isfinite(y) &&
+            std::isfinite(width) &&
+            std::isfinite(height));
+  }
 
   // Returns true if this rectangle contains the interior of aRect. Always
   // returns true if aRect is empty, and always returns false is aRect is
@@ -89,10 +98,10 @@ struct BaseRect {
   Sub Intersect(const Sub& aRect) const
   {
     Sub result;
-    result.x = std::max(x, aRect.x);
-    result.y = std::max(y, aRect.y);
-    result.width = std::min(XMost(), aRect.XMost()) - result.x;
-    result.height = std::min(YMost(), aRect.YMost()) - result.y;
+    result.x = std::max<T>(x, aRect.x);
+    result.y = std::max<T>(y, aRect.y);
+    result.width = std::min<T>(XMost(), aRect.XMost()) - result.x;
+    result.height = std::min<T>(YMost(), aRect.YMost()) - result.y;
     if (result.width < 0 || result.height < 0) {
       result.SizeTo(0, 0);
     }
@@ -180,7 +189,7 @@ struct BaseRect {
     width += 2 * aDx;
     height += 2 * aDy;
   }
-  void Inflate(const Margin& aMargin)
+  void Inflate(const MarginT& aMargin)
   {
     x -= aMargin.left;
     y -= aMargin.top;
@@ -197,7 +206,7 @@ struct BaseRect {
     width = std::max(T(0), width - 2 * aDx);
     height = std::max(T(0), height - 2 * aDy);
   }
-  void Deflate(const Margin& aMargin)
+  void Deflate(const MarginT& aMargin)
   {
     x += aMargin.left;
     y += aMargin.top;
@@ -242,12 +251,12 @@ struct BaseRect {
   }
 
   // Find difference as a Margin
-  Margin operator-(const Sub& aRect) const
+  MarginT operator-(const Sub& aRect) const
   {
-    return Margin(aRect.y - y,
-                  XMost() - aRect.XMost(),
-                  YMost() - aRect.YMost(),
-                  aRect.x - x);
+    return MarginT(aRect.y - y,
+                   XMost() - aRect.XMost(),
+                   YMost() - aRect.YMost(),
+                   aRect.x - x);
   }
 
   // Helpers for accessing the vertices
@@ -268,21 +277,21 @@ struct BaseRect {
 
   // Moves one edge of the rect without moving the opposite edge.
   void SetLeftEdge(T aX) {
-    MOZ_ASSERT(aX <= XMost());
+    NS_ASSERTION(aX <= XMost(), "Bad rect edge");
     width = XMost() - aX;
     x = aX;
   }
   void SetRightEdge(T aXMost) { 
-    MOZ_ASSERT(aXMost >= x);
+    NS_ASSERTION(aXMost >= x, "Bad rect edge");
     width = aXMost - x; 
   }
   void SetTopEdge(T aY) {
-    MOZ_ASSERT(aY <= YMost());
+    NS_ASSERTION(aY <= YMost(), "Bad rect edge");
     height = YMost() - aY;
     y = aY;
   }
   void SetBottomEdge(T aYMost) { 
-    MOZ_ASSERT(aYMost >= y);
+    NS_ASSERTION(aYMost >= y, "Bad rect edge");
     height = aYMost - y; 
   }
 

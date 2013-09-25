@@ -4,16 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef Xdr_h___
-#define Xdr_h___
+#ifndef vm_Xdr_h
+#define vm_Xdr_h
 
 #include "mozilla/Endian.h"
 
-#include "jsapi.h"
-#include "jsprvtd.h"
-#include "jsnum.h"
-
-#include "vm/NumericConversions.h"
+#include "jsatom.h"
 
 namespace js {
 
@@ -26,7 +22,7 @@ namespace js {
  * and saved versions. If deserialization fails, the data should be
  * invalidated if possible.
  */
-static const uint32_t XDR_BYTECODE_VERSION = uint32_t(0xb973c0de - 147);
+static const uint32_t XDR_BYTECODE_VERSION = uint32_t(0xb973c0de - 152);
 
 class XDRBuffer {
   public:
@@ -98,16 +94,20 @@ class XDRState {
     XDRBuffer buf;
 
   protected:
-    JSPrincipals *principals;
-    JSPrincipals *originPrincipals;
+    JSPrincipals *principals_;
+    JSPrincipals *originPrincipals_;
 
     XDRState(JSContext *cx)
-      : buf(cx), principals(NULL), originPrincipals(NULL) {
+      : buf(cx), principals_(NULL), originPrincipals_(NULL) {
     }
 
   public:
     JSContext *cx() const {
         return buf.cx();
+    }
+
+    JSPrincipals *originPrincipals() const {
+        return originPrincipals_;
     }
 
     bool codeUint8(uint8_t *n) {
@@ -210,8 +210,6 @@ class XDRState {
 
     bool codeFunction(JS::MutableHandleObject objp);
     bool codeScript(MutableHandleScript scriptp);
-
-    void initScriptPrincipals(JSScript *script);
 };
 
 class XDREncoder : public XDRState<XDR_ENCODE> {
@@ -244,4 +242,4 @@ class XDRDecoder : public XDRState<XDR_DECODE> {
 
 } /* namespace js */
 
-#endif /* Xdr_h___ */
+#endif /* vm_Xdr_h */

@@ -4,7 +4,8 @@
 let prefs = {
   "net": [
     "network",
-    "networkinfo"
+    "netwarn",
+    "networkinfo",
   ],
   "css": [
     "csserror",
@@ -12,7 +13,8 @@ let prefs = {
   ],
   "js": [
     "exception",
-    "jswarn"
+    "jswarn",
+    "jslog",
   ],
   "logging": [
      "error",

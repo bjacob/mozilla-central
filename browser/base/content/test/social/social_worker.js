@@ -100,32 +100,9 @@ onconnect = function(e) {
           };
         }
         port.postMessage({topic: "social.user-profile", data: profile});
-        port.postMessage({
-          topic: "social.page-mark-config",
-          data: {
-            images: {
-              // this one is relative to test we handle relative ones.
-              marked: "/browser/browser/base/content/test/social/social_mark_image.png",
-              // absolute to check we handle them too.
-              unmarked: "https://example.com/browser/browser/base/content/test/social/social_mark_image.png"
-            },
-            messages: {
-              unmarkedTooltip: "Mark this page",
-              markedTooltip: "Unmark this page",
-              unmarkedLabel: "Mark",
-              markedLabel: "Unmark",
-            }
-          }
-        });
         break;
       case "test-ambient-notification":
-        let icon = {
-          name: "testIcon",
-          iconURL: "chrome://browser/skin/Info.png",
-          contentPanel: "https://example.com/browser/browser/base/content/test/social/social_panel.html",
-          counter: 1
-        };
-        apiPort.postMessage({topic: "social.ambient-notification", data: icon});
+        apiPort.postMessage({topic: "social.ambient-notification", data: event.data.data});
         break;
       case "test-isVisible":
         sidebarPort.postMessage({topic: "test-isVisible"});
@@ -136,6 +113,13 @@ onconnect = function(e) {
       case "share-data-message":
         if (testPort)
           testPort.postMessage({topic:"got-share-data-message", result: event.data.result});
+        break;
+      case "worker.update":
+        apiPort.postMessage({topic: 'social.manifest-get'});
+        break;
+      case "social.manifest":
+        event.data.data.version = 2;
+        apiPort.postMessage({topic: 'social.manifest-set', data: event.data.data});
         break;
     }
   }

@@ -179,7 +179,7 @@ typedef enum {
     SDP_TRANSPORT_RTPSAVP,
     SDP_TRANSPORT_TCP,
     SDP_TRANSPORT_RTPSAVPF,
-    SDP_TRANSPORT_SCTPDTLS,
+    SDP_TRANSPORT_DTLSSCTP,
     SDP_MAX_TRANSPORT_TYPES,
     SDP_TRANSPORT_UNSUPPORTED,
     SDP_TRANSPORT_INVALID
@@ -474,6 +474,14 @@ typedef enum {
     SDP_RTCP_UNICAST_MODE_NOT_PRESENT
 } sdp_rtcp_unicast_mode_e;
 
+typedef enum {
+    SDP_CONNECTION_NOT_FOUND = -1,
+    SDP_CONNECTION_NEW = 0,
+    SDP_CONNECTION_EXISTING,
+    SDP_MAX_CONNECTION,
+    SDP_CONNECTION_UNKNOWN
+} sdp_connection_type_e;
+
 /*
  * sdp_srtp_fec_order_t
  *  This type defines the order in which to perform FEC
@@ -611,6 +619,8 @@ typedef struct sdp_encryptspec {
 #define SDP_MAX_RCMD_NALU_SIZE_FLAG   0x4
 #define SDP_DEINT_BUF_CAP_FLAG   0x8
 
+#define SDP_FMTP_UNUSED          0xFFFF
+
 typedef struct sdp_fmtp {
     u16                       payload_num;
     u32                       maxval;  /* maxval optimizes bmap search */
@@ -682,7 +692,7 @@ typedef struct sdp_fmtp {
     tinybool                  redundant_pic_cap;
     u32                       deint_buf_cap;
     u32                       max_rcmd_nalu_size;
-    tinybool                  parameter_add;
+    u16                       parameter_add;
 
     tinybool                  annex_d;
 
@@ -828,6 +838,25 @@ typedef struct sdp_source_filter {
 } sdp_source_filter_t;
 
 /*
+ * a=rtcp-fb:<payload-type> <feedback-type> [<feedback-parameters>]
+ * Defines RTCP feedback parameters
+ */
+#define SDP_ALL_PAYLOADS         0xFFFF
+typedef struct sdp_fmtp_fb {
+    u16                          payload_num;    /* can be SDP_ALL_PAYLOADS */
+    sdp_rtcp_fb_type_e           feedback_type;
+    union {
+        sdp_rtcp_fb_ack_type_e   ack;
+        sdp_rtcp_fb_ccm_type_e   ccm;
+        sdp_rtcp_fb_nack_type_e  nack;
+        u32                      trr_int;
+    } param;
+    char extra[SDP_MAX_STRING_LEN + 1]; /* Holds any trailing information that
+                                           cannot be represented by preceding
+                                           fields. */
+} sdp_fmtp_fb_t;
+
+/*
  * b=<bw-modifier>:<val>
  *
 */
@@ -939,12 +968,15 @@ typedef struct sdp_attr {
         sdp_silencesupp_t     silencesupp;
         sdp_mca_t            *cap_p;    /* A X-CAP or CDSC attribute */
         sdp_rtr_t             rtr;
-    sdp_comediadir_t      comediadir;
-    sdp_srtp_crypto_context_t srtp_context;
+        sdp_comediadir_t      comediadir;
+        sdp_srtp_crypto_context_t srtp_context;
         sdp_mptime_t          mptime;
         sdp_stream_data_t     stream_data;
         char                  unknown[SDP_MAX_STRING_LEN+1];
         sdp_source_filter_t   source_filter;
+        sdp_fmtp_fb_t         rtcp_fb;
+        sdp_setup_type_e      setup;
+        sdp_connection_type_e connection;
     } attr;
     struct sdp_attr          *next_p;
 } sdp_attr_t;
@@ -1028,7 +1060,6 @@ typedef struct {
     sdp_result_e (*build_func)(sdp_t *sdp_p, u16 level, flex_string *fs);
 } sdp_tokenarray_t;
 
-
 /* Attribute processing table. */
 typedef struct {
     char *name;
@@ -1068,7 +1099,6 @@ extern void sdp_debug(sdp_t *sdp_ptr, sdp_debug_e debug_type, tinybool debug_fla
 extern void sdp_set_string_debug(sdp_t *sdp_ptr, const char *debug_str);
 extern sdp_result_e sdp_parse(sdp_t *sdp_ptr, char **bufp, u16 len);
 extern sdp_result_e sdp_build(sdp_t *sdp_ptr, flex_string *fs);
-extern sdp_t *sdp_copy(sdp_t *sdp_ptr);
 extern sdp_result_e sdp_free_description(sdp_t *sdp_ptr);
 extern void sdp_parse_error(const char *peerconnection, const char *format, ...);
 
@@ -1515,7 +1545,7 @@ extern sdp_result_e sdp_attr_set_fmtp_h264_parameter_add (void *sdp_ptr,
                                                           u16 level,
                                                           u8 cap_num,
                                                           u16 inst_num,
-                                                          tinybool parameter_add);
+                                                          u16 parameter_add);
 
 extern sdp_result_e sdp_attr_set_fmtp_h261_annex_params (void *sdp_ptr,
                                                          u16 level,
@@ -1999,6 +2029,23 @@ sdp_result_e
 sdp_attr_set_rtcp_mux_attribute(void *sdp_ptr, u16 level,
                               u8 cap_num, sdp_attr_e sdp_attr, u16 inst_num, const tinybool rtcp_mux);
 
+
+sdp_result_e
+sdp_attr_get_setup_attribute (void *sdp_ptr, u16 level,
+    u8 cap_num, u16 inst_num, sdp_setup_type_e *setup_type);
+
+sdp_result_e
+sdp_attr_set_setup_attribute(void *sdp_ptr, u16 level,
+    u8 cap_num, u16 inst_num, sdp_setup_type_e setup_type);
+
+sdp_result_e
+sdp_attr_get_connection_attribute (void *sdp_ptr, u16 level,
+    u8 cap_num, u16 inst_num, sdp_connection_type_e *connection_type);
+
+sdp_result_e
+sdp_attr_set_connection_attribute(void *sdp_ptr, u16 level,
+    u8 cap_num, u16 inst_num, sdp_connection_type_e connection_type);
+
 sdp_result_e
 sdp_attr_get_dtls_fingerprint_attribute (void *sdp_ptr, u16 level,
                                   u8 cap_num, sdp_attr_e sdp_attr, u16 inst_num,
@@ -2007,5 +2054,34 @@ sdp_attr_get_dtls_fingerprint_attribute (void *sdp_ptr, u16 level,
 sdp_result_e
 sdp_attr_set_dtls_fingerprint_attribute(void *sdp_ptr, u16 level,
                               u8 cap_num, sdp_attr_e sdp_attr, u16 inst_num, const char *dtls_fingerprint);
+
+sdp_rtcp_fb_ack_type_e
+sdp_attr_get_rtcp_fb_ack(void *sdp_ptr, u16 level, u16 payload_type, u16 inst);
+
+sdp_rtcp_fb_nack_type_e
+sdp_attr_get_rtcp_fb_nack(void *sdp_ptr, u16 level, u16 payload_type, u16 inst);
+
+u32
+sdp_attr_get_rtcp_fb_trr_int(void *sdp_ptr, u16 level, u16 payload_type,
+                             u16 inst);
+
+sdp_rtcp_fb_ccm_type_e
+sdp_attr_get_rtcp_fb_ccm(void *sdp_ptr, u16 level, u16 payload_type, u16 inst);
+
+sdp_result_e
+sdp_attr_set_rtcp_fb_ack(void *sdp_ptr, u16 level, u16 payload_type, u16 inst,
+                         sdp_rtcp_fb_ack_type_e type);
+
+sdp_result_e
+sdp_attr_set_rtcp_fb_nack(void *sdp_ptr, u16 level, u16 payload_type, u16 inst,
+                          sdp_rtcp_fb_nack_type_e);
+
+sdp_result_e
+sdp_attr_set_rtcp_fb_trr_int(void *sdp_ptr, u16 level, u16 payload_type,
+                             u16 inst, u32 interval);
+
+sdp_result_e
+sdp_attr_set_rtcp_fb_ccm(void *sdp_ptr, u16 level, u16 payload_type, u16 inst,
+                         sdp_rtcp_fb_ccm_type_e);
 
 #endif /* _SDP_H_ */

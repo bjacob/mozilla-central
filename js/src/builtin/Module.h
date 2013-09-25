@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef Module_h___
-#define Module_h___
+#ifndef builtin_Module_h
+#define builtin_Module_h
 
 #include "jsobj.h"
 
@@ -13,7 +13,7 @@ namespace js {
 
 class Module : public JSObject {
   public:
-    static Module *create(JSContext *cx, js::HandleAtom atom);
+    static Module *create(ExclusiveContext *cx, js::HandleAtom atom);
 
     JSAtom *atom() {
         return &getReservedSlot(ATOM_SLOT).toString()->asAtom();
@@ -22,6 +22,8 @@ class Module : public JSObject {
     JSScript *script() {
         return (JSScript *) getReservedSlot(SCRIPT_SLOT).toPrivate();
     }
+
+    static const Class class_;
 
   private:
     inline void setAtom(JSAtom *atom);
@@ -33,4 +35,4 @@ class Module : public JSObject {
 
 } // namespace js
 
-#endif // Module_h___
+#endif /* builtin_Module_h */

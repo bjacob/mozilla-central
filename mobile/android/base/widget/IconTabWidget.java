@@ -11,12 +11,14 @@ import android.content.res.TypedArray;
 import android.util.AttributeSet;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.TextView;
 import android.widget.TabWidget;
 
 public class IconTabWidget extends TabWidget {
     private OnTabChangedListener mListener;
-    private boolean mIsIcon;
+    private final int mButtonLayoutId;
+    private final boolean mIsIcon;
 
     public static interface OnTabChangedListener {
         public void onTabChanged(int tabIndex);
@@ -26,25 +28,27 @@ public class IconTabWidget extends TabWidget {
         super(context, attrs);
 
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.IconTabWidget);
-        int type = a.getInt(R.styleable.IconTabWidget_display, 0x00);
+        mButtonLayoutId = a.getResourceId(R.styleable.IconTabWidget_android_layout, 0);
+        mIsIcon = (a.getInt(R.styleable.IconTabWidget_display, 0x00) == 0x00);
         a.recycle();
 
-        mIsIcon = (type == 0x01);
+        if (mButtonLayoutId == 0) {
+            throw new RuntimeException("You must supply layout attribute");
+        }
     }
 
-    public Button addTab(int imageResId, int stringResId) {
-        Button button = (Button) LayoutInflater.from(getContext()).inflate(R.layout.tabs_panel_indicator, null);
+    public void addTab(int imageResId, int stringResId) {
+        View button = LayoutInflater.from(getContext()).inflate(mButtonLayoutId, this, false);
         if (mIsIcon) {
-            button.setCompoundDrawablesWithIntrinsicBounds(imageResId, 0, 0, 0);
+            ((ImageButton) button).setImageResource(imageResId);
             button.setContentDescription(getContext().getString(stringResId));
         } else {
-            button.setText(getContext().getString(stringResId).toUpperCase());
+            ((TextView) button).setText(getContext().getString(stringResId));
         }
 
         addView(button);
         button.setOnClickListener(new TabClickListener(getTabCount() - 1));
         button.setOnFocusChangeListener(this);
-        return button;
     }
 
     public void setTabSelectionListener(OnTabChangedListener listener) {

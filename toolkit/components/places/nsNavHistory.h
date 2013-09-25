@@ -21,7 +21,6 @@
 #include "nsCategoryCache.h"
 #include "nsNetCID.h"
 #include "nsToolkitCompsCID.h"
-#include "nsThreadUtils.h"
 #include "nsURIHashKey.h"
 #include "nsTHashtable.h"
 
@@ -76,7 +75,7 @@ class nsNavHistory MOZ_FINAL : public nsSupportsWeakReference
 public:
   nsNavHistory();
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSINAVHISTORYSERVICE
   NS_DECL_NSIBROWSERHISTORY
   NS_DECL_NSIOBSERVER
@@ -217,6 +216,7 @@ public:
   static const int32_t kGetInfoIndex_ItemTags;
   static const int32_t kGetInfoIndex_Frecency;
   static const int32_t kGetInfoIndex_Hidden;
+  static const int32_t kGetInfoIndex_Guid;
 
   int64_t GetTagsFolder();
 

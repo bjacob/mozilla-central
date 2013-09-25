@@ -6,7 +6,9 @@
 #ifndef GFX_IMAGESURFACE_H
 #define GFX_IMAGESURFACE_H
 
+#include "mozilla/MemoryReporting.h"
 #include "gfxASurface.h"
+#include "nsAutoPtr.h"
 #include "gfxPoint.h"
 
 // ARGB -- raw buffer.. wont be changed.. good for storing data.
@@ -113,9 +115,9 @@ public:
 
     static long ComputeStride(const gfxIntSize&, gfxImageFormat);
 
-    virtual size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+    virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
         MOZ_OVERRIDE;
-    virtual size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+    virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
         MOZ_OVERRIDE;
     virtual bool SizeOfIsMeasured() const MOZ_OVERRIDE;
 
@@ -148,7 +150,8 @@ protected:
     friend class gfxImageSurface;
     gfxSubimageSurface(gfxImageSurface* aParent,
                        unsigned char* aData,
-                       const gfxIntSize& aSize);
+                       const gfxIntSize& aSize,
+                       gfxImageFormat aFormat);
 private:
     nsRefPtr<gfxImageSurface> mParent;
 };

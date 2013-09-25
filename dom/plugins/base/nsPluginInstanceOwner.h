@@ -83,10 +83,6 @@ public:
   
   nsresult ProcessMouseDown(nsIDOMEvent* aKeyEvent);
   nsresult ProcessKeyPress(nsIDOMEvent* aKeyEvent);
-#if defined(MOZ_WIDGET_QT) && (MOZ_PLATFORM_MAEMO == 6)
-  nsresult Text(nsIDOMEvent* aTextEvent);
-#endif
-
   nsresult Destroy();  
 
 #ifdef XP_WIN
@@ -260,8 +256,8 @@ private:
   
   void FixUpURLS(const nsString &name, nsAString &value);
 #ifdef MOZ_WIDGET_ANDROID
-  gfxRect GetPluginRect();
-  bool AddPluginView(const gfxRect& aRect = gfxRect(0, 0, 0, 0));
+  mozilla::LayoutDeviceRect GetPluginRect();
+  bool AddPluginView(const mozilla::LayoutDeviceRect& aRect = mozilla::LayoutDeviceRect(0, 0, 0, 0));
   void RemovePluginView();
 
   bool mFullScreen;
@@ -324,6 +320,8 @@ private:
   nsresult DispatchKeyToPlugin(nsIDOMEvent* aKeyEvent);
   nsresult DispatchMouseToPlugin(nsIDOMEvent* aMouseEvent);
   nsresult DispatchFocusToPlugin(nsIDOMEvent* aFocusEvent);
+
+  int mLastMouseDownButtonType;
   
   nsresult EnsureCachedAttrParamArrays();
   

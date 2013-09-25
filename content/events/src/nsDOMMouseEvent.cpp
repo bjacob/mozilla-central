@@ -7,6 +7,7 @@
 #include "nsGUIEvent.h"
 #include "nsIContent.h"
 #include "nsContentUtils.h"
+#include "prtime.h"
 
 using namespace mozilla;
 
@@ -125,10 +126,10 @@ nsDOMMouseEvent::InitMouseEvent(const nsAString& aType,
 
   nsresult rv = InitMouseEvent(aType, aCanBubble, aCancelable, aView,
                                aDetail, aScreenX, aScreenY, aClientX, aClientY,
-                               (modifiers & widget::MODIFIER_CONTROL) != 0,
-                               (modifiers & widget::MODIFIER_ALT) != 0,
-                               (modifiers & widget::MODIFIER_SHIFT) != 0,
-                               (modifiers & widget::MODIFIER_META) != 0,
+                               (modifiers & MODIFIER_CONTROL) != 0,
+                               (modifiers & MODIFIER_ALT) != 0,
+                               (modifiers & MODIFIER_SHIFT) != 0,
+                               (modifiers & MODIFIER_META) != 0,
                                aButton, aRelatedTarget);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -141,8 +142,7 @@ nsDOMMouseEvent::InitMouseEvent(const nsAString& aType,
       static_cast<nsInputEvent*>(mEvent)->modifiers = modifiers;
       return NS_OK;
     default:
-      MOZ_NOT_REACHED("There is no space to store the modifiers");
-      return NS_ERROR_FAILURE;
+      MOZ_CRASH("There is no space to store the modifiers");
   }
 }
 
@@ -152,9 +152,8 @@ nsDOMMouseEvent::Constructor(const mozilla::dom::GlobalObject& aGlobal,
                              const mozilla::dom::MouseEventInit& aParam,
                              mozilla::ErrorResult& aRv)
 {
-  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.Get());
+  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.GetAsSupports());
   nsRefPtr<nsDOMMouseEvent> e = new nsDOMMouseEvent(t, nullptr, nullptr);
-  e->SetIsDOMBinding();
   bool trusted = e->Init(t);
   e->InitMouseEvent(aType, aParam.mBubbles, aParam.mCancelable,
                     aParam.mView, aParam.mDetail, aParam.mScreenX,
@@ -243,8 +242,7 @@ nsDOMMouseEvent::Buttons()
     case NS_SIMPLE_GESTURE_EVENT:
       return static_cast<nsMouseEvent_base*>(mEvent)->buttons;
     default:
-      MOZ_NOT_REACHED("Tried to get mouse buttons for non-mouse event!");
-      return 0;
+      MOZ_CRASH("Tried to get mouse buttons for non-mouse event!");
   }
 }
 
@@ -435,6 +433,5 @@ nsresult NS_NewDOMMouseEvent(nsIDOMEvent** aInstancePtrResult,
                              nsInputEvent *aEvent)
 {
   nsDOMMouseEvent* it = new nsDOMMouseEvent(aOwner, aPresContext, aEvent);
-  it->SetIsDOMBinding();
   return CallQueryInterface(it, aInstancePtrResult);
 }

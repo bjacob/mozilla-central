@@ -4,19 +4,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef json_h___
-#define json_h___
+#ifndef json_h
+#define json_h
 
-#include "js/CharacterEncoding.h"
+#include "NamespaceImports.h"
+
 #include "js/RootingAPI.h"
-#include "js/Value.h"
-#include "js/Vector.h"
-#include "vm/StringBuffer.h"
+
+namespace js {
+class StringBuffer;
+}
 
 extern JSObject *
 js_InitJSONClass(JSContext *cx, js::HandleObject obj);
 
-extern JSBool
+extern bool
 js_Stringify(JSContext *cx, js::MutableHandleValue vp, JSObject *replacer,
              js::Value space, js::StringBuffer &sb);
 
@@ -28,4 +30,4 @@ ParseJSONWithReviver(JSContext *cx, JS::StableCharPtr chars, size_t length, Hand
 
 } // namespace js
 
-#endif /* json_h___ */
+#endif /* json_h */

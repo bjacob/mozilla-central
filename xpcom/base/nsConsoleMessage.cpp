@@ -8,14 +8,13 @@
  */
 
 #include "nsConsoleMessage.h"
-#include "nsReadableUtils.h"
 #include "jsapi.h"
 
-NS_IMPL_THREADSAFE_ISUPPORTS1(nsConsoleMessage, nsIConsoleMessage)
+NS_IMPL_ISUPPORTS1(nsConsoleMessage, nsIConsoleMessage)
 
 nsConsoleMessage::nsConsoleMessage()
-    :  mMessage(),
-       mTimeStamp(0)
+    :  mTimeStamp(0),
+       mMessage()
 {
 }
 

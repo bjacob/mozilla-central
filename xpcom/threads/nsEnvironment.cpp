@@ -14,7 +14,7 @@
 
 using namespace mozilla;
 
-NS_IMPL_THREADSAFE_ISUPPORTS1(nsEnvironment, nsIEnvironment)
+NS_IMPL_ISUPPORTS1(nsEnvironment, nsIEnvironment)
 
 nsresult
 nsEnvironment::Create(nsISupports *aOuter, REFNSIID aIID,
@@ -111,7 +111,6 @@ EnsureEnvHash()
     if (!gEnvHash)
         return false;
 
-    gEnvHash->Init();
     return true;
 }
 

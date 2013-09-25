@@ -8,36 +8,19 @@
 
 #include "nsIScriptContext.h"
 #include "mozilla/dom/EventTarget.h"
-#include "nsJSUtils.h"
 #include "nsDOMJSUtils.h"
-#include "mozilla/Util.h"
 #include "xpcprivate.h"
 
 using mozilla::dom::EventTarget;
 using mozilla::DebugOnly;
 
 NS_EXPORT
-nsCxPusher::nsCxPusher()
-    : mScriptIsRunning(false),
-      mPushedSomething(false)
-{
-}
-
-NS_EXPORT
-nsCxPusher::~nsCxPusher()
-{
-  Pop();
-}
+nsCxPusher::~nsCxPusher() {}
 
 bool
 nsCxPusher::Push(EventTarget *aCurrentTarget)
 {
-  if (mPushedSomething) {
-    NS_ERROR("Whaaa! No double pushing with nsCxPusher::Push()!");
-
-    return false;
-  }
-
+  MOZ_ASSERT(mPusher.empty());
   NS_ENSURE_TRUE(aCurrentTarget, false);
   nsresult rv;
   nsIScriptContext* scx =
@@ -54,7 +37,7 @@ nsCxPusher::Push(EventTarget *aCurrentTarget)
     // The target may have a special JS context for event handlers.
     JSContext* cx = aCurrentTarget->GetJSContextForEventHandlers();
     if (cx) {
-      DoPush(cx);
+      mPusher.construct(cx);
     }
 
     // Nothing to do here, I guess.  Have to return true so that event firing
@@ -62,20 +45,14 @@ nsCxPusher::Push(EventTarget *aCurrentTarget)
     return true;
   }
 
-  JSContext* cx = scx ? scx->GetNativeContext() : nullptr;
-
-  // If there's no native context in the script context it must be
-  // in the process or being torn down. We don't want to notify the
-  // script context about scripts having been evaluated in such a
-  // case, calling with a null cx is fine in that case.
-  Push(cx);
+  mPusher.construct(scx->GetNativeContext());
   return true;
 }
 
 bool
 nsCxPusher::RePush(EventTarget *aCurrentTarget)
 {
-  if (!mPushedSomething) {
+  if (mPusher.empty()) {
     return Push(aCurrentTarget);
   }
 
@@ -84,88 +61,92 @@ nsCxPusher::RePush(EventTarget *aCurrentTarget)
     nsIScriptContext* scx =
       aCurrentTarget->GetContextForEventHandlers(&rv);
     if (NS_FAILED(rv)) {
-      Pop();
+      mPusher.destroy();
       return false;
     }
 
     // If we have the same script context and native context is still
     // alive, no need to Pop/Push.
-    if (scx && scx == mScx &&
+    if (scx && scx == mPusher.ref().GetScriptContext() &&
         scx->GetNativeContext()) {
       return true;
     }
   }
 
-  Pop();
+  mPusher.destroy();
   return Push(aCurrentTarget);
 }
 
 NS_EXPORT_(void)
 nsCxPusher::Push(JSContext *cx)
 {
-  MOZ_ASSERT(!mPushedSomething, "No double pushing with nsCxPusher::Push()!");
-  MOZ_ASSERT(cx);
-
-  // Hold a strong ref to the nsIScriptContext, just in case
-  // XXXbz do we really need to?  If we don't get one of these in Pop(), is
-  // that really a problem?  Or do we need to do this to effectively root |cx|?
-  mScx = GetScriptContextFromJSContext(cx);
-
-  DoPush(cx);
-}
-
-void
-nsCxPusher::DoPush(JSContext* cx)
-{
-  // NB: The GetDynamicScriptContext is historical and might not be sane.
-  if (cx && nsJSUtils::GetDynamicScriptContext(cx) &&
-      xpc::IsJSContextOnStack(cx))
-  {
-    // If the context is on the stack, that means that a script
-    // is running at the moment in the context.
-    mScriptIsRunning = true;
-  }
-
-  if (!xpc::PushJSContext(cx)) {
-    MOZ_CRASH();
-  }
-
-  // Enter a request for the duration that the cx is on the stack if non-null.
-  // NB: We call UnmarkGrayContext so that this can obsolete the need for the
-  // old XPCAutoRequest as well.
-  if (cx) {
-    mAutoRequest.construct(cx);
-    xpc_UnmarkGrayContext(cx);
-  }
-
-  mPushedSomething = true;
-#ifdef DEBUG
-  mPushedContext = cx;
-  if (cx)
-    mCompartmentDepthOnEntry = js::GetEnterCompartmentDepth(cx);
-#endif
+  mPusher.construct(cx);
 }
 
 void
 nsCxPusher::PushNull()
 {
-  DoPush(nullptr);
+  // Note: The Maybe<> template magic seems to need the static_cast below to
+  // work right on some older compilers.
+  mPusher.construct(static_cast<JSContext*>(nullptr), /* aAllowNull = */ true);
 }
 
 NS_EXPORT_(void)
 nsCxPusher::Pop()
 {
-  if (!mPushedSomething) {
-    mScx = nullptr;
-    mPushedSomething = false;
+  if (!mPusher.empty())
+    mPusher.destroy();
+}
 
-    NS_ASSERTION(!mScriptIsRunning, "Huh, this can't be happening, "
-                 "mScriptIsRunning can't be set here!");
+namespace mozilla {
 
-    return;
+AutoCxPusher::AutoCxPusher(JSContext* cx, bool allowNull)
+{
+  MOZ_ASSERT_IF(!allowNull, cx);
+
+  // Hold a strong ref to the nsIScriptContext, if any. This ensures that we
+  // only destroy the mContext of an nsJSContext when it is not on the cx stack
+  // (and therefore not in use). See nsJSContext::DestroyJSContext().
+  if (cx)
+    mScx = GetScriptContextFromJSContext(cx);
+
+  XPCJSContextStack *stack = XPCJSRuntime::Get()->GetJSContextStack();
+  if (!stack->Push(cx)) {
+    MOZ_CRASH();
   }
 
-  // Leave the request before popping.
+#ifdef DEBUG
+  mPushedContext = cx;
+  mCompartmentDepthOnEntry = cx ? js::GetEnterCompartmentDepth(cx) : 0;
+#endif
+
+  // Enter a request and a compartment for the duration that the cx is on the
+  // stack if non-null.
+  if (cx) {
+    mAutoRequest.construct(cx);
+
+    // DOM JSContexts don't store their default compartment object on the cx.
+    JSObject *compartmentObject = mScx ? mScx->GetWindowProxy()
+                                       : js::DefaultObjectForContextOrNull(cx);
+    if (compartmentObject)
+      mAutoCompartment.construct(cx, compartmentObject);
+  }
+}
+
+NS_EXPORT
+AutoCxPusher::~AutoCxPusher()
+{
+  // GC when we pop a script entry point. This is a useful heuristic that helps
+  // us out on certain (flawed) benchmarks like sunspider, because it lets us
+  // avoid GCing during the timing loop.
+  //
+  // NB: We need to take care to only do this if we're in a compartment,
+  // otherwise JS_MaybeGC will segfault.
+  if (mScx && !mAutoCompartment.empty())
+    JS_MaybeGC(nsXPConnect::XPConnect()->GetCurrentJSContext());
+
+  // Leave the compartment and request before popping.
+  mAutoCompartment.destroyIfConstructed();
   mAutoRequest.destroyIfConstructed();
 
   // When we push a context, we may save the frame chain and pretend like we
@@ -177,21 +158,9 @@ nsCxPusher::Pop()
                                 js::GetEnterCompartmentDepth(mPushedContext));
   DebugOnly<JSContext*> stackTop;
   MOZ_ASSERT(mPushedContext == nsXPConnect::XPConnect()->GetCurrentJSContext());
-  xpc::PopJSContext();
-
-  if (!mScriptIsRunning && mScx) {
-    // No JS is running in the context, but executing the event handler might have
-    // caused some JS to run. Tell the script context that it's done.
-
-    mScx->ScriptEvaluated(true);
-  }
-
+  XPCJSRuntime::Get()->GetJSContextStack()->Pop();
   mScx = nullptr;
-  mScriptIsRunning = false;
-  mPushedSomething = false;
 }
-
-namespace mozilla {
 
 AutoJSContext::AutoJSContext(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMPL)
   : mCx(nullptr)
@@ -219,7 +188,7 @@ AutoJSContext::Init(bool aSafe MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
 
   if (!mCx) {
     mCx = xpc->GetSafeJSContext();
-    mPusher.Push(mCx);
+    mPusher.construct(mCx);
   }
 }
 
@@ -236,7 +205,7 @@ AutoSafeJSContext::AutoSafeJSContext(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMP
 AutoPushJSContext::AutoPushJSContext(JSContext *aCx) : mCx(aCx)
 {
   if (mCx && mCx != nsXPConnect::XPConnect()->GetCurrentJSContext()) {
-    mPusher.Push(mCx);
+    mPusher.construct(mCx);
   }
 }
 

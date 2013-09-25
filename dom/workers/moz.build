@@ -19,8 +19,8 @@ EXPORTS.mozilla.dom.workers.bindings += [
     'EventListenerManager.h',
     'EventTarget.h',
     'FileReaderSync.h',
-    'TextDecoder.h',
-    'TextEncoder.h',
+    'Location.h',
+    'Navigator.h',
     'URL.h',
     'WorkerFeature.h',
     'XMLHttpRequest.h',
@@ -34,17 +34,13 @@ CPP_SOURCES += [
     'EventListenerManager.cpp',
     'EventTarget.cpp',
     'Events.cpp',
-    'Exceptions.cpp',
     'File.cpp',
     'FileReaderSync.cpp',
-    'ImageData.cpp',
     'Location.cpp',
     'Navigator.cpp',
     'Principal.cpp',
     'RuntimeService.cpp',
     'ScriptLoader.cpp',
-    'TextDecoder.cpp',
-    'TextEncoder.cpp',
     'URL.cpp',
     'Worker.cpp',
     'WorkerPrivate.cpp',
@@ -54,3 +50,18 @@ CPP_SOURCES += [
     'XMLHttpRequestUpload.cpp',
 ]
 
+LIBRARY_NAME = 'domworkers_s'
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+MSVC_ENABLE_PGO = True
+
+LOCAL_INCLUDES += [
+    '../base',
+    '../system',
+    '/content/base/src',
+    '/content/events/src',
+    '/xpcom/build',
+]

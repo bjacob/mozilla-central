@@ -4,9 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "LifoAlloc.h"
+#include "ds/LifoAlloc.h"
+
+#include "mozilla/MathAlgorithms.h"
 
 using namespace js;
+
+using mozilla::RoundUpPow2;
+using mozilla::tl::BitSize;
 
 namespace js {
 namespace detail {
@@ -87,7 +92,7 @@ LifoAlloc::getOrCreateChunk(size_t n)
 
         // Guard for overflow.
         if (allocSizeWithHeader < n ||
-            (allocSizeWithHeader & (size_t(1) << (tl::BitSize<size_t>::result - 1)))) {
+            (allocSizeWithHeader & (size_t(1) << (BitSize<size_t>::value - 1)))) {
             return NULL;
         }
 
@@ -119,14 +124,16 @@ void
 LifoAlloc::transferFrom(LifoAlloc *other)
 {
     JS_ASSERT(!markCount);
-    JS_ASSERT(latest == first);
     JS_ASSERT(!other->markCount);
 
     if (!other->first)
         return;
 
     incrementCurSize(other->curSize_);
-    append(other->first, other->last);
+    if (other->isEmpty())
+        appendUnused(other->first, other->last);
+    else
+        appendUsed(other->first, other->latest, other->last);
     other->first = other->last = other->latest = NULL;
     other->curSize_ = 0;
 }
@@ -156,7 +163,7 @@ LifoAlloc::transferUnusedFrom(LifoAlloc *other)
             }
         }
 
-        append(other->latest->next(), other->last);
+        appendUnused(other->latest->next(), other->last);
         other->latest->setNext(NULL);
         other->last = other->latest;
     }

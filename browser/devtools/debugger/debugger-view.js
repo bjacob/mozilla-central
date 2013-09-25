@@ -5,8 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const SOURCE_URL_DEFAULT_MAX_LENGTH = 64; // chars
 const SOURCE_SYNTAX_HIGHLIGHT_MAX_FILE_SIZE = 1048576; // 1 MB in bytes
+const SOURCE_URL_DEFAULT_MAX_LENGTH = 64; // chars
 const STACK_FRAMES_SOURCE_URL_MAX_LENGTH = 15; // chars
 const STACK_FRAMES_SOURCE_URL_TRIM_SECTION = "center";
 const STACK_FRAMES_POPUP_SOURCE_URL_MAX_LENGTH = 32; // chars
@@ -18,6 +18,7 @@ const BREAKPOINT_CONDITIONAL_POPUP_OFFSET_X = 7; // px
 const BREAKPOINT_CONDITIONAL_POPUP_OFFSET_Y = -3; // px
 const RESULTS_PANEL_POPUP_POSITION = "before_end";
 const RESULTS_PANEL_MAX_RESULTS = 10;
+const FILE_SEARCH_ACTION_MAX_DELAY = 300; // ms
 const GLOBAL_SEARCH_EXPAND_MAX_RESULTS = 50;
 const GLOBAL_SEARCH_LINE_MAX_LENGTH = 300; // chars
 const GLOBAL_SEARCH_ACTION_MAX_DELAY = 1500; // ms
@@ -27,6 +28,16 @@ const SEARCH_FUNCTION_FLAG = "@";
 const SEARCH_TOKEN_FLAG = "#";
 const SEARCH_LINE_FLAG = ":";
 const SEARCH_VARIABLE_FLAG = "*";
+const DEFAULT_EDITOR_CONFIG = {
+  mode: SourceEditor.MODES.TEXT,
+  readOnly: true,
+  showLineNumbers: true,
+  showAnnotationRuler: true,
+  showOverviewRuler: true
+};
+
+//For telemetry
+Cu.import("resource://gre/modules/Services.jsm")
 
 /**
  * Object defining the debugger view components.
@@ -35,15 +46,18 @@ let DebuggerView = {
   /**
    * Initializes the debugger view.
    *
-   * @param function aCallback
-   *        Called after the view finishes initializing.
+   * @return object
+   *         A promise that is resolved when the view finishes initializing.
    */
-  initialize: function(aCallback) {
-    dumpn("Initializing the DebuggerView");
+  initialize: function() {
+    if (this._startup) {
+      return this._startup;
+    }
 
-    this._initializeWindow();
+    let deferred = promise.defer();
+    this._startup = deferred.promise;
+
     this._initializePanes();
-
     this.Toolbar.initialize();
     this.Options.initialize();
     this.Filtering.initialize();
@@ -54,26 +68,25 @@ let DebuggerView = {
     this.Sources.initialize();
     this.WatchExpressions.initialize();
     this.GlobalSearch.initialize();
+    this._initializeVariablesView();
+    this._initializeEditor(deferred.resolve);
 
-    this.Variables = new VariablesView(document.getElementById("variables"));
-    this.Variables.searchPlaceholder = L10N.getStr("emptyVariablesFilterText");
-    this.Variables.emptyText = L10N.getStr("emptyVariablesText");
-    this.Variables.onlyEnumVisible = Prefs.variablesOnlyEnumVisible;
-    this.Variables.searchEnabled = Prefs.variablesSearchboxVisible;
-    this.Variables.eval = DebuggerController.StackFrames.evaluate;
-    this.Variables.lazyEmpty = true;
-
-    this._initializeEditor(aCallback);
+    return deferred.promise;
   },
 
   /**
    * Destroys the debugger view.
    *
-   * @param function aCallback
-   *        Called after the view finishes destroying.
+   * @return object
+   *         A promise that is resolved when the view finishes destroying.
    */
-  destroy: function(aCallback) {
-    dumpn("Destroying the DebuggerView");
+  destroy: function() {
+    if (this._shutdown) {
+      return this._shutdown;
+    }
+
+    let deferred = promise.defer();
+    this._shutdown = deferred.promise;
 
     this.Toolbar.destroy();
     this.Options.destroy();
@@ -85,46 +98,10 @@ let DebuggerView = {
     this.Sources.destroy();
     this.WatchExpressions.destroy();
     this.GlobalSearch.destroy();
-
-    this._destroyWindow();
     this._destroyPanes();
-    this._destroyEditor();
-    aCallback();
-  },
+    this._destroyEditor(deferred.resolve);
 
-  /**
-   * Initializes the UI for the window.
-   */
-  _initializeWindow: function() {
-    dumpn("Initializing the DebuggerView window");
-
-    let isRemote = window._isRemoteDebugger;
-    let isChrome = window._isChromeDebugger;
-
-    if (isRemote || isChrome) {
-      window.moveTo(Prefs.windowX, Prefs.windowY);
-      window.resizeTo(Prefs.windowWidth, Prefs.windowHeight);
-
-      if (isRemote) {
-        document.title = L10N.getStr("remoteDebuggerWindowTitle");
-      } else {
-        document.title = L10N.getStr("chromeDebuggerWindowTitle");
-      }
-    }
-  },
-
-  /**
-   * Destroys the UI for the window.
-   */
-  _destroyWindow: function() {
-    dumpn("Destroying the DebuggerView window");
-
-    if (window._isRemoteDebugger || window._isChromeDebugger) {
-      Prefs.windowX = window.screenX;
-      Prefs.windowY = window.screenY;
-      Prefs.windowWidth = window.outerWidth;
-      Prefs.windowHeight = window.outerHeight;
-    }
+    return deferred.promise;
   },
 
   /**
@@ -160,6 +137,37 @@ let DebuggerView = {
   },
 
   /**
+   * Initializes the VariablesView instance and attaches a controller.
+   */
+  _initializeVariablesView: function() {
+    this.Variables = new VariablesView(document.getElementById("variables"), {
+      searchPlaceholder: L10N.getStr("emptyVariablesFilterText"),
+      emptyText: L10N.getStr("emptyVariablesText"),
+      onlyEnumVisible: Prefs.variablesOnlyEnumVisible,
+      searchEnabled: Prefs.variablesSearchboxVisible,
+      eval: DebuggerController.StackFrames.evaluate,
+      lazyEmpty: true
+    });
+
+    // Attach a controller that handles interfacing with the debugger protocol.
+    VariablesViewController.attach(this.Variables, {
+      getObjectClient: aObject => gThreadClient.pauseGrip(aObject)
+    });
+
+    // Relay events from the VariablesView.
+    this.Variables.on("fetched", (aEvent, aType) => {
+      switch (aType) {
+        case "variables":
+          window.emit(EVENTS.FETCHED_VARIABLES);
+          break;
+        case "properties":
+          window.emit(EVENTS.FETCHED_PROPERTIES);
+          break;
+      }
+    });
+  },
+
+  /**
    * Initializes the SourceEditor instance.
    *
    * @param function aCallback
@@ -168,44 +176,56 @@ let DebuggerView = {
   _initializeEditor: function(aCallback) {
     dumpn("Initializing the DebuggerView editor");
 
-    let placeholder = document.getElementById("editor");
-    let config = {
-      mode: SourceEditor.MODES.JAVASCRIPT,
-      readOnly: true,
-      showLineNumbers: true,
-      showAnnotationRuler: true,
-      showOverviewRuler: true
-    };
-
     this.editor = new SourceEditor();
-    this.editor.init(placeholder, config, () => {
+    this.editor.init(document.getElementById("editor"), DEFAULT_EDITOR_CONFIG, () => {
       this._loadingText = L10N.getStr("loadingText");
-      this._onEditorLoad();
-      aCallback();
+      this._onEditorLoad(aCallback);
     });
   },
 
   /**
    * The load event handler for the source editor, also executing any necessary
    * post-load operations.
+   *
+   * @param function aCallback
+   *        Called after the editor finishes loading.
    */
-  _onEditorLoad: function() {
+  _onEditorLoad: function(aCallback) {
     dumpn("Finished loading the DebuggerView editor");
 
-    DebuggerController.Breakpoints.initialize();
-    window.dispatchEvent(document, "Debugger:EditorLoaded", this.editor);
-    this.editor.focus();
+    DebuggerController.Breakpoints.initialize().then(() => {
+      window.emit(EVENTS.EDITOR_LOADED, this.editor);
+      aCallback();
+    });
   },
 
   /**
    * Destroys the SourceEditor instance and also executes any necessary
    * post-unload operations.
+   *
+   * @param function aCallback
+   *        Called after the editor finishes destroying.
    */
-  _destroyEditor: function() {
+  _destroyEditor: function(aCallback) {
     dumpn("Destroying the DebuggerView editor");
 
-    DebuggerController.Breakpoints.destroy();
-    window.dispatchEvent(document, "Debugger:EditorUnloaded", this.editor);
+    DebuggerController.Breakpoints.destroy().then(() => {
+      window.emit(EVENTS.EDITOR_UNLOADED, this.editor);
+      aCallback();
+    });
+  },
+
+  /**
+   * Sets the currently displayed text contents in the source editor.
+   * This resets the mode and undo stack.
+   *
+   * @param string aTextContent
+   *        The source text content.
+   */
+  _setEditorText: function(aTextContent = "") {
+    this.editor.setMode(SourceEditor.MODES.TEXT);
+    this.editor.setText(aTextContent);
+    this.editor.resetUndo();
   },
 
   /**
@@ -219,195 +239,169 @@ let DebuggerView = {
    * @param string aTextContent [optional]
    *        The source text content.
    */
-  setEditorMode: function(aUrl, aContentType = "", aTextContent = "") {
-    if (aContentType) {
-      if (/javascript/.test(aContentType)) {
-        this.editor.setMode(SourceEditor.MODES.JAVASCRIPT);
-      } else {
-        this.editor.setMode(SourceEditor.MODES.HTML);
-      }
-    } else if (aTextContent.match(/^\s*</)) {
-      // Use HTML mode for files in which the first non whitespace character is
-      // &lt;, regardless of extension.
+  _setEditorMode: function(aUrl, aContentType = "", aTextContent = "") {
+    // Avoid setting the editor mode for very large files.
+    if (aTextContent.length >= SOURCE_SYNTAX_HIGHLIGHT_MAX_FILE_SIZE) {
+      this.editor.setMode(SourceEditor.MODES.TEXT);
+    }
+    // Use JS mode for files with .js and .jsm extensions.
+    else if (SourceUtils.isJavaScript(aUrl, aContentType)) {
+      this.editor.setMode(SourceEditor.MODES.JAVASCRIPT);
+    }
+    // Use HTML mode for files in which the first non whitespace character is
+    // &lt;, regardless of extension.
+    else if (aTextContent.match(/^\s*</)) {
       this.editor.setMode(SourceEditor.MODES.HTML);
-    } else {
-      // Use JS mode for files with .js and .jsm extensions.
-      if (/\.jsm?$/.test(SourceUtils.trimUrlQuery(aUrl))) {
-        this.editor.setMode(SourceEditor.MODES.JAVASCRIPT);
-      } else {
-        this.editor.setMode(SourceEditor.MODES.TEXT);
-      }
+    }
+    // Unknown languange, use plain text.
+    else {
+      this.editor.setMode(SourceEditor.MODES.TEXT);
     }
   },
 
   /**
    * Sets the currently displayed source text in the editor.
    *
-   * To update the source editor's current caret and debug location based on
-   * a requested url and line, use the DebuggerView.updateEditor method.
+   * You should use DebuggerView.updateEditor instead. It updates the current
+   * caret and debug location based on a requested url and line.
    *
    * @param object aSource
    *        The source object coming from the active thread.
+   * @param object aFlags
+   *        Additional options for setting the source. Supported options:
+   *          - force: boolean allowing whether we can get the selected url's
+   *                   text again.
+   * @return object
+   *         A promise that is resolved after the source text has been set.
    */
-  set editorSource(aSource) {
-    if (!this._isInitialized || this._isDestroyed || this._editorSource == aSource) {
-      return;
+  _setEditorSource: function(aSource, aFlags={}) {
+    // Avoid setting the same source text in the editor again.
+    if (this._editorSource.url == aSource.url && !aFlags.force) {
+      return this._editorSource.promise;
     }
+    let transportType = DebuggerController.client.localTransport
+      ? "_LOCAL"
+      : "_REMOTE";
+    //Telemetry probe
+    let histogramId = "DEVTOOLS_DEBUGGER_DISPLAY_SOURCE" + transportType + "_MS";
+    let histogram = Services.telemetry.getHistogramById(histogramId);
+    let startTime = +new Date();
 
-    dumpn("Setting the DebuggerView editor source: " + aSource.url +
-          ", loaded: " + aSource.loaded);
+    let deferred = promise.defer();
 
-    this.editor.setMode(SourceEditor.MODES.TEXT);
-    this.editor.setText(L10N.getStr("loadingText"));
-    this.editor.resetUndo();
-    this._editorSource = aSource;
+    this._setEditorText(L10N.getStr("loadingText"));
+    this._editorSource = { url: aSource.url, promise: deferred.promise };
 
-    // If the source is not loaded, display a placeholder text.
-    if (!aSource.loaded) {
-      DebuggerController.SourceScripts.getText(aSource, set.bind(this));
-    }
-    // If the source is already loaded, display it immediately.
-    else {
-      set.call(this, aSource);
-    }
-
-    // Updates the source editor's displayed text.
-    // @param object aSource
-    function set(aSource) {
-      // Avoid setting an unexpected source. This may happen when fast switching
-      // between sources that haven't been fetched yet.
-      if (this._editorSource != aSource) {
+    DebuggerController.SourceScripts.getText(aSource).then(([, aText]) => {
+      // Avoid setting an unexpected source. This may happen when switching
+      // very fast between sources that haven't been fetched yet.
+      if (this._editorSource.url != aSource.url) {
         return;
       }
 
-      // Avoid setting the editor mode for very large files.
-      if (aSource.text.length < SOURCE_SYNTAX_HIGHLIGHT_MAX_FILE_SIZE) {
-        this.setEditorMode(aSource.url, aSource.contentType, aSource.text);
-      } else {
-        this.editor.setMode(SourceEditor.MODES.TEXT);
-      }
-      this.editor.setText(aSource.text);
-      this.editor.resetUndo();
-
-      // Update the editor's current caret and debug locations given by the
-      // currently active frame in the stack, if there's one available.
-      this.updateEditor();
+      this._setEditorText(aText);
+      this._setEditorMode(aSource.url, aSource.contentType, aText);
 
       // Synchronize any other components with the currently displayed source.
       DebuggerView.Sources.selectedValue = aSource.url;
       DebuggerController.Breakpoints.updateEditorBreakpoints();
 
-      // Notify that we've shown a source file.
-      window.dispatchEvent(document, "Debugger:SourceShown", aSource);
-    }
+      histogram.add(+new Date() - startTime);
+
+      // Resolve and notify that a source file was shown.
+      window.emit(EVENTS.SOURCE_SHOWN, aSource);
+      deferred.resolve([aSource, aText]);
+    },
+    ([, aError]) => {
+      let msg = L10N.getStr("errorLoadingText") + DevToolsUtils.safeErrorString(aError);
+      this._setEditorText(msg);
+      Cu.reportError(msg);
+      dumpn(msg);
+
+      // Reject and notify that there was an error showing the source file.
+      window.emit(EVENTS.SOURCE_ERROR_SHOWN, aSource);
+      deferred.reject([aSource, aError]);
+    });
+
+    return deferred.promise;
   },
 
   /**
-   * Gets the currently displayed source text in the editor.
-   *
-   * @return object
-   *         The source object coming from the active thread.
-   */
-  get editorSource() this._editorSource,
-
-  /**
    * Update the source editor's current caret and debug location based on
-   * a requested url and line. If unspecified, they default to the location
-   * given by the currently active frame in the stack.
+   * a requested url and line.
    *
-   * @param string aUrl [optional]
+   * @param string aUrl
    *        The target source url.
    * @param number aLine [optional]
-   *        The target line number in the source.
+   *        The target line in the source.
    * @param object aFlags [optional]
    *        Additional options for showing the source. Supported options:
    *          - charOffset: character offset for the caret or debug location
    *          - lineOffset: line offset for the caret or debug location
    *          - columnOffset: column offset for the caret or debug location
-   *          - noSwitch: don't switch to the source if not currently selected
    *          - noCaret: don't set the caret location at the specified line
    *          - noDebug: don't set the debug location at the specified line
+   *          - force: boolean allowing whether we can get the selected url's
+   *                   text again.
+   * @return object
+   *         A promise that is resolved after the source text has been set.
    */
-  updateEditor: function(aUrl, aLine, aFlags = {}) {
-    if (!this._isInitialized || this._isDestroyed) {
-      return;
+  setEditorLocation: function(aUrl, aLine = 0, aFlags = {}) {
+    // Avoid trying to set a source for a url that isn't known yet.
+    if (!this.Sources.containsValue(aUrl)) {
+      return promise.reject(new Error("Unknown source for the specified URL."));
     }
-    // If the location is not specified, default to the location given by
-    // the currently active frame in the stack.
-    if (!aUrl && !aLine) {
+    // If the line is not specified, default to the current frame's position,
+    // if available and the frame's url corresponds to the requested url.
+    if (!aLine) {
       let cachedFrames = DebuggerController.activeThread.cachedFrames;
-      let currentFrame = DebuggerController.StackFrames.currentFrame;
-      let frame = cachedFrames[currentFrame];
-      if (frame) {
-        let { url, line } = frame.where;
-        this.updateEditor(url, line, { noSwitch: true });
+      let currentDepth = DebuggerController.StackFrames.currentFrameDepth;
+      let frame = cachedFrames[currentDepth];
+      if (frame && frame.where.url == aUrl) {
+        aLine = frame.where.line;
       }
-      return;
     }
 
-    dumpn("Updating the DebuggerView editor: " + aUrl + " @ " + aLine +
-          ", flags: " + aFlags.toSource());
+    let sourceItem = this.Sources.getItemByValue(aUrl);
+    let sourceForm = sourceItem.attachment.source;
 
-    // If the currently displayed source is the requested one, update.
-    if (this.Sources.selectedValue == aUrl) {
-      set(aLine);
-    }
-    // If the requested source exists, display it and update.
-    else if (this.Sources.containsValue(aUrl) && !aFlags.noSwitch) {
-      this.Sources.selectedValue = aUrl;
-      set(aLine);
-    }
-    // Dumb request, invalidate the caret position and debug location.
-    else {
-      set(0);
-    }
-
-    // Updates the source editor's caret position and debug location.
-    // @param number a Line
-    function set(aLine) {
-      let editor = DebuggerView.editor;
-
-      // Handle any additional options for showing the source.
+    // Make sure the requested source client is shown in the editor, then
+    // update the source editor's caret position and debug location.
+    return this._setEditorSource(sourceForm, aFlags).then(() => {
+      // Line numbers in the source editor should start from 1. If invalid
+      // or not specified, then don't do anything.
+      if (aLine < 1) {
+        return;
+      }
       if (aFlags.charOffset) {
-        aLine += editor.getLineAtOffset(aFlags.charOffset);
+        aLine += this.editor.getLineAtOffset(aFlags.charOffset);
       }
       if (aFlags.lineOffset) {
         aLine += aFlags.lineOffset;
       }
       if (!aFlags.noCaret) {
-        editor.setCaretPosition(aLine - 1, aFlags.columnOffset);
+        this.editor.setCaretPosition(aLine - 1, aFlags.columnOffset);
       }
       if (!aFlags.noDebug) {
-        editor.setDebugLocation(aLine - 1, aFlags.columnOffset);
+        this.editor.setDebugLocation(aLine - 1, aFlags.columnOffset);
       }
-    }
+    });
   },
 
   /**
    * Gets the text in the source editor's specified line.
    *
    * @param number aLine [optional]
-   *        The line to get the text from.
-   *        If unspecified, it defaults to the current caret position line.
+   *        The line to get the text from. If unspecified, it defaults to
+   *        the current caret position.
    * @return string
    *         The specified line's text.
    */
-  getEditorLine: function(aLine) {
+  getEditorLineText: function(aLine) {
     let line = aLine || this.editor.getCaretPosition().line;
     let start = this.editor.getLineStart(line);
     let end = this.editor.getLineEnd(line);
     return this.editor.getText(start, end);
-  },
-
-  /**
-   * Gets the text in the source editor's selection bounds.
-   *
-   * @return string
-   *         The selected text.
-   */
-  getEditorSelection: function() {
-    let selection = this.editor.getSelection();
-    return this.editor.getText(selection.start, selection.end);
   },
 
   /**
@@ -473,61 +467,57 @@ let DebuggerView = {
     this.Variables.empty();
 
     if (this.editor) {
+      this.editor.setMode(SourceEditor.MODES.TEXT);
       this.editor.setText("");
-      this.editor.focus();
-      this._editorSource = null;
+      this.editor.resetUndo();
+      this._editorSource = {};
     }
   },
 
+  _startup: null,
+  _shutdown: null,
   Toolbar: null,
   Options: null,
   Filtering: null,
   FilteredSources: null,
+  FilteredFunctions: null,
+  GlobalSearch: null,
   ChromeGlobals: null,
   StackFrames: null,
   Sources: null,
-  WatchExpressions: null,
-  GlobalSearch: null,
   Variables: null,
-  _editor: null,
-  _editorSource: null,
+  WatchExpressions: null,
+  editor: null,
+  _editorSource: {},
   _loadingText: "",
   _sourcesPane: null,
   _instrumentsPane: null,
   _instrumentsPaneToggleButton: null,
   _collapsePaneString: "",
   _expandPaneString: "",
-  _isInitialized: false,
-  _isDestroyed: false
 };
 
 /**
- * A stacked list of items, compatible with MenuContainer instances, used for
+ * A stacked list of items, compatible with WidgetMethods instances, used for
  * displaying views like the watch expressions, filtering or search results etc.
  *
- * You should never need to access these methods directly, use the wrapper
- * MenuContainer instances.
+ * You should never need to access these methods directly, use the wrapped
+ * WidgetMethods instead.
  *
- * Custom methods introduced by this view, not necessary for a MenuContainer:
- *   - set emptyText(aValue:string)
- *   - set permaText(aValue:string)
- *   - set itemType(aType:string)
- *   - set itemFactory(aCallback:function)
- *
- * @param nsIDOMNode aAssociatedNode
- *        The element associated with the displayed container.
+ * @param nsIDOMNode aNode
+ *        The element associated with the widget.
  */
-function ListWidget(aAssociatedNode) {
-  this._parent = aAssociatedNode;
+function ListWidget(aNode) {
+  this._parent = aNode;
 
   // Create an internal list container.
   this._list = document.createElement("vbox");
   this._parent.appendChild(this._list);
 
   // Delegate some of the associated node's methods to satisfy the interface
-  // required by MenuContainer instances.
-  ViewHelpers.delegateWidgetAttributeMethods(this, aAssociatedNode);
-  ViewHelpers.delegateWidgetEventMethods(this, aAssociatedNode);
+  // required by WidgetMethods instances.
+  ViewHelpers.delegateWidgetAttributeMethods(this, aNode);
+  ViewHelpers.delegateWidgetEventMethods(this, aNode);
 }
 
 ListWidget.prototype = {
@@ -728,16 +718,12 @@ ListWidget.prototype = {
 
 /**
  * A custom items container, used for displaying views like the
- * FilteredSources, FilteredFunctions etc., inheriting the generic MenuContainer.
+ * FilteredSources, FilteredFunctions etc., inheriting the generic WidgetMethods.
  */
 function ResultsPanelContainer() {
-  this._createItemView = this._createItemView.bind(this);
 }
 
-create({ constructor: ResultsPanelContainer, proto: MenuContainer.prototype }, {
-  onClick: null,
-  onSelect: null,
-
+ResultsPanelContainer.prototype = Heritage.extend(WidgetMethods, {
   /**
    * Sets the anchor node for this container panel.
    * @param nsIDOMNode aNode
@@ -755,23 +741,17 @@ create({ constructor: ResultsPanelContainer, proto: MenuContainer.prototype }, {
         this._panel.setAttribute("noautofocus", "true");
         document.documentElement.appendChild(this._panel);
       }
-      if (!this.node) {
-        this.node = new ListWidget(this._panel);
-        this.node.itemType = "vbox";
-        this.node.itemFactory = this._createItemView;
-        this.node.addEventListener("click", this.onClick, false);
+      if (!this.widget) {
+        this.widget = new ListWidget(this._panel);
+        this.widget.itemType = "vbox";
+        this.widget.itemFactory = this._createItemView;
       }
     }
     // Cleanup the anchor and remove the previously created panel.
     else {
-      if (this._panel) {
-        document.documentElement.removeChild(this._panel);
-        this._panel = null;
-      }
-      if (this.node) {
-        this.node.removeEventListener("click", this.onClick, false);
-        this.node = null;
-      }
+      this._panel.remove();
+      this._panel = null;
+      this.widget = null;
     }
   },
 
@@ -782,35 +762,16 @@ create({ constructor: ResultsPanelContainer, proto: MenuContainer.prototype }, {
   get anchor() this._anchor,
 
   /**
-   * Sets the default top, left and position params when opening the panel.
-   * @param object aOptions
-   */
-  set options(aOptions) {
-    this._top = aOptions.top;
-    this._left = aOptions.left;
-    this._position = aOptions.position;
-  },
-
-  /**
-   * Gets the default params for when opening the panel.
-   * @return object
-   */
-  get options() ({
-    top: this._top,
-    left: this._left,
-    position: this._position
-  }),
-
-  /**
    * Sets the container panel hidden or visible. It's hidden by default.
    * @param boolean aFlag
    */
   set hidden(aFlag) {
     if (aFlag) {
+      this._panel.hidden = true;
       this._panel.hidePopup();
     } else {
-      this._panel.openPopup(this._anchor, this._position, this._left, this._top);
-      this.anchor.focus();
+      this._panel.hidden = false;
+      this._panel.openPopup(this._anchor, this.position, this.left, this.top);
     }
   },
 
@@ -828,52 +789,30 @@ create({ constructor: ResultsPanelContainer, proto: MenuContainer.prototype }, {
   clearView: function() {
     this.hidden = true;
     this.empty();
-    window.dispatchEvent(document, "Debugger:ResultsPanelContainer:ViewCleared");
   },
 
   /**
-   * Focuses the next found item in this container.
+   * Selects the next found item in this container.
+   * Does not change the currently focused node.
    */
-  focusNext: function() {
+  selectNext: function() {
     let nextIndex = this.selectedIndex + 1;
     if (nextIndex >= this.itemCount) {
       nextIndex = 0;
     }
-    this.select(this.getItemAtIndex(nextIndex));
+    this.selectedItem = this.getItemAtIndex(nextIndex);
   },
 
   /**
-   * Focuses the previously found item in this container.
+   * Selects the previously found item in this container.
+   * Does not change the currently focused node.
    */
-  focusPrev: function() {
+  selectPrev: function() {
     let prevIndex = this.selectedIndex - 1;
     if (prevIndex < 0) {
       prevIndex = this.itemCount - 1;
     }
-    this.select(this.getItemAtIndex(prevIndex));
-  },
-
-  /**
-   * Updates the selected item in this container.
-   *
-   * @param MenuItem | number aItem
-   *        The item associated with the element to select.
-   */
-  select: function(aItem) {
-    if (typeof aItem == "number") {
-      this.select(this.getItemAtIndex(aItem));
-      return;
-    }
-
-    // Update the currently selected item in this container using the
-    // selectedItem setter in the MenuContainer prototype chain.
-    this.selectedItem = aItem;
-
-    // Invoke the attached selection callback if available in any
-    // inheriting prototype.
-    if (this.onSelect) {
-      this.onSelect({ target: aItem.target });
-    }
+    this.selectedItem = this.getItemAtIndex(prevIndex);
   },
 
   /**
@@ -892,6 +831,7 @@ create({ constructor: ResultsPanelContainer, proto: MenuContainer.prototype }, {
    */
   _createItemView: function(aElementNode, aAttachment, aLabel, aValue, aDescription) {
     let labelsGroup = document.createElement("hbox");
+
     if (aDescription) {
       let preLabelNode = document.createElement("label");
       preLabelNode.className = "plain results-panel-item-pre";
@@ -916,49 +856,7 @@ create({ constructor: ResultsPanelContainer, proto: MenuContainer.prototype }, {
 
   _anchor: null,
   _panel: null,
-  _position: RESULTS_PANEL_POPUP_POSITION,
-  _left: 0,
-  _top: 0
+  position: RESULTS_PANEL_POPUP_POSITION,
+  left: 0,
+  top: 0
 });
-
-/**
- * A simple way of displaying a "Connect to..." prompt.
- */
-function RemoteDebuggerPrompt() {
-  this.remote = {};
-}
-
-RemoteDebuggerPrompt.prototype = {
-  /**
-   * Shows the prompt and waits for a remote host and port to connect to.
-   *
-   * @param boolean aIsReconnectingFlag
-   *        True to show the reconnect message instead of the connect request.
-   */
-  show: function(aIsReconnectingFlag) {
-    let check = { value: Prefs.remoteAutoConnect };
-    let input = { value: Prefs.remoteHost + ":" + Prefs.remotePort };
-    let parts;
-
-    while (true) {
-      let result = Services.prompt.prompt(null,
-        L10N.getStr("remoteDebuggerPromptTitle"),
-        L10N.getStr(aIsReconnectingFlag
-          ? "remoteDebuggerReconnectMessage"
-          : "remoteDebuggerPromptMessage"), input,
-        L10N.getStr("remoteDebuggerPromptCheck"), check);
-
-      if (!result) {
-        return false;
-      }
-      if ((parts = input.value.split(":")).length == 2) {
-        let [host, port] = parts;
-
-        if (host.length && port.length) {
-          this.remote = { host: host, port: port, auto: check.value };
-          return true;
-        }
-      }
-    }
-  }
-};

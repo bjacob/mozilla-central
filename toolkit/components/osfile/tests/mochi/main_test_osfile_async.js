@@ -1,8 +1,9 @@
 "use strict";
 
 Components.utils.import("resource://gre/modules/osfile.jsm");
-Components.utils.import("resource://gre/modules/commonjs/sdk/core/promise.js");
+Components.utils.import("resource://gre/modules/Promise.jsm");
 Components.utils.import("resource://gre/modules/Task.jsm");
+Components.utils.import("resource://gre/modules/AsyncShutdown.jsm");
 
 // The following are used to compare against a well-tested reference
 // implementation of file I/O.
@@ -133,6 +134,14 @@ let reference_dir_contents = function reference_dir_contents(path) {
   }
   return result;
 };
+
+// Set/Unset OS.Shared.DEBUG, OS.Shared.TEST and a console listener.
+function toggleDebugTest (pref, consoleListener) {
+  Services.prefs.setBoolPref("toolkit.osfile.log", pref);
+  Services.prefs.setBoolPref("toolkit.osfile.log.redirect", pref);
+  Services.console[pref ? "registerListener" : "unregisterListener"](
+    consoleListener);
+}
 
 let test = maketest("Main", function main(test) {
   return Task.spawn(function() {
@@ -341,7 +350,7 @@ let test_read_write = maketest("read_write", function read_write(test) {
 });
 
 /**
- * Test OS.File.prototype.{writeAtomic}
+ * Test OS.File.writeAtomic
  */
 let test_read_write_all = maketest("read_write_all", function read_write_all(test) {
   return Task.spawn(function() {
@@ -349,157 +358,81 @@ let test_read_write_all = maketest("read_write_all", function read_write_all(tes
       "osfile async test read writeAtomic.tmp");
     let tmpPath = pathDest + ".tmp";
 
-    // Check that read + writeAtomic performs a correct copy
-    let currentDir = yield OS.File.getCurrentDirectory();
-    let pathSource = OS.Path.join(currentDir, EXISTING_FILE);
-    let contents = yield OS.File.read(pathSource);
-    test.ok(contents, "Obtained contents");
-    let options = {tmpPath: tmpPath};
-    let optionsBackup = {tmpPath: tmpPath};
-    let bytesWritten = yield OS.File.writeAtomic(pathDest, contents, options);
-    test.is(contents.byteLength, bytesWritten, "Wrote the correct number of bytes");
+    let test_with_options = function(options, suffix) {
+      return Task.spawn(function() {
+        let optionsBackup = JSON.parse(JSON.stringify(options));
 
-    // Check that options are not altered
-    test.is(Object.keys(options).length, Object.keys(optionsBackup).length,
-            "The number of options was not changed");
-    for (let k in options) {
-      test.is(options[k], optionsBackup[k], "Option was not changed");
-    }
-    yield reference_compare_files(pathSource, pathDest, test);
+        // Check that read + writeAtomic performs a correct copy
+        let currentDir = yield OS.File.getCurrentDirectory();
+        let pathSource = OS.Path.join(currentDir, EXISTING_FILE);
+        let contents = yield OS.File.read(pathSource);
+        test.ok(contents, "Obtained contents");
+        let bytesWritten = yield OS.File.writeAtomic(pathDest, contents, options);
+        test.is(contents.byteLength, bytesWritten, "Wrote the correct number of bytes (" + suffix + ")");
 
-    // Check that temporary file was removed
-    test.info("Compare complete");
-    test.ok(!(new FileUtils.File(tmpPath).exists()), "Temporary file was removed");
+        // Check that options are not altered
+        test.is(Object.keys(options).length, Object.keys(optionsBackup).length,
+          "The number of options was not changed");
+        for (let k in options) {
+          test.is(options[k], optionsBackup[k], "Option was not changed (" + suffix + ")");
+        }
+        yield reference_compare_files(pathSource, pathDest, test);
 
-    // Check that writeAtomic fails if noOverwrite is true and the destination
-    // file already exists!
-    let view = new Uint8Array(contents.buffer, 10, 200);
-    try {
-      options = {tmpPath: tmpPath, noOverwrite: true};
-      yield OS.File.writeAtomic(pathDest, view, options);
-      test.fail("With noOverwrite, writeAtomic should have refused to overwrite file");
-    } catch (err) {
-      test.info("With noOverwrite, writeAtomic correctly failed");
-      test.ok(err instanceof OS.File.Error, "writeAtomic correctly failed with a file error");
-      test.ok(err.becauseExists, "writeAtomic file error confirmed that the file already exists");
-    }
-    yield reference_compare_files(pathSource, pathDest, test);
-    test.ok(!(new FileUtils.File(tmpPath).exists()), "Temporary file was removed");
+        // Check that temporary file was removed or doesn't exist
+        test.info("Compare complete");
+        test.ok(!(new FileUtils.File(tmpPath).exists()), "No temporary file at the end of the run (" + suffix + ")");
 
-    // Now write a subset
-    let START = 10;
-    let LENGTH = 100;
-    view = new Uint8Array(contents.buffer, START, LENGTH);
-    bytesWritten = yield OS.File.writeAtomic(pathDest, view, {tmpPath: tmpPath});
-    test.is(bytesWritten, LENGTH, "Partial write wrote the correct number of bytes");
-    let array2 = yield OS.File.read(pathDest);
-    let view1 = new Uint8Array(contents.buffer, START, LENGTH);
-    test.is(view1.length, array2.length, "Re-read partial write with the correct number of bytes");
-    for (let i = 0; i < LENGTH; ++i) {
-      if (view1[i] != array2[i]) {
-        test.is(view1[i], array2[i], "Offset " + i + " is correct");
-      }
-      test.ok(true, "Compared re-read of partial write");
-    }
+        // Check that writeAtomic fails if noOverwrite is true and the destination
+        // file already exists!
+        let view = new Uint8Array(contents.buffer, 10, 200);
+        try {
+          let opt = JSON.parse(JSON.stringify(options));
+          opt.noOverwrite = true;
+          yield OS.File.writeAtomic(pathDest, view, opt);
+          test.fail("With noOverwrite, writeAtomic should have refused to overwrite file (" + suffix + ")");
+        } catch (err) {
+          test.info("With noOverwrite, writeAtomic correctly failed (" + suffix + ")");
+          test.ok(err instanceof OS.File.Error, "writeAtomic correctly failed with a file error (" + suffix + ")");
+          test.ok(err.becauseExists, "writeAtomic file error confirmed that the file already exists (" + suffix + ")");
+        }
+        yield reference_compare_files(pathSource, pathDest, test);
+        test.ok(!(new FileUtils.File(tmpPath).exists()), "Temporary file was removed");
 
-    // Check that writeAtomic fails if there is no tmpPath.
-    // FIXME: Remove this as part of bug 793660
-    try {
-      yield OS.File.writeAtomic(pathDest, contents, {});
-      test.fail("Without a tmpPath, writeAtomic should have failed");
-    } catch (err) {
-      test.ok(true, "Without a tmpPath, writeAtomic has failed as expected");
-    }
+        // Now write a subset
+        let START = 10;
+        let LENGTH = 100;
+        view = new Uint8Array(contents.buffer, START, LENGTH);
+        bytesWritten = yield OS.File.writeAtomic(pathDest, view, options);
+        test.is(bytesWritten, LENGTH, "Partial write wrote the correct number of bytes (" + suffix + ")");
+        let array2 = yield OS.File.read(pathDest);
+        let view1 = new Uint8Array(contents.buffer, START, LENGTH);
+        test.is(view1.length, array2.length, "Re-read partial write with the correct number of bytes (" + suffix + ")");
+        let decoder = new TextDecoder();
+        test.is(decoder.decode(view1), decoder.decode(array2), "Comparing re-read of partial write (" + suffix + ")");
 
-    // Write strings, default encoding
-    let ARBITRARY_STRING = "aeiouyâêîôûçß•";
-    yield OS.File.writeAtomic(pathDest, ARBITRARY_STRING, {tmpPath: tmpPath});
-    let array = yield OS.File.read(pathDest);
-    let IN_STRING = (new TextDecoder()).decode(array);
-    test.is(ARBITRARY_STRING, IN_STRING, "String write + read with default encoding works");
+        // Write strings, default encoding
+        let ARBITRARY_STRING = "aeiouyâêîôûçß•";
+        yield OS.File.writeAtomic(pathDest, ARBITRARY_STRING, options);
+        let array = yield OS.File.read(pathDest);
+        let IN_STRING = decoder.decode(array);
+        test.is(ARBITRARY_STRING, IN_STRING, "String write + read with default encoding works (" + suffix + ")");
 
-    yield OS.File.writeAtomic(pathDest, ARBITRARY_STRING, {tmpPath: tmpPath, encoding: "utf-16"});
-    array = yield OS.File.read(pathDest);
-    IN_STRING = (new TextDecoder("utf-16")).decode(array);
-    test.is(ARBITRARY_STRING, IN_STRING, "String write + read with utf-16 encoding works");
+        let opt16 = JSON.parse(JSON.stringify(options));
+        opt16.encoding = "utf-16";
+        yield OS.File.writeAtomic(pathDest, ARBITRARY_STRING, opt16);
+        array = yield OS.File.read(pathDest);
+        IN_STRING = (new TextDecoder("utf-16")).decode(array);
+        test.is(ARBITRARY_STRING, IN_STRING, "String write + read with utf-16 encoding works (" + suffix + ")");
 
-    // Cleanup.
-    OS.File.remove(pathDest);
+        // Cleanup.
+        OS.File.remove(pathDest);
+      });
+    };
 
-    // Same tests with |flush: false|
-    // Check that read + writeAtomic performs a correct copy
-    options = {tmpPath: tmpPath, flush: false};
-    optionsBackup = {tmpPath: tmpPath, flush: false};
-    bytesWritten = yield OS.File.writeAtomic(pathDest, contents, options);
-    test.is(contents.byteLength, bytesWritten, "Wrote the correct number of bytes (without flush)");
-
-    // Check that options are not altered
-    test.is(Object.keys(options).length, Object.keys(optionsBackup).length,
-            "The number of options was not changed (without flush)");
-    for (let k in options) {
-      test.is(options[k], optionsBackup[k], "Option was not changed (without flush)");
-    }
-    yield reference_compare_files(pathSource, pathDest, test);
-
-    // Check that temporary file was removed
-    test.info("Compare complete (without flush)");
-    test.ok(!(new FileUtils.File(tmpPath).exists()), "Temporary file was removed (without flush)");
-
-    // Check that writeAtomic fails if noOverwrite is true and the destination
-    // file already exists!
-    view = new Uint8Array(contents.buffer, 10, 200);
-    try {
-      options = {tmpPath: tmpPath, noOverwrite: true, flush: false};
-      yield OS.File.writeAtomic(pathDest, view, options);
-      test.fail("With noOverwrite, writeAtomic should have refused to overwrite file (without flush)");
-    } catch (err) {
-      test.info("With noOverwrite, writeAtomic correctly failed (without flush)");
-      test.ok(err instanceof OS.File.Error, "writeAtomic correctly failed with a file error (without flush)");
-      test.ok(err.becauseExists, "writeAtomic file error confirmed that the file already exists (without flush)");
-    }
-    yield reference_compare_files(pathSource, pathDest, test);
-    test.ok(!(new FileUtils.File(tmpPath).exists()), "Temporary file was removed (without flush)");
-
-    // Now write a subset
-    START = 10;
-    LENGTH = 100;
-    view = new Uint8Array(contents.buffer, START, LENGTH);
-    bytesWritten = yield OS.File.writeAtomic(pathDest, view, {tmpPath: tmpPath, flush: false});
-    test.is(bytesWritten, LENGTH, "Partial write wrote the correct number of bytes (without flush)");
-    array2 = yield OS.File.read(pathDest);
-    view1 = new Uint8Array(contents.buffer, START, LENGTH);
-    test.is(view1.length, array2.length, "Re-read partial write with the correct number of bytes (without flush)");
-    for (let i = 0; i < LENGTH; ++i) {
-      if (view1[i] != array2[i]) {
-        test.is(view1[i], array2[i], "Offset " + i + " is correct (without flush)");
-      }
-      test.ok(true, "Compared re-read of partial write (without flush)");
-    }
-
-    // Cleanup.
-    OS.File.remove(pathDest);
-
-    // Check that writeAtomic fails when destination path is undefined
-    try {
-      let path = undefined;
-      let options = {tmpPath: tmpPath};
-      yield OS.File.writeAtomic(path, contents, options);
-      test.fail("With file path undefined, writeAtomic should have failed");
-    } catch (err) {
-      test.ok(err.message == "TypeError: File path should be a (non-empty) string",
-              "With file path undefined, writeAtomic correctly failed");
-    }
-
-    // Check that writeAtomic fails when destination path is an empty string
-    try {
-      let path = "";
-      let options = {tmpPath: tmpPath};
-      yield OS.File.writeAtomic(path, contents, options);
-      test.fail("With file path an empty string, writeAtomic should have failed");
-    } catch (err) {
-      test.ok(err.message == "TypeError: File path should be a (non-empty) string",
-              "With file path an empty string, writeAtomic correctly failed");
-    }
+    yield test_with_options({tmpPath: tmpPath}, "Renaming, not flushing");
+    yield test_with_options({tmpPath: tmpPath, flush: true}, "Renaming, flushing");
+    yield test_with_options({}, "Not renaming, not flushing");
+    yield test_with_options({flush: true}, "Not renaming, flushing");
   });
 });
 
@@ -813,24 +746,13 @@ let test_debug_test = maketest("debug_test", function debug_test(test) {
         if (aMessage.message.indexOf("TEST OS") < 0) {
           return;
         }
-        test.ok(true, "DEBUG TEST messages are logged correctly.")
+        test.ok(true, "DEBUG TEST messages are logged correctly.");
       }
     };
-    // Set/Unset OS.Shared.DEBUG, OS.Shared.TEST and the console listener.
-    function toggleDebugTest (pref) {
-      OS.Shared.DEBUG = pref;
-      OS.Shared.TEST = pref;
-      Services.console[pref ? "registerListener" : "unregisterListener"](
-        consoleListener);
-    }
-    // Save original DEBUG value.
-    let originalPref = OS.Shared.DEBUG;
-    toggleDebugTest(true);
+    toggleDebugTest(true, consoleListener);
     // Execution of OS.File.exist method will trigger OS.File.LOG several times.
     let fileExists = yield OS.File.exists(EXISTING_FILE);
-    toggleDebugTest(false);
-    // Restore DEBUG to its original.
-    OS.Shared.DEBUG = originalPref;
+    toggleDebugTest(false, consoleListener);
   });
 });
 
@@ -838,116 +760,86 @@ let test_debug_test = maketest("debug_test", function debug_test(test) {
  * Test logging of file descriptors leaks.
  */
 let test_system_shutdown = maketest("system_shutdown", function system_shutdown(test) {
+
+  // Test that unclosed files cause warnings
+  // Test that unclosed directories cause warnings
+  // Test that closed files do not cause warnings
+  // Test that closed directories do not cause warnings
+
   return Task.spawn(function () {
-    // Save original DEBUG value.
-    let originalDebug = OS.Shared.DEBUG;
-    // Count the number of times the leaks are logged.
-    let logCounter = 0;
-    // Create a console listener.
-    function inDebugTest(resource, f) {
-      return Task.spawn(function task() {
-        let originalDebug = OS.Shared.DEBUG;
-        OS.Shared.TEST = true;
-        OS.Shared.DEBUG = true;
+    function testLeaksOf(resource, topic) {
+      return Task.spawn(function() {
+        let deferred = Promise.defer();
 
-        let waitObservation = Promise.defer();
-        // Unregister a listener, reset DEBUG and TEST both when the promise is
-        // resolved or rejected.
-        let cleanUp = function cleanUp() {
-          Services.console.unregisterListener(listener);
-          OS.Shared.DEBUG = originalDebug;
-          OS.Shared.TEST = false;
-          test.info("Unregistered listener for resource " + resource);
-        };
-        waitObservation.promise.then(cleanUp, cleanUp);
+        // Register observer
+        Services.prefs.setBoolPref("toolkit.asyncshutdown.testing", true);
+        Services.prefs.setBoolPref("toolkit.osfile.log", true);
+        Services.prefs.setBoolPref("toolkit.osfile.log.redirect", true);
+        Services.prefs.setCharPref("toolkit.osfile.test.shutdown.observer", topic);
 
-        // Measure how long it takes to receive a log message.
-        let logStart;
-
-        let listener = {
-          observe: function (aMessage) {
-            test.info("Waiting for a console message mentioning resource " + resource);
-            // Ignore unexpected messages.
+        let observer = {
+          observe: function(aMessage) {
+          try {
+              test.info("Got message: " + aMessage);
             if (!(aMessage instanceof Components.interfaces.nsIConsoleMessage)) {
-              test.info("Not a console message");
               return;
             }
-            if (aMessage.message.indexOf("TEST OS Controller WARNING") < 0) {
-              test.info("Not a warning");
+            let message = aMessage.message;
+            test.info("Got message: " + message);
+            if (message.indexOf("TEST OS Controller WARNING") < 0) {
               return;
             }
-            test.ok(aMessage.message.indexOf("WARNING: File descriptors leaks " +
-              "detected.") >= 0, "Noticing file descriptors leaks, as expected.");
-            let found = aMessage.message.indexOf(resource) >= 0;
-            if (found) {
-              if (++logCounter > 2) {
-                test.fail("test.osfile.web-workers-shutdown observer should only " +
-                  "be activated 2 times.");
-              }
-              test.ok(true, "Leaked resource is correctly listed in the log.");
-              test.info(
-                "It took " + (Date.now() - logStart) + "MS to receive a log message.");
-              setTimeout(function() { waitObservation.resolve(); });
-            } else {
-              test.info("This log didn't list the expected resource: " + resource + "\ngot " + aMessage.message);
+            test.info("Got message: " + message + ", looking for resource " + resource);
+            if (message.indexOf(resource) < 0) {
+              return;
             }
+            test.info("Resource: " + resource + " found");
+            setTimeout(deferred.resolve);
+          } catch (ex) {
+            setTimeout(function() {
+              deferred.reject(ex);
+            });
           }
-        };
-        Services.console.registerListener(listener);
-        logStart = Date.now();
-        f();
-        // If listener does not resolve webObservation in timely manner (1000MS),
-        // reject it.
+        }};
+        Services.console.registerListener(observer);
+        Services.obs.notifyObservers(null, topic, null);
         setTimeout(function() {
-          test.info("waitObservation timeout exceeded.");
-          waitObservation.reject();
+          test.info("Timeout while waiting for resource: " + resource);
+          deferred.reject("timeout");
         }, 1000);
-        yield waitObservation.promise;
-      });
-    }
 
-    // Enable test shutdown observer.
-    Services.prefs.setBoolPref("toolkit.osfile.test.shutdown.observer", true);
-
-    let currentDir = yield OS.File.getCurrentDirectory();
-    test.info("Testing for leaks of directory iterator " + currentDir);
-    let iterator = new OS.File.DirectoryIterator(currentDir);
-    try {
-      yield inDebugTest(currentDir, function() {
-        Services.obs.notifyObservers(null, "test.osfile.web-workers-shutdown",
-          null);
-      });
-      test.ok(true, "Log messages observation promise resolved as expected.");
-    } catch (ex) {
-      test.fail("Log messages observation promise was rejected.");
-    }
-    yield iterator.close();
-
-    let testFileDescriptorsLeaks = function testFileDescriptorsLeaks(shouldResolve) {
-      return Task.spawn(function task() {
-        let openedFile = yield OS.File.open(EXISTING_FILE);
+        let resolved = false;
         try {
-          yield inDebugTest(EXISTING_FILE, function() {
-            Services.obs.notifyObservers(null, "test.osfile.web-workers-shutdown",
-              null);
-          });
-          test.ok(shouldResolve,
-            "Log message observation promise resolved as expected.");
+          yield deferred.promise;
+          resolved = true;
         } catch (ex) {
-          test.ok(!shouldResolve,
-            "Log message observation promise was rejected as expected.");
+          if (ex != "timeout") {
+            test.ok(false, "Error during 'test.osfile.web-workers-shutdown'" + ex);
+          }
+          resolved = false;
         }
-        yield openedFile.close();
+        Services.console.unregisterListener(observer);
+        Services.prefs.clearUserPref("toolkit.osfile.log");
+        Services.prefs.clearUserPref("toolkit.osfile.log.redirect");
+        Services.prefs.clearUserPref("toolkit.osfile.test.shutdown.observer");
+        Services.prefs.clearUserPref("toolkit.async_shutdown.testing", true);
+
+        throw new Task.Result(resolved);
       });
-    };
+    }
 
-    test.info("Testing for leaks of file " + EXISTING_FILE);
-    yield testFileDescriptorsLeaks(true);
+    let TEST_DIR = OS.Path.join((yield OS.File.getCurrentDirectory()), "..");
+    test.info("Testing for leaks of directory iterator " + TEST_DIR);
+    let iterator = new OS.File.DirectoryIterator(TEST_DIR);
+    ok((yield testLeaksOf(TEST_DIR, "test.shutdown.dir.leak")), "Detected directory leak");
+    yield iterator.close();
+    ok(!(yield testLeaksOf(TEST_DIR, "test.shutdown.dir.noleak")), "We don't leak the directory anymore");
 
-    // Disable test shutdown observer.
-    Services.prefs.clearUserPref("toolkit.osfile.test.shutdown.observer");
-    // Nothing should be logged since the test shutdown observer is unregistered.
-    yield testFileDescriptorsLeaks(false);
+    test.info("Testing for leaks of file descriptor: " + EXISTING_FILE);
+    let openedFile = yield OS.File.open(EXISTING_FILE);
+    ok((yield testLeaksOf(EXISTING_FILE, "test.shutdown.file.leak")), "Detected file leak");
+    yield openedFile.close();
+    ok(!(yield testLeaksOf(EXISTING_FILE, "test.shutdown.file.noleak")), "We don't leak the file anymore");
   });
 });
 
@@ -956,6 +848,7 @@ let test_system_shutdown = maketest("system_shutdown", function system_shutdown(
  */
 let test_duration = maketest("duration", function duration(test) {
   return Task.spawn(function() {
+    Services.prefs.setBoolPref("toolkit.osfile.log", true);
     // Options structure passed to a OS.File copy method.
     let copyOptions = {
       // This field should be overridden with the actual duration
@@ -1031,12 +924,12 @@ let test_duration = maketest("duration", function duration(test) {
     test.ok(copyOptions.outExecutionDuration >= backupDuration, "duration has increased 3");
     OS.File.remove(pathDest);
 
-    Services.prefs.setBoolPref("toolkit.osfile.log", true);
     OS.Shared.TEST = true;
 
     // Testing an operation that doesn't take arguments at all
     let file = yield OS.File.open(pathSource);
     yield file.stat();
     yield file.close();
+    Services.prefs.setBoolPref("toolkit.osfile.log", false);
   });
 });

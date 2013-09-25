@@ -23,3 +23,7 @@ CPP_SOURCES += [
     'rdfutil.cpp',
 ]
 
+LIBRARY_NAME = 'rdfbase_s'
+
+LIBXUL_LIBRARY = True
+

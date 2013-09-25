@@ -8,6 +8,7 @@
 #include "mozilla/Hal.h"
 #include "mozilla/HalTypes.h"
 #include "nsDOMEventTargetHelper.h"
+#include "AudioChannelService.h"
 
 namespace mozilla {
 namespace hal {
@@ -18,12 +19,17 @@ typedef Observer<SwitchEvent> SwitchObserver;
 namespace dom {
 namespace system {
 
-class AudioChannelManager : public nsDOMEventTargetHelper
-                          , public hal::SwitchObserver
+class AudioChannelManager MOZ_FINAL
+  : public nsDOMEventTargetHelper
+  , public hal::SwitchObserver
+  , public nsIDOMEventListener
 {
 public:
   AudioChannelManager();
   virtual ~AudioChannelManager();
+
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_NSIDOMEVENTLISTENER
 
   void Notify(const hal::SwitchEvent& aEvent);
 
@@ -43,13 +49,21 @@ public:
 
   bool Headphones() const
   {
-    return mState == hal::SWITCH_STATE_ON;
+    MOZ_ASSERT(mState != hal::SWITCH_STATE_UNKNOWN);
+    return mState != hal::SWITCH_STATE_OFF;
   }
+
+  bool SetVolumeControlChannel(const nsAString& aChannel);
+
+  bool GetVolumeControlChannel(nsAString& aChannel);
 
   IMPL_EVENT_HANDLER(headphoneschange)
 
 private:
+  void NotifyVolumeControlChannelChanged();
+
   hal::SwitchState mState;
+  AudioChannelType mVolumeChannel;
 };
 
 } // namespace system

@@ -2,11 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "tests.h"
+#include "jsapi-tests/tests.h"
 
 using namespace JS;
 
-static JSClass CustomClass = {
+static const JSClass CustomClass = {
   "CustomClass",
   JSCLASS_HAS_RESERVED_SLOTS(1),
   JS_PropertyStub,
@@ -21,7 +21,7 @@ static JSClass CustomClass = {
 static const uint32_t CUSTOM_SLOT = 0;
 
 static bool
-IsCustomClass(const Value &v)
+IsCustomClass(JS::Handle<JS::Value> v)
 {
   return v.isObject() && JS_GetClass(&v.toObject()) == &CustomClass;
 }
@@ -34,7 +34,7 @@ CustomMethodImpl(JSContext *cx, CallArgs args)
   return true;
 }
 
-static JSBool
+static bool
 CustomMethod(JSContext *cx, unsigned argc, Value *vp)
 {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -44,7 +44,7 @@ CustomMethod(JSContext *cx, unsigned argc, Value *vp)
 BEGIN_TEST(test_CallNonGenericMethodOnProxy)
 {
   // Create the first global object and compartment
-  JS::RootedObject globalA(cx, JS_NewGlobalObject(cx, getGlobalClass(), NULL));
+  JS::RootedObject globalA(cx, JS_NewGlobalObject(cx, getGlobalClass(), NULL, JS::FireOnNewGlobalHook));
   CHECK(globalA);
 
   JS::RootedObject customA(cx, JS_NewObject(cx, &CustomClass, NULL, NULL));
@@ -60,7 +60,7 @@ BEGIN_TEST(test_CallNonGenericMethodOnProxy)
 
   // Now create the second global object and compartment...
   {
-    JS::RootedObject globalB(cx, JS_NewGlobalObject(cx, getGlobalClass(), NULL));
+    JS::RootedObject globalB(cx, JS_NewGlobalObject(cx, getGlobalClass(), NULL, JS::FireOnNewGlobalHook));
     CHECK(globalB);
 
     // ...and enter it.

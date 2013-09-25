@@ -10,3 +10,7 @@ CPP_SOURCES += [
     'nsGnomeVFSProtocolHandler.cpp',
 ]
 
+LIBRARY_NAME = 'nkgnomevfs'
+
+IS_COMPONENT = True
+

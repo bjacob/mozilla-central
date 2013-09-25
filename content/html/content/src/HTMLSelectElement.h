@@ -16,9 +16,11 @@
 #include "nsCheapSets.h"
 #include "nsCOMPtr.h"
 #include "nsError.h"
-#include "nsHTMLFormElement.h"
+#include "mozilla/dom/HTMLFormElement.h"
 
+class nsContentList;
 class nsIDOMHTMLOptionElement;
+class nsIHTMLCollection;
 class nsISelectControlFrame;
 class nsPresState;
 
@@ -103,9 +105,9 @@ private:
 /**
  * Implementation of &lt;select&gt;
  */
-class HTMLSelectElement : public nsGenericHTMLFormElement,
-                          public nsIDOMHTMLSelectElement,
-                          public nsIConstraintValidation
+class HTMLSelectElement MOZ_FINAL : public nsGenericHTMLFormElementWithState,
+                                    public nsIDOMHTMLSelectElement,
+                                    public nsIConstraintValidation
 {
 public:
   using nsIConstraintValidation::GetValidationMessage;
@@ -118,15 +120,6 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
-
-  // nsIDOMNode
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE
-
-  // nsIDOMElement
-  NS_FORWARD_NSIDOMELEMENT_TO_GENERIC
-
-  // nsIDOMHTMLElement
-  NS_FORWARD_NSIDOMHTMLELEMENT_TO_GENERIC
 
   virtual int32_t TabIndexDefault() MOZ_OVERRIDE;
 
@@ -150,9 +143,9 @@ public:
   {
     SetHTMLBoolAttr(nsGkAtoms::disabled, aVal, aRv);
   }
-  nsHTMLFormElement* GetForm() const
+  HTMLFormElement* GetForm() const
   {
-    return nsGenericHTMLFormElement::GetForm();
+    return nsGenericHTMLFormElementWithState::GetForm();
   }
   bool Multiple() const
   {
@@ -194,10 +187,7 @@ public:
   {
     return mOptions->Length();
   }
-  void SetLength(uint32_t aLength, ErrorResult& aRv)
-  {
-    aRv = SetLength(aLength);
-  }
+  void SetLength(uint32_t aLength, ErrorResult& aRv);
   Element* IndexedGetter(uint32_t aIdx, bool& aFound) const
   {
     return mOptions->IndexedGetter(aIdx, aFound);
@@ -219,6 +209,11 @@ public:
   {
     mOptions->IndexedSetter(aIndex, aOption, aRv);
   }
+
+  static bool MatchSelectedOptions(nsIContent* aContent, int32_t, nsIAtom*,
+                                   void*);
+
+  nsIHTMLCollection* SelectedOptions();
 
   int32_t SelectedIndex() const
   {
@@ -301,6 +296,7 @@ public:
    */
   NS_IMETHOD IsOptionDisabled(int32_t aIndex,
                               bool* aIsDisabled);
+  bool IsOptionDisabled(HTMLOptionElement* aOption);
 
   /**
    * Sets multiple options (or just sets startIndex if select is single)
@@ -319,13 +315,12 @@ public:
    * @param aNotify whether to notify frames and such
    * @return whether any options were actually changed
    */
-  NS_IMETHOD SetOptionsSelectedByIndex(int32_t aStartIndex,
-                                       int32_t aEndIndex,
-                                       bool aIsSelected,
-                                       bool aClearAll,
-                                       bool aSetDisabled,
-                                       bool aNotify,
-                                       bool* aChangedSomething);
+  bool SetOptionsSelectedByIndex(int32_t aStartIndex,
+                                 int32_t aEndIndex,
+                                 bool aIsSelected,
+                                 bool aClearAll,
+                                 bool aSetDisabled,
+                                 bool aNotify);
 
   /**
    * Finds the index of a given option element
@@ -372,14 +367,12 @@ public:
   virtual nsresult Clone(nsINodeInfo* aNodeInfo, nsINode** aResult) const MOZ_OVERRIDE;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLSelectElement,
-                                           nsGenericHTMLFormElement)
+                                           nsGenericHTMLFormElementWithState)
 
   HTMLOptionsCollection* GetOptions()
   {
     return mOptions;
   }
-
-  virtual nsIDOMNode* AsDOMNode() MOZ_OVERRIDE { return this; }
 
   // nsIConstraintValidation
   nsresult GetValidationMessage(nsAString& aValidationMessage,
@@ -463,10 +456,10 @@ protected:
    * @param aListIndex the index to start adding options into the list at
    * @param aDepth the depth of aOptions (1=direct child of select ...)
    */
-  nsresult InsertOptionsIntoList(nsIContent* aOptions,
-                                 int32_t aListIndex,
-                                 int32_t aDepth,
-                                 bool aNotify);
+  void InsertOptionsIntoList(nsIContent* aOptions,
+                             int32_t aListIndex,
+                             int32_t aDepth,
+                             bool aNotify);
   /**
    * Remove option(s) from the options[] array
    * @param aOptions the option or optgroup being added
@@ -483,9 +476,9 @@ protected:
    * @param aInsertIndex the index to start adding options into the list at
    * @param aDepth the depth of aOptions (1=direct child of select ...)
    */
-  nsresult InsertOptionsIntoListRecurse(nsIContent* aOptions,
-                                        int32_t* aInsertIndex,
-                                        int32_t aDepth);
+  void InsertOptionsIntoListRecurse(nsIContent* aOptions,
+                                    int32_t* aInsertIndex,
+                                    int32_t aDepth);
   /**
    * Remove option(s) from the options[] array (called by RemoveOptionsFromList)
    * @param aOptions the option or optgroup being added
@@ -568,6 +561,12 @@ protected:
   void SetSelectionChanged(bool aValue, bool aNotify);
 
   /**
+   * Marks the selectedOptions list as dirty, so that it'll populate itself
+   * again.
+   */
+  void UpdateSelectedOptions();
+
+  /**
    * Return whether an element should have a validity UI.
    * (with :-moz-ui-invalid and :-moz-ui-valid pseudo-classes).
    *
@@ -632,6 +631,11 @@ protected:
    * done adding options
    */
   nsCOMPtr<SelectState> mRestoreState;
+
+  /**
+   * The live list of selected options.
+  */
+  nsRefPtr<nsContentList> mSelectedOptions;
 };
 
 } // namespace dom

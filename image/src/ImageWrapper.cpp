@@ -4,6 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ImageWrapper.h"
+#include "Orientation.h"
+
+#include "mozilla/MemoryReporting.h"
 
 using mozilla::layers::LayerManager;
 using mozilla::layers::ImageContainer;
@@ -38,13 +41,13 @@ ImageWrapper::SizeOfData()
 }
 
 size_t
-ImageWrapper::HeapSizeOfSourceWithComputedFallback(nsMallocSizeOfFun aMallocSizeOf) const
+ImageWrapper::HeapSizeOfSourceWithComputedFallback(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   return mInnerImage->HeapSizeOfSourceWithComputedFallback(aMallocSizeOf);
 }
 
 size_t
-ImageWrapper::HeapSizeOfDecodedWithComputedFallback(nsMallocSizeOfFun aMallocSizeOf) const
+ImageWrapper::HeapSizeOfDecodedWithComputedFallback(mozilla::MallocSizeOf aMallocSizeOf) const
 {
   return mInnerImage->HeapSizeOfDecodedWithComputedFallback(aMallocSizeOf);
 }
@@ -165,6 +168,12 @@ ImageWrapper::GetIntrinsicRatio(nsSize* aSize)
   return mInnerImage->GetIntrinsicRatio(aSize);
 }
 
+NS_IMETHODIMP_(Orientation)
+ImageWrapper::GetOrientation()
+{
+  return mInnerImage->GetOrientation();
+}
+
 NS_IMETHODIMP
 ImageWrapper::GetType(uint16_t* aType)
 {
@@ -229,6 +238,12 @@ NS_IMETHODIMP
 ImageWrapper::StartDecoding()
 {
   return mInnerImage->StartDecoding();
+}
+
+bool
+ImageWrapper::IsDecoded()
+{
+  return mInnerImage->IsDecoded();
 }
 
 NS_IMETHODIMP

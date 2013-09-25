@@ -6,9 +6,10 @@
 #include "gfxDrawable.h"
 #include "gfxPlatform.h"
 #include "gfxUtils.h"
-#include "mozilla/dom/SVGSVGElement.h"
 
 #include "ClippedImage.h"
+#include "Orientation.h"
+#include "SVGImageContext.h"
 
 using mozilla::layers::LayerManager;
 using mozilla::layers::ImageContainer;
@@ -232,8 +233,8 @@ ClippedImage::GetFrameInternal(const nsIntSize& aViewportSize,
     // Create a surface to draw into.
     mozilla::RefPtr<mozilla::gfx::DrawTarget> target;
     target = gfxPlatform::GetPlatform()->
-      CreateOffscreenDrawTarget(gfx::IntSize(mClip.width, mClip.height),
-                                gfx::FORMAT_B8G8R8A8);
+      CreateOffscreenCanvasDrawTarget(gfx::IntSize(mClip.width, mClip.height),
+                                      gfx::FORMAT_B8G8R8A8);
     nsRefPtr<gfxASurface> surface = gfxPlatform::GetPlatform()->
       GetThebesSurfaceForDrawTarget(target);
 
@@ -248,7 +249,7 @@ ClippedImage::GetFrameInternal(const nsIntSize& aViewportSize,
     gfxRect imageRect(0, 0, mClip.width, mClip.height);
     gfxUtils::DrawPixelSnapped(ctx, drawable, gfxMatrix(),
                                imageRect, imageRect, imageRect, imageRect,
-                               gfxASurface::ImageFormatARGB32,
+                               gfxImageFormatARGB32,
                                gfxPattern::FILTER_FAST);
 
     // Cache the resulting surface.
@@ -335,7 +336,7 @@ ClippedImage::Draw(gfxContext* aContext,
     gfxRect subimage(aSubimage.x, aSubimage.y, aSubimage.width, aSubimage.height);
     gfxUtils::DrawPixelSnapped(aContext, drawable, aUserSpaceToImageSpace,
                                subimage, sourceRect, imageRect, aFill,
-                               gfxASurface::ImageFormatARGB32, aFilter);
+                               gfxImageFormatARGB32, aFilter);
 
     return NS_OK;
   }
@@ -409,6 +410,14 @@ ClippedImage::RequestDiscard()
   mCachedSurface = nullptr;
 
   return InnerImage()->RequestDiscard();
+}
+
+NS_IMETHODIMP_(Orientation)
+ClippedImage::GetOrientation()
+{
+  // XXX(seth): This should not actually be here; this is just to work around a
+  // what appears to be a bug in MSVC's linker.
+  return InnerImage()->GetOrientation();
 }
 
 } // namespace image

@@ -33,8 +33,8 @@ JNI.prototype = {
       case "D": return ctypes.double;
       case "F": return ctypes.float;
       case "I": return ctypes.int32_t;
-      case "J": return ctypes.long;
-      case "S": return ctypes.short;
+      case "J": return ctypes.int64_t;
+      case "S": return ctypes.int16_t;
       case "V": return ctypes.void_t;
       case "Z": return ctypes.bool;
       default: return this.types.jobject
@@ -124,7 +124,7 @@ JNI.prototype = {
 
   callStaticVoidMethod: function(aClass, aMethod) {
     let args = Array.prototype.slice.apply(arguments, [2]);
-    this._callStaticVoidMethod(aClass, aMethodId.methodId, this.getArgs(aMethod, args));
+    this._callStaticVoidMethod(aClass, aMethod.methodId, this.getArgs(aMethod, args));
     if (this.exceptionCheck())
        throw("Error calling static void method");
   },

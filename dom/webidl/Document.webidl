@@ -16,9 +16,9 @@
  */
 
 interface StyleSheetList;
-interface TouchList;
 interface WindowProxy;
 interface nsISupports;
+interface URI;
 
 enum VisibilityState { "hidden", "visible" };
 
@@ -136,17 +136,17 @@ partial interface Document {
   //(Not implemented)readonly attribute HTMLCollection commands;
 
   // special event handler IDL attributes that only apply to Document objects
-  [LenientThis, SetterThrows] attribute EventHandler onreadystatechange;
+  [LenientThis] attribute EventHandler onreadystatechange;
 
   // Gecko extensions?
-  [LenientThis, SetterThrows] attribute EventHandler onmouseenter;
-  [LenientThis, SetterThrows] attribute EventHandler onmouseleave;
-  [SetterThrows] attribute EventHandler onwheel;
-  [SetterThrows] attribute EventHandler oncopy;
-  [SetterThrows] attribute EventHandler oncut;
-  [SetterThrows] attribute EventHandler onpaste;
-  [SetterThrows] attribute EventHandler onbeforescriptexecute;
-  [SetterThrows] attribute EventHandler onafterscriptexecute;
+  [LenientThis] attribute EventHandler onmouseenter;
+  [LenientThis] attribute EventHandler onmouseleave;
+                attribute EventHandler onwheel;
+                attribute EventHandler oncopy;
+                attribute EventHandler oncut;
+                attribute EventHandler onpaste;
+                attribute EventHandler onbeforescriptexecute;
+                attribute EventHandler onafterscriptexecute;
   /**
    * True if this document is synthetic : stand alone image, video, audio file,
    * etc.
@@ -277,11 +277,14 @@ partial interface Document {
 partial interface Document {
   // nsIDOMDocumentXBL.  Wish we could make these [ChromeOnly], but
   // that would likely break bindings running with the page principal.
+  [Func="IsChromeOrXBL"]
   NodeList? getAnonymousNodes(Element elt);
+  [Func="IsChromeOrXBL"]
   Element? getAnonymousElementByAttribute(Element elt, DOMString attrName,
                                           DOMString attrValue);
+  [Func="IsChromeOrXBL"]
   Element? getBindingParent(Node node);
-  [Throws]
+  [Throws, Func="IsChromeOrXBL"]
   void loadBindingDocument(DOMString documentURL);
 
   // nsIDOMDocumentTouch
@@ -317,9 +320,21 @@ partial interface Document {
 
   [ChromeOnly]
   attribute boolean styleSheetChangeEventsEnabled;
+
+  [ChromeOnly, Throws]
+  void obsoleteSheet(URI sheetURI);
+  [ChromeOnly, Throws]
+  void obsoleteSheet(DOMString sheetURI);
+};
+
+// Extension to give chrome JS the ability to determine when a document was
+// created to satisfy an iframe with srcdoc attribute.
+partial interface Document {
+  [ChromeOnly] readonly attribute boolean isSrcdocDocument;
 };
 
 Document implements XPathEvaluator;
 Document implements GlobalEventHandlers;
 Document implements NodeEventHandlers;
 Document implements TouchEventHandlers;
+Document implements ParentNode;

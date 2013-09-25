@@ -4,12 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <stdlib.h>
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "nsHttpResponseHead.h"
 #include "nsPrintfCString.h"
-#include "prprf.h"
 #include "prtime.h"
-#include "nsCRT.h"
+#include "nsURLHelper.h"
 #include <algorithm>
 
 //-----------------------------------------------------------------------------
@@ -509,14 +510,22 @@ nsHttpResponseHead::GetMaxAgeValue(uint32_t *result) const
     if (!val)
         return NS_ERROR_NOT_AVAILABLE;
 
-    const char *p = PL_strcasestr(val, "max-age=");
+    const char *p = nsHttp::FindToken(val, "max-age", HTTP_HEADER_VALUE_SEPS "=");
     if (!p)
         return NS_ERROR_NOT_AVAILABLE;
+    p += 7;
+    while (*p == ' ' || *p == '\t')
+        ++p;
+    if (*p != '=')
+        return NS_ERROR_NOT_AVAILABLE;
+    ++p;
+    while (*p == ' ' || *p == '\t')
+        ++p;
 
-    int maxAgeValue = atoi(p + 8);
+    int maxAgeValue = atoi(p);
     if (maxAgeValue < 0)
         maxAgeValue = 0;
-    *result = uint32_t(maxAgeValue);
+    *result = static_cast<uint32_t>(maxAgeValue);
     return NS_OK;
 }
 

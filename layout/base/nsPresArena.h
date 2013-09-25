@@ -10,8 +10,9 @@
 #ifndef nsPresArena_h___
 #define nsPresArena_h___
 
-#include "mozilla/MemoryChecking.h"
-#include "mozilla/StandardInteger.h"
+#include "mozilla/MemoryChecking.h" // Note: Do not remove this, needed for MOZ_HAVE_MEM_CHECKS below
+#include "mozilla/MemoryReporting.h"
+#include <stdint.h>
 #include "nscore.h"
 #include "nsQueryFrame.h"
 #include "nsTArray.h"
@@ -84,7 +85,7 @@ public:
    * Fill aArenaStats with sizes of interesting objects allocated in
    * this arena and its mOther field with the size of everything else.
    */
-  void SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+  void SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                            nsArenaMemoryStats* aArenaStats);
 
 private:
@@ -125,7 +126,7 @@ private:
 #endif
   static PLDHashOperator FreeListEnumerator(FreeList* aEntry, void* aData);
   static size_t SizeOfFreeListEntryExcludingThis(FreeList* aEntry,
-                                                 nsMallocSizeOfFun aMallocSizeOf,
+                                                 mozilla::MallocSizeOf aMallocSizeOf,
                                                  void*);
 
   nsTHashtable<FreeList> mFreeLists;

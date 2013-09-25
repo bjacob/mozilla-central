@@ -7,6 +7,23 @@
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
+const EVENT_VIRTUALCURSOR_CHANGED = Ci.nsIAccessibleEvent.EVENT_VIRTUALCURSOR_CHANGED;
+const EVENT_STATE_CHANGE = Ci.nsIAccessibleEvent.EVENT_STATE_CHANGE;
+const EVENT_SCROLLING_START = Ci.nsIAccessibleEvent.EVENT_SCROLLING_START;
+const EVENT_TEXT_CARET_MOVED = Ci.nsIAccessibleEvent.EVENT_TEXT_CARET_MOVED;
+const EVENT_TEXT_INSERTED = Ci.nsIAccessibleEvent.EVENT_TEXT_INSERTED;
+const EVENT_TEXT_REMOVED = Ci.nsIAccessibleEvent.EVENT_TEXT_REMOVED;
+const EVENT_FOCUS = Ci.nsIAccessibleEvent.EVENT_FOCUS;
+const EVENT_SHOW = Ci.nsIAccessibleEvent.EVENT_SHOW;
+const EVENT_HIDE = Ci.nsIAccessibleEvent.EVENT_HIDE;
+
+const ROLE_INTERNAL_FRAME = Ci.nsIAccessibleRole.ROLE_INTERNAL_FRAME;
+const ROLE_DOCUMENT = Ci.nsIAccessibleRole.ROLE_DOCUMENT;
+const ROLE_CHROME_WINDOW = Ci.nsIAccessibleRole.ROLE_CHROME_WINDOW;
+const ROLE_TEXT_LEAF = Ci.nsIAccessibleRole.ROLE_TEXT_LEAF;
+
+const TEXT_NODE = 3;
+
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'Services',
   'resource://gre/modules/Services.jsm');
@@ -57,8 +74,7 @@ this.EventManager.prototype = {
       this.present(Presentation.tabStateChanged(null, 'newtab'));
 
     } catch (x) {
-      Logger.error('Failed to start EventManager');
-      Logger.logException(x);
+      Logger.logException(x, 'Failed to start EventManager');
     }
   },
 
@@ -117,8 +133,7 @@ this.EventManager.prototype = {
       }
       }
     } catch (x) {
-      Logger.error('Error handling DOM event');
-      Logger.logException(x);
+      Logger.logException(x, 'Error handling DOM event');
     }
   },
 
@@ -129,32 +144,37 @@ this.EventManager.prototype = {
 
     // Don't bother with non-content events in firefox.
     if (Utils.MozBuildApp == 'browser' &&
-        aEvent.eventType != Ci.nsIAccessibleEvent.EVENT_VIRTUALCURSOR_CHANGED &&
-        aEvent.accessibleDocument != Utils.CurrentContentDoc) {
+        aEvent.eventType != EVENT_VIRTUALCURSOR_CHANGED &&
+        // XXX Bug 442005 results in DocAccessible::getDocType returning
+        // NS_ERROR_FAILURE. Checking for aEvent.accessibleDocument.docType ==
+        // 'window' does not currently work.
+        (aEvent.accessibleDocument.DOMDocument.doctype &&
+         aEvent.accessibleDocument.DOMDocument.doctype.name === 'window')) {
       return;
     }
 
     switch (aEvent.eventType) {
-      case Ci.nsIAccessibleEvent.EVENT_VIRTUALCURSOR_CHANGED:
+      case EVENT_VIRTUALCURSOR_CHANGED:
       {
         let pivot = aEvent.accessible.
           QueryInterface(Ci.nsIAccessibleDocument).virtualCursor;
         let position = pivot.position;
-        if (position.role == Ci.nsIAccessibleRole.ROLE_INTERNAL_FRAME)
+        if (position && position.role == ROLE_INTERNAL_FRAME)
           break;
         let event = aEvent.
           QueryInterface(Ci.nsIAccessibleVirtualCursorChangeEvent);
         let reason = event.reason;
 
-        if (this.editState.editing)
+        if (this.editState.editing) {
           aEvent.accessibleDocument.takeFocus();
-
+        }
         this.present(
-          Presentation.pivotChanged(position, event.oldAccessible, reason));
+          Presentation.pivotChanged(position, event.oldAccessible, reason,
+                                    pivot.startOffset, pivot.endOffset));
 
         break;
       }
-      case Ci.nsIAccessibleEvent.EVENT_STATE_CHANGE:
+      case EVENT_STATE_CHANGE:
       {
         let event = aEvent.QueryInterface(Ci.nsIAccessibleStateChangeEvent);
         if (event.state == Ci.nsIAccessibleStates.STATE_CHECKED &&
@@ -166,13 +186,13 @@ this.EventManager.prototype = {
         }
         break;
       }
-      case Ci.nsIAccessibleEvent.EVENT_SCROLLING_START:
+      case EVENT_SCROLLING_START:
       {
         let vc = Utils.getVirtualCursor(aEvent.accessibleDocument);
         vc.moveNext(TraversalRules.Simple, aEvent.accessible, true);
         break;
       }
-      case Ci.nsIAccessibleEvent.EVENT_TEXT_CARET_MOVED:
+      case EVENT_TEXT_CARET_MOVED:
       {
         let acc = aEvent.accessible;
         let characterCount = acc.
@@ -202,46 +222,191 @@ this.EventManager.prototype = {
             editState.atStart != this.editState.atStart)
           this.sendMsgFunc("AccessFu:Input", editState);
 
+        this.present(Presentation.textSelectionChanged(acc.getText(0,-1),
+                     caretOffset, caretOffset, 0, 0, aEvent.isFromUserInput));
+
         this.editState = editState;
         break;
       }
-      case Ci.nsIAccessibleEvent.EVENT_TEXT_INSERTED:
-      case Ci.nsIAccessibleEvent.EVENT_TEXT_REMOVED:
+      case EVENT_SHOW:
       {
-        if (aEvent.isFromUserInput) {
-          // XXX support live regions as well.
-          let event = aEvent.QueryInterface(Ci.nsIAccessibleTextChangeEvent);
-          let isInserted = event.isInserted;
-          let txtIface = aEvent.accessible.QueryInterface(Ci.nsIAccessibleText);
-
-          let text = '';
-          try {
-            text = txtIface.
-              getText(0, Ci.nsIAccessibleText.TEXT_OFFSET_END_OF_TEXT);
-          } catch (x) {
-            // XXX we might have gotten an exception with of a
-            // zero-length text. If we did, ignore it (bug #749810).
-            if (txtIface.characterCount)
-              throw x;
-          }
-          this.present(Presentation.textChanged(
-                         isInserted, event.start, event.length,
-                         text, event.modifiedText));
+        let {liveRegion, isPolite} = this._handleLiveRegion(aEvent,
+          ['additions', 'all']);
+        // Only handle show if it is a relevant live region.
+        if (!liveRegion) {
+          break;
+        }
+        // Show for text is handled by the EVENT_TEXT_INSERTED handler.
+        if (aEvent.accessible.role === ROLE_TEXT_LEAF) {
+          break;
+        }
+        this._dequeueLiveEvent(EVENT_HIDE, liveRegion);
+        this.present(Presentation.liveRegion(liveRegion, isPolite, false));
+        break;
+      }
+      case EVENT_HIDE:
+      {
+        let {liveRegion, isPolite} = this._handleLiveRegion(
+          aEvent.QueryInterface(Ci.nsIAccessibleHideEvent),
+          ['removals', 'all']);
+        // Only handle hide if it is a relevant live region.
+        if (!liveRegion) {
+          break;
+        }
+        // Hide for text is handled by the EVENT_TEXT_REMOVED handler.
+        if (aEvent.accessible.role === ROLE_TEXT_LEAF) {
+          break;
+        }
+        this._queueLiveEvent(EVENT_HIDE, liveRegion, isPolite);
+        break;
+      }
+      case EVENT_TEXT_INSERTED:
+      case EVENT_TEXT_REMOVED:
+      {
+        let {liveRegion, isPolite} = this._handleLiveRegion(aEvent,
+          ['text', 'all']);
+        if (aEvent.isFromUserInput || liveRegion) {
+          // Handle all text mutations coming from the user or if they happen
+          // on a live region.
+          this._handleText(aEvent, liveRegion, isPolite);
         }
         break;
       }
-      case Ci.nsIAccessibleEvent.EVENT_FOCUS:
+      case EVENT_FOCUS:
       {
         // Put vc where the focus is at
         let acc = aEvent.accessible;
         let doc = aEvent.accessibleDocument;
-        if (acc.role != Ci.nsIAccessibleRole.ROLE_DOCUMENT &&
-            doc.role != Ci.nsIAccessibleRole.ROLE_CHROME_WINDOW) {
+        if (acc.role != ROLE_DOCUMENT && doc.role != ROLE_CHROME_WINDOW) {
           let vc = Utils.getVirtualCursor(doc);
           vc.moveNext(TraversalRules.Simple, acc, true);
         }
         break;
       }
+    }
+  },
+
+  _handleText: function _handleText(aEvent, aLiveRegion, aIsPolite) {
+    let event = aEvent.QueryInterface(Ci.nsIAccessibleTextChangeEvent);
+    let isInserted = event.isInserted;
+    let txtIface = aEvent.accessible.QueryInterface(Ci.nsIAccessibleText);
+
+    let text = '';
+    try {
+      text = txtIface.getText(0, Ci.nsIAccessibleText.TEXT_OFFSET_END_OF_TEXT);
+    } catch (x) {
+      // XXX we might have gotten an exception with of a
+      // zero-length text. If we did, ignore it (bug #749810).
+      if (txtIface.characterCount) {
+        throw x;
+      }
+    }
+    // If there are embedded objects in the text, ignore them.
+    // Assuming changes to the descendants would already be handled by the
+    // show/hide event.
+    let modifiedText = event.modifiedText.replace(/\uFFFC/g, '').trim();
+    if (!modifiedText) {
+      return;
+    }
+    if (aLiveRegion) {
+      if (aEvent.eventType === EVENT_TEXT_REMOVED) {
+        this._queueLiveEvent(EVENT_TEXT_REMOVED, aLiveRegion, aIsPolite,
+          modifiedText);
+      } else {
+        this._dequeueLiveEvent(EVENT_TEXT_REMOVED, aLiveRegion);
+        this.present(Presentation.liveRegion(aLiveRegion, aIsPolite, false,
+          modifiedText));
+      }
+    } else {
+      this.present(Presentation.textChanged(isInserted, event.start,
+        event.length, text, modifiedText));
+    }
+  },
+
+  _handleLiveRegion: function _handleLiveRegion(aEvent, aRelevant) {
+    if (aEvent.isFromUserInput) {
+      return {};
+    }
+    let parseLiveAttrs = function parseLiveAttrs(aAccessible) {
+      let attrs = Utils.getAttributes(aAccessible);
+      if (attrs['container-live']) {
+        return {
+          live: attrs['container-live'],
+          relevant: attrs['container-relevant'] || 'additions text',
+          busy: attrs['container-busy'],
+          atomic: attrs['container-atomic'],
+          memberOf: attrs['member-of']
+        };
+      }
+      return null;
+    };
+    // XXX live attributes are not set for hidden accessibles yet. Need to
+    // climb up the tree to check for them.
+    let getLiveAttributes = function getLiveAttributes(aEvent) {
+      let liveAttrs = parseLiveAttrs(aEvent.accessible);
+      if (liveAttrs) {
+        return liveAttrs;
+      }
+      let parent = aEvent.targetParent;
+      while (parent) {
+        liveAttrs = parseLiveAttrs(parent);
+        if (liveAttrs) {
+          return liveAttrs;
+        }
+        parent = parent.parent
+      }
+      return {};
+    };
+    let {live, relevant, busy, atomic, memberOf} = getLiveAttributes(aEvent);
+    // If container-live is not present or is set to |off| ignore the event.
+    if (!live || live === 'off') {
+      return {};
+    }
+    // XXX: support busy and atomic.
+
+    // Determine if the type of the mutation is relevant. Default is additions
+    // and text.
+    let isRelevant = Utils.matchAttributeValue(relevant, aRelevant);
+    if (!isRelevant) {
+      return {};
+    }
+    return {
+      liveRegion: aEvent.accessible,
+      isPolite: live === 'polite'
+    };
+  },
+
+  _dequeueLiveEvent: function _dequeueLiveEvent(aEventType, aLiveRegion) {
+    let domNode = aLiveRegion.DOMNode;
+    if (this._liveEventQueue && this._liveEventQueue.has(domNode)) {
+      let queue = this._liveEventQueue.get(domNode);
+      let nextEvent = queue[0];
+      if (nextEvent.eventType === aEventType) {
+        Utils.win.clearTimeout(nextEvent.timeoutID);
+        queue.shift();
+        if (queue.length === 0) {
+          this._liveEventQueue.delete(domNode)
+        }
+      }
+    }
+  },
+
+  _queueLiveEvent: function _queueLiveEvent(aEventType, aLiveRegion, aIsPolite, aModifiedText) {
+    if (!this._liveEventQueue) {
+      this._liveEventQueue = new WeakMap();
+    }
+    let eventHandler = {
+      eventType: aEventType,
+      timeoutID: Utils.win.setTimeout(this.present.bind(this),
+        20, // Wait for a possible EVENT_SHOW or EVENT_TEXT_INSERTED event.
+        Presentation.liveRegion(aLiveRegion, aIsPolite, true, aModifiedText))
+    };
+
+    let domNode = aLiveRegion.DOMNode;
+    if (this._liveEventQueue.has(domNode)) {
+      this._liveEventQueue.get(domNode).push(eventHandler);
+    } else {
+      this._liveEventQueue.set(domNode, [eventHandler]);
     }
   },
 
@@ -421,8 +586,7 @@ const AccessibilityEventObserver = {
     try {
       eventManager.handleAccEvent(event);
     } catch (x) {
-      Logger.error('Error handing accessible event');
-      Logger.logException(x);
+      Logger.logException(x, 'Error handing accessible event');
     } finally {
       return;
     }

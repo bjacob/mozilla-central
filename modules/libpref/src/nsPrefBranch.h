@@ -21,10 +21,16 @@
 #include "prbit.h"
 #include "nsTraceRefcnt.h"
 #include "mozilla/HashFunctions.h"
+#include "mozilla/MemoryReporting.h"
+
+namespace mozilla {
+class PreferencesReporter;
+} // namespace mozilla;
 
 class nsPrefBranch;
 
 class PrefCallback : public PLDHashEntryHdr {
+  friend class mozilla::PreferencesReporter;
 
   public:
     typedef PrefCallback* KeyType;
@@ -172,8 +178,9 @@ class nsPrefBranch : public nsIPrefBranchInternal,
                      public nsIObserver,
                      public nsSupportsWeakReference
 {
+  friend class mozilla::PreferencesReporter;
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIPREFBRANCH
   NS_DECL_NSIPREFBRANCH2
   NS_DECL_NSIOBSERVER
@@ -187,7 +194,7 @@ public:
 
   static nsresult NotifyObserver(const char *newpref, void *data);
 
-  size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf);
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf);
 
 protected:
   nsPrefBranch()    /* disallow use of this constructer */
@@ -226,7 +233,7 @@ public:
   nsPrefLocalizedString();
   virtual ~nsPrefLocalizedString();
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_FORWARD_NSISUPPORTSSTRING(mUnicodeString->)
   NS_FORWARD_NSISUPPORTSPRIMITIVE(mUnicodeString->)
 
@@ -244,7 +251,7 @@ private:
 class nsRelativeFilePref : public nsIRelativeFilePref
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIRELATIVEFILEPREF
   
                 nsRelativeFilePref();

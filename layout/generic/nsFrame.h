@@ -11,15 +11,12 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Likely.h"
 #include "nsBox.h"
-#include "nsRect.h"
-#include "nsString.h"
 #include "prlog.h"
 
 #include "nsIPresShell.h"
-#include "nsFrameSelection.h"
 #include "nsHTMLReflowState.h"
-#include "nsHTMLReflowMetrics.h"
 #include "nsHTMLParts.h"
+#include "nsISelectionDisplay.h"
 
 /**
  * nsFrame logging constants. We redefine the nspr
@@ -100,6 +97,7 @@
 
 struct nsBoxLayoutMetrics;
 class nsDisplayBackgroundImage;
+struct nsRect;
 
 /**
  * Implementation of a simple frame that's not splittable and has no
@@ -494,13 +492,11 @@ public:
    * background style appears to have no background --- this is useful
    * for frames that might receive a propagated background via
    * nsCSSRendering::FindBackground
-   * @param aBackground *aBackground is set to the bottom-most
-   * nsDisplayBackground item, if any are created, otherwise null.
+   * @return whether a themed background item was created.
    */
-  void DisplayBackgroundUnconditional(nsDisplayListBuilder*   aBuilder,
+  bool DisplayBackgroundUnconditional(nsDisplayListBuilder* aBuilder,
                                       const nsDisplayListSet& aLists,
-                                      bool aForceBackground,
-                                      nsDisplayBackgroundImage** aBackground);
+                                      bool aForceBackground);
   /**
    * Adds display items for standard CSS borders, background and outline for
    * for this frame, as necessary. Checks IsVisibleForPainting and won't

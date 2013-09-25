@@ -9,7 +9,10 @@
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_2(TextTrackList, mGlobal, mTextTracks)
+NS_IMPL_CYCLE_COLLECTION_INHERITED_2(TextTrackList,
+                                     nsDOMEventTargetHelper,
+                                     mGlobal,
+                                     mTextTracks)
 
 NS_IMPL_ADDREF_INHERITED(TextTrackList, nsDOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(TextTrackList, nsDOMEventTargetHelper)
@@ -52,6 +55,19 @@ TextTrackList::AddTextTrack(TextTrackKind aKind,
   mTextTracks.AppendElement(track);
   // TODO: dispatch addtrack event
   return track.forget();
+}
+
+TextTrack*
+TextTrackList::GetTrackById(const nsAString& aId)
+{
+  nsAutoString id;
+  for (uint32_t i = 0; i < Length(); i++) {
+    mTextTracks[i]->GetId(id);
+    if (aId.Equals(id)) {
+      return mTextTracks[i];
+    }
+  }
+  return nullptr;
 }
 
 void

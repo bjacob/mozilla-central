@@ -6,7 +6,6 @@
 
 #include "nsURILoader.h"
 #include "nsAutoPtr.h"
-#include "nsProxyRelease.h"
 #include "nsIURIContentListener.h"
 #include "nsIContentHandler.h"
 #include "nsILoadGroup.h"
@@ -78,7 +77,7 @@ public:
                      uint32_t aFlags,
                      nsURILoader* aURILoader);
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
 
   /**
    * Prepares this object for receiving data. The stream
@@ -130,7 +129,7 @@ protected:
    * The stream listener to forward nsIStreamListener notifications
    * to.  This is set once the load is dispatched.
    */
-  nsMainThreadPtrHandle<nsIStreamListener> m_targetStreamListener;
+  nsCOMPtr<nsIStreamListener> m_targetStreamListener;
 
   /**
    * A pointer to the entity that originated the load. We depend on getting
@@ -158,8 +157,8 @@ protected:
   nsRefPtr<nsURILoader> mURILoader;
 };
 
-NS_IMPL_THREADSAFE_ADDREF(nsDocumentOpenInfo)
-NS_IMPL_THREADSAFE_RELEASE(nsDocumentOpenInfo)
+NS_IMPL_ADDREF(nsDocumentOpenInfo)
+NS_IMPL_RELEASE(nsDocumentOpenInfo)
 
 NS_INTERFACE_MAP_BEGIN(nsDocumentOpenInfo)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIRequestObserver)
@@ -311,7 +310,7 @@ NS_IMETHODIMP nsDocumentOpenInfo::OnStopRequest(nsIRequest *request, nsISupports
   
   if ( m_targetStreamListener)
   {
-    nsMainThreadPtrHandle<nsIStreamListener> listener = m_targetStreamListener;
+    nsCOMPtr<nsIStreamListener> listener(m_targetStreamListener);
 
     // If this is a multipart stream, we could get another
     // OnStartRequest after this... reset state.
@@ -537,15 +536,11 @@ nsresult nsDocumentOpenInfo::DispatchContent(nsIRequest *request, nsISupports * 
       aChannel->SetContentType(NS_LITERAL_CSTRING(APPLICATION_GUESS_FROM_EXT));
     }
 
-    nsCOMPtr<nsIStreamListener> listener;
     rv = helperAppService->DoContent(mContentType,
                                      request,
                                      m_originalContext,
                                      false,
-                                     getter_AddRefs(listener));
-    // Passing false here to allow off main thread use.
-    m_targetStreamListener
-      = new nsMainThreadPtrHolder<nsIStreamListener>(listener, false);
+                                     getter_AddRefs(m_targetStreamListener));
     if (NS_FAILED(rv)) {
       request->SetLoadFlags(loadFlags);
       m_targetStreamListener = nullptr;
@@ -608,16 +603,11 @@ nsDocumentOpenInfo::ConvertData(nsIRequest *request,
   // stream converter and sets the output end of the stream converter to
   // nextLink.  As we pump data into m_targetStreamListener the stream
   // converter will convert it and pass the converted data to nextLink.
-  nsCOMPtr<nsIStreamListener> listener;
-  rv = StreamConvService->AsyncConvertData(PromiseFlatCString(aSrcContentType).get(),
-                                           PromiseFlatCString(aOutContentType).get(),
-                                           nextLink,
-                                           request,
-                                           getter_AddRefs(listener));
-  // Passing false here to allow off main thread use.
-  m_targetStreamListener
-    = new nsMainThreadPtrHolder<nsIStreamListener>(listener, false);
-  return rv;
+  return StreamConvService->AsyncConvertData(PromiseFlatCString(aSrcContentType).get(), 
+                                             PromiseFlatCString(aOutContentType).get(), 
+                                             nextLink, 
+                                             request,
+                                             getter_AddRefs(m_targetStreamListener));
 }
 
 bool
@@ -662,7 +652,7 @@ nsDocumentOpenInfo::TryContentListener(nsIURIContentListener* aListener,
     // m_targetStreamListener is now the input end of the converter, and we can
     // just pump the data in there, if it exists.  If it does not, we need to
     // try other nsIURIContentListeners.
-    return m_targetStreamListener.get() != nullptr;
+    return m_targetStreamListener != nullptr;
   }
 
   // At this point, aListener wants data of type mContentType.  Let 'em have
@@ -684,15 +674,12 @@ nsDocumentOpenInfo::TryContentListener(nsIURIContentListener* aListener,
   
   bool abort = false;
   bool isPreferred = (mFlags & nsIURILoader::IS_CONTENT_PREFERRED) != 0;
-  nsCOMPtr<nsIStreamListener> listener;
   nsresult rv = aListener->DoContent(mContentType.get(),
                                      isPreferred,
                                      aChannel,
-                                     getter_AddRefs(listener),
+                                     getter_AddRefs(m_targetStreamListener),
                                      &abort);
-  // Passing false here to allow off main thread use.
-  m_targetStreamListener
-    = new nsMainThreadPtrHolder<nsIStreamListener>(listener, false);
+    
   if (NS_FAILED(rv)) {
     LOG_ERROR(("  DoContent failed"));
     
@@ -766,7 +753,7 @@ NS_IMETHODIMP nsURILoader::UnRegisterContentListener(nsIURIContentListener * aCo
 }
 
 NS_IMETHODIMP nsURILoader::OpenURI(nsIChannel *channel, 
-                                   bool aIsContentPreferred,
+                                   uint32_t aFlags,
                                    nsIInterfaceRequestor *aWindowContext)
 {
   NS_ENSURE_ARG_POINTER(channel);
@@ -783,7 +770,7 @@ NS_IMETHODIMP nsURILoader::OpenURI(nsIChannel *channel,
 
   nsCOMPtr<nsIStreamListener> loader;
   nsresult rv = OpenChannel(channel,
-                            aIsContentPreferred ? IS_CONTENT_PREFERRED : 0,
+                            aFlags,
                             aWindowContext,
                             false,
                             getter_AddRefs(loader));

@@ -20,9 +20,7 @@
 
 
 #include "nsCRT.h"
-#include "nsIServiceManager.h"
-#include "nsCharTraits.h"
-#include "nsUTF8Utils.h"
+#include "nsDebug.h"
 
 //----------------------------------------------------------------------
 
@@ -147,24 +145,6 @@ const char* nsCRT::memmem(const char* haystack, uint32_t haystackLen,
   }
 #endif
   return NULL;
-}
-
-PRUnichar* nsCRT::strdup(const PRUnichar* str)
-{
-  uint32_t len = NS_strlen(str);
-  return strndup(str, len);
-}
-
-PRUnichar* nsCRT::strndup(const PRUnichar* str, uint32_t len)
-{
-	nsCppSharedAllocator<PRUnichar> shared_allocator;
-	PRUnichar* rslt = shared_allocator.allocate(len + 1); // add one for the null
-  // PRUnichar* rslt = new PRUnichar[len + 1];
-
-  if (rslt == NULL) return NULL;
-  memcpy(rslt, str, len * sizeof(PRUnichar));
-  rslt[len] = 0;
-  return rslt;
 }
 
 // This should use NSPR but NSPR isn't exporting its PR_strtoll function

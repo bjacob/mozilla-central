@@ -31,3 +31,15 @@ CPP_SOURCES += [
     'RemoteOpenFileParent.cpp',
 ]
 
+IPDL_SOURCES = [
+    'NeckoChannelParams.ipdlh',
+    'PNecko.ipdl',
+    'PRemoteOpenFile.ipdl',
+]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+LIBRARY_NAME = 'neckoipc_s'
+

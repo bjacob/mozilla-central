@@ -41,6 +41,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=435441
 
 /** Test for Bug 435441 **/
 
+SimpleTest.requestLongerTimeout(2);
 SimpleTest.waitForExplicitFinish();
 
 function has_num(str)
@@ -121,6 +122,7 @@ var supported_properties = {
                        // opacity is clamped in computed style
                        // (not parsing/interpolation)
                        test_float_zeroToOne_clamped ],
+    "filter" : [ test_filter_transition ],
     "flood-color": [ test_color_transition ],
     "flood-opacity" : [ test_float_zeroToOne_transition,
                         // opacity is clamped in computed style
@@ -260,9 +262,9 @@ if (SpecialPowers.getBoolPref("layout.css.flexbox.enabled")) {
 }
 
 var div = document.getElementById("display");
-var transformDiv = document.getElementById("transformTest");
+var OMTAdiv = document.getElementById("transformTest");
 var cs = getComputedStyle(div, "");
-var transformCs = getComputedStyle(transformDiv, "");
+var OMTACs = getComputedStyle(OMTAdiv, "");
 var winUtils = SpecialPowers.getDOMWindowUtils(window);
 
 function computeMatrix(v) {
@@ -295,42 +297,35 @@ var transformTests = [
     expected: computeMatrix('rotate(90deg)') },
   { start: 'none', end: 'rotatez(360deg)',
     expected_uncomputed: 'rotate(90deg)',
-    expected: computeMatrix('rotate(90deg)'),
-    requires_3d: true },
+    expected: computeMatrix('rotate(90deg)') },
   { start: 'none', end: 'rotate(720deg)',
     expected_uncomputed: 'rotate(180deg)',
     expected: computeMatrix('rotate(180deg)') },
   { start: 'none', end: 'rotate(720deg)',
     expected_uncomputed: 'rotatez(180deg)',
-    expected: computeMatrix('rotate(180deg)'),
-    requires_3d: true },
+    expected: computeMatrix('rotate(180deg)') },
   { start: 'none', end: 'rotate(1080deg)',
     expected_uncomputed: 'rotate(270deg)',
     expected: computeMatrix('rotate(270deg)') },
   { start: 'none', end: 'rotate(1080deg)',
     expected_uncomputed: 'rotate(270deg)',
-    expected: computeMatrix('rotatez(270deg)'),
-    requires_3d: true },
+    expected: computeMatrix('rotatez(270deg)') },
   { start: 'none', end: 'rotate(1440deg)',
     expected_uncomputed: 'rotate(360deg)',
     expected: computeMatrix('scale(1)'),
     round_error_ok: true },
   { start: 'none', end: 'rotatey(60deg)',
     expected_uncomputed: 'rotatey(15deg)',
-    expected: computeMatrix('rotatey(15deg)'),
-    requires_3d: true },
+    expected: computeMatrix('rotatey(15deg)') },
   { start: 'none', end: 'rotatey(720deg)',
     expected_uncomputed: 'rotatey(180deg)',
-    expected: computeMatrix('rotatey(180deg)'),
-    requires_3d: true },
+    expected: computeMatrix('rotatey(180deg)') },
   { start: 'none', end: 'rotatex(60deg)',
     expected_uncomputed: 'rotatex(15deg)',
-    expected: computeMatrix('rotatex(15deg)'),
-    requires_3d: true },
+    expected: computeMatrix('rotatex(15deg)') },
   { start: 'none', end: 'rotatex(720deg)',
     expected_uncomputed: 'rotatex(180deg)',
-    expected: computeMatrix('rotatex(180deg)'),
-    requires_3d: true },
+    expected: computeMatrix('rotatex(180deg)') },
 
   // translate
   { start: 'translate(20px)', end: 'none',
@@ -347,12 +342,10 @@ var transformTests = [
     expected: 'matrix(1, 0, 0, 1, 0, -30)' },
   { start: 'translateZ(40px)', end: 'none',
     expected_uncomputed: 'translateZ(30px)',
-    expected: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 30, 1)',
-    requires_3d: true },
+    expected: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 30, 1)' },
   { start: 'none', end: 'translate3D(40px, 60px, -40px)',
     expected_uncomputed: 'translate3D(10px, 15px, -10px)',
-    expected: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 15, -10, 1)',
-    requires_3d: true },
+    expected: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 15, -10, 1)' },
   // percentages are relative to 300px (width) and 50px (height)
   // per the prerequisites in property_database.js
   { start: 'translate(20%)', end: 'none',
@@ -427,12 +420,10 @@ var transformTests = [
     expected: 'matrix(1, 0, 0, 4, 0, 0)' },
   { start: 'scaleZ(5)', end: 'none',
     expected_uncomputed: 'scaleZ(4)',
-    expected: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1)',
-    requires_3d: true },
+    expected: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1)' },
   { start: 'none', end: 'scale3D(5, 5, 5)',
     expected_uncomputed: 'scale3D(2, 2, 2)',
-    expected: 'matrix3d(2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1)',
-    requires_3d: true },
+    expected: 'matrix3d(2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1)' },
 
   // skew
   { start: 'skewX(45deg)', end: 'none',
@@ -586,6 +577,156 @@ var transformTests = [
     round_error_ok: true },
 ];
 
+var filterTests = [
+  { start: "none", end: "none",
+    expected: ["none"] },
+  // function from none (number/length)
+  { start: "none", end: "brightness(0.5)",
+    expected: ["brightness", 0.875] },
+  { start: "none", end: "contrast(0.5)",
+    expected: ["contrast", 0.875] },
+  { start: "none", end: "grayscale(0.5)",
+    expected: ["grayscale", 0.125] },
+  { start: "none", end: "invert(0.5)",
+    expected: ["invert", 0.125] },
+  { start: "none", end: "opacity(0.5)",
+    expected: ["opacity", 0.875] },
+  { start: "none", end: "saturate(0.5)",
+    expected: ["saturate", 0.875] },
+  { start: "none", end: "sepia(0.5)",
+    expected: ["sepia", 0.125] },
+  { start: "none", end: "blur(50px)",
+    expected: ["blur", 12.5] },
+  // function to none (number/length)
+  { start: "brightness(0.5)", end: "none",
+    expected: ["brightness", 0.625] },
+  { start: "contrast(0.5)", end: "none",
+    expected: ["contrast", 0.625] },
+  { start: "grayscale(0.5)", end: "none",
+    expected: ["grayscale", 0.375] },
+  { start: "invert(0.5)", end: "none",
+    expected: ["invert", 0.375] },
+  { start: "opacity(0.5)", end: "none",
+    expected: ["opacity", 0.625] },
+  { start: "saturate(0.5)", end: "none",
+    expected: ["saturate", 0.625] },
+  { start: "sepia(0.5)", end: "none",
+    expected: ["sepia", 0.375] },
+  { start: "blur(50px)", end: "none",
+    expected: ["blur", 37.5] },
+  // function to same function (number/length)
+  { start: "brightness(0.25)", end: "brightness(0.75)",
+    expected: ["brightness", 0.375] },
+  { start: "contrast(0.25)", end: "contrast(0.75)",
+    expected: ["contrast", 0.375] },
+  { start: "grayscale(0.25)", end: "grayscale(0.75)",
+    expected: ["grayscale", 0.375] },
+  { start: "invert(0.25)", end: "invert(0.75)",
+    expected: ["invert", 0.375] },
+  { start: "opacity(0.25)", end: "opacity(0.75)",
+    expected: ["opacity", 0.375] },
+  { start: "saturate(0.25)", end: "saturate(0.75)",
+    expected: ["saturate", 0.375] },
+  { start: "sepia(0.25)", end: "sepia(0.75)",
+    expected: ["sepia", 0.375] },
+  { start: "blur(25px)", end: "blur(75px)",
+    expected: ["blur", 37.5] },
+  // function to same function (percent)
+  { start: "brightness(25%)", end: "brightness(75%)",
+    expected: ["brightness", 0.375] },
+  { start: "contrast(25%)", end: "contrast(75%)",
+    expected: ["contrast", 0.375] },
+  { start: "grayscale(25%)", end: "grayscale(75%)",
+    expected: ["grayscale", 0.375] },
+  { start: "invert(25%)", end: "invert(75%)",
+    expected: ["invert", 0.375] },
+  { start: "opacity(25%)", end: "opacity(75%)",
+    expected: ["opacity", 0.375] },
+  { start: "saturate(25%)", end: "saturate(75%)",
+    expected: ["saturate", 0.375] },
+  { start: "sepia(25%)", end: "sepia(75%)",
+    expected: ["sepia", 0.375] },
+  // function to same function (percent, number/length)
+  { start: "brightness(0.25)", end: "brightness(75%)",
+    expected: ["brightness", 0.375] },
+  { start: "contrast(25%)", end: "contrast(0.75)",
+    expected: ["contrast", 0.375] },
+  // hue-rotate with different angle values
+  { start: "hue-rotate(0deg)", end: "hue-rotate(720deg)",
+    expected: ["hue-rotate", Math.PI.toFixed(5)] },
+  { start: "hue-rotate(0rad)", end: "hue-rotate("+4*Math.PI+"rad)",
+    expected: ["hue-rotate", Math.PI.toFixed(5)] },
+  { start: "hue-rotate(0grad)", end: "hue-rotate(800grad)",
+    expected: ["hue-rotate", Math.PI.toFixed(5)] },
+  { start: "hue-rotate(0turn)", end: "hue-rotate(2turn)",
+    expected: ["hue-rotate", Math.PI.toFixed(5)] },
+  { start: "hue-rotate(0deg)", end: "hue-rotate("+4*Math.PI+"rad)",
+    expected: ["hue-rotate", Math.PI.toFixed(5)] },
+  { start: "hue-rotate(0turn)", end: "hue-rotate(800grad)",
+    expected: ["hue-rotate", Math.PI.toFixed(5)] },
+  { start: "hue-rotate(0grad)", end: "hue-rotate("+4*Math.PI+"rad)",
+    expected: ["hue-rotate", Math.PI.toFixed(5)] },
+  { start: "hue-rotate(0grad)", end: "hue-rotate(0turn)",
+    expected: ["hue-rotate", 0] },
+  // multiple matching functions, same length
+  { start: "contrast(25%) brightness(0.25) blur(25px) sepia(75%)",
+    end: "contrast(75%) brightness(0.75) blur(75px) sepia(25%)",
+    expected: ["contrast", 0.375, "brightness", 0.375, "blur", 37.5, "sepia", 0.625] },
+  { start: "invert(25%) brightness(0.25) blur(25px) invert(50%) brightness(0.5) blur(50px)",
+    end: "invert(75%) brightness(0.75) blur(75px)",
+    expected: ["invert", 0.375, "brightness", 0.375, "blur", 37.5, "invert", 0.375, "brightness", 0.625, "blur", 37.5] },
+  // multiple matching functions, different length
+  { start: "contrast(25%) brightness(0.5) blur(50px)",
+    end: "contrast(75%)",
+    expected: ["contrast", 0.375, "brightness", 0.625, "blur", 37.5] },
+  // mismatching filter functions
+  { start: "contrast(0%)", end: "blur(10px)",
+    expected: ["blur", 10] },
+  // not supported interpolations
+  { start: "none", end: "url('#b')",
+    expected: ["url", "\""+document.URL+"#b\""] },
+  { start: "url('#a')", end: "none",
+    expected: ["none"] },
+  { start: "url('#a')", end: "url('#b')",
+    expected: ["url", "\""+document.URL+"#b\""] },
+  { start: "url('#a')", end: "blur(10px)",
+    expected: ["blur", 10] },
+  { start: "blur(10px)", end: "url('#a')",
+    expected: ["url", "\""+document.URL+"#a\""] },
+  { start: "blur(0px) url('#a')", end: "blur(20px)",
+    expected: ["blur", 20] },
+  { start: "blur(0px)", end: "blur(20px) url('#a')",
+    expected: ["blur", 20, "url", "\""+document.URL+"#a\""] },
+  { start: "contrast(0.25) brightness(0.25) blur(25px)",
+    end: "contrast(0.75) url('#a')",
+    expected: ["contrast", 0.75, "url", "\""+document.URL+"#a\""] },
+  { start: "contrast(0.25) brightness(0.25) blur(75px)",
+    end: "brightness(0.75) contrast(0.75) blur(25px)",
+    expected: ["brightness", 0.75, "contrast", 0.75, "blur", 25] },
+  { start: "contrast(0.25) brightness(0.25) blur(25px)",
+    end: "contrast(0.75) brightness(0.75) contrast(0.75)",
+    expected: ["contrast", 0.75, "brightness", 0.75, "contrast", 0.75] },
+  // drop-shadow animation
+  { start: "none",
+    end: "drop-shadow(rgb(0, 0, 0) 4px 4px 0px)",
+    expected: ["drop-shadow", "rgba(0, 0, 0, 0.25) 1px 1px 0px"] },
+  { start: "drop-shadow(rgb(0, 0, 0) 0px 0px 0px)",
+    end: "drop-shadow(rgb(0, 0, 0) 4px 4px 0px)",
+    expected: ["drop-shadow", "rgb(0, 0, 0) 1px 1px 0px"] },
+  { start: "drop-shadow(#038000 4px 4px)",
+    end: "drop-shadow(8px 8px 8px red)",
+    expected: ["drop-shadow", "rgb(66, 96, 0) 5px 5px 2px"] },
+  { start: "blur(25px) drop-shadow(8px 8px)",
+    end: "blur(75px)",
+    expected: ["blur", 37.5, "drop-shadow", "rgb(0, 0, 0) 6px 6px 0px"] },
+  { start: "blur(75px)",
+    end: "blur(25px) drop-shadow(8px 8px)",
+    expected: ["blur", 62.5, "drop-shadow", "rgb(0, 0, 0) 2px 2px 0px"] },
+  { start: "drop-shadow(2px 2px blue)",
+    end: "none",
+    expected: ["drop-shadow", "rgba(0, 0, 255, 0.75) 1.5px 1.5px 0px"] },
+];
+
 var prop;
 for (prop in supported_properties) {
   // Test that prop is in the property database.
@@ -594,6 +735,23 @@ for (prop in supported_properties) {
   // Test that the entry has at least one test function.
   ok(supported_properties[prop].length > 0,
      "property " + prop + " must have at least one test function");
+}
+
+// Return a consistent sampling of |count| values out of |array|.
+function sample_array(array, count) {
+  if (count <= 0) {
+    ok(false, "unexpected count");
+    return [];
+  }
+  var ratio = array.length / count;
+  if (ratio <= 1) {
+    return array;
+  }
+  var result = new Array(count);
+  for (var i = 0; i < count; ++i) {
+    result[i] = array[Math.floor(i * ratio)];
+  }
+  return result;
 }
 
 // Test that transitions don't do anything (i.e., aren't supported) on
@@ -616,6 +774,26 @@ for (prop in gCSSProperties) {
     }
 
     var all_values = info.initial_values.concat(info.other_values);
+
+    if (all_values.length > 50) {
+      // Since we're using an O(N^2) algorithm here, reduce the list of
+      // values that we want to test.  (This test is really only testing
+      // that somebody didn't make a property animatable without
+      // modifying this test.  The odds of somebody doing that without
+      // making at least one of the many pairs of values we have left
+      // animatable seems pretty low, at least relative to the chance
+      // that any pair of the values listed in property_database.js is
+      // animatable.)
+      //
+      // That said, we still try to use all of the start of the list on
+      // the assumption that the more basic values are likely to be at
+      // the beginning of the list.
+      all_values = [].concat(info.initial_values.slice(0,2),
+                             sample_array(info.initial_values.slice(2), 6),
+                             info.other_values.slice(0, 10),
+                             sample_array(info.other_values.slice(10), 40));
+    }
+
     var all_computed = [];
     for (var idx in all_values) {
       var val = all_values[idx];
@@ -695,11 +873,6 @@ function get_distance(prop, v1, v2)
 {
   return SpecialPowers.DOMWindowUtils
            .computeAnimationDistance(div, prop, v1, v2);
-}
-
-function transform3D_enabled()
-{
-  return SpecialPowers.getBoolPref("layout.3d-transforms.enabled");
 }
 
 function check_distance(prop, start, quarter, end)
@@ -973,6 +1146,88 @@ function test_border_color_transition(prop) {
   div.style.removeProperty("color");
 }
 
+function filter_function_list_equals(computedValStr, expectedList)
+{
+  // Check simple case "none"
+  if (computedValStr == "none" && computedValStr == expectedList[0]) {
+    return true;
+  }
+
+  // The regular expression does not filter out the last parenthesis.
+  // Remove last character for now.
+  is(computedValStr.substring(computedValStr.length - 1, computedValStr.length),
+                              ')', "Check if last character is close-paren");
+  computedValStr = computedValStr.substring(0, computedValStr.length - 1);
+
+  var reg = /\)*\s*(blur|brightness|contrast|grayscale|hue\-rotate|invert|opacity|saturate|sepia|drop\-shadow|url)\(/
+  var matches = computedValStr.split(reg);
+  // First item must be empty. All other items are of functionName, functionValue.
+  if (!matches || matches.shift() != "") {
+    ok(false, "computed style of 'filter' isn't in the format we expect");
+    return false;
+  }
+
+  // Odd items are the function name, even items the function value.
+  if (!matches.length || matches.length % 2 ||
+      expectedList.length != matches.length) {
+    ok(false, "computed style of 'filter' isn't in the format we expect");
+    return false;
+  }
+  for (var i = 0; i < matches.length; i += 2) {
+    var functionName = matches[i];
+    var functionValue = matches[i+1];
+    var expected = expectedList[i+1]
+    var tolerance = 0;
+    // Check if we have the expected function.
+    if (functionName != expectedList[i]) {
+      return false;
+    }
+    if (functionName == "blur") {
+      // Last two characters must be "px".
+      if (functionValue.search("px") != functionValue.length - 2) {
+        return false;
+      }
+      functionValue = functionValue.substring(0, functionValue.length - 2);
+    } else if (functionName == "hue-rotate") {
+      // Last two characters must be "rad".
+      if (functionValue.search("rad") != functionValue.length - 3) {
+        return false;
+      }
+      tolerance = 0.001;
+      functionValue = functionValue.substring(0, functionValue.length - 3);
+    } else if (functionName == "drop-shadow" || functionName == "url") {
+      if (functionValue != expected) {
+        return false;
+      }
+      continue;
+    }
+    // Check if string is not a number or difference is not in tolerance level.
+    if (isNaN(functionValue) ||
+      Math.abs(parseFloat(functionValue) - expected) > tolerance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function test_filter_transition(prop) {
+  if (!SpecialPowers.getBoolPref("layout.css.filters.enabled")) {
+    return;
+  }
+  for (var i in filterTests) {
+    var test = filterTests[i];
+    div.style.setProperty("transition-property", "none", "");
+    div.style.setProperty(prop, test.start, "");
+    cs.getPropertyValue(prop);
+    div.style.setProperty("transition-property", prop, "");
+    div.style.setProperty(prop, test.end, "");
+    var actual = cs.getPropertyValue(prop);
+    ok(filter_function_list_equals(actual, test.expected),
+                                   "Filter property is " + actual + " expected values of " +
+                                   test.expected);
+  }
+}
+
 function test_shadow_transition(prop) {
   var spreadStr = (prop == "box-shadow") ? " 0px" : "";
 
@@ -1177,6 +1432,15 @@ function test_radius_transition(prop) {
   check_distance(prop, "6.25% 12.5%",
                  "calc(4.6875% + 16px) calc(9.375% + 4px)",
                  "64px 16px");
+
+  div.style.setProperty("transition-property", "none", "");
+  div.style.setProperty(prop, "calc(5px) 10px", "");
+  is(cs.getPropertyValue(prop), "5px 10px",
+     "radius-valued property " + prop + ": computed value before transition");
+  div.style.setProperty("transition-property", prop, "");
+  div.style.setProperty(prop, "calc(25px) calc(50px)", "");
+  is(cs.getPropertyValue(prop), "10px 20px",
+     "radius-valued property " + prop + ": interpolation of radius with calc() units");
 
   div.style.setProperty("transition-timing-function", FUNC_NEGATIVE, "");
   div.style.setProperty("transition-property", "none", "");
@@ -1646,9 +1910,6 @@ function test_transform_transition(prop) {
 
   for (var i in transformTests) {
     var test = transformTests[i];
-    if (test.requires_3d && !transform3D_enabled()) {
-      continue;
-    }
     div.style.setProperty("transition-property", "none", "");
     div.style.setProperty(prop, test.start, "");
     cs.getPropertyValue(prop);
@@ -1684,8 +1945,8 @@ function test_transform_transition(prop) {
   // FIXME: should perhaps test that no clamping occurs
 
   // These tests check the computed value 2/3 of the way through the transition
-  transformDiv.style.setProperty("transition-duration", "300s", "");
-  transformDiv.style.setProperty("transition-timing-function", "linear", "");
+  OMTAdiv.style.setProperty("transition-duration", "300s", "");
+  OMTAdiv.style.setProperty("transition-timing-function", "linear", "");
   window.requestAnimationFrame(nextAsyncTransformTest);
 }
 
@@ -1694,23 +1955,16 @@ function nextAsyncTransformTest()
   var test = transformTests[transformTestIndex];
 
   if (transformTestIndex >= transformTests.length) {
-    transformDiv.style.removeProperty("transition");
-    SimpleTest.finish();
+    window.requestAnimationFrame(asyncOpacityTest);
     return;
   }
 
-  if (test.requires_3d && !transform3D_enabled()) {
-    transformTestIndex++;
-    window.requestAnimationFrame(nextAsyncTransformTest);
-    return;
-  }
-
-  transformDiv.style.setProperty("transition-property", "none", "");
-  transformDiv.style.setProperty("transform", test.start, "");
-  transformCs.getPropertyValue("transform");
-  transformDiv.style.setProperty("transition-property", "transform", "");
-  transformDiv.style.setProperty("transform", test.end, "");
-  transformCs.getPropertyValue("transform");
+  OMTAdiv.style.setProperty("transition-property", "none", "");
+  OMTAdiv.style.setProperty("transform", test.start, "");
+  OMTACs.getPropertyValue("transform");
+  OMTAdiv.style.setProperty("transition-property", "transform", "");
+  OMTAdiv.style.setProperty("transform", test.end, "");
+  OMTACs.getPropertyValue("transform");
 
   window.requestAnimationFrame(checkAsyncTransformTest);
 }
@@ -1721,8 +1975,8 @@ function checkAsyncTransformTest() {
   }
   winUtils.advanceTimeAndRefresh(200000);
   var test = transformTests[transformTestIndex];
-  var async_transform = winUtils.getOMTAOrComputedStyle(transformDiv, "transform");
-  var computed_transform = transformCs.getPropertyValue("transform");
+  var async_transform = winUtils.getOMTAOrComputedStyle(OMTAdiv, "transform");
+  var computed_transform = OMTACs.getPropertyValue("transform");
   var async_split = s(async_transform);
   var cs_split = s(computed_transform);
   var pass = true;
@@ -1738,6 +1992,28 @@ function checkAsyncTransformTest() {
   transformTestIndex++;
   winUtils.restoreNormalRefresh();
   window.requestAnimationFrame(nextAsyncTransformTest);
+}
+
+function asyncOpacityTest() {
+  OMTAdiv.style.setProperty("transition-property", "none", "");
+  OMTAdiv.style.setProperty("opacity", 0, "");
+  OMTACs.getPropertyValue("opacity");
+  OMTAdiv.style.setProperty("transition-property", "opacity", "");
+  OMTAdiv.style.setProperty("opacity", 1, "");
+  OMTACs.getPropertyValue("opacity");
+
+  window.requestAnimationFrame(checkAsyncOpacityTest);
+}
+
+function checkAsyncOpacityTest() {
+  winUtils.advanceTimeAndRefresh(200000);
+  var async_opacity = winUtils.getOMTAOrComputedStyle(OMTAdiv, "opacity");
+  var computed_opacity = OMTACs.getPropertyValue("opacity");
+  is(async_opacity, computed_opacity,
+     "Async animated opacity should match computed opacity");
+  winUtils.restoreNormalRefresh();
+  OMTAdiv.style.removeProperty("transition");
+  SimpleTest.finish();
 }
 
 </script>

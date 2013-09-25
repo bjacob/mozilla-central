@@ -90,7 +90,7 @@ AsyncChannel::Link::~Link()
 
 AsyncChannel::ProcessLink::ProcessLink(AsyncChannel *aChan)
     : Link(aChan)
-    , mExistingListener(NULL)
+    , mExistingListener(nullptr)
 {
 }
 
@@ -158,8 +158,9 @@ AsyncChannel::ProcessLink::Open(mozilla::ipc::Transport* aTransport,
                 NewRunnableMethod(this, &ProcessLink::OnTakeConnectedChannel));
         }
 
-        // FIXME/cjones: handle errors
-        while (!mChan->Connected()) {
+        // Should not wait here if something goes wrong with the channel.
+        while (!mChan->Connected() &&
+               mChan->mChannelState != AsyncChannel::ChannelError) {
             mChan->mMonitor->Wait();
         }
     }
@@ -270,13 +271,27 @@ AsyncChannel::ThreadLink::SendClose()
         mTargetChan->OnChannelErrorFromLink();
 }
 
+bool
+AsyncChannel::ThreadLink::Unsound_IsClosed() const
+{
+    MonitorAutoLock lock(*mChan->mMonitor);
+    return mChan->mChannelState == ChannelClosed;
+}
+
+uint32_t
+AsyncChannel::ThreadLink::Unsound_NumQueuedMessages() const
+{
+    // ThreadLinks don't have a message queue.
+    return 0;
+}
+
 AsyncChannel::AsyncChannel(AsyncListener* aListener)
   : mListener(aListener->asWeakPtr()),
     mChannelState(ChannelClosed),
     mWorkerLoop(),
     mChild(false),
-    mChannelErrorTask(NULL),
-    mLink(NULL),
+    mChannelErrorTask(nullptr),
+    mLink(nullptr),
     mWorkerLoopID(-1)
 {
     MOZ_COUNT_CTOR(AsyncChannel);
@@ -511,7 +526,7 @@ AsyncChannel::OnNotifyMaybeChannelError()
     AssertWorkerThread();
     mMonitor->AssertNotCurrentThreadOwns();
 
-    mChannelErrorTask = NULL;
+    mChannelErrorTask = nullptr;
 
     // OnChannelError holds mMonitor when it posts this task and this
     // task cannot be allowed to run until OnChannelError has
@@ -590,7 +605,7 @@ AsyncChannel::Clear()
 
     if (mChannelErrorTask) {
         mChannelErrorTask->Cancel();
-        mChannelErrorTask = NULL;
+        mChannelErrorTask = nullptr;
     }
 }
 
@@ -676,6 +691,26 @@ AsyncChannel::DispatchOnChannelConnected(int32_t peer_pid)
     AssertWorkerThread();
     if (mListener)
         mListener->OnChannelConnected(peer_pid);
+}
+
+bool
+AsyncChannel::Unsound_IsClosed() const
+{
+    if (!mLink) {
+        return true;
+    }
+
+    return mLink->Unsound_IsClosed();
+}
+
+uint32_t
+AsyncChannel::Unsound_NumQueuedMessages() const
+{
+    if (!mLink) {
+        return 0;
+    }
+
+    return mLink->Unsound_NumQueuedMessages();
 }
 
 //
@@ -787,6 +822,18 @@ AsyncChannel::ProcessLink::OnCloseChannel()
     mChan->mMonitor->Notify();
 }
 
+bool
+AsyncChannel::ProcessLink::Unsound_IsClosed() const
+{
+    return mTransport->Unsound_IsClosed();
+}
+
+uint32_t
+AsyncChannel::ProcessLink::Unsound_NumQueuedMessages() const
+{
+    return mTransport->Unsound_NumQueuedMessages();
+}
+
 //
 // The methods below run in the context of the link thread
 //
@@ -810,8 +857,10 @@ AsyncChannel::OnChannelErrorFromLink()
     AssertLinkThread();
     mMonitor->AssertCurrentThreadOwns();
 
-    if (ChannelClosing != mChannelState)
+    if (ChannelClosing != mChannelState) {
         mChannelState = ChannelError;
+        mMonitor->Notify();
+    }
 
     PostErrorNotifyTask();
 }
@@ -867,9 +916,6 @@ AsyncChannel::ProcessGoodbyeMessage()
     // TODO sort out Close() on this side racing with Close() on the
     // other side
     mChannelState = ChannelClosing;
-
-    printf("NOTE: %s process received `Goodbye', closing down\n",
-           mChild ? "child" : "parent");
 }
 
 

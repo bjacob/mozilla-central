@@ -10,7 +10,7 @@
 
 gfxQuartzImageSurface::gfxQuartzImageSurface(gfxImageSurface *imageSurface)
 {
-    if (imageSurface->CairoSurface() == NULL)
+    if (imageSurface->CairoSurface() == nullptr)
         return;
 
     cairo_surface_t *surf = cairo_quartz_image_surface_create (imageSurface->CairoSurface());
@@ -67,5 +67,8 @@ gfxQuartzImageSurface::GetAsImageSurface()
         return nullptr;
     }
 
-    return gfxASurface::Wrap(isurf).downcast<gfxImageSurface>();
+    nsRefPtr<gfxImageSurface> result = gfxASurface::Wrap(isurf).downcast<gfxImageSurface>();
+    result->SetOpaqueRect(GetOpaqueRect());
+
+    return result.forget();
 }

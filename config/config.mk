@@ -27,6 +27,8 @@ ifndef INCLUDED_AUTOCONF_MK
 include $(DEPTH)/config/autoconf.mk
 endif
 
+-include $(DEPTH)/.mozconfig.mk
+
 space = $(NULL) $(NULL)
 
 # Include defs.mk files that can be found in $(srcdir)/$(DEPTH),
@@ -62,10 +64,9 @@ check-variable = $(if $(filter-out 0 1,$(words $($(x))z)),$(error Spaces are not
 
 $(foreach x,$(CHECK_VARS),$(check-variable))
 
-core_abspath = $(if $(findstring :,$(1)),$(1),$(if $(filter /%,$(1)),$(1),$(CURDIR)/$(1)))
-core_realpath = $(if $(realpath $(1)),$(realpath $(1)),$(call core_abspath,$(1)))
-
-core_winabspath = $(firstword $(subst /, ,$(call core_abspath,$(1)))):$(subst $(space),,$(patsubst %,\\%,$(wordlist 2,$(words $(subst /, ,$(call core_abspath,$(1)))), $(strip $(subst /, ,$(call core_abspath,$(1)))))))
+ifndef INCLUDED_FUNCTIONS_MK
+include $(topsrcdir)/config/makefiles/functions.mk
+endif
 
 RM = rm -f
 
@@ -115,10 +116,6 @@ endif
 endif
 
 OS_CONFIG	:= $(OS_ARCH)$(OS_RELEASE)
-
-FINAL_LINK_LIBS = $(DEPTH)/config/final-link-libs
-FINAL_LINK_COMPS = $(DEPTH)/config/final-link-comps
-FINAL_LINK_COMP_NAMES = $(DEPTH)/config/final-link-comp-names
 
 MOZ_UNICHARUTIL_LIBS = $(LIBXUL_DIST)/lib/$(LIB_PREFIX)unicharutil_s.$(LIB_SUFFIX)
 MOZ_WIDGET_SUPPORT_LIBS    = $(DIST)/lib/$(LIB_PREFIX)widgetsupport_s.$(LIB_SUFFIX)
@@ -239,11 +236,13 @@ _ENABLE_PIC=1
 
 ifdef LIBXUL_LIBRARY
 ifdef IS_COMPONENT
-ifdef MODULE_NAME
-DEFINES += -DXPCOM_TRANSLATE_NSGM_ENTRY_POINT=1
-else
-$(error Component makefile does not specify MODULE_NAME.)
+$(error IS_COMPONENT is set, but is not compatible with LIBXUL_LIBRARY)
 endif
+ifdef MODULE_NAME
+$(error MODULE_NAME is $(MODULE_NAME) but MODULE_NAME and LIBXUL_LIBRARY are not compatible)
+endif
+ifdef FORCE_STATIC_LIB
+$(error Makefile sets FORCE_STATIC_LIB which was already implied by LIBXUL_LIBRARY)
 endif
 FORCE_STATIC_LIB=1
 ifneq ($(SHORT_LIBNAME),)
@@ -329,14 +328,7 @@ endif
 # building libxul libraries
 ifdef LIBXUL_LIBRARY
 DEFINES += \
-		-D_IMPL_NS_COM \
-		-DEXPORT_XPT_API \
-		-DEXPORT_XPTC_API \
-		-D_IMPL_NS_GFX \
-		-D_IMPL_NS_WIDGET \
-		-DIMPL_XREAPI \
-		-DIMPL_NS_NET \
-		-DIMPL_THEBES \
+	  -DIMPL_LIBXUL \
 		$(NULL)
 
 ifndef JS_SHARED_LIBRARY
@@ -358,12 +350,10 @@ ifdef BOTH_MANIFESTS
 MAKE_JARS_FLAGS += --both-manifests
 endif
 
-TAR_CREATE_FLAGS = -cvhf
-TAR_CREATE_FLAGS_QUIET = -chf
+TAR_CREATE_FLAGS = -chf
 
 ifeq ($(OS_ARCH),OS2)
-TAR_CREATE_FLAGS = -cvf
-TAR_CREATE_FLAGS_QUIET = -cf
+TAR_CREATE_FLAGS = -cf
 endif
 
 #
@@ -376,7 +366,6 @@ MY_RULES	:= $(DEPTH)/config/myrules.mk
 # Default command macros; can be overridden in <arch>.mk.
 #
 CCC = $(CXX)
-XPIDL_LINK = $(PYTHON) $(LIBXUL_DIST)/sdk/bin/xpt.py link
 
 # Java macros
 JAVA_GEN_DIR  = _javagen
@@ -507,8 +496,8 @@ OS_COMPILE_CMMFLAGS += -fobjc-abi-version=2 -fobjc-legacy-dispatch
 endif
 endif
 
-COMPILE_CFLAGS	= $(VISIBILITY_FLAGS) $(DEFINES) $(INCLUDES) $(DSO_CFLAGS) $(DSO_PIC_CFLAGS) $(CFLAGS) $(RTL_FLAGS) $(OS_CPPFLAGS) $(OS_COMPILE_CFLAGS)
-COMPILE_CXXFLAGS = $(STL_FLAGS) $(VISIBILITY_FLAGS) $(DEFINES) $(INCLUDES) $(DSO_CFLAGS) $(DSO_PIC_CFLAGS) $(CXXFLAGS) $(RTL_FLAGS) $(OS_CPPFLAGS) $(OS_COMPILE_CXXFLAGS)
+COMPILE_CFLAGS	= $(VISIBILITY_FLAGS) $(DEFINES) $(INCLUDES) $(DSO_CFLAGS) $(DSO_PIC_CFLAGS) $(RTL_FLAGS) $(OS_CPPFLAGS) $(OS_COMPILE_CFLAGS) $(CFLAGS)
+COMPILE_CXXFLAGS = $(STL_FLAGS) $(VISIBILITY_FLAGS) $(DEFINES) $(INCLUDES) $(DSO_CFLAGS) $(DSO_PIC_CFLAGS) $(RTL_FLAGS) $(OS_CPPFLAGS) $(OS_COMPILE_CXXFLAGS) $(CXXFLAGS)
 COMPILE_CMFLAGS = $(OS_COMPILE_CMFLAGS)
 COMPILE_CMMFLAGS = $(OS_COMPILE_CMMFLAGS)
 
@@ -533,12 +522,8 @@ endif
 endif
 
 # Default location of include files
-IDL_DIR		= $(DIST)/idl
-
-XPIDL_FLAGS += -I$(srcdir) -I$(IDL_DIR)
-ifdef LIBXUL_SDK
-XPIDL_FLAGS += -I$(LIBXUL_SDK)/idl
-endif
+IDL_PARSER_DIR = $(topsrcdir)/xpcom/idl-parser
+IDL_PARSER_CACHE_DIR = $(DEPTH)/xpcom/idl-parser
 
 SDK_LIB_DIR = $(DIST)/sdk/lib
 SDK_BIN_DIR = $(DIST)/sdk/bin
@@ -694,7 +679,7 @@ endif
 EXPAND_LOCALE_SRCDIR = $(if $(filter en-US,$(AB_CD)),$(topsrcdir)/$(1)/en-US,$(call core_realpath,$(L10NBASEDIR))/$(AB_CD)/$(subst /locales,,$(1)))
 
 ifdef relativesrcdir
-LOCALE_SRCDIR = $(call EXPAND_LOCALE_SRCDIR,$(relativesrcdir))
+LOCALE_SRCDIR ?= $(call EXPAND_LOCALE_SRCDIR,$(relativesrcdir))
 endif
 
 ifdef relativesrcdir
@@ -759,13 +744,17 @@ EXPAND_MKSHLIB_ARGS += --symbol-order $(SYMBOL_ORDER)
 endif
 EXPAND_MKSHLIB = $(EXPAND_LIBS_EXEC) $(EXPAND_MKSHLIB_ARGS) -- $(MKSHLIB)
 
-ifdef STDCXX_COMPAT
+ifneq (,$(MOZ_LIBSTDCXX_TARGET_VERSION)$(MOZ_LIBSTDCXX_HOST_VERSION))
 ifneq ($(OS_ARCH),Darwin)
 CHECK_STDCXX = objdump -p $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' > /dev/null && echo "TEST-UNEXPECTED-FAIL | | We don't want these libstdc++ symbols to be used:" && objdump -T $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' && exit 1 || exit 0
 endif
 
+ifdef MOZ_LIBSTDCXX_TARGET_VERSION
 EXTRA_LIBS += $(call EXPAND_LIBNAME_PATH,stdc++compat,$(DEPTH)/build/unix/stdc++compat)
+endif
+ifdef MOZ_LIBSTDCXX_HOST_VERSION
 HOST_EXTRA_LIBS += $(call EXPAND_LIBNAME_PATH,host_stdc++compat,$(DEPTH)/build/unix/stdc++compat)
+endif
 endif
 
 # autoconf.mk sets OBJ_SUFFIX to an error to avoid use before including
@@ -804,15 +793,20 @@ endif
 EXPAND_LIBNAME_PATH = $(foreach lib,$(1),$(2)/$(LIB_PREFIX)$(lib).$(LIB_SUFFIX))
 EXPAND_MOZLIBNAME = $(foreach lib,$(1),$(DIST)/lib/$(LIB_PREFIX)$(lib).$(LIB_SUFFIX))
 
-# Include internal ply only if needed
-ifndef MOZ_SYSTEM_PLY
 PLY_INCLUDE = -I$(topsrcdir)/other-licenses/ply
-endif
 
 export CL_INCLUDES_PREFIX
 
-ifeq ($(MOZ_WIDGET_GTK),2)
-MOZ_GTK2_CFLAGS := -I$(topsrcdir)/widget/gtk2/compat $(MOZ_GTK2_CFLAGS)
+ifdef MOZ_GTK2_CFLAGS
+MOZ_GTK2_CFLAGS := -I$(topsrcdir)/widget/gtk/compat $(MOZ_GTK2_CFLAGS)
 endif
 
 DEFINES += -DNO_NSPR_10_SUPPORT
+
+# Run a named Python build action. The first argument is the name of the build
+# action. The second argument are the arguments to pass to the action (space
+# delimited arguments). e.g.
+#
+#   libs::
+#       $(call py_action,purge_manifests,_build_manifests/purge/foo.manifest)
+py_action = $(PYTHON) -m mozbuild.action.$(1) $(2)

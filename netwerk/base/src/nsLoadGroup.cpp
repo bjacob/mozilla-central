@@ -10,19 +10,17 @@
 
 #include "nsArrayEnumerator.h"
 #include "nsCOMArray.h"
-#include "nsEnumeratorUtils.h"
-#include "nsIServiceManager.h"
 #include "nsCOMPtr.h"
-#include "nsIURI.h"
 #include "prlog.h"
-#include "nsCRT.h"
-#include "netCore.h"
-#include "nsXPIDLString.h"
-#include "nsReadableUtils.h"
 #include "nsString.h"
 #include "nsTArray.h"
-#include "nsIHttpChannelInternal.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/Telemetry.h"
+#include "nsAutoPtr.h"
+#include "mozilla/net/PSpdyPush3.h"
+#include "nsITimedChannel.h"
+#include "nsIInterfaceRequestor.h"
+#include "nsIRequestObserver.h"
 
 using namespace mozilla;
 
@@ -112,6 +110,7 @@ RescheduleRequests(PLDHashTable *table, PLDHashEntryHdr *hdr,
 nsLoadGroup::nsLoadGroup(nsISupports* outer)
     : mForegroundCount(0)
     , mLoadFlags(LOAD_NORMAL)
+    , mDefaultLoadFlags(0)
     , mStatus(NS_OK)
     , mPriority(PRIORITY_NORMAL)
     , mIsCanceling(false)
@@ -856,6 +855,21 @@ nsLoadGroup::AdjustPriority(int32_t aDelta)
     return NS_OK;
 }
 
+NS_IMETHODIMP
+nsLoadGroup::GetDefaultLoadFlags(uint32_t *aFlags)
+{
+    *aFlags = mDefaultLoadFlags;
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsLoadGroup::SetDefaultLoadFlags(uint32_t aFlags)
+{
+    mDefaultLoadFlags = aFlags;
+    return NS_OK;
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void 
@@ -1036,6 +1050,9 @@ nsresult nsLoadGroup::MergeLoadFlags(nsIRequest *aRequest, nsLoadFlags& outFlags
                             VALIDATE_ONCE_PER_SESSION |
                             VALIDATE_NEVER));
 
+    // ... and force the default flags.
+    flags |= mDefaultLoadFlags;
+
     if (flags != oldFlags)
         rv = aRequest->SetLoadFlags(flags);
 
@@ -1048,16 +1065,16 @@ nsresult nsLoadGroup::MergeLoadFlags(nsIRequest *aRequest, nsLoadFlags& outFlags
 class nsLoadGroupConnectionInfo MOZ_FINAL : public nsILoadGroupConnectionInfo
 {
 public:
-    NS_DECL_ISUPPORTS
+    NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSILOADGROUPCONNECTIONINFO
 
     nsLoadGroupConnectionInfo();
 private:
-    int32_t       mBlockingTransactionCount; // signed for PR_ATOMIC_*
+    Atomic<uint32_t>       mBlockingTransactionCount;
     nsAutoPtr<mozilla::net::SpdyPushCache3> mSpdyCache3;
 };
 
-NS_IMPL_THREADSAFE_ISUPPORTS1(nsLoadGroupConnectionInfo, nsILoadGroupConnectionInfo)
+NS_IMPL_ISUPPORTS1(nsLoadGroupConnectionInfo, nsILoadGroupConnectionInfo)
 
 nsLoadGroupConnectionInfo::nsLoadGroupConnectionInfo()
     : mBlockingTransactionCount(0)
@@ -1068,14 +1085,14 @@ NS_IMETHODIMP
 nsLoadGroupConnectionInfo::GetBlockingTransactionCount(uint32_t *aBlockingTransactionCount)
 {
     NS_ENSURE_ARG_POINTER(aBlockingTransactionCount);
-    *aBlockingTransactionCount = static_cast<uint32_t>(mBlockingTransactionCount);
+    *aBlockingTransactionCount = mBlockingTransactionCount;
     return NS_OK;
 }
 
 NS_IMETHODIMP
 nsLoadGroupConnectionInfo::AddBlockingTransaction()
 {
-    PR_ATOMIC_INCREMENT(&mBlockingTransactionCount);
+    mBlockingTransactionCount++;
     return NS_OK;
 }
 
@@ -1083,8 +1100,8 @@ NS_IMETHODIMP
 nsLoadGroupConnectionInfo::RemoveBlockingTransaction(uint32_t *_retval)
 {
     NS_ENSURE_ARG_POINTER(_retval);
-    *_retval =
-        static_cast<uint32_t>(PR_ATOMIC_DECREMENT(&mBlockingTransactionCount));
+        mBlockingTransactionCount--;
+        *_retval = mBlockingTransactionCount;
     return NS_OK;
 }
 

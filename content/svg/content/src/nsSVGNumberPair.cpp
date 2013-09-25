@@ -14,21 +14,7 @@
 #include "SVGNumberPairSMILType.h"
 
 using namespace mozilla;
-
-NS_SVG_VAL_IMPL_CYCLE_COLLECTION(nsSVGNumberPair::DOMAnimatedNumber, mSVGElement)
-
-NS_IMPL_CYCLE_COLLECTING_ADDREF(nsSVGNumberPair::DOMAnimatedNumber)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(nsSVGNumberPair::DOMAnimatedNumber)
-
-DOMCI_DATA(SVGAnimatedNumberPair, nsSVGNumberPair::DOMAnimatedNumber)
-
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsSVGNumberPair::DOMAnimatedNumber)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMSVGAnimatedNumber)
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
-  NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(SVGAnimatedNumber)
-NS_INTERFACE_MAP_END
-
-/* Implementation */
+using namespace mozilla::dom;
 
 static nsSVGAttrTearoffTable<nsSVGNumberPair, nsSVGNumberPair::DOMAnimatedNumber>
   sSVGFirstAnimatedNumberTearoffTable;
@@ -42,7 +28,7 @@ ParseNumberOptionalNumber(const nsAString& aValue,
   nsCharSeparatedTokenizerTemplate<IsSVGWhitespace>
     tokenizer(aValue, ',',
               nsCharSeparatedTokenizer::SEPARATOR_OPTIONAL);
-  if (tokenizer.firstTokenBeganWithWhitespace()) {
+  if (tokenizer.whitespaceBeforeFirstToken()) {
     return NS_ERROR_DOM_SYNTAX_ERR;
   }
 
@@ -66,8 +52,8 @@ ParseNumberOptionalNumber(const nsAString& aValue,
 
   if (i == 0 ||                                   // Too few values.
       tokenizer.hasMoreTokens() ||                // Too many values.
-      tokenizer.lastTokenEndedWithWhitespace() || // Trailing whitespace.
-      tokenizer.lastTokenEndedWithSeparator()) {  // Trailing comma.
+      tokenizer.whitespaceAfterCurrentToken() ||  // Trailing whitespace.
+      tokenizer.separatorAfterCurrentToken()) {   // Trailing comma.
     return NS_ERROR_DOM_SYNTAX_ERR;
   }
 
@@ -166,16 +152,7 @@ nsSVGNumberPair::SetAnimValue(const float aValue[2], nsSVGElement *aSVGElement)
   aSVGElement->DidAnimateNumberPair(mAttrEnum);
 }
 
-nsresult
-nsSVGNumberPair::ToDOMAnimatedNumber(nsIDOMSVGAnimatedNumber** aResult,
-                                     PairIndex aIndex,
-                                     nsSVGElement* aSVGElement)
-{
-  *aResult = ToDOMAnimatedNumber(aIndex, aSVGElement).get();
-  return NS_OK;
-}
-
-already_AddRefed<nsIDOMSVGAnimatedNumber>
+already_AddRefed<SVGAnimatedNumber>
 nsSVGNumberPair::ToDOMAnimatedNumber(PairIndex aIndex,
                                      nsSVGElement* aSVGElement)
 {

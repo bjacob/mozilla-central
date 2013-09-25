@@ -10,10 +10,12 @@
 <pre id="test">
 <script class="testbody" type="text/javascript">
 
+// Work around bug 911777
+SpecialPowers.forceGC();
+SpecialPowers.forceCC();
+
 SimpleTest.waitForExplicitFinish();
 addLoadEvent(function() {
-  SpecialPowers.setBoolPref("media.webaudio.enabled", true);
-
   var ac = new AudioContext();
   ok(ac.destination.maxChannelCount > 0, "We can query the maximum number of channels");
 
@@ -27,7 +29,6 @@ addLoadEvent(function() {
     oac.destination.channelCount = oac.destination.channelCount + 1;
   }, DOMException.INDEX_SIZE_ERR);
 
-  SpecialPowers.clearUserPref("media.webaudio.enabled");
   SimpleTest.finish();
 });
 

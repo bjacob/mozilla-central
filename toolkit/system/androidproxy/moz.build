@@ -10,3 +10,7 @@ CPP_SOURCES += [
     'nsAndroidSystemProxySettings.cpp',
 ]
 
+LIBRARY_NAME = 'androidproxy'
+
+LIBXUL_LIBRARY = True
+

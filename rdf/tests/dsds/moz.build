@@ -11,3 +11,7 @@ CPP_SOURCES += [
     'nsRDFDataSourceFactory.cpp',
 ]
 
+LIBRARY_NAME = 'rdfdsds'
+
+IS_COMPONENT = True
+

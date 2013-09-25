@@ -25,13 +25,13 @@
 #include "nsISupportsPrimitives.h"
 #include "nsNetUtil.h"
 #include "nsScriptLoader.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 #include "nsXPCOM.h"
 #include "xpcpublic.h"
 
-#include "Exceptions.h"
+#include "mozilla/dom/Exceptions.h"
 #include "Principal.h"
 #include "WorkerFeature.h"
 #include "WorkerPrivate.h"
@@ -59,7 +59,7 @@ END_WORKERS_NAMESPACE
 
 USING_WORKERS_NAMESPACE
 
-using mozilla::dom::workers::exceptions::ThrowDOMExceptionForNSResult;
+using mozilla::dom::Throw;
 
 namespace {
 
@@ -133,7 +133,7 @@ class ScriptLoaderRunnable : public WorkerFeature,
   bool mCanceledMainThread;
 
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
 
   ScriptLoaderRunnable(WorkerPrivate* aWorkerPrivate,
                        uint32_t aSyncQueueKey,
@@ -520,8 +520,7 @@ public:
   }
 };
 
-NS_IMPL_THREADSAFE_ISUPPORTS2(ScriptLoaderRunnable, nsIRunnable,
-                                                    nsIStreamLoaderObserver)
+NS_IMPL_ISUPPORTS2(ScriptLoaderRunnable, nsIRunnable, nsIStreamLoaderObserver)
 
 class StopSyncLoopRunnable MOZ_FINAL : public MainThreadSyncRunnable
 {
@@ -633,7 +632,7 @@ ScriptExecutorRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     }
   }
 
-  JS::RootedObject global(aCx, JS_GetGlobalForScopeChain(aCx));
+  JS::RootedObject global(aCx, JS::CurrentGlobalOrNull(aCx));
   NS_ASSERTION(global, "Must have a global by now!");
 
   JSPrincipals* principal = GetWorkerPrincipal();
@@ -881,12 +880,7 @@ void ReportLoadError(JSContext* aCx, const nsString& aURL,
 
     case NS_ERROR_DOM_SECURITY_ERR:
     case NS_ERROR_DOM_SYNTAX_ERR:
-      if (aIsMainThread) {
-        AssertIsOnMainThread();
-        xpc::Throw(aCx, aLoadResult);
-      } else {
-        ThrowDOMExceptionForNSResult(aCx, aLoadResult);
-      }
+      Throw(aCx, aLoadResult);
       break;
 
     default:

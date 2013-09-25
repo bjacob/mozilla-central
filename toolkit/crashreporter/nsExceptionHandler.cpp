@@ -3,21 +3,23 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsExceptionHandler.h"
+#include "nsDataHashtable.h"
 #include "mozilla/dom/CrashReporterChild.h"
 #include "mozilla/Services.h"
 #include "nsIObserverService.h"
 #include "mozilla/Util.h"
 
-#include "nsXULAppAPI.h"
-
-#include "nsExceptionHandler.h"
 #include "nsThreadUtils.h"
+#include "nsXULAppAPI.h"
 
 #if defined(XP_WIN32)
 #ifdef WIN32_LEAN_AND_MEAN
 #undef WIN32_LEAN_AND_MEAN
 #endif
 
+#include "nsXULAppAPI.h"
+#include "nsIXULAppInfo.h"
 #include "nsIWindowsRegKey.h"
 #include "client/windows/crash_generation/client_info.h"
 #include "client/windows/crash_generation/crash_generation_server.h"
@@ -42,15 +44,12 @@
 #include <unistd.h>
 #include "mac_utils.h"
 #elif defined(XP_LINUX)
-#include "nsDirectoryServiceDefs.h"
 #include "nsIINIParser.h"
 #include "common/linux/linux_libc_support.h"
 #include "third_party/lss/linux_syscall_support.h"
 #include "client/linux/crash_generation/client_info.h"
 #include "client/linux/crash_generation/crash_generation_server.h"
 #include "client/linux/handler/exception_handler.h"
-#include "client/linux/minidump_writer/linux_dumper.h"
-#include "client/linux/minidump_writer/minidump_writer.h"
 #include <fcntl.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -77,10 +76,7 @@ using mozilla::InjectCrashRunnable;
 #include "nsDebug.h"
 #include "nsCRT.h"
 #include "nsIFile.h"
-#include "nsIFileStreams.h"
-#include "nsInterfaceHashtable.h"
 #include "prprf.h"
-#include "nsIXULAppInfo.h"
 #include <map>
 #include <vector>
 
@@ -93,8 +89,6 @@ CFStringRef reporterClientAppID = CFSTR("org.mozilla.crashreporter");
 #if defined(MOZ_WIDGET_ANDROID)
 #include "common/linux/file_id.h"
 #endif
-
-#include "nsIUUIDGenerator.h"
 
 using google_breakpad::CrashGenerationServer;
 using google_breakpad::ClientInfo;
@@ -802,9 +796,19 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
   if (gExceptionHandler)
     return NS_ERROR_ALREADY_INITIALIZED;
 
+#if defined(DEBUG)
+  // In debug builds, disable the crash reporter by default, and allow to
+  // enable it with the MOZ_CRASHREPORTER environment variable.
+  const char *envvar = PR_GetEnv("MOZ_CRASHREPORTER");
+  if ((!envvar || !*envvar) && !force)
+    return NS_OK;
+#else
+  // In non-debug builds, enable the crash reporter by default, and allow
+  // to disable it with the MOZ_CRASHREPORTER_DISABLE environment variable.
   const char *envvar = PR_GetEnv("MOZ_CRASHREPORTER_DISABLE");
   if (envvar && *envvar && !force)
     return NS_OK;
+#endif
 
 #if defined(MOZ_WIDGET_GONK)
   doReport = false;
@@ -834,8 +838,6 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
   crashReporterAPIData_Hash =
     new nsDataHashtable<nsCStringHashKey,nsCString>();
   NS_ENSURE_TRUE(crashReporterAPIData_Hash, NS_ERROR_OUT_OF_MEMORY);
-
-  crashReporterAPIData_Hash->Init();
 
   notesField = new nsCString();
   NS_ENSURE_TRUE(notesField, NS_ERROR_OUT_OF_MEMORY);
@@ -2290,7 +2292,6 @@ OOPInit()
     NS_RUNTIMEABORT("can't start crash reporter server()");
 
   pidToMinidump = new ChildMinidumpMap();
-  pidToMinidump->Init();
 
   dumpMapLock = new Mutex("CrashReporter::dumpMapLock");
 
@@ -2434,9 +2435,9 @@ CheckForLastRunCrash()
 #endif
   nsCOMPtr<nsIFile> lastMinidumpFile;
   CreateFileFromPath(lastMinidump.get(),
-                      getter_AddRefs(lastMinidumpFile));
+                     getter_AddRefs(lastMinidumpFile));
 
-  if (NS_FAILED(lastMinidumpFile->Exists(&exists)) || !exists) {
+  if (!lastMinidumpFile || NS_FAILED(lastMinidumpFile->Exists(&exists)) || !exists) {
     return false;
   }
 

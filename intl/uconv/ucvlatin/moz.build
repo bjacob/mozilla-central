@@ -127,3 +127,11 @@ CPP_SOURCES += [
     'nsVPSToUnicode.cpp',
 ]
 
+LIBRARY_NAME = 'ucvlatin_s'
+
+LIBXUL_LIBRARY = True
+
+LOCAL_INCLUDES += [
+    '../src',
+    '../util',
+]

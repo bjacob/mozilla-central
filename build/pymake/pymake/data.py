@@ -573,7 +573,8 @@ class Pattern(object):
     def __init__(self, s):
         r = []
         i = 0
-        while i < len(s):
+        slen = len(s)
+        while i < slen:
             c = s[i]
             if c == '\\':
                 nc = s[i + 1]
@@ -1474,8 +1475,20 @@ class Rule(object):
 
     def getcommands(self, target, makefile):
         assert isinstance(target, Target)
+        # Prerequisites are merged if the target contains multiple rules and is
+        # not a terminal (double colon) rule. See
+        # https://www.gnu.org/software/make/manual/make.html#Multiple-Targets.
+        prereqs = []
+        prereqs.extend(self.prerequisites)
 
-        return getcommandsforrule(self, target, makefile, self.prerequisites, stem=None)
+        if not self.doublecolon:
+            for rule in target.rules:
+                # The current rule comes first, which is already in prereqs so
+                # we don't need to add it again.
+                if rule != self:
+                    prereqs.extend(rule.prerequisites)
+
+        return getcommandsforrule(self, target, makefile, prereqs, stem=None)
         # TODO: $* in non-pattern rules?
 
 class PatternRuleInstance(object):

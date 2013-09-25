@@ -40,20 +40,13 @@ let ContactService = {
 
     var idbManager = Components.classes["@mozilla.org/dom/indexeddb/manager;1"].getService(Ci.nsIIndexedDatabaseManager);
     idbManager.initWindowless(myGlobal);
-    this._db = new ContactDB(myGlobal);
+    this._db = new ContactDB();
     this._db.init(myGlobal);
 
-    let countryName = PhoneNumberUtils.getCountryName();
-    if (Services.prefs.getPrefType("dom.phonenumber.substringmatching." + countryName) == Ci.nsIPrefBranch.PREF_INT) {
-      if (DEBUG) debug("Enable Substring Matching for Phone Numbers: " + countryName);
-      let val = Services.prefs.getIntPref("dom.phonenumber.substringmatching." + countryName);
-      if (val && val > 0) {
-        this._db.enableSubstringMatching(val);
-      }
-    }
+    this.configureSubstringMatching();
 
     Services.obs.addObserver(this, "profile-before-change", false);
-    Services.prefs.addObserver("dom.phonenumber.substringmatching", this, false);
+    Services.prefs.addObserver("ril.lastKnownSimMcc", this, false);
   },
 
   observe: function(aSubject, aTopic, aData) {
@@ -71,16 +64,23 @@ let ContactService = {
       this._db = null;
       this._children = null;
       this._cursors = null;
-    } else if (aTopic === 'nsPref:changed' && aData.contains("dom.phonenumber.substringmatching")) {
-      // We don't fully support changing substringMatching during runtime. This is mostly for testing.
-      let countryName = PhoneNumberUtils.getCountryName();
-      if (Services.prefs.getPrefType("dom.phonenumber.substringmatching." + countryName) == Ci.nsIPrefBranch.PREF_INT) {
-        let val = Services.prefs.getIntPref("dom.phonenumber.substringmatching." + countryName);
-        if (val && val > 0) {
-          this._db.enableSubstringMatching(val);
-        }
+    } else if (aTopic === 'nsPref:changed' && aData === "ril.lastKnownSimMcc") {
+      this.configureSubstringMatching();
+    }
+  },
+
+  configureSubstringMatching: function() {
+    let countryName = PhoneNumberUtils.getCountryName();
+    if (Services.prefs.getPrefType("dom.phonenumber.substringmatching." + countryName) == Ci.nsIPrefBranch.PREF_INT) {
+      let val = Services.prefs.getIntPref("dom.phonenumber.substringmatching." + countryName);
+      if (val) {
+        this._db.enableSubstringMatching(val);
+        return;
       }
     }
+    // if we got here, we dont have a substring setting
+    // for this country, so disable substring matching
+    this._db.disableSubstringMatching();
   },
 
   assertPermission: function(aMessage, aPerm) {
@@ -143,7 +143,7 @@ let ContactService = {
               throw e;
             }
           }.bind(this),
-          function(aErrorMsg) { mm.sendAsyncMessage("Contacts:Find:Return:KO", { requestID: msg.cursorId, errorMsg: aErrorMsg }); },
+          function(aErrorMsg) { mm.sendAsyncMessage("Contacts:GetAll:Return:KO", { requestID: msg.cursorId, errorMsg: aErrorMsg }); },
           msg.findOptions, msg.cursorId);
         break;
       case "Contacts:GetAll:SendNow":
@@ -192,7 +192,9 @@ let ContactService = {
             mm.sendAsyncMessage("Contacts:Clear:Return:OK", { requestID: msg.requestID });
             this.broadcastMessage("Contact:Changed", { reason: "remove" });
           }.bind(this),
-          function(aErrorMsg) { mm.sendAsyncMessage("Contacts:Clear:Return:KO", { requestID: msg.requestID, errorMsg: aErrorMsg }); }.bind(this)
+          function(aErrorMsg) {
+            mm.sendAsyncMessage("Contacts:Clear:Return:KO", { requestID: msg.requestID, errorMsg: aErrorMsg });
+          }.bind(this)
         );
         break;
       case "Contacts:GetRevision":
@@ -205,7 +207,10 @@ let ContactService = {
               requestID: msg.requestID,
               revision: revision
             });
-          }
+          },
+          function(aErrorMsg) {
+            mm.sendAsyncMessage("Contacts:GetRevision:Return:KO", { requestID: msg.requestID, errorMsg: aErrorMsg });
+          }.bind(this)
         );
         break;
       case "Contacts:GetCount":
@@ -218,7 +223,10 @@ let ContactService = {
               requestID: msg.requestID,
               count: count
             });
-          }
+          },
+          function(aErrorMsg) {
+            mm.sendAsyncMessage("Contacts:Count:Return:KO", { requestID: msg.requestID, errorMsg: aErrorMsg });
+          }.bind(this)
         );
         break;
       case "Contacts:RegisterForMessages":

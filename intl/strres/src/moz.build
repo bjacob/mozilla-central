@@ -11,3 +11,9 @@ CPP_SOURCES += [
     'nsStringBundleTextOverride.cpp',
 ]
 
+LIBRARY_NAME = 'strres_s'
+
+LIBXUL_LIBRARY = True
+
+MSVC_ENABLE_PGO = True
+

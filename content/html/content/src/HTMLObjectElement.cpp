@@ -37,8 +37,6 @@ HTMLObjectElement::HTMLObjectElement(already_AddRefed<nsINodeInfo> aNodeInfo,
 
   // By default we're in the loading state
   AddStatesSilently(NS_EVENT_STATE_LOADING);
-
-  SetIsDOMBinding();
 }
 
 HTMLObjectElement::~HTMLObjectElement()
@@ -65,11 +63,14 @@ HTMLObjectElement::DoneAddingChildren(bool aHaveNotified)
   }
 }
 
+NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLObjectElement)
+
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLObjectElement,
                                                   nsGenericHTMLFormElement)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mValidity)
   nsObjectLoadingContent::Traverse(tmp, cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLObjectElement,
                                                 nsGenericHTMLFormElement)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mValidity)
@@ -79,8 +80,7 @@ NS_IMPL_ADDREF_INHERITED(HTMLObjectElement, Element)
 NS_IMPL_RELEASE_INHERITED(HTMLObjectElement, Element)
 
 NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLObjectElement)
-  NS_HTML_CONTENT_INTERFACES(nsGenericHTMLFormElement)
-  NS_INTERFACE_TABLE_INHERITED11(HTMLObjectElement,
+  NS_INTERFACE_TABLE_INHERITED10(HTMLObjectElement,
                                  nsIDOMHTMLObjectElement,
                                  imgINotificationObserver,
                                  nsIRequestObserver,
@@ -89,11 +89,9 @@ NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLObjectElement)
                                  nsIObjectLoadingContent,
                                  nsIImageLoadingContent,
                                  imgIOnloadBlocker,
-                                 nsIInterfaceRequestor,
                                  nsIChannelEventSink,
                                  nsIConstraintValidation)
-  NS_INTERFACE_TABLE_TO_MAP_SEGUE
-NS_ELEMENT_INTERFACE_MAP_END
+NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLFormElement)
 
 NS_IMPL_ELEMENT_CLONE(HTMLObjectElement)
 

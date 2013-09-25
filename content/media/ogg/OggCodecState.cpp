@@ -7,15 +7,27 @@
 #include <string.h>
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/StandardInteger.h"
+#include <stdint.h>
 
 #include "nsDebug.h"
+#include "MediaDecoderReader.h"
 #include "OggCodecState.h"
 #include "OggDecoder.h"
 #include "nsTraceRefcnt.h"
 #include "VideoUtils.h"
-#include "MediaDecoderReader.h"
 #include <algorithm>
+
+// On Android JellyBean, the hardware.h header redefines version_major and
+// version_minor, which breaks our build.  See:
+// https://bugzilla.mozilla.org/show_bug.cgi?id=912702#c6
+#ifdef MOZ_WIDGET_GONK
+#ifdef version_major
+#undef version_major
+#endif
+#ifdef version_minor
+#undef version_minor
+#endif
+#endif
 
 namespace mozilla {
 
@@ -664,7 +676,6 @@ VorbisState::GetTags()
   NS_ASSERTION(mComment.user_comments, "no vorbis comment strings!");
   NS_ASSERTION(mComment.comment_lengths, "no vorbis comment lengths!");
   tags = new MetadataTags;
-  tags->Init();
   for (int i = 0; i < mComment.comments; i++) {
     AddVorbisComment(tags, mComment.user_comments[i],
                      mComment.comment_lengths[i]);
@@ -1066,7 +1077,6 @@ MetadataTags* OpusState::GetTags()
   MetadataTags* tags;
 
   tags = new MetadataTags;
-  tags->Init();
   for (uint32_t i = 0; i < mTags.Length(); i++) {
     AddVorbisComment(tags, mTags[i].Data(), mTags[i].Length());
   }
@@ -1543,7 +1553,6 @@ bool SkeletonState::DecodeHeader(ogg_packet* aPacket)
     LOG(PR_LOG_DEBUG, ("Skeleton segment length: %lld", mLength));
 
     // Initialize the serialno-to-index map.
-    mIndex.Init();
     return true;
   } else if (IsSkeletonIndex(aPacket) && mVersion >= SKELETON_VERSION(4,0)) {
     return DecodeIndex(aPacket);

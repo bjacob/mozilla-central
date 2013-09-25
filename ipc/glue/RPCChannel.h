@@ -15,7 +15,7 @@
 
 #include "base/basictypes.h"
 
-#include "nsAtomicRefcnt.h"
+#include "nsISupportsImpl.h"
 
 #include "mozilla/ipc/SyncChannel.h"
 #include "nsAutoPtr.h"
@@ -96,36 +96,10 @@ public:
     virtual bool Send(Message* msg) MOZ_OVERRIDE;
     virtual bool Send(Message* msg, Message* reply) MOZ_OVERRIDE;
 
-    // Asynchronously, send the child a message that puts it in such a
-    // state that it can't send messages to the parent unless the
-    // parent sends a message to it first.  The child stays in this
-    // state until the parent calls |UnblockChild()|.
-    //
-    // It is an error to
-    //  - call this on the child side of the channel.
-    //  - nest |BlockChild()| calls
-    //  - call this when the child is already blocked on a sync or RPC
-    //    in-/out- message/call
-    //
-    // Return true iff successful.
-    bool BlockChild();
-
-    // Asynchronously undo |BlockChild()|.
-    //
-    // It is an error to
-    //  - call this on the child side of the channel
-    //  - call this without a matching |BlockChild()|
-    //
-    // Return true iff successful.
-    bool UnblockChild();
-
     // Return true iff this has code on the C++ stack.
     bool IsOnCxxStack() const {
         return !mCxxStackFrames.empty();
     }
-
-    virtual bool OnSpecialMessage(uint16_t id, const Message& msg) MOZ_OVERRIDE;
-
 
     /**
      * If there is a pending RPC message, process all pending messages.
@@ -184,9 +158,6 @@ private:
 
     void Incall(const Message& call, size_t stackDepth);
     void DispatchIncall(const Message& call);
-
-    void BlockOnParent();
-    void UnblockFromParent();
 
     // This helper class managed RPCChannel.mCxxStackDepth on behalf
     // of RPCChannel.  When the stack depth is incremented from zero
@@ -341,6 +312,11 @@ private:
     typedef std::deque<Message> MessageQueue;
     MessageQueue mPending;
 
+    // List of async and sync messages that have been received while waiting
+    // for an urgent reply, that need to be deferred until that reply has been
+    // received.
+    MessageQueue mNonUrgentDeferred;
+
     // 
     // Stack of all the RPC out-calls on which this RPCChannel is
     // awaiting a response.
@@ -391,9 +367,6 @@ private:
     //
     size_t mRemoteStackDepthGuess;
 
-    // True iff the parent has put us in a |BlockChild()| state.
-    bool mBlockedOnParent;
-
     // Approximation of Sync/RPCChannel-code frames on the C++ stack.
     // It can only be interpreted as the implication
     //
@@ -419,22 +392,15 @@ private:
     {
       public:
         RefCountedTask(CancelableTask* aTask)
-        : mTask(aTask)
-        , mRefCnt(0) {}
+        : mTask(aTask) {}
         ~RefCountedTask() { delete mTask; }
         void Run() { mTask->Run(); }
         void Cancel() { mTask->Cancel(); }
-        void AddRef() {
-            NS_AtomicIncrementRefcnt(mRefCnt);
-        }
-        void Release() {
-            if (NS_AtomicDecrementRefcnt(mRefCnt) == 0)
-                delete this;
-        }
+
+        NS_INLINE_DECL_THREADSAFE_REFCOUNTING(RefCountedTask)
 
       private:
         CancelableTask* mTask;
-        nsrefcnt mRefCnt;
     };
 
     //

@@ -121,7 +121,7 @@ class DataChannelConnection: public nsITimerCallback
 #endif
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSITIMERCALLBACK
 
   class DataConnectionListener : public SupportsWeakPtr<DataConnectionListener>
@@ -344,7 +344,7 @@ public:
     , mStream(stream)
     , mPrPolicy(policy)
     , mPrValue(value)
-    , mFlags(0)
+    , mFlags(flags)
     , mIsRecvBinary(false)
     {
       NS_ASSERTION(mConnection,"NULL connection");
@@ -405,12 +405,14 @@ public:
   // Find out state
   uint16_t GetReadyState()
     {
-      if (mState == WAITING_TO_OPEN)
-        return CONNECTING;
-      return mState;
+      if (mConnection) {
+        MutexAutoLock lock(mConnection->mLock);
+        if (mState == WAITING_TO_OPEN)
+          return CONNECTING;
+        return mState;
+      }
+      return CLOSED;
     }
-
-  void SetReadyState(uint16_t aState) { mState = aState; }
 
   void GetLabel(nsAString& aLabel) { CopyUTF8toUTF16(mLabel, aLabel); }
   void GetProtocol(nsAString& aProtocol) { CopyUTF8toUTF16(mProtocol, aProtocol); }

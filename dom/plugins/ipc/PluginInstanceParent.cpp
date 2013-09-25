@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/StandardInteger.h" // for intptr_t
+#include <stdint.h> // for intptr_t
 
 #include "PluginInstanceParent.h"
 #include "BrowserStreamParent.h"
@@ -26,7 +26,6 @@
 #include "gfxContext.h"
 #include "gfxColor.h"
 #include "gfxUtils.h"
-#include "nsNPAPIPluginInstance.h"
 #include "Layers.h"
 #include "SharedTextureImage.h"
 #include "GLContext.h"
@@ -80,9 +79,6 @@ PluginInstanceParent::PluginInstanceParent(PluginModuleParent* parent,
     , mShColorSpace(nullptr)
 #endif
 {
-#ifdef OS_WIN
-    mTextureMap.Init();
-#endif
 }
 
 PluginInstanceParent::~PluginInstanceParent()
@@ -113,7 +109,6 @@ PluginInstanceParent::~PluginInstanceParent()
 bool
 PluginInstanceParent::Init()
 {
-    mScriptableObjects.Init();
     return true;
 }
 
@@ -158,37 +153,37 @@ PluginInstanceParent::Destroy()
 }
 
 PBrowserStreamParent*
-PluginInstanceParent::AllocPBrowserStream(const nsCString& url,
-                                          const uint32_t& length,
-                                          const uint32_t& lastmodified,
-                                          PStreamNotifyParent* notifyData,
-                                          const nsCString& headers,
-                                          const nsCString& mimeType,
-                                          const bool& seekable,
-                                          NPError* rv,
-                                          uint16_t *stype)
+PluginInstanceParent::AllocPBrowserStreamParent(const nsCString& url,
+                                                const uint32_t& length,
+                                                const uint32_t& lastmodified,
+                                                PStreamNotifyParent* notifyData,
+                                                const nsCString& headers,
+                                                const nsCString& mimeType,
+                                                const bool& seekable,
+                                                NPError* rv,
+                                                uint16_t *stype)
 {
     NS_RUNTIMEABORT("Not reachable");
     return NULL;
 }
 
 bool
-PluginInstanceParent::DeallocPBrowserStream(PBrowserStreamParent* stream)
+PluginInstanceParent::DeallocPBrowserStreamParent(PBrowserStreamParent* stream)
 {
     delete stream;
     return true;
 }
 
 PPluginStreamParent*
-PluginInstanceParent::AllocPPluginStream(const nsCString& mimeType,
-                                         const nsCString& target,
-                                         NPError* result)
+PluginInstanceParent::AllocPPluginStreamParent(const nsCString& mimeType,
+                                               const nsCString& target,
+                                               NPError* result)
 {
     return new PluginStreamParent(this, mimeType, target, result);
 }
 
 bool
-PluginInstanceParent::DeallocPPluginStream(PPluginStreamParent* stream)
+PluginInstanceParent::DeallocPPluginStreamParent(PPluginStreamParent* stream)
 {
     delete stream;
     return true;
@@ -478,12 +473,12 @@ PluginInstanceParent::AnswerNPN_PostURL(const nsCString& url,
 }
 
 PStreamNotifyParent*
-PluginInstanceParent::AllocPStreamNotify(const nsCString& url,
-                                         const nsCString& target,
-                                         const bool& post,
-                                         const nsCString& buffer,
-                                         const bool& file,
-                                         NPError* result)
+PluginInstanceParent::AllocPStreamNotifyParent(const nsCString& url,
+                                               const nsCString& target,
+                                               const bool& post,
+                                               const nsCString& buffer,
+                                               const bool& file,
+                                               NPError* result)
 {
     return new StreamNotifyParent();
 }
@@ -532,7 +527,7 @@ PluginInstanceParent::AnswerPStreamNotifyConstructor(PStreamNotifyParent* actor,
 }
 
 bool
-PluginInstanceParent::DeallocPStreamNotify(PStreamNotifyParent* notifyData)
+PluginInstanceParent::DeallocPStreamNotifyParent(PStreamNotifyParent* notifyData)
 {
     delete notifyData;
     return true;
@@ -611,7 +606,7 @@ PluginInstanceParent::RecvShow(const NPRect& updatedRect,
         // the plugin.  We might still have drawing operations
         // referencing it.
 #ifdef MOZ_X11
-        if (mFrontSurface->GetType() == gfxASurface::SurfaceTypeXlib) {
+        if (mFrontSurface->GetType() == gfxSurfaceTypeXlib) {
             // Finish with the surface and XSync here to ensure the server has
             // finished operations on the surface before the plugin starts
             // scribbling on it again, or worse, destroys it.
@@ -686,31 +681,6 @@ PluginInstanceParent::AsyncSetWindow(NPWindow* aWindow)
     return NS_OK;
 }
 
-#if defined(MOZ_WIDGET_QT) && (MOZ_PLATFORM_MAEMO == 6)
-nsresult
-PluginInstanceParent::HandleGUIEvent(const nsGUIEvent& anEvent, bool* handled)
-{
-    switch (anEvent.eventStructType) {
-    case NS_KEY_EVENT:
-        if (!CallHandleKeyEvent(static_cast<const nsKeyEvent&>(anEvent),
-                                handled)) {
-            return NS_ERROR_FAILURE;
-        }
-        break;
-    case NS_TEXT_EVENT:
-        if (!CallHandleTextEvent(static_cast<const nsTextEvent&>(anEvent),
-                                 handled)) {
-            return NS_ERROR_FAILURE;
-        }
-        break;
-    default:
-        NS_ERROR("Not implemented for this event type");
-        return NS_ERROR_FAILURE;
-    }
-    return NS_OK;
-}
-#endif
-
 nsresult
 PluginInstanceParent::GetImageContainer(ImageContainer** aContainer)
 {
@@ -752,10 +722,10 @@ PluginInstanceParent::GetImageContainer(ImageContainer** aContainer)
         NS_ASSERTION(image->GetFormat() == SHARED_TEXTURE, "Wrong format?");
 
         SharedTextureImage::Data data;
-        data.mShareType = GLContext::SameProcess;
+        data.mShareType = gl::SameProcess;
         data.mHandle = GLContextProviderCGL::CreateSharedHandle(data.mShareType,
                                                                 ioSurface,
-                                                                GLContext::IOSurface);
+                                                                gl::IOSurface);
         data.mInverted = false;
         // Use the device pixel size of the IOSurface, since layers handles resolution scaling
         // already.
@@ -909,7 +879,7 @@ PluginInstanceParent::CreateBackground(const nsIntSize& aSize)
         gfxSharedImageSurface::CreateUnsafe(
             this,
             gfxIntSize(aSize.width, aSize.height),
-            gfxASurface::ImageFormatRGB24);
+            gfxImageFormatRGB24);
     return !!mBackground;
 #else
     return nullptr;
@@ -970,14 +940,14 @@ PluginInstanceParent::GetImageContainer()
 }
 
 PPluginBackgroundDestroyerParent*
-PluginInstanceParent::AllocPPluginBackgroundDestroyer()
+PluginInstanceParent::AllocPPluginBackgroundDestroyerParent()
 {
     NS_RUNTIMEABORT("'Power-user' ctor is used exclusively");
     return nullptr;
 }
 
 bool
-PluginInstanceParent::DeallocPPluginBackgroundDestroyer(
+PluginInstanceParent::DeallocPPluginBackgroundDestroyerParent(
     PPluginBackgroundDestroyerParent* aActor)
 {
     delete aActor;
@@ -1472,7 +1442,7 @@ PluginInstanceParent::NPP_Print(NPPrint* platformPrint)
 }
 
 PPluginScriptableObjectParent*
-PluginInstanceParent::AllocPPluginScriptableObject()
+PluginInstanceParent::AllocPPluginScriptableObjectParent()
 {
     return new PluginScriptableObjectParent(Proxy);
 }
@@ -1503,7 +1473,7 @@ ActorSearch(NPObject* aKey,
 #endif // DEBUG
 
 bool
-PluginInstanceParent::DeallocPPluginScriptableObject(
+PluginInstanceParent::DeallocPPluginScriptableObjectParent(
                                          PPluginScriptableObjectParent* aObject)
 {
     PluginScriptableObjectParent* actor =
@@ -1562,7 +1532,6 @@ PluginInstanceParent::RegisterNPObjectForActor(
                                            PluginScriptableObjectParent* aActor)
 {
     NS_ASSERTION(aObject && aActor, "Null pointers!");
-    NS_ASSERTION(mScriptableObjects.IsInitialized(), "Hash not initialized!");
     NS_ASSERTION(!mScriptableObjects.Get(aObject, nullptr), "Duplicate entry!");
     mScriptableObjects.Put(aObject, aActor);
     return true;
@@ -1572,7 +1541,6 @@ void
 PluginInstanceParent::UnregisterNPObject(NPObject* aObject)
 {
     NS_ASSERTION(aObject, "Null pointer!");
-    NS_ASSERTION(mScriptableObjects.IsInitialized(), "Hash not initialized!");
     NS_ASSERTION(mScriptableObjects.Get(aObject, nullptr), "Unknown entry!");
     mScriptableObjects.Remove(aObject);
 }
@@ -1610,9 +1578,9 @@ PluginInstanceParent::GetActorForNPObject(NPObject* aObject)
 }
 
 PPluginSurfaceParent*
-PluginInstanceParent::AllocPPluginSurface(const WindowsSharedMemoryHandle& handle,
-                                          const gfxIntSize& size,
-                                          const bool& transparent)
+PluginInstanceParent::AllocPPluginSurfaceParent(const WindowsSharedMemoryHandle& handle,
+                                                const gfxIntSize& size,
+                                                const bool& transparent)
 {
 #ifdef XP_WIN
     return new PluginSurfaceParent(handle, size, transparent);
@@ -1623,7 +1591,7 @@ PluginInstanceParent::AllocPPluginSurface(const WindowsSharedMemoryHandle& handl
 }
 
 bool
-PluginInstanceParent::DeallocPPluginSurface(PPluginSurfaceParent* s)
+PluginInstanceParent::DeallocPPluginSurfaceParent(PPluginSurfaceParent* s)
 {
 #ifdef XP_WIN
     delete s;

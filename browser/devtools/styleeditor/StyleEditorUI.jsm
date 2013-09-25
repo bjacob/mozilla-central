@@ -14,7 +14,7 @@ const Cu = Components.utils;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/PluralForm.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
-Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
+let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
 Cu.import("resource:///modules/devtools/shared/event-emitter.js");
 Cu.import("resource:///modules/devtools/StyleEditorUtil.jsm");
 Cu.import("resource:///modules/devtools/SplitView.jsm");
@@ -149,7 +149,7 @@ StyleEditorUI.prototype = {
    */
   _onStyleSheetsCleared: function() {
     // remember selected sheet and line number for next load
-    if (this.selectedEditor) {
+    if (this.selectedEditor && this.selectedEditor.sourceEditor) {
       let href = this.selectedEditor.styleSheet.href;
       let {line, col} = this.selectedEditor.sourceEditor.getCaretPosition();
       this.selectStyleSheet(href, line, col);

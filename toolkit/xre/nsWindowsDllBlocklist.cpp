@@ -125,6 +125,16 @@ static DllBlockInfo sWindowsDllBlocklist[] = {
   // Windows Media Foundation FLAC decoder and type sniffer (bug 839031).
   { "mfflac.dll", ALL_VERSIONS },
 
+  // Older Relevant Knowledge DLLs cause us to crash (bug 904001).
+  { "rlnx.dll", MAKE_VERSION(1, 3, 334, 9) },
+  { "pmnx.dll", MAKE_VERSION(1, 3, 334, 9) },
+  { "opnx.dll", MAKE_VERSION(1, 3, 334, 9) },
+  { "prnx.dll", MAKE_VERSION(1, 3, 334, 9) },
+
+  // Older belgian ID card software causes Firefox to crash or hang on
+  // shutdown, bug 831285 and 918399.
+  { "beid35cardlayer.dll", MAKE_VERSION(3, 5, 6, 6968) },
+
   { NULL, 0 }
 };
 

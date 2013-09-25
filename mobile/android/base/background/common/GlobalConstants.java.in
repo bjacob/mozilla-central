@@ -22,7 +22,8 @@ public class GlobalConstants {
   public static final boolean MOZ_OFFICIAL_BRANDING = false;
 #endif
 
-  public static final long BUILD_TIMESTAMP = @MOZ_BUILD_TIMESTAMP@;
+  public static final long BUILD_TIMESTAMP_SECONDS = @MOZ_BUILD_TIMESTAMP@L;
+  public static final long BUILD_TIMESTAMP_MSEC = 1000L * @MOZ_BUILD_TIMESTAMP@L;
 
   public static final String MOZ_APP_DISPLAYNAME = "@MOZ_APP_DISPLAYNAME@";
   public static final String MOZ_APP_VERSION = "@MOZ_APP_VERSION@";
@@ -46,4 +47,9 @@ public class GlobalConstants {
   public static String GECKO_PREFERENCES_CLASS = "org.mozilla.gecko.GeckoPreferences";
   public static String GECKO_BROADCAST_ANNOUNCEMENTS_PREF_METHOD  = "broadcastAnnouncementsPref";
   public static String GECKO_BROADCAST_HEALTHREPORT_UPLOAD_PREF_METHOD  = "broadcastHealthReportUploadPref";
+  public static String GECKO_BROADCAST_HEALTHREPORT_PRUNE_METHOD = "broadcastHealthReportPrune";
+
+  // Common time values.
+  public static final long MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+  public static final long MILLISECONDS_PER_SIX_MONTHS = 180 * MILLISECONDS_PER_DAY;
 }

@@ -16,13 +16,14 @@ if CONFIG['JS_NATIVE_EDITLINE']:
 if not CONFIG['JS_DISABLE_SHELL']:
     DIRS += ['shell']
 
-# FIXME: bug 530688 covers getting these working on Android
-if CONFIG['OS_ARCH'] != 'ANDROID':
-    TEST_DIRS += ['jsapi-tests']
-
-TEST_DIRS += ['tests', 'gdb']
+TEST_DIRS += ['jsapi-tests', 'tests', 'gdb']
 
 MODULE = 'js'
+
+if CONFIG['JS_STANDALONE']:
+    LIBRARY_NAME = 'mozjs-%s.%s%s' % (CONFIG['MOZJS_MAJOR_VERSION'], CONFIG['MOZJS_MINOR_VERSION'], CONFIG['MOZJS_ALPHA'])
+else:
+    LIBRARY_NAME = 'mozjs'
 
 CONFIGURE_SUBST_FILES += ['devtools/rootAnalysis/Makefile']
 
@@ -30,60 +31,58 @@ CONFIGURE_SUBST_FILES += ['devtools/rootAnalysis/Makefile']
 # browser builds.  Don't add new files here unless you know what you're
 # doing!
 EXPORTS += [
-    'js-config.h',
     'js.msg',
     'jsalloc.h',
     'jsapi.h',
-    'jsclass.h',
+    'jsbytecode.h',
     'jsclist.h',
     'jscpucfg.h',
-    'jsdbgapi.h',
-    'jsdhash.h',
     'jsfriendapi.h',
-    'jslock.h',
-    'jsperf.h',
     'jsprf.h',
     'jsprototypes.h',
     'jsproxy.h',
-    'jsprvtd.h',
     'jspubtd.h',
     'jstypes.h',
-    'jsutil.h',
     'jsversion.h',
     'jswrapper.h',
+    'perf/jsperf.h',
 ]
-
-if CONFIG['HAVE_DTRACE']:
-    EXPORTS += [
-        '$(CURDIR)/javascript-trace.h',
-    ]
 
 # If you add a header here, add it to js/src/jsapi-tests/testIntTypesABI.cpp so
 # that we ensure we don't over-expose our internal integer typedefs.  Note that
 # LegacyIntTypes.h below is deliberately exempted from this requirement.
 EXPORTS.js += [
-    'Anchor.h',
-    'CallArgs.h',
-    'CharacterEncoding.h',
-    'Date.h',
-    'GCAPI.h',
-    'HashTable.h',
-    'HeapAPI.h',
-    'LegacyIntTypes.h',
-    'MemoryMetrics.h',
-    'PropertyKey.h',
-    'RequiredDefines.h',
-    'RootingAPI.h',
-    'TemplateLib.h',
-    'Utility.h',
-    'Value.h',
-    'Vector.h',
+    '../public/Anchor.h',
+    '../public/CallArgs.h',
+    '../public/CallNonGenericMethod.h',
+    '../public/CharacterEncoding.h',
+    '../public/Class.h',
+    '../public/Date.h',
+    '../public/GCAPI.h',
+    '../public/HashTable.h',
+    '../public/HeapAPI.h',
+    '../public/Id.h',
+    '../public/LegacyIntTypes.h',
+    '../public/MemoryMetrics.h',
+    '../public/OldDebugAPI.h',
+    '../public/ProfilingStack.h',
+    '../public/PropertyKey.h',
+    '../public/RequiredDefines.h',
+    '../public/RootingAPI.h',
+    '../public/StructuredClone.h',
+    '../public/Tracer.h',
+    '../public/TypeDecls.h',
+    '../public/Utility.h',
+    '../public/Value.h',
+    '../public/Vector.h',
 ]
 
 CPP_SOURCES += [
     'ArgumentsObject.cpp',
+    'Barrier.cpp',
     'BytecodeCompiler.cpp',
     'BytecodeEmitter.cpp',
+    'CallNonGenericMethod.cpp',
     'CharacterEncoding.cpp',
     'DateTime.cpp',
     'Debugger.cpp',
@@ -92,6 +91,7 @@ CPP_SOURCES += [
     'FoldConstants.cpp',
     'ForkJoin.cpp',
     'GlobalObject.cpp',
+    'Id.cpp',
     'Interpreter.cpp',
     'Intl.cpp',
     'Iteration.cpp',
@@ -105,6 +105,7 @@ CPP_SOURCES += [
     'Nursery.cpp',
     'Object.cpp',
     'ObjectImpl.cpp',
+    'OldDebugAPI.cpp',
     'PageBlock.cpp',
     'ParallelArray.cpp',
     'ParseMaps.cpp',
@@ -113,10 +114,12 @@ CPP_SOURCES += [
     'Probes.cpp',
     'Profilers.cpp',
     'PropertyKey.cpp',
+    'ProxyObject.cpp',
     'RegExp.cpp',
     'RegExpObject.cpp',
     'RegExpStatics.cpp',
     'RootMarking.cpp',
+    'Runtime.cpp',
     'SPSProfiler.cpp',
     'ScopeObject.cpp',
     'SelfHosting.cpp',
@@ -126,10 +129,16 @@ CPP_SOURCES += [
     'StoreBuffer.cpp',
     'String.cpp',
     'StringBuffer.cpp',
+    'StructuredClone.cpp',
     'TestingFunctions.cpp',
     'ThreadPool.cpp',
     'TokenStream.cpp',
+    'Tracer.cpp',
+    'TypeRepresentation.cpp',
+    'TypedArrayObject.cpp',
+    'TypedObject.cpp',
     'Unicode.cpp',
+    'Value.cpp',
     'Verifier.cpp',
     'Xdr.cpp',
     'YarrCanonicalizeUCS2.cpp',
@@ -143,13 +152,10 @@ CPP_SOURCES += [
     'jsarray.cpp',
     'jsatom.cpp',
     'jsbool.cpp',
-    'jsclone.cpp',
     'jscntxt.cpp',
     'jscompartment.cpp',
     'jscrashreport.cpp',
     'jsdate.cpp',
-    'jsdbgapi.cpp',
-    'jsdhash.cpp',
     'jsdtoa.cpp',
     'jsexn.cpp',
     'jsfriendapi.cpp',
@@ -167,13 +173,11 @@ CPP_SOURCES += [
     'jsopcode.cpp',
     'jsperf.cpp',
     'jsprf.cpp',
-    'jspropertycache.cpp',
     'jspropertytree.cpp',
     'jsproxy.cpp',
     'jsreflect.cpp',
     'jsscript.cpp',
     'jsstr.cpp',
-    'jstypedarray.cpp',
     'jsutil.cpp',
     'jswatchpoint.cpp',
     'jsweakmap.cpp',
@@ -198,6 +202,7 @@ if CONFIG['ENABLE_ION']:
         'AliasAnalysis.cpp',
         'AsmJS.cpp',
         'AsmJSLink.cpp',
+        'AsmJSModule.cpp',
         'AsmJSSignalHandlers.cpp',
         'BacktrackingAllocator.cpp',
         'Bailouts.cpp',
@@ -235,7 +240,7 @@ if CONFIG['ENABLE_ION']:
         'MIR.cpp',
         'MIRGraph.cpp',
         'MoveResolver.cpp',
-        'ParallelArrayAnalysis.cpp',
+        'ParallelSafetyAnalysis.cpp',
         'ParallelFunctions.cpp',
         'RangeAnalysis.cpp',
         'RegisterAllocator.cpp',
@@ -243,6 +248,7 @@ if CONFIG['ENABLE_ION']:
         'Snapshots.cpp',
         'StupidAllocator.cpp',
         'TypePolicy.cpp',
+        'TypeRepresentationSet.cpp',
         'UnreachableCodeElimination.cpp',
         'VMFunctions.cpp',
         'ValueNumbering.cpp',
@@ -328,6 +334,11 @@ if CONFIG['JS_HAS_CTYPES']:
         'Library.cpp',
     ]
 
+if CONFIG['MOZ_VTUNE']:
+    CSRCS += [
+        'vtune/jitprofiling.c'
+    ]
+
 if CONFIG['HAVE_LINUX_PERF_EVENT_H']:
     CPP_SOURCES += [
         'pm_linux.cpp'
@@ -336,3 +347,10 @@ else:
     CPP_SOURCES += [
         'pm_stub.cpp'
     ]
+
+MSVC_ENABLE_PGO = True
+
+HOST_CPPSRCS += [
+    'jskwgen.cpp',
+    'jsoplengen.cpp',
+]

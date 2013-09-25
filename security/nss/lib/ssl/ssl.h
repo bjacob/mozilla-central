@@ -121,14 +121,22 @@ SSL_IMPORT PRFileDesc *DTLS_ImportFD(PRFileDesc *model, PRFileDesc *fd);
 #define SSL_ENABLE_FALSE_START         22 /* Enable SSL false start (off by */
                                           /* default, applies only to       */
                                           /* clients). False start is a     */
-/* mode where an SSL client will start sending application data before      */
-/* verifying the server's Finished message. This means that we could end up */
-/* sending data to an imposter. However, the data will be encrypted and     */
-/* only the true server can derive the session key. Thus, so long as the    */
-/* cipher isn't broken this is safe. Because of this, False Start will only */
-/* occur on RSA or DH ciphersuites where the cipher's key length is >= 80   */
-/* bits. The advantage of False Start is that it saves a round trip for     */
-/* client-speaks-first protocols when performing a full handshake.          */
+/* mode where an SSL client will start sending application data before
+ * verifying the server's Finished message. This means that we could end up
+ * sending data to an imposter. However, the data will be encrypted and
+ * only the true server can derive the session key. Thus, so long as the
+ * cipher isn't broken this is safe. The advantage of false start is that
+ * it saves a round trip for client-speaks-first protocols when performing a
+ * full handshake.
+ *
+ * See SSL_DefaultCanFalseStart for the default criteria that NSS uses to
+ * determine whether to false start or not. See SSL_SetCanFalseStartCallback
+ * for how to change that criteria. In addition to those criteria, false start
+ * will only be done when the server selects a cipher suite with an effective
+ * key length of 80 bits or more (including RC4-128). Also, see
+ * SSL_HandshakeCallback for a description on how false start affects when the
+ * handshake callback gets called.
+ */
 
 /* For SSL 3.0 and TLS 1.0, by default we prevent chosen plaintext attacks
  * on SSL CBC mode cipher suites (see RFC 4346 Section F.3) by splitting
@@ -320,7 +328,7 @@ SSL_IMPORT SECStatus SSL_VersionRangeSet(PRFileDesc *fd,
 					 const SSLVersionRange *vrange);
 
 
-/* Values for "policy" argument to SSL_PolicySet */
+/* Values for "policy" argument to SSL_CipherPolicySet */
 /* Values returned by SSL_CipherPolicyGet. */
 #define SSL_NOT_ALLOWED		 0	      /* or invalid or unimplemented */
 #define SSL_ALLOWED		 1
@@ -653,13 +661,58 @@ SSL_IMPORT SECStatus SSL_SetMaxServerCacheLocks(PRUint32 maxLocks);
 SSL_IMPORT SECStatus SSL_InheritMPServerSIDCache(const char * envString);
 
 /*
-** Set the callback on a particular socket that gets called when we finish
-** performing a handshake.
+** Set the callback that normally gets called when the TLS handshake
+** is complete. If false start is not enabled, then the handshake callback is
+** called after verifying the peer's Finished message and before sending
+** outgoing application data and before processing incoming application data.
+**
+** If false start is enabled and there is a custom CanFalseStartCallback
+** callback set, then the handshake callback gets called after the peer's
+** Finished message has been verified, which may be after application data is
+** sent.
+**
+** If false start is enabled and there is not a custom CanFalseStartCallback
+** callback established with SSL_SetCanFalseStartCallback then the handshake
+** callback gets called before any application data is sent, which may be
+** before the peer's Finished message has been verified.
 */
 typedef void (PR_CALLBACK *SSLHandshakeCallback)(PRFileDesc *fd,
                                                  void *client_data);
 SSL_IMPORT SECStatus SSL_HandshakeCallback(PRFileDesc *fd, 
 			          SSLHandshakeCallback cb, void *client_data);
+
+/* Applications that wish to customize TLS false start should set this callback
+** function. NSS will invoke the functon to determine if a particular
+** connection should use false start or not. SECSuccess indicates that the
+** callback completed successfully, and if so *canFalseStart indicates if false
+** start can be used. If the callback does not return SECSuccess then the
+** handshake will be canceled.
+**
+** Applications that do not set the callback will use an internal set of
+** criteria to determine if the connection should false start. If
+** the callback is set false start will never be used without invoking the
+** callback function, but some connections (e.g. resumed connections) will
+** never use false start and therefore will not invoke the callback.
+**
+** NSS's internal criteria for this connection can be evaluated by calling
+** SSL_DefaultCanFalseStart() from the custom callback.
+**
+** See the description of SSL_HandshakeCallback for important information on
+** how registering a custom false start callback affects when the handshake
+** callback gets called.
+**/
+typedef SECStatus (PR_CALLBACK *SSLCanFalseStartCallback)(
+    PRFileDesc *fd, void *arg, PRBool *canFalseStart);
+
+SSL_IMPORT SECStatus SSL_SetCanFalseStartCallback(
+    PRFileDesc *fd, SSLCanFalseStartCallback callback, void *arg);
+
+/* A utility function that can be called from a custom CanFalseStartCallback
+** function to determine what NSS would have done for this connection if the
+** custom callback was not implemented.
+**/
+SSL_IMPORT SECStatus SSL_DefaultCanFalseStart(PRFileDesc *fd,
+                                              PRBool *canFalseStart);
 
 /*
 ** For the server, request a new handshake.  For the client, begin a new
@@ -792,24 +845,20 @@ SSL_IMPORT SECStatus NSS_CmpCertChainWCANames(CERTCertificate *cert,
 SSL_IMPORT SSLKEAType NSS_FindCertKEAType(CERTCertificate * cert);
 
 /* Set cipher policies to a predefined Domestic (U.S.A.) policy.
- * This essentially enables all supported ciphers.
+ * This essentially allows all supported ciphers.
  */
 SSL_IMPORT SECStatus NSS_SetDomesticPolicy(void);
 
 /* Set cipher policies to a predefined Policy that is exportable from the USA
  *   according to present U.S. policies as we understand them.
- * See documentation for the list.
- * Note that your particular application program may be able to obtain
- *   an export license with more or fewer capabilities than those allowed
- *   by this function.  In that case, you should use SSL_SetPolicy()
- *   to explicitly allow those ciphers you may legally export.
+ * It is the same as NSS_SetDomesticPolicy now.
  */
 SSL_IMPORT SECStatus NSS_SetExportPolicy(void);
 
 /* Set cipher policies to a predefined Policy that is exportable from the USA
  *   according to present U.S. policies as we understand them, and that the 
  *   nation of France will permit to be imported into their country.
- * See documentation for the list.
+ * It is the same as NSS_SetDomesticPolicy now.
  */
 SSL_IMPORT SECStatus NSS_SetFrancePolicy(void);
 

@@ -8,27 +8,20 @@
 #include "nsCOMPtr.h"
 #include "nsBulletFrame.h"
 #include "nsGkAtoms.h"
-#include "nsHTMLParts.h"
-#include "nsContainerFrame.h"
 #include "nsGenericHTMLElement.h"
 #include "nsAttrValueInlines.h"
 #include "nsPresContext.h"
 #include "nsIPresShell.h"
 #include "nsIDocument.h"
 #include "nsRenderingContext.h"
-#include "nsILoadGroup.h"
-#include "nsIURL.h"
-#include "nsNetUtil.h"
 #include "prprf.h"
 #include "nsDisplayList.h"
 #include "nsCounterManager.h"
 
-#include "imgILoader.h"
 #include "imgIContainer.h"
 #include "imgRequestProxy.h"
+#include "nsIURI.h"
 
-#include "nsIServiceManager.h"
-#include "nsIComponentManager.h"
 #include <algorithm>
 
 #ifdef ACCESSIBILITY
@@ -240,6 +233,15 @@ public:
       bool snap;
       aInvalidRegion->Or(geometry->mBounds, GetBounds(aBuilder, &snap));
       return;
+    }
+
+    nsCOMPtr<imgIContainer> image = f->GetImage();
+    if (aBuilder->ShouldSyncDecodeImages() && image && !image->IsDecoded()) {
+      // If we are going to do a sync decode and we are not decoded then we are
+      // going to be drawing something different from what is currently there,
+      // so we add our bounds to the invalid region.
+      bool snap;
+      aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
     }
 
     return nsDisplayItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
@@ -1612,6 +1614,18 @@ nsBulletFrame::SetFontSizeInflation(float aInflation)
   VoidPtrOrFloat u;
   u.f = aInflation;
   Properties().Set(FontSizeInflationProperty(), u.p);
+}
+
+already_AddRefed<imgIContainer>
+nsBulletFrame::GetImage() const
+{
+  if (mImageRequest && StyleList()->GetListStyleImage()) {
+    nsCOMPtr<imgIContainer> imageCon;
+    mImageRequest->GetImage(getter_AddRefs(imageCon));
+    return imageCon.forget();
+  }
+
+  return nullptr;
 }
 
 nscoord

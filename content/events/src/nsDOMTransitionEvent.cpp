@@ -5,6 +5,7 @@
 
 #include "nsDOMTransitionEvent.h"
 #include "nsGUIEvent.h"
+#include "prtime.h"
 
 nsDOMTransitionEvent::nsDOMTransitionEvent(mozilla::dom::EventTarget* aOwner,
                                            nsPresContext *aPresContext,
@@ -22,7 +23,6 @@ nsDOMTransitionEvent::nsDOMTransitionEvent(mozilla::dom::EventTarget* aOwner,
     mEventIsInternal = true;
     mEvent->time = PR_Now();
   }
-  SetIsDOMBinding();
 }
 
 nsDOMTransitionEvent::~nsDOMTransitionEvent()
@@ -47,7 +47,7 @@ nsDOMTransitionEvent::Constructor(const mozilla::dom::GlobalObject& aGlobal,
                                   const mozilla::dom::TransitionEventInit& aParam,
                                   mozilla::ErrorResult& aRv)
 {
-  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.Get());
+  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.GetAsSupports());
   nsRefPtr<nsDOMTransitionEvent> e = new nsDOMTransitionEvent(t, nullptr, nullptr);
   bool trusted = e->Init(t);
 

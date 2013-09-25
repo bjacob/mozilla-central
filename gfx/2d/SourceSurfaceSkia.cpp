@@ -15,13 +15,17 @@ namespace mozilla {
 namespace gfx {
 
 SourceSurfaceSkia::SourceSurfaceSkia()
-  : mDrawTarget(nullptr)
+  : mDrawTarget(nullptr), mLocked(false)
 {
 }
 
 SourceSurfaceSkia::~SourceSurfaceSkia()
 {
-  MarkIndependent();
+  MaybeUnlock();
+  if (mDrawTarget) {
+    mDrawTarget->SnapshotDestroyed();
+    mDrawTarget = nullptr;
+  }
 }
 
 IntSize
@@ -85,17 +89,21 @@ SourceSurfaceSkia::InitFromData(unsigned char* aData,
 unsigned char*
 SourceSurfaceSkia::GetData()
 {
-  mBitmap.lockPixels();
-  unsigned char *pixels = (unsigned char *)mBitmap.getPixels();
-  mBitmap.unlockPixels();
-  return pixels;
+  if (!mLocked) {
+    mBitmap.lockPixels();
+    mLocked = true;
+  }
 
+  unsigned char *pixels = (unsigned char *)mBitmap.getPixels();
+  return pixels;
 }
 
 void
 SourceSurfaceSkia::DrawTargetWillChange()
 {
   if (mDrawTarget) {
+    MaybeUnlock();
+
     mDrawTarget = nullptr;
     SkBitmap temp = mBitmap;
     mBitmap.reset();
@@ -104,17 +112,11 @@ SourceSurfaceSkia::DrawTargetWillChange()
 }
 
 void
-SourceSurfaceSkia::DrawTargetDestroyed()
+SourceSurfaceSkia::MaybeUnlock()
 {
-  mDrawTarget = nullptr;
-}
-
-void
-SourceSurfaceSkia::MarkIndependent()
-{
-  if (mDrawTarget) {
-    mDrawTarget->RemoveSnapshot(this);
-    mDrawTarget = nullptr;
+  if (mLocked) {
+    mBitmap.unlockPixels();
+    mLocked = false;
   }
 }
 

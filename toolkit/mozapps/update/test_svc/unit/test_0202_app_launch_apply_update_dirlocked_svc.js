@@ -24,81 +24,7 @@ const TEST_ID = "0202_svc";
 // launching a post update executable.
 const FILE_UPDATER_INI_BAK = "updater.ini.bak";
 
-// Number of milliseconds for each do_timeout call.
-const CHECK_TIMEOUT_MILLI = 1000;
-
-// How many of CHECK_TIMEOUT_MILLI to wait before we abort the test.
-const MAX_TIMEOUT_RUNS = 300;
-
-let gActiveUpdate;
 let gTimeoutRuns = 0;
-
-// Override getUpdatesRootDir on Mac because we need to apply the update
-// inside the bundle directory.
-function symlinkUpdateFilesIntoBundleDirectory() {
-  if (!shouldAdjustPathsOnMac()) {
-    return;
-  }
-  // Symlink active-update.xml and updates/ inside the dist/bin directory
-  // to point to the bundle directory.
-  // This is necessary because in order to test the code which actually ships
-  // with Firefox, we need to perform the update inside the bundle directory,
-  // whereas xpcshell runs from dist/bin/, and the updater service code looks
-  // at the current process directory to find things like these two files.
-
-  Components.utils.import("resource://gre/modules/ctypes.jsm");
-  let libc = ctypes.open("/usr/lib/libc.dylib");
-  // We need these two low level APIs because their functionality is not
-  // provided in nsIFile APIs.
-  let symlink = libc.declare("symlink", ctypes.default_abi, ctypes.int,
-                             ctypes.char.ptr, ctypes.char.ptr);
-  let unlink = libc.declare("unlink", ctypes.default_abi, ctypes.int,
-                            ctypes.char.ptr);
-
-  // Symlink active-update.xml
-  let dest = getAppDir();
-  dest.append("active-update.xml");
-  if (!dest.exists()) {
-    dest.create(dest.NORMAL_FILE_TYPE, 0644);
-  }
-  do_check_true(dest.exists());
-  let source = getUpdatesRootDir();
-  source.append("active-update.xml");
-  unlink(source.path);
-  let ret = symlink(dest.path, source.path);
-  do_check_eq(ret, 0);
-  do_check_true(source.exists());
-
-  // Symlink updates/
-  let dest2 = getAppDir();
-  dest2.append("updates");
-  if (dest2.exists()) {
-    dest2.remove(true);
-  }
-  dest2.create(dest.DIRECTORY_TYPE, 0755);
-  do_check_true(dest2.exists());
-  let source2 = getUpdatesRootDir();
-  source2.append("updates");
-  if (source2.exists()) {
-    source2.remove(true);
-  }
-  ret = symlink(dest2.path, source2.path);
-  do_check_eq(ret, 0);
-  do_check_true(source2.exists());
-
-  // Cleanup the symlinks when the test is finished.
-  do_register_cleanup(function() {
-    let ret = unlink(source.path);
-    do_check_false(source.exists());
-    let ret = unlink(source2.path);
-    do_check_false(source2.exists());
-  });
-
-  // Now, make sure that getUpdatesRootDir returns the application bundle
-  // directory, to make the various stuff in the test framework to work
-  // correctly.
-  getUpdatesRootDir = getAppDir;
-}
 
 function run_test() {
   if (!shouldRunServiceTest()) {
@@ -166,43 +92,55 @@ function run_test() {
   let mar = do_get_file("data/simple.mar");
   mar.copyTo(updatesPatchDir, FILE_UPDATE_ARCHIVE);
 
-  // Backup the updater.ini if it exists by moving it. This prevents the post
-  // update executable from being launched if it is specified.
+  // Backup the updater.ini file if it exists by moving it. This prevents the
+  // post update executable from being launched if it is specified.
   let updaterIni = processDir.clone();
   updaterIni.append(FILE_UPDATER_INI);
   if (updaterIni.exists()) {
     updaterIni.moveTo(processDir, FILE_UPDATER_INI_BAK);
   }
 
+  // Backup the updater-settings.ini file if it exists by moving it.
   let updateSettingsIni = processDir.clone();
-  updateSettingsIni.append(UPDATE_SETTINGS_INI_FILE);
+  updateSettingsIni.append(FILE_UPDATE_SETTINGS_INI);
+  if (updateSettingsIni.exists()) {
+    updateSettingsIni.moveTo(processDir, FILE_UPDATE_SETTINGS_INI_BAK);
+  }
+  updateSettingsIni = processDir.clone();
+  updateSettingsIni.append(FILE_UPDATE_SETTINGS_INI);
   writeFile(updateSettingsIni, UPDATE_SETTINGS_CONTENTS);
 
   reloadUpdateManagerData();
-  gActiveUpdate = gUpdateManager.activeUpdate;
-  do_check_true(!!gActiveUpdate);
+  do_check_true(!!gUpdateManager.activeUpdate);
+
+  Services.obs.addObserver(gUpdateStagedObserver, "update-staged", false);
 
   setEnvironment();
 
   // Initiate a background update.
   AUS_Cc["@mozilla.org/updates/update-processor;1"].
     createInstance(AUS_Ci.nsIUpdateProcessor).
-    processUpdate(gActiveUpdate);
+    processUpdate(gUpdateManager.activeUpdate);
 
   resetEnvironment();
-
-  checkUpdateApplied();
 }
 
 function end_test() {
   resetEnvironment();
 
   let processDir = getAppDir();
-  // Restore the backup of the updater.ini if it exists
+  // Restore the backup of the updater.ini if it exists.
   let updaterIni = processDir.clone();
   updaterIni.append(FILE_UPDATER_INI_BAK);
   if (updaterIni.exists()) {
     updaterIni.moveTo(processDir, FILE_UPDATER_INI);
+  }
+
+  // Restore the backed up updater-settings.ini if it exists.
+  let updateSettingsIni = processDir.clone();
+  updateSettingsIni.append(FILE_UPDATE_SETTINGS_INI_BAK);
+  if (updateSettingsIni.exists()) {
+    updateSettingsIni.moveTo(processDir, FILE_UPDATE_SETTINGS_INI);
   }
 
   // Remove the files added by the update.
@@ -219,10 +157,6 @@ function end_test() {
   if (IS_UNIX) {
     // This will delete the launch script if it exists.
     getLaunchScript();
-    if (IS_MACOSX) {
-      // This will delete the version script and version file if they exist.
-      getVersionScriptAndFile();
-    }
   }
 
   cleanUp();
@@ -260,11 +194,11 @@ function checkUpdateApplied() {
     if (++gTimeoutRuns > MAX_TIMEOUT_RUNS)
       do_throw("Exceeded MAX_TIMEOUT_RUNS whist waiting for pending state to finish");
     else
-      do_timeout(CHECK_TIMEOUT_MILLI, checkUpdateApplied);
+      do_timeout(TEST_CHECK_TIMEOUT, checkUpdateApplied);
     return;
   }
 
-  do_timeout(CHECK_TIMEOUT_MILLI, finishTest);
+  do_timeout(TEST_CHECK_TIMEOUT, finishTest);
 }
 
 function finishTest() {

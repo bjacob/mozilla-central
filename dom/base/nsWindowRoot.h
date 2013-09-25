@@ -30,7 +30,7 @@ public:
   NS_DECL_NSIDOMEVENTTARGET
   using mozilla::dom::EventTarget::RemoveEventListener;
   virtual void AddEventListener(const nsAString& aType,
-                                nsIDOMEventListener* aListener,
+                                mozilla::dom::EventListener* aListener,
                                 bool aUseCapture,
                                 const mozilla::dom::Nullable<bool>& aWantsUntrusted,
                                 mozilla::ErrorResult& aRv) MOZ_OVERRIDE;
@@ -58,7 +58,7 @@ public:
 
 protected:
   // Members
-  nsPIDOMWindow* mWindow; // [Weak]. The window will hold on to us and let go when it dies.
+  nsCOMPtr<nsPIDOMWindow> mWindow;
   nsRefPtr<nsEventListenerManager> mListenerManager; // [Strong]. We own the manager, which owns event listeners attached
                                                       // to us.
 

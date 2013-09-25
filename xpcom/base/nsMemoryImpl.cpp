@@ -3,21 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsXPCOM.h"
 #include "nsMemoryImpl.h"
 #include "nsThreadUtils.h"
 
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
-#include "nsIServiceManager.h"
 #include "nsISimpleEnumerator.h"
 
-#include "prcvar.h"
-#include "pratom.h"
-
-#include "nsAlgorithm.h"
 #include "nsCOMPtr.h"
-#include "nsString.h"
 #include "mozilla/Services.h"
 
 #ifdef ANDROID
@@ -114,7 +107,7 @@ nsMemoryImpl::FlushMemory(const PRUnichar* aReason, bool aImmediate)
         }
     }
 
-    int32_t lastVal = PR_ATOMIC_SET(&sIsFlushing, 1);
+    int32_t lastVal = sIsFlushing.exchange(1);
     if (lastVal)
         return NS_OK;
 
@@ -183,8 +176,8 @@ nsMemoryImpl::FlushEvent::Run()
     return NS_OK;
 }
 
-int32_t
-nsMemoryImpl::sIsFlushing = 0;
+mozilla::Atomic<int32_t>
+nsMemoryImpl::sIsFlushing;
 
 PRIntervalTime
 nsMemoryImpl::sLastFlushTime = 0;

@@ -120,6 +120,8 @@ public:
   nsresult EndUpdateBatch();
   nsresult ClearStyleAndImageCaches();
 
+  void ManageReflowCallback(const nsRect& aRect, nscoord aHorzWidth);
+
   virtual nsSize GetMinSize(nsBoxLayoutState& aBoxLayoutState) MOZ_OVERRIDE;
   virtual void SetBounds(nsBoxLayoutState& aBoxLayoutState, const nsRect& aRect,
                          bool aRemoveOverflowArea = false) MOZ_OVERRIDE;
@@ -541,7 +543,7 @@ protected: // Data Members
 
   nsRevocableEventPtr<ScrollEvent> mScrollEvent;
 
-  nsCOMPtr<ScrollbarActivity> mScrollbarActivity;
+  nsRefPtr<ScrollbarActivity> mScrollbarActivity;
 
   // The cached box object parent.
   nsCOMPtr<nsITreeBoxObject> mTreeBoxObject;
@@ -576,6 +578,13 @@ protected: // Data Members
 
   // The horizontal scroll position
   nscoord mHorzPosition;
+
+  // The original desired horizontal width before changing it and posting a
+  // reflow callback. In some cases, the desired horizontal width can first be
+  // different from the current desired horizontal width, only to return to
+  // the same value later during the same reflow. In this case, we can cancel
+  // the posted reflow callback and prevent an unnecessary reflow.
+  nscoord mOriginalHorzWidth;
   // Our desired horizontal width (the width for which we actually have tree
   // columns).
   nscoord mHorzWidth;
@@ -607,6 +616,10 @@ protected: // Data Members
   bool mHorizontalOverflow;
 
   bool mReflowCallbackPosted;
+
+  // Set while we flush layout to take account of effects of
+  // overflow/underflow event handlers
+  bool mCheckingOverflow;
 
   // Hash table to keep track of which listeners we created and thus
   // have pointers to us.

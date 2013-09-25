@@ -7,6 +7,7 @@
 #include "ProcessPriorityManager.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/Hal.h"
 #include "mozilla/Preferences.h"
@@ -15,25 +16,14 @@
 #include "AudioChannelService.h"
 #include "prlog.h"
 #include "nsPrintfCString.h"
-#include "nsWeakPtr.h"
 #include "nsXULAppAPI.h"
 #include "nsIFrameLoader.h"
-#include "nsIInterfaceRequestorUtils.h"
-#include "nsITimer.h"
-#include "nsIObserver.h"
 #include "nsIObserverService.h"
-#include "nsIDocument.h"
-#include "nsIDOMEventListener.h"
-#include "nsIDOMWindow.h"
-#include "nsIDOMEvent.h"
-#include "nsIDOMDocument.h"
-#include "nsPIDOMWindow.h"
 #include "StaticPtr.h"
 #include "nsIMozBrowserFrame.h"
 #include "nsIObserver.h"
 #include "nsITimer.h"
-#include "nsPrintfCString.h"
-#include "prlog.h"
+#include "nsIPropertyBag2.h"
 
 #ifdef XP_WIN
 #include <process.h>
@@ -372,8 +362,6 @@ ProcessPriorityManagerImpl::GetSingleton()
 ProcessPriorityManagerImpl::ProcessPriorityManagerImpl()
 {
   MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
-  mParticularManagers.Init();
-  mHighPriorityChildIDs.Init();
 }
 
 void
@@ -829,8 +817,7 @@ ParticularProcessPriorityManager::IsExpectingSystemMessage()
     mContentParent->ManagedPBrowserParent();
   for (uint32_t i = 0; i < browsers.Length(); i++) {
     TabParent* tp = static_cast<TabParent*>(browsers[i]);
-    nsCOMPtr<nsIDOMElement> ownerElement = tp->GetOwnerElement();
-    nsCOMPtr<nsIMozBrowserFrame> bf = do_QueryInterface(ownerElement);
+    nsCOMPtr<nsIMozBrowserFrame> bf = do_QueryInterface(tp->GetOwnerElement());
     if (!bf) {
       continue;
     }
@@ -1045,6 +1032,7 @@ ProcessPriorityManagerChild::StaticInit()
 {
   if (!sSingleton) {
     sSingleton = new ProcessPriorityManagerChild();
+    sSingleton->Init();
     ClearOnShutdown(&sSingleton);
   }
 }

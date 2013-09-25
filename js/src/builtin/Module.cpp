@@ -10,7 +10,11 @@
 
 using namespace js;
 
-Class js::ModuleClass = {
+namespace js {
+typedef Rooted<Module*> RootedModule;
+}
+
+const Class Module::class_ = {
     "Module",
     JSCLASS_HAS_RESERVED_SLOTS(2) | JSCLASS_IS_ANONYMOUS,
     JS_PropertyStub,        /* addProperty */
@@ -35,12 +39,12 @@ Module::setScript(JSScript *script)
 }
 
 Module *
-Module::create(JSContext *cx, HandleAtom atom)
+Module::create(ExclusiveContext *cx, HandleAtom atom)
 {
-    RootedObject object(cx, NewBuiltinClassInstance(cx, &ModuleClass));
+    RootedObject object(cx, NewBuiltinClassInstance(cx, &class_));
     if (!object)
         return NULL;
-    RootedModule module(cx, &object->asModule());
+    RootedModule module(cx, &object->as<Module>());
     module->setAtom(atom);
     module->setScript(NULL);
     return module;

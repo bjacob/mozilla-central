@@ -24,7 +24,9 @@
 #include "gfxPattern.h"
 #include "mozilla/HashFunctions.h"
 #include "nsIMemoryReporter.h"
+#include "nsIObserver.h"
 #include "gfxFontFeatures.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/Attributes.h"
 #include <algorithm>
@@ -48,7 +50,7 @@ class gfxUserFontData;
 class gfxShapedText;
 class gfxShapedWord;
 class gfxSVGGlyphs;
-class gfxTextObjectPaint;
+class gfxTextContextPaint;
 
 class nsILanguageAtomService;
 
@@ -126,6 +128,9 @@ struct gfxFontStyle {
     // Say that this font is used for print or print preview.
     bool printerFont : 1;
 
+    // Used to imitate -webkit-font-smoothing: antialiased
+    bool useGrayscaleAntialiasing : 1;
+
     // The style of font (normal, italic, oblique)
     uint8_t style : 2;
 
@@ -152,6 +157,7 @@ struct gfxFontStyle {
             (style == other.style) &&
             (systemFont == other.systemFont) &&
             (printerFont == other.printerFont) &&
+            (useGrayscaleAntialiasing == other.useGrayscaleAntialiasing) &&
             (weight == other.weight) &&
             (stretch == other.stretch) &&
             (language == other.language) &&
@@ -196,7 +202,7 @@ public:
 
     void CalcHash() { mHash = GetChecksum(); }
 
-    size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const {
+    size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
         return gfxSparseBitSet::SizeOfExcludingThis(aMallocSizeOf);
     }
 
@@ -223,35 +229,7 @@ class gfxFontEntry {
 public:
     NS_INLINE_DECL_REFCOUNTING(gfxFontEntry)
 
-    gfxFontEntry(const nsAString& aName, bool aIsStandardFace = false) :
-        mName(aName), mItalic(false), mFixedPitch(false),
-        mIsProxy(false), mIsValid(true), 
-        mIsBadUnderlineFont(false), mIsUserFont(false),
-        mIsLocalUserFont(false), mStandardFace(aIsStandardFace),
-        mSymbolFont(false),
-        mIgnoreGDEF(false),
-        mIgnoreGSUB(false),
-        mSVGInitialized(false),
-        mHasSpaceFeaturesInitialized(false),
-        mHasSpaceFeatures(false),
-        mHasSpaceFeaturesKerning(false),
-        mHasSpaceFeaturesNonKerning(false),
-        mHasSpaceFeaturesSubDefault(false),
-        mCheckedForGraphiteTables(false),
-        mHasCmapTable(false),
-        mGrFaceInitialized(false),
-        mWeight(500), mStretch(NS_FONT_STRETCH_NORMAL),
-        mUVSOffset(0), mUVSData(nullptr),
-        mUserFontData(nullptr),
-        mSVGGlyphs(nullptr),
-        mLanguageOverride(NO_FONT_LANGUAGE_OVERRIDE),
-        mHBFace(nullptr),
-        mGrFace(nullptr),
-        mGrFaceRefCnt(0)
-    {
-        memset(&mHasSpaceFeaturesSub, 0, sizeof(mHasSpaceFeaturesSub));
-    }
-
+    gfxFontEntry(const nsAString& aName, bool aIsStandardFace = false);
     virtual ~gfxFontEntry();
 
     // unique name for the face, *not* the family; not necessarily the
@@ -319,12 +297,15 @@ public:
     // can be safely dereferenced.
     virtual nsresult ReadCMAP();
 
-    bool TryGetSVGData();
+    bool TryGetSVGData(gfxFont* aFont);
     bool HasSVGGlyph(uint32_t aGlyphId);
     bool GetSVGGlyphExtents(gfxContext *aContext, uint32_t aGlyphId,
                             gfxRect *aResult);
     bool RenderSVGGlyph(gfxContext *aContext, uint32_t aGlyphId, int aDrawMode,
-                        gfxTextObjectPaint *aObjectPaint);
+                        gfxTextContextPaint *aContextPaint);
+    // Call this when glyph geometry or rendering has changed
+    // (e.g. animated SVG glyphs)
+    void NotifyGlyphsChanged();
 
     virtual bool MatchesGenericFamily(const nsACString& aGeneric) const {
         return true;
@@ -345,12 +326,12 @@ public:
     // Subclasses should override this if they can provide more efficient
     // access than copying table data into our own buffers.
     //
-    // Get blob that encapsulates a specific font table, or NULL if
+    // Get blob that encapsulates a specific font table, or nullptr if
     // the table doesn't exist in the font.
     //
     // Caller is responsible to call hb_blob_destroy() on the returned blob
-    // (if non-NULL) when no longer required. For transient access to a table,
-    // use of AutoTable (below) is generally preferred.
+    // (if non-nullptr) when no longer required. For transient access to a
+    // table, use of AutoTable (below) is generally preferred.
     virtual hb_blob_t *GetFontTable(uint32_t aTag);
 
     // Stack-based utility to return a specified table, automatically releasing
@@ -390,10 +371,20 @@ public:
     // reference is owned by the caller.  Removing the last reference
     // unregisters the table from the font entry.
     //
-    // Pass NULL for aBuffer to indicate that the table is not present and
-    // NULL will be returned.  Also returns NULL on OOM.
+    // Pass nullptr for aBuffer to indicate that the table is not present and
+    // nullptr will be returned.  Also returns nullptr on OOM.
     hb_blob_t *ShareFontTableAndGetBlob(uint32_t aTag,
                                         FallibleTArray<uint8_t>* aTable);
+
+    // Get the font's unitsPerEm from the 'head' table, in the case of an
+    // sfnt resource. Will return kInvalidUPEM for non-sfnt fonts,
+    // if present on the platform.
+    uint16_t UnitsPerEm();
+    enum {
+        kMinUPEM = 16,    // Limits on valid unitsPerEm range, from the
+        kMaxUPEM = 16384, // OpenType spec
+        kInvalidUPEM = uint16_t(-1)
+    };
 
     // Shaper face accessors:
     // NOTE that harfbuzz and graphite handle ownership/lifetime of the face
@@ -409,11 +400,18 @@ public:
     // Caller must call gfxFontEntry::ReleaseGrFace when finished with it.
     gr_face* GetGrFace();
     virtual void ReleaseGrFace(gr_face* aFace);
+
+    // Release any SVG-glyphs document this font may have loaded.
+    void DisconnectSVG();
+
+    // Called to notify that aFont is being destroyed. Needed when we're tracking
+    // the fonts belonging to this font entry.
+    void NotifyFontDestroyed(gfxFont* aFont);
     
     // For memory reporting
-    virtual void SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    virtual void SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                      FontListSizes*    aSizes) const;
-    virtual void SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    virtual void SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                      FontListSizes*    aSizes) const;
 
     nsString         mName;
@@ -450,9 +448,10 @@ public:
     nsRefPtr<gfxCharacterMap> mCharacterMap;
     uint32_t         mUVSOffset;
     nsAutoArrayPtr<uint8_t> mUVSData;
-    gfxUserFontData* mUserFontData;
-    gfxSVGGlyphs    *mSVGGlyphs;
-
+    nsAutoPtr<gfxUserFontData> mUserFontData;
+    nsAutoPtr<gfxSVGGlyphs> mSVGGlyphs;
+    // list of gfxFonts that are using SVG glyphs
+    nsTArray<gfxFont*> mFontsUsingSVGGlyphs;
     nsTArray<gfxFontFeature> mFeatureSettings;
     uint32_t         mLanguageOverride;
 
@@ -463,34 +462,7 @@ protected:
     friend class gfxFontFamily;
     friend class gfxSingleFaceMacFontFamily;
 
-    gfxFontEntry() :
-        mItalic(false), mFixedPitch(false),
-        mIsProxy(false), mIsValid(true), 
-        mIsBadUnderlineFont(false),
-        mIsUserFont(false),
-        mIsLocalUserFont(false),
-        mStandardFace(false),
-        mSymbolFont(false),
-        mIgnoreGDEF(false),
-        mIgnoreGSUB(false),
-        mSVGInitialized(false),
-        mHasSpaceFeaturesInitialized(false),
-        mHasSpaceFeatures(false),
-        mHasSpaceFeaturesKerning(false),
-        mHasSpaceFeaturesNonKerning(false),
-        mHasSpaceFeaturesSubDefault(false),
-        mCheckedForGraphiteTables(false),
-        mHasCmapTable(false),
-        mGrFaceInitialized(false),
-        mWeight(500), mStretch(NS_FONT_STRETCH_NORMAL),
-        mUVSOffset(0), mUVSData(nullptr),
-        mUserFontData(nullptr),
-        mSVGGlyphs(nullptr),
-        mLanguageOverride(NO_FONT_LANGUAGE_OVERRIDE),
-        mHBFace(nullptr),
-        mGrFace(nullptr),
-        mGrFaceRefCnt(0)
-    { }
+    gfxFontEntry();
 
     virtual gfxFont *CreateFontInstance(const gfxFontStyle *aFontStyle, bool aNeedsBold) {
         NS_NOTREACHED("oops, somebody didn't override CreateFontInstance");
@@ -507,7 +479,18 @@ protected:
         return NS_ERROR_FAILURE;
     }
 
-protected:
+    // Return a blob that wraps a table found within a buffer of font data.
+    // The blob does NOT own its data; caller guarantees that the buffer
+    // will remain valid at least as long as the blob.
+    // Returns null if the specified table is not found.
+    // This method assumes aFontData is valid 'sfnt' data; before using this,
+    // caller is responsible to do any sanitization/validation necessary.
+    hb_blob_t* GetTableFromFontData(const void* aFontData, uint32_t aTableTag);
+
+    // Font's unitsPerEm from the 'head' table, if available (will be set to
+    // kInvalidUPEM for non-sfnt font formats)
+    uint16_t mUnitsPerEm;
+
     // Shaper-specific face objects, shared by all instantiations of the same
     // physical font, regardless of size.
     // Usually, only one of these will actually be created for any given font
@@ -592,12 +575,21 @@ private:
         typedef KeyClass::KeyTypePointer KeyTypePointer;
 
         FontTableHashEntry(KeyTypePointer aTag)
-            : KeyClass(aTag), mBlob() { }
-        // Copying transfers blob association.
-        FontTableHashEntry(FontTableHashEntry& toCopy)
-            : KeyClass(toCopy), mBlob(toCopy.mBlob)
+            : KeyClass(aTag)
+            , mSharedBlobData(nullptr)
+            , mBlob(nullptr)
+        { }
+
+        // NOTE: This assumes the new entry belongs to the same hashtable as
+        // the old, because the mHashtable pointer in mSharedBlobData (if
+        // present) will not be updated.
+        FontTableHashEntry(FontTableHashEntry&& toMove)
+            : KeyClass(mozilla::Move(toMove))
+            , mSharedBlobData(mozilla::Move(toMove.mSharedBlobData))
+            , mBlob(mozilla::Move(toMove.mBlob))
         {
-            toCopy.mBlob = nullptr;
+            toMove.mSharedBlobData = nullptr;
+            toMove.mBlob = nullptr;
         }
 
         ~FontTableHashEntry() { Clear(); }
@@ -620,7 +612,7 @@ private:
 
         static size_t
         SizeOfEntryExcludingThis(FontTableHashEntry *aEntry,
-                                 nsMallocSizeOfFun   aMallocSizeOf,
+                                 mozilla::MallocSizeOf   aMallocSizeOf,
                                  void*               aUserArg);
 
     private:
@@ -632,7 +624,7 @@ private:
         hb_blob_t *mBlob;
     };
 
-    nsTHashtable<FontTableHashEntry> mFontTableCache;
+    nsAutoPtr<nsTHashtable<FontTableHashEntry> > mFontTableCache;
 
     gfxFontEntry(const gfxFontEntry&);
     gfxFontEntry& operator=(const gfxFontEntry&);
@@ -781,9 +773,9 @@ public:
     void CheckForSimpleFamily();
 
     // For memory reporter
-    virtual void SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    virtual void SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                      FontListSizes*    aSizes) const;
-    virtual void SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    virtual void SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                      FontListSizes*    aSizes) const;
 
     // Only used for debugging checks - does a linear search
@@ -949,18 +941,27 @@ public:
         mFonts.EnumerateEntries(ClearCachedWordsForFont, nullptr);
     }
 
-    void SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    void SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                              FontCacheSizes*   aSizes) const;
-    void SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    void SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                              FontCacheSizes*   aSizes) const;
 
 protected:
     class MemoryReporter MOZ_FINAL
-        : public nsIMemoryMultiReporter
+        : public nsIMemoryReporter
     {
     public:
         NS_DECL_ISUPPORTS
-        NS_DECL_NSIMEMORYMULTIREPORTER
+        NS_DECL_NSIMEMORYREPORTER
+    };
+
+    // Observer for notifications that the font cache cares about
+    class Observer MOZ_FINAL
+        : public nsIObserver
+    {
+    public:
+        NS_DECL_ISUPPORTS
+        NS_DECL_NSIOBSERVER
     };
 
     void DestroyFont(gfxFont *aFont);
@@ -996,7 +997,7 @@ protected:
     };
 
     static size_t SizeOfFontEntryExcludingThis(HashEntry*        aHashEntry,
-                                               nsMallocSizeOfFun aMallocSizeOf,
+                                               mozilla::MallocSizeOf aMallocSizeOf,
                                                void*             aUserArg);
 
     nsTHashtable<HashEntry> mFonts;
@@ -1134,11 +1135,14 @@ public:
     gfxGlyphExtents(int32_t aAppUnitsPerDevUnit) :
         mAppUnitsPerDevUnit(aAppUnitsPerDevUnit) {
         MOZ_COUNT_CTOR(gfxGlyphExtents);
-        mTightGlyphExtents.Init();
     }
     ~gfxGlyphExtents();
 
     enum { INVALID_WIDTH = 0xFFFF };
+
+    void NotifyGlyphsChanged() {
+        mTightGlyphExtents.Clear();
+    }
 
     // returns INVALID_WIDTH => not a contained glyph
     // Otherwise the glyph has no before-bearing or vertical bearings,
@@ -1170,8 +1174,8 @@ public:
 
     int32_t GetAppUnitsPerDevUnit() { return mAppUnitsPerDevUnit; }
 
-    size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
-    size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
+    size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+    size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 private:
     class HashEntry : public nsUint32HashKey {
@@ -1208,7 +1212,7 @@ private:
             return widths[indexInBlock];
         }
 
-        uint32_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
+        uint32_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
         
         ~GlyphWidths();
 
@@ -1535,8 +1539,8 @@ public:
      * that there is no spacing.
      * @param aDrawMode specifies whether the fill or stroke of the glyph should be
      * drawn, or if it should be drawn into the current path
-     * @param aObjectPaint information about how to construct the fill and
-     * stroke pattern. Can be NULL if we are not stroking the text, which
+     * @param aContextPaint information about how to construct the fill and
+     * stroke pattern. Can be nullptr if we are not stroking the text, which
      * indicates that the current source from aContext should be used for filling
      * 
      * Callers guarantee:
@@ -1548,7 +1552,7 @@ public:
      */
     virtual void Draw(gfxTextRun *aTextRun, uint32_t aStart, uint32_t aEnd,
                       gfxContext *aContext, DrawMode aDrawMode, gfxPoint *aBaselineOrigin,
-                      Spacing *aSpacing, gfxTextObjectPaint *aObjectPaint,
+                      Spacing *aSpacing, gfxTextContextPaint *aContextPaint,
                       gfxTextRunDrawCallbacks *aCallbacks);
 
     /**
@@ -1655,29 +1659,32 @@ public:
     // Ensure the ShapedWord cache is initialized. This MUST be called before
     // any attempt to use GetShapedWord().
     void InitWordCache() {
-        if (!mWordCache.IsInitialized()) {
-            mWordCache.Init();
+        if (!mWordCache) {
+            mWordCache = new nsTHashtable<CacheHashEntry>;
         }
     }
 
     // Called by the gfxFontCache timer to increment the age of all the words,
     // so that they'll expire after a sufficient period of non-use
     void AgeCachedWords() {
-        if (mWordCache.IsInitialized()) {
-            (void)mWordCache.EnumerateEntries(AgeCacheEntry, this);
+        if (mWordCache) {
+            (void)mWordCache->EnumerateEntries(AgeCacheEntry, this);
         }
     }
 
     // Discard all cached word records; called on memory-pressure notification.
     void ClearCachedWords() {
-        if (mWordCache.IsInitialized()) {
-            mWordCache.Clear();
+        if (mWordCache) {
+            mWordCache->Clear();
         }
     }
 
-    virtual void SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    // Glyph rendering/geometry has changed, so invalidate data as necessary.
+    void NotifyGlyphsChanged();
+
+    virtual void SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                      FontCacheSizes*   aSizes) const;
-    virtual void SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+    virtual void SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                      FontCacheSizes*   aSizes) const;
 
     typedef enum {
@@ -1698,7 +1705,39 @@ public:
         return mKerningSet && !mKerningEnabled;
     }
 
+    /**
+     * Subclass this object to be notified of glyph changes. Delete the object
+     * when no longer needed.
+     */
+    class GlyphChangeObserver {
+    public:
+        virtual ~GlyphChangeObserver()
+        {
+            if (mFont) {
+                mFont->RemoveGlyphChangeObserver(this);
+            }
+        }
+        // This gets called when the gfxFont dies.
+        void ForgetFont() { mFont = nullptr; }
+        virtual void NotifyGlyphsChanged() = 0;
+    protected:
+        GlyphChangeObserver(gfxFont *aFont) : mFont(aFont)
+        {
+            mFont->AddGlyphChangeObserver(this);
+        }
+        gfxFont* mFont;
+    };
+    friend class GlyphChangeObserver;
+
+    bool GlyphsMayChange()
+    {
+        // Currently only fonts with SVG glyphs can have animated glyphs
+        return mFontEntry->TryGetSVGData(this);
+    }
+
 protected:
+    void AddGlyphChangeObserver(GlyphChangeObserver *aObserver);
+    void RemoveGlyphChangeObserver(GlyphChangeObserver *aObserver);
 
     bool HasSubstitutionRulesWithSpaceLookups(int32_t aRunScript) {
         NS_ASSERTION(GetFontEntry()->mHasSpaceFeaturesInitialized,
@@ -1806,7 +1845,7 @@ protected:
     // font and the style. aFeatureOn set if resolved feature value is non-zero
     bool HasFeatureSet(uint32_t aFeature, bool& aFeatureOn);
 
-    static nsDataHashtable<nsUint32HashKey, int32_t> sScriptTagToCode;
+    static nsDataHashtable<nsUint32HashKey, int32_t> *sScriptTagToCode;
 
     nsRefPtr<gfxFontEntry> mFontEntry;
 
@@ -1885,10 +1924,10 @@ protected:
 
     static size_t
     WordCacheEntrySizeOfExcludingThis(CacheHashEntry*   aHashEntry,
-                                      nsMallocSizeOfFun aMallocSizeOf,
+                                      mozilla::MallocSizeOf aMallocSizeOf,
                                       void*             aUserArg);
 
-    nsTHashtable<CacheHashEntry> mWordCache;
+    nsAutoPtr<nsTHashtable<CacheHashEntry> > mWordCache;
 
     static PLDHashOperator AgeCacheEntry(CacheHashEntry *aEntry, void *aUserData);
     static const uint32_t  kShapedWordCacheMaxAge = 3;
@@ -1905,6 +1944,7 @@ protected:
     nsExpirationState          mExpirationState;
     gfxFontStyle               mStyle;
     nsAutoTArray<gfxGlyphExtents*,1> mGlyphExtentsArray;
+    nsAutoPtr<nsTHashtable<nsPtrHashKey<GlyphChangeObserver> > > mGlyphChangeObservers;
 
     gfxFloat                   mAdjustedSize;
 
@@ -1949,9 +1989,9 @@ protected:
     void SanitizeMetrics(gfxFont::Metrics *aMetrics, bool aIsBadUnderlineFont);
 
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint, DrawMode aDrawMode,
-                        uint32_t aGlyphId, gfxTextObjectPaint *aObjectPaint);
+                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint);
     bool RenderSVGGlyph(gfxContext *aContext, gfxPoint aPoint, DrawMode aDrawMode,
-                        uint32_t aGlyphId, gfxTextObjectPaint *aObjectPaint,
+                        uint32_t aGlyphId, gfxTextContextPaint *aContextPaint,
                         gfxTextRunDrawCallbacks *aCallbacks,
                         bool& aEmittedGlyphs);
 
@@ -2378,7 +2418,7 @@ protected:
             return details;
         }
 
-        size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) {
+        size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) {
             return aMallocSizeOf(this) +
                 mDetails.SizeOfExcludingThis(aMallocSizeOf) +
                 mOffsetToIndex.SizeOfExcludingThis(aMallocSizeOf);
@@ -2447,8 +2487,6 @@ protected:
 class gfxShapedWord : public gfxShapedText
 {
 public:
-    static const uint32_t kMaxLength = 32;
-
     // Create a ShapedWord that can hold glyphs for aLength characters,
     // with mCharacterGlyphs sized appropriately.
     //
@@ -2462,7 +2500,8 @@ public:
                                  int32_t aRunScript,
                                  int32_t aAppUnitsPerDevUnit,
                                  uint32_t aFlags) {
-        NS_ASSERTION(aLength <= kMaxLength, "excessive length for gfxShapedWord!");
+        NS_ASSERTION(aLength <= gfxPlatform::GetPlatform()->WordCacheCharLimit(),
+                     "excessive length for gfxShapedWord!");
 
         // Compute size needed including the mCharacterGlyphs array
         // and a copy of the original text
@@ -2483,7 +2522,8 @@ public:
                                  int32_t aRunScript,
                                  int32_t aAppUnitsPerDevUnit,
                                  uint32_t aFlags) {
-        NS_ASSERTION(aLength <= kMaxLength, "excessive length for gfxShapedWord!");
+        NS_ASSERTION(aLength <= gfxPlatform::GetPlatform()->WordCacheCharLimit(),
+                     "excessive length for gfxShapedWord!");
 
         // In the 16-bit version of Create, if the TEXT_IS_8BIT flag is set,
         // then we convert the text to an 8-bit version and call the 8-bit
@@ -2805,7 +2845,7 @@ public:
               gfxFont::DrawMode aDrawMode,
               uint32_t aStart, uint32_t aLength,
               PropertyProvider *aProvider,
-              gfxFloat *aAdvanceWidth, gfxTextObjectPaint *aObjectPaint,
+              gfxFloat *aAdvanceWidth, gfxTextContextPaint *aContextPaint,
               gfxTextRunDrawCallbacks *aCallbacks = nullptr);
 
     /**
@@ -3136,13 +3176,13 @@ public:
     
     // return storage used by this run, for memory reporter;
     // nsTransformedTextRun needs to override this as it holds additional data
-    virtual size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf)
+    virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf)
       MOZ_MUST_OVERRIDE;
-    virtual size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf)
+    virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
       MOZ_MUST_OVERRIDE;
 
     // Get the size, if it hasn't already been gotten, marking as it goes.
-    size_t MaybeSizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf)  {
+    size_t MaybeSizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)  {
         if (mFlags & gfxTextRunFactory::TEXT_RUN_SIZE_ACCOUNTED) {
             return 0;
         }
@@ -3232,7 +3272,7 @@ private:
     // **** drawing helper ****
     void DrawGlyphs(gfxFont *aFont, gfxContext *aContext,
                     gfxFont::DrawMode aDrawMode, gfxPoint *aPt,
-                    gfxTextObjectPaint *aObjectPaint, uint32_t aStart,
+                    gfxTextContextPaint *aContextPaint, uint32_t aStart,
                     uint32_t aEnd, PropertyProvider *aProvider,
                     uint32_t aSpacingStart, uint32_t aSpacingEnd,
                     gfxTextRunDrawCallbacks *aCallbacks);

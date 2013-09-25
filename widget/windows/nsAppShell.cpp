@@ -16,13 +16,16 @@
 #include "mozilla/widget/AudioSession.h"
 #include "mozilla/HangMonitor.h"
 
+using namespace mozilla;
 using namespace mozilla::widget;
 
-const PRUnichar* kAppShellEventId = L"nsAppShell:EventID";
+namespace mozilla {
+namespace widget {
+// Native event callback message.
+UINT sAppShellGeckoMsgId = RegisterWindowMessageW(L"nsAppShell:EventID");
+} }
+
 const PRUnichar* kTaskbarButtonEventId = L"TaskbarButtonCreated";
-
-static UINT sMsgId;
-
 UINT sTaskbarButtonCreatedMsg;
 
 /* static */
@@ -43,7 +46,7 @@ using mozilla::crashreporter::LSPAnnotate;
 /*static*/ LRESULT CALLBACK
 nsAppShell::EventWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-  if (uMsg == sMsgId) {
+  if (uMsg == sAppShellGeckoMsgId) {
     nsAppShell *as = reinterpret_cast<nsAppShell *>(lParam);
     as->NativeEventCallback();
     NS_RELEASE(as);
@@ -70,9 +73,6 @@ nsAppShell::Init()
 #endif
 
   mLastNativeEventScheduled = TimeStamp::NowLoRes();
-
-  if (!sMsgId)
-    sMsgId = RegisterWindowMessageW(kAppShellEventId);
 
   sTaskbarButtonCreatedMsg = ::RegisterWindowMessageW(kTaskbarButtonEventId);
   NS_ASSERTION(sTaskbarButtonCreatedMsg, "Could not register taskbar button creation message");
@@ -162,10 +162,13 @@ nsAppShell::ScheduleNativeEventCallback()
 {
   // Post a message to the hidden message window
   NS_ADDREF_THIS(); // will be released when the event is processed
-  // Time stamp this event so we can detect cases where the event gets
-  // dropping in sub classes / modal loops we do not control. 
-  mLastNativeEventScheduled = TimeStamp::NowLoRes();
-  ::PostMessage(mEventWnd, sMsgId, 0, reinterpret_cast<LPARAM>(this));
+  {
+    MutexAutoLock lock(mLastNativeEventScheduledMutex);
+    // Time stamp this event so we can detect cases where the event gets
+    // dropping in sub classes / modal loops we do not control.
+    mLastNativeEventScheduled = TimeStamp::NowLoRes();
+  }
+  ::PostMessage(mEventWnd, sAppShellGeckoMsgId, 0, reinterpret_cast<LPARAM>(this));
 }
 
 bool
@@ -225,7 +228,7 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
     } else if (mayWait) {
       // Block and wait for any posted application message
       mozilla::HangMonitor::Suspend();
-      ::WaitMessage();
+      WinUtils::WaitForMessage();
     }
   } while (!gotMessage && mayWait);
 
@@ -239,8 +242,13 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
   static const mozilla::TimeDuration nativeEventStarvationLimit =
     mozilla::TimeDuration::FromSeconds(NATIVE_EVENT_STARVATION_LIMIT);
 
-  if ((TimeStamp::NowLoRes() - mLastNativeEventScheduled) >
-      nativeEventStarvationLimit) {
+  TimeDuration timeSinceLastNativeEventScheduled;
+  {
+    MutexAutoLock lock(mLastNativeEventScheduledMutex);
+    timeSinceLastNativeEventScheduled =
+        TimeStamp::NowLoRes() - mLastNativeEventScheduled;
+  }
+  if (timeSinceLastNativeEventScheduled > nativeEventStarvationLimit) {
     ScheduleNativeEventCallback();
   }
   

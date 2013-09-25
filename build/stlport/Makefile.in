@@ -2,15 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH = @DEPTH@
-topsrcdir = @top_srcdir@
-srcdir = @srcdir@
-VPATH = @srcdir@
-
-include $(DEPTH)/config/autoconf.mk
-
 MODULES = stlport
-LIBRARY_NAME = stlport_static
 FORCE_STATIC_LIB = 1
 STL_FLAGS =
 
@@ -18,12 +10,12 @@ STL_FLAGS =
 # installing it in dist/lib.
 LIBRARY = $(LIB_PREFIX)$(LIBRARY_NAME).$(LIB_SUFFIX)
 
-VPATH += $(STLPORT_SOURCES)/src
+VPATH += $(srcdir)/src
 
-CSRCS = $(notdir $(wildcard $(STLPORT_SOURCES)/src/*.c))
+CSRCS = $(notdir $(wildcard $(srcdir)/src/*.c))
 
 include $(topsrcdir)/config/rules.mk
 
 DEFINES += -D_GNU_SOURCE
 CXXFLAGS += -fuse-cxa-atexit
-INCLUDES += -I$(STLPORT_SOURCES)/stlport
+INCLUDES += -I$(srcdir)/stlport

@@ -21,8 +21,6 @@ typedef uint32_t EGLenum;
 typedef int32_t EGLint;
 typedef uint32_t EGLBoolean;
 
-typedef gfxASurface::gfxImageFormat gfxImageFormat;
-
 #define EGL_TRUE 1
 #define EGL_FALSE 0
 #define EGL_NONE 0x3038
@@ -89,7 +87,21 @@ static bool gTryRealloc = true;
 static class GLFunctions
 {
 public:
-  GLFunctions() : mInitialized(false)
+  MOZ_CONSTEXPR GLFunctions() : fGetDisplay(nullptr),
+                                fEGLGetError(nullptr),
+                                fCreateImageKHR(nullptr),
+                                fDestroyImageKHR(nullptr),
+                                fImageTargetTexture2DOES(nullptr),
+                                fBindTexture(nullptr),
+                                fGLGetError(nullptr),
+                                fGraphicBufferCtor(nullptr),
+                                fGraphicBufferDtor(nullptr),
+                                fGraphicBufferLock(nullptr),
+                                fGraphicBufferLockRect(nullptr),
+                                fGraphicBufferUnlock(nullptr),
+                                fGraphicBufferGetNativeBuffer(nullptr),
+                                fGraphicBufferReallocate(nullptr),
+                                mInitialized(false)
   {
   }
 
@@ -378,9 +390,9 @@ uint32_t
 AndroidGraphicBuffer::GetAndroidFormat(gfxImageFormat aFormat)
 {
   switch (aFormat) {
-    case gfxImageFormat::ImageFormatRGB24:
+    case gfxImageFormatRGB24:
       return HAL_PIXEL_FORMAT_RGBX_8888;
-    case gfxImageFormat::ImageFormatRGB16_565:
+    case gfxImageFormatRGB16_565:
       return HAL_PIXEL_FORMAT_RGB_565;
     default:
       return 0;

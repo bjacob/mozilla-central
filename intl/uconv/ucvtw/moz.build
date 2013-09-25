@@ -18,3 +18,10 @@ CPP_SOURCES += [
     'nsUnicodeToHKSCS.cpp',
 ]
 
+LIBRARY_NAME = 'ucvtw_s'
+
+LIBXUL_LIBRARY = True
+
+LOCAL_INCLUDES += [
+    '../util',
+]

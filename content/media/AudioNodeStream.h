@@ -7,10 +7,8 @@
 #define MOZILLA_AUDIONODESTREAM_H_
 
 #include "MediaStreamGraph.h"
-#include "AudioChannelFormat.h"
-#include "AudioNodeEngine.h"
 #include "mozilla/dom/AudioNodeBinding.h"
-#include "mozilla/dom/AudioParam.h"
+#include "AudioSegment.h"
 
 #ifdef PR_LOGGING
 #define LOG(type, msg) PR_LOG(gMediaStreamGraphLog, type, msg)
@@ -23,9 +21,11 @@ namespace mozilla {
 namespace dom {
 struct ThreeDPoint;
 class AudioParamTimeline;
+class DelayNodeEngine;
 }
 
 class ThreadSharedFloatArrayBufferList;
+class AudioNodeEngine;
 
 /**
  * An AudioNodeStream produces one audio track with ID AUDIO_TRACK.
@@ -55,7 +55,8 @@ public:
       mKind(aKind),
       mNumberOfInputChannels(2),
       mMarkAsFinishedAfterThisBlock(false),
-      mAudioParamStream(false)
+      mAudioParamStream(false),
+      mMuted(false)
   {
     MOZ_ASSERT(NS_IsMainThread());
     mChannelCountMode = dom::ChannelCountMode::Max;
@@ -104,9 +105,27 @@ public:
   {
     return mAudioParamStream;
   }
+  void Mute() {
+    mMuted = true;
+  }
+
+  void Unmute() {
+    mMuted = false;
+  }
+
   const OutputChunks& LastChunks() const
   {
     return mLastChunks;
+  }
+  virtual bool MainThreadNeedsUpdates() const MOZ_OVERRIDE
+  {
+    // Only source and external streams need updates on the main thread.
+    return (mKind == MediaStreamGraph::SOURCE_STREAM && mFinished) ||
+           mKind == MediaStreamGraph::EXTERNAL_STREAM;
+  }
+  virtual bool IsIntrinsicallyConsumed() const MOZ_OVERRIDE
+  {
+    return true;
   }
 
   // Any thread
@@ -114,8 +133,16 @@ public:
   TrackRate SampleRate() const { return mSampleRate; }
 
 protected:
+  void AdvanceOutputSegment();
   void FinishOutput();
+  void AccumulateInputChunk(uint32_t aInputIndex, const AudioChunk& aChunk,
+                            AudioChunk* aBlock,
+                            nsTArray<float>* aDownmixBuffer);
+  void UpMixDownMixChunk(const AudioChunk* aChunk, uint32_t aOutputChannelCount,
+                         nsTArray<const void*>& aOutputChannels,
+                         nsTArray<float>& aDownmixBuffer);
 
+  uint32_t ComputeFinalOuputChannelCount(uint32_t aInputChannelCount);
   void ObtainInputBlock(AudioChunk& aTmpChunk, uint32_t aPortIndex);
 
   // The engine that will generate output for this node.
@@ -136,6 +163,8 @@ protected:
   bool mMarkAsFinishedAfterThisBlock;
   // Whether the stream is an AudioParamHelper stream.
   bool mAudioParamStream;
+  // Whether the stream is muted. Access only on the MediaStreamGraph thread.
+  bool mMuted;
 };
 
 }

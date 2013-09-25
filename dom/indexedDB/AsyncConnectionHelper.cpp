@@ -54,7 +54,7 @@ nsresult
 ConvertCloneReadInfosToArrayInternal(
                                 JSContext* aCx,
                                 nsTArray<StructuredCloneReadInfo>& aReadInfos,
-                                jsval* aResult)
+                                JS::MutableHandle<JS::Value> aResult)
 {
   JS::Rooted<JSObject*> array(aCx, JS_NewArrayObject(aCx, 0, nullptr));
   if (!array) {
@@ -73,19 +73,19 @@ ConvertCloneReadInfosToArrayInternal(
       StructuredCloneReadInfo& readInfo = aReadInfos[index];
 
       JS::Rooted<JS::Value> val(aCx);
-      if (!IDBObjectStore::DeserializeValue(aCx, readInfo, val.address())) {
+      if (!IDBObjectStore::DeserializeValue(aCx, readInfo, &val)) {
         NS_WARNING("Failed to decode!");
         return NS_ERROR_DOM_DATA_CLONE_ERR;
       }
 
-      if (!JS_SetElement(aCx, array, index, val.address())) {
+      if (!JS_SetElement(aCx, array, index, &val)) {
         NS_WARNING("Failed to set array element!");
         return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
       }
     }
   }
 
-  *aResult = OBJECT_TO_JSVAL(array);
+  aResult.setObject(*array);
   return NS_OK;
 }
 
@@ -112,18 +112,19 @@ HelperBase::~HelperBase()
 nsresult
 HelperBase::WrapNative(JSContext* aCx,
                        nsISupports* aNative,
-                       jsval* aResult)
+                       JS::MutableHandle<JS::Value> aResult)
 {
   NS_ASSERTION(aCx, "Null context!");
   NS_ASSERTION(aNative, "Null pointer!");
-  NS_ASSERTION(aResult, "Null pointer!");
+  NS_ASSERTION(aResult.address(), "Null pointer!");
   NS_ASSERTION(mRequest, "Null request!");
 
-  JS::Rooted<JSObject*> global(aCx, mRequest->GetParentObject());
+  nsRefPtr<IDBWrapperCache> wrapper = static_cast<IDBWrapperCache*>(mRequest);
+  JS::Rooted<JSObject*> global(aCx, wrapper->GetParentObject());
   NS_ASSERTION(global, "This should never be null!");
 
   nsresult rv =
-    nsContentUtils::WrapNative(aCx, global, aNative, aResult);
+    nsContentUtils::WrapNative(aCx, global, aNative, aResult.address());
   NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
 
   return NS_OK;
@@ -173,11 +174,10 @@ AsyncConnectionHelper::~AsyncConnectionHelper()
 
     if (mainThread) {
       if (database) {
-        NS_ProxyRelease(mainThread, static_cast<nsIIDBDatabase*>(database));
+        NS_ProxyRelease(mainThread, static_cast<IDBWrapperCache*>(database));
       }
       if (transaction) {
-        NS_ProxyRelease(mainThread,
-                        static_cast<nsIIDBTransaction*>(transaction));
+        NS_ProxyRelease(mainThread, static_cast<IDBWrapperCache*>(transaction));
       }
     }
   }
@@ -185,8 +185,8 @@ AsyncConnectionHelper::~AsyncConnectionHelper()
   NS_ASSERTION(!mOldProgressHandler, "Should not have anything here!");
 }
 
-NS_IMPL_THREADSAFE_ISUPPORTS2(AsyncConnectionHelper, nsIRunnable,
-                                                     mozIStorageProgressHandler)
+NS_IMPL_ISUPPORTS2(AsyncConnectionHelper, nsIRunnable,
+                   mozIStorageProgressHandler)
 
 NS_IMETHODIMP
 AsyncConnectionHelper::Run()
@@ -254,7 +254,7 @@ AsyncConnectionHelper::Run()
       }
 
       default:
-        MOZ_NOT_REACHED("Unknown value for ChildProcessSendResult!");
+        MOZ_CRASH("Unknown value for ChildProcessSendResult!");
     }
 
     NS_ASSERTION(gCurrentTransaction == mTransaction, "Should be unchanged!");
@@ -533,11 +533,11 @@ AsyncConnectionHelper::OnError()
 
 nsresult
 AsyncConnectionHelper::GetSuccessResult(JSContext* aCx,
-                                        jsval* aVal)
+                                        JS::MutableHandle<JS::Value> aVal)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
-  *aVal = JSVAL_VOID;
+  aVal.setUndefined();
   return NS_OK;
 }
 
@@ -612,10 +612,10 @@ nsresult
 AsyncConnectionHelper::ConvertToArrayAndCleanup(
                                   JSContext* aCx,
                                   nsTArray<StructuredCloneReadInfo>& aReadInfos,
-                                  jsval* aResult)
+                                  JS::MutableHandle<JS::Value> aResult)
 {
   NS_ASSERTION(aCx, "Null context!");
-  NS_ASSERTION(aResult, "Null pointer!");
+  NS_ASSERTION(aResult.address(), "Null pointer!");
 
   nsresult rv = ConvertCloneReadInfosToArrayInternal(aCx, aReadInfos, aResult);
 

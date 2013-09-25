@@ -18,13 +18,20 @@
 ** for all C files.
 **/
 
-#ifndef jstypes_h___
-#define jstypes_h___
+#ifndef jstypes_h
+#define jstypes_h
 
 #include "mozilla/Attributes.h"
-#include "mozilla/Util.h"
+#include "mozilla/Types.h"
 
+// jstypes.h is (or should be!) included by every file in SpiderMonkey.
+// js-config.h and jsversion.h also should be included by every file.
+// So include them here.
+// XXX: including them in js/RequiredDefines.h should be a better option, since
+// that is by definition the header file that should be included in all
+// SpiderMonkey code.  However, Gecko doesn't do this!  See bug 909576.
 #include "js-config.h"
+#include "jsversion.h"
 
 /***********************************************************************
 ** MACROS:      JS_EXTERN_API
@@ -180,19 +187,6 @@
 # error "Implement me"
 #endif
 
-
-/************************************************************************
-** TYPES:       JSBool
-** DESCRIPTION:
-**  Use JSBool for variables and parameter types. Use JS_FALSE and JS_TRUE
-**      for clarity of target type in assignments and actual arguments. Use
-**      'if (bool)', 'while (!bool)', '(bool) ? x : y' etc., to test booleans
-**      just as you would C int-valued conditions.
-************************************************************************/
-typedef int JSBool;
-#define JS_TRUE (int)1
-#define JS_FALSE (int)0
-
 /***********************************************************************
 ** MACROS:      JS_LIKELY
 **              JS_UNLIKELY
@@ -279,4 +273,4 @@ typedef int JSBool;
 # define JS_EXTENSION_(s) s
 #endif
 
-#endif /* jstypes_h___ */
+#endif /* jstypes_h */

@@ -6,11 +6,7 @@
 
 #include "DOMRequest.h"
 
-#include "mozilla/Util.h"
 #include "DOMError.h"
-#include "nsEventDispatcher.h"
-#include "nsDOMEvent.h"
-#include "nsContentUtils.h"
 #include "nsCxPusher.h"
 #include "nsThreadUtils.h"
 #include "DOMCursor.h"
@@ -23,7 +19,6 @@ using mozilla::AutoPushJSContext;
 DOMRequest::DOMRequest(nsIDOMWindow* aWindow)
   : mResult(JSVAL_VOID)
   , mDone(false)
-  , mRooted(false)
 {
   SetIsDOMBinding();
   Init(aWindow);
@@ -34,7 +29,6 @@ DOMRequest::DOMRequest(nsIDOMWindow* aWindow)
 DOMRequest::DOMRequest()
   : mResult(JSVAL_VOID)
   , mDone(false)
-  , mRooted(false)
 {
   SetIsDOMBinding();
 }
@@ -47,6 +41,8 @@ DOMRequest::Init(nsIDOMWindow* aWindow)
                                         window->GetCurrentInnerWindow());
 }
 
+NS_IMPL_CYCLE_COLLECTION_CLASS(DOMRequest)
+
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(DOMRequest,
                                                   nsDOMEventTargetHelper)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mError)
@@ -54,10 +50,8 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(DOMRequest,
                                                 nsDOMEventTargetHelper)
-  if (tmp->mRooted) {
-    tmp->UnrootResultVal();
-  }
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mError)
+  tmp->mResult = JSVAL_VOID;
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(DOMRequest,
@@ -95,7 +89,7 @@ DOMRequest::GetReadyState(nsAString& aReadyState)
       aReadyState.AssignLiteral("done");
       break;
     default:
-      MOZ_NOT_REACHED("Unrecognized readyState.");
+      MOZ_CRASH("Unrecognized readyState.");
   }
 
   return NS_OK;
@@ -158,6 +152,20 @@ DOMRequest::FireError(nsresult aError)
 }
 
 void
+DOMRequest::FireDetailedError(nsISupports* aError)
+{
+  NS_ASSERTION(!mDone, "mDone shouldn't have been set to true already!");
+  NS_ASSERTION(!mError, "mError shouldn't have been set!");
+  NS_ASSERTION(mResult == JSVAL_VOID, "mResult shouldn't have been set!");
+  NS_ASSERTION(aError, "No detailed error provided");
+
+  mDone = true;
+  mError = aError;
+
+  FireEvent(NS_LITERAL_STRING("error"), true, true);
+}
+
+void
 DOMRequest::FireEvent(const nsAString& aType, bool aBubble, bool aCancelable)
 {
   if (NS_FAILED(CheckInnerWindowCorrectness())) {
@@ -180,21 +188,7 @@ DOMRequest::FireEvent(const nsAString& aType, bool aBubble, bool aCancelable)
 void
 DOMRequest::RootResultVal()
 {
-  NS_ASSERTION(!mRooted, "Don't call me if already rooted!");
-  nsXPCOMCycleCollectionParticipant *participant;
-  CallQueryInterface(this, &participant);
-  nsContentUtils::HoldJSObjects(NS_CYCLE_COLLECTION_UPCAST(this, DOMRequest),
-                                participant);
-  mRooted = true;
-}
-
-void
-DOMRequest::UnrootResultVal()
-{
-  NS_ASSERTION(mRooted, "Don't call me if not rooted!");
-  mResult = JSVAL_VOID;
-  NS_DROP_JS_OBJECTS(this, DOMRequest);
-  mRooted = false;
+  mozilla::HoldJSObjects(this);
 }
 
 NS_IMPL_ISUPPORTS1(DOMRequestService, nsIDOMRequestService)
@@ -235,6 +229,16 @@ DOMRequestService::FireError(nsIDOMDOMRequest* aRequest,
 {
   NS_ENSURE_STATE(aRequest);
   static_cast<DOMRequest*>(aRequest)->FireError(aError);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+DOMRequestService::FireDetailedError(nsIDOMDOMRequest* aRequest,
+                                     nsISupports* aError)
+{
+  NS_ENSURE_STATE(aRequest);
+  static_cast<DOMRequest*>(aRequest)->FireDetailedError(aError);
 
   return NS_OK;
 }

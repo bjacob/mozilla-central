@@ -5,8 +5,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
-#include "tests.h"
+#include "jsapi-tests/tests.h"
 
 /*
  * Test that resolve hook recursion for the same object and property is
@@ -15,7 +14,7 @@
 
 BEGIN_TEST(testResolveRecursion)
 {
-    static JSClass my_resolve_class = {
+    static const JSClass my_resolve_class = {
         "MyResolve",
         JSCLASS_NEW_RESOLVE | JSCLASS_HAS_PRIVATE,
 
@@ -27,6 +26,10 @@ BEGIN_TEST(testResolveRecursion)
         (JSResolveOp) my_resolve,
         JS_ConvertStub
     };
+
+    obj1 = obj2 = NULL;
+    JS_AddObjectRoot(cx, &obj1);
+    JS_AddObjectRoot(cx, &obj2);
 
     obj1 = JS_NewObject(cx, &my_resolve_class, NULL, NULL);
     CHECK(obj1);
@@ -47,6 +50,9 @@ BEGIN_TEST(testResolveRecursion)
     CHECK_SAME(v, JSVAL_FALSE);
     CHECK_EQUAL(resolveEntryCount, 4);
     CHECK_EQUAL(resolveExitCount, 4);
+
+    JS_RemoveObjectRoot(cx, &obj1);
+    JS_RemoveObjectRoot(cx, &obj2);
     return true;
 }
 
@@ -69,7 +75,7 @@ struct AutoIncrCounters {
 };
 
 bool
-doResolve(JSHandleObject obj, JSHandleId id, unsigned flags, JS::MutableHandleObject objp)
+doResolve(JS::HandleObject obj, JS::HandleId id, unsigned flags, JS::MutableHandleObject objp)
 {
     CHECK_EQUAL(resolveExitCount, 0);
     AutoIncrCounters incr(this);
@@ -126,8 +132,8 @@ doResolve(JSHandleObject obj, JSHandleId id, unsigned flags, JS::MutableHandleOb
     return false;
 }
 
-static JSBool
-my_resolve(JSContext *cx, JSHandleObject obj, JSHandleId id, unsigned flags,
+static bool
+my_resolve(JSContext *cx, JS::HandleObject obj, JS::HandleId id, unsigned flags,
            JS::MutableHandleObject objp)
 {
     return static_cast<cls_testResolveRecursion *>(JS_GetPrivate(obj))->

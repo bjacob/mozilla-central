@@ -4,6 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxGDIFont.h"
+
+#include "mozilla/MemoryReporting.h"
+
 #include "gfxGDIShaper.h"
 #include "gfxUniscribeShaper.h"
 #include "gfxHarfBuzzShaper.h"
@@ -11,10 +14,15 @@
 #include "gfxGraphiteShaper.h"
 #include "gfxWindowsPlatform.h"
 #include "gfxContext.h"
+#include "mozilla/Preferences.h"
+#include "nsUnicodeProperties.h"
 
 #include "cairo-win32.h"
 
 #define ROUND(x) floor((x) + 0.5)
+
+using namespace mozilla;
+using namespace mozilla::unicode;
 
 static inline cairo_antialias_t
 GetCairoAntialiasOption(gfxFont::AntialiasOption anAntialiasOption)
@@ -37,7 +45,7 @@ gfxGDIFont::gfxGDIFont(GDIFontEntry *aFontEntry,
                        bool aNeedsBold,
                        AntialiasOption anAAOption)
     : gfxFont(aFontEntry, aFontStyle, anAAOption),
-      mFont(NULL),
+      mFont(nullptr),
       mFontFace(nullptr),
       mMetrics(nullptr),
       mSpaceGlyph(0),
@@ -136,7 +144,12 @@ gfxGDIFont::ShapeText(gfxContext      *aContext,
     }
 
     if (!ok && mHarfBuzzShaper) {
-        if (gfxPlatform::GetPlatform()->UseHarfBuzzForScript(aScript)) {
+        if (gfxPlatform::GetPlatform()->UseHarfBuzzForScript(aScript) ||
+            (gfxWindowsPlatform::WindowsOSVersion() <
+                 gfxWindowsPlatform::kWindowsVista &&
+             ScriptShapingType(aScript) == SHAPING_INDIC &&
+             !Preferences::GetBool("gfx.font_rendering.winxp-indic-uniscribe",
+                                   false))) {
             ok = mHarfBuzzShaper->ShapeText(aContext, aText, aOffset, aLength,
                                             aScript, aShapedText);
         }
@@ -527,12 +540,12 @@ gfxGDIFont::FillLogFont(LOGFONTW& aLogFont, gfxFloat aSize,
 int32_t
 gfxGDIFont::GetGlyphWidth(gfxContext *aCtx, uint16_t aGID)
 {
-    if (!mGlyphWidths.IsInitialized()) {
-        mGlyphWidths.Init(200);
+    if (!mGlyphWidths) {
+        mGlyphWidths = new nsDataHashtable<nsUint32HashKey,int32_t>(200);
     }
 
     int32_t width;
-    if (mGlyphWidths.Get(aGID, &width)) {
+    if (mGlyphWidths->Get(aGID, &width)) {
         return width;
     }
 
@@ -540,10 +553,10 @@ gfxGDIFont::GetGlyphWidth(gfxContext *aCtx, uint16_t aGID)
     AutoSelectFont fs(dc, GetHFONT());
 
     int devWidth;
-    if (GetCharWidthI(dc, aGID, 1, NULL, &devWidth)) {
+    if (GetCharWidthI(dc, aGID, 1, nullptr, &devWidth)) {
         // ensure width is positive, 16.16 fixed-point value
         width = (devWidth & 0x7fff) << 16;
-        mGlyphWidths.Put(aGID, width);
+        mGlyphWidths->Put(aGID, width);
         return width;
     }
 
@@ -551,16 +564,19 @@ gfxGDIFont::GetGlyphWidth(gfxContext *aCtx, uint16_t aGID)
 }
 
 void
-gfxGDIFont::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf,
+gfxGDIFont::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                 FontCacheSizes*   aSizes) const
 {
     gfxFont::SizeOfExcludingThis(aMallocSizeOf, aSizes);
-    aSizes->mFontInstances += aMallocSizeOf(mMetrics) +
-        mGlyphWidths.SizeOfExcludingThis(nullptr, aMallocSizeOf);
+    aSizes->mFontInstances += aMallocSizeOf(mMetrics);
+    if (mGlyphWidths) {
+        aSizes->mFontInstances +=
+            mGlyphWidths->SizeOfExcludingThis(nullptr, aMallocSizeOf);
+    }
 }
 
 void
-gfxGDIFont::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf,
+gfxGDIFont::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                                 FontCacheSizes*   aSizes) const
 {
     aSizes->mFontInstances += aMallocSizeOf(this);

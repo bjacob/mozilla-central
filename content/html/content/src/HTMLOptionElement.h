@@ -11,22 +11,23 @@
 #include "nsGenericHTMLElement.h"
 #include "nsIDOMHTMLOptionElement.h"
 #include "nsIJSNativeInitializer.h"
-#include "nsHTMLFormElement.h"
+#include "mozilla/dom/HTMLFormElement.h"
 
 namespace mozilla {
 namespace dom {
 
 class HTMLSelectElement;
 
-class HTMLOptionElement : public nsGenericHTMLElement,
-                          public nsIDOMHTMLOptionElement
+class HTMLOptionElement MOZ_FINAL : public nsGenericHTMLElement,
+                                    public nsIDOMHTMLOptionElement
 {
 public:
   HTMLOptionElement(already_AddRefed<nsINodeInfo> aNodeInfo);
   virtual ~HTMLOptionElement();
 
   static already_AddRefed<HTMLOptionElement>
-    Option(const GlobalObject& aGlobal, const Optional<nsAString>& aText,
+    Option(const GlobalObject& aGlobal,
+           const Optional<nsAString>& aText,
            const Optional<nsAString>& aValue,
            const Optional<bool>& aDefaultSelected,
            const Optional<bool>& aSelected, ErrorResult& aError);
@@ -35,15 +36,6 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
-
-  // nsIDOMNode
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE
-
-  // nsIDOMElement
-  NS_FORWARD_NSIDOMELEMENT_TO_GENERIC
-
-  // nsIDOMHTMLElement
-  NS_FORWARD_NSIDOMHTMLELEMENT_TO_GENERIC
 
   // nsIDOMHTMLOptionElement
   using mozilla::dom::Element::SetText;
@@ -75,8 +67,6 @@ public:
 
   nsresult CopyInnerTo(mozilla::dom::Element* aDest);
 
-  virtual nsIDOMNode* AsDOMNode() MOZ_OVERRIDE { return this; }
-
   virtual bool IsDisabled() const MOZ_OVERRIDE {
     return HasAttr(kNameSpaceID_None, nsGkAtoms::disabled);
   }
@@ -91,7 +81,7 @@ public:
     SetHTMLBoolAttr(nsGkAtoms::disabled, aValue, aRv);
   }
 
-  nsHTMLFormElement* GetForm();
+  HTMLFormElement* GetForm();
 
   // The XPCOM GetLabel is OK for us
   void SetLabel(const nsAString& aLabel, ErrorResult& aError)
@@ -123,12 +113,7 @@ public:
     aRv = SetText(aValue);
   }
 
-  int32_t GetIndex(ErrorResult& aRv)
-  {
-    int32_t id = 0;
-    aRv = GetIndex(&id);
-    return id;
-  }
+  int32_t Index();
 
 protected:
   virtual JSObject* WrapNode(JSContext* aCx,

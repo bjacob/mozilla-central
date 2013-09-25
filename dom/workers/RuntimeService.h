@@ -11,7 +11,6 @@
 
 #include "nsIObserver.h"
 
-#include "jsapi.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/TimeStamp.h"
@@ -19,7 +18,7 @@
 #include "nsClassHashtable.h"
 #include "nsCOMPtr.h"
 #include "nsHashKeys.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsTArray.h"
 
 class nsIThread;
@@ -208,6 +207,9 @@ private:
 
   nsresult
   Init();
+
+  void
+  Shutdown();
 
   void
   Cleanup();

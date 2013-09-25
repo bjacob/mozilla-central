@@ -2,23 +2,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH		= @DEPTH@
-topsrcdir	= @top_srcdir@
-srcdir		= @srcdir@
-VPATH		= @srcdir@
-relativesrcdir  = @relativesrcdir@
-
-include $(DEPTH)/config/autoconf.mk
-
 # browser_506482.js is disabled because of frequent failures (bug 538672)
 # browser_526613.js is disabled because of frequent failures (bug 534489)
 # browser_589246.js is disabled for leaking browser windows (bug 752467)
 # browser_580512.js is disabled for leaking browser windows (bug 752467)
-# browser_capabilities.js is disabled for using resources outside of the build network (bug 882575)
 
 MOCHITEST_BROWSER_FILES = \
 	head.js \
 	browser_attributes.js \
+	browser_capabilities.js \
 	browser_dying_cache.js \
 	browser_form_restore_events.js \
 	browser_form_restore_events_sample.html \
@@ -27,6 +19,8 @@ MOCHITEST_BROWSER_FILES = \
 	browser_input.js \
 	browser_input_sample.html \
 	browser_pageshow.js \
+	browser_sessionStorage.js \
+	browser_upgrade_backup.js \
 	browser_windowRestore_perwindowpb.js \
 	browser_248970_b_perwindowpb.js \
 	browser_248970_b_sample.html \
@@ -120,6 +114,8 @@ MOCHITEST_BROWSER_FILES = \
 	browser_628270.js \
 	browser_635418.js \
 	browser_636279.js \
+	browser_637020.js \
+	browser_637020_slow.sjs \
 	browser_644409-scratchpads.js \
 	browser_645428.js \
 	browser_659591.js \
@@ -139,6 +135,8 @@ MOCHITEST_BROWSER_FILES = \
 	browser_739805.js \
 	browser_819510_perwindowpb.js \
 	browser_833286_atomic_backup.js \
+	browser_916390_form_data_loss.js \
+	browser_916390_sample.html \
 	$(filter disabled-for-intermittent-failures--bug-766044, browser_459906_empty.html) \
 	$(filter disabled-for-intermittent-failures--bug-766044, browser_459906_sample.html) \
 	$(filter disabled-for-intermittent-failures--bug-765389, browser_461743_sample.html) \
@@ -164,5 +162,3 @@ MOCHITEST_BROWSER_FILES += \
 	browser_625016.js \
 	$(NULL)
 endif
-
-include $(topsrcdir)/config/rules.mk

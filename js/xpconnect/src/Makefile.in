@@ -3,21 +3,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH		= @DEPTH@
-topsrcdir	= @top_srcdir@
-srcdir		= @srcdir@
-VPATH		= @srcdir@
-
-include $(DEPTH)/config/autoconf.mk
-
-LIBRARY_NAME    = xpconnect_s
-MSVC_ENABLE_PGO := 1
-FORCE_STATIC_LIB = 1
-LIBXUL_LIBRARY = 1
-FAIL_ON_WARNINGS := 1
-
-include $(topsrcdir)/config/config.mk
-
 LOCAL_INCLUDES = \
 		-I$(srcdir)/../wrappers \
 		-I$(srcdir)/../loader \
@@ -32,7 +17,14 @@ LOCAL_INCLUDES = \
 		-I$(topsrcdir)/layout/base \
 		-I$(topsrcdir)/dom/base \
 		-I$(topsrcdir)/xpcom/ds \
+		-I$(topsrcdir)/js/ipc \
 		$(NULL)
+
+ifdef MOZ_B2G_BT
+LOCAL_INCLUDES += \
+    -I$(topsrcdir)/dom/bluetooth \
+    $(NULL)
+endif
 
 SHARED_LIBRARY_LIBS = \
   ../loader/$(LIB_PREFIX)jsloader_s.$(LIB_SUFFIX) \
@@ -41,7 +33,17 @@ SHARED_LIBRARY_LIBS = \
 
 EXTRA_MDDEPEND_FILES = dom_qsgen.pp dictionary_helper_gen.pp event_impl_gen.pp
 
+INSTALL_TARGETS += extra_export_files
+extra_export_files_FILES := \
+  DictionaryHelpers.h \
+  GeneratedEventClasses.h \
+  GeneratedEvents.h \
+  $(NULL)
+extra_export_files_DEST = $(DIST)/include
+extra_export_files_TARGET := export
+
 include $(topsrcdir)/config/rules.mk
+include $(topsrcdir)/ipc/chromium/chromium-config.mk
 
 DEFINES += \
   -DJSFILE \
@@ -117,7 +119,10 @@ GeneratedEvents.h: $(srcdir)/dictionary_helper_gen.conf \
 	  --header-output GeneratedEvents.h \
 	  event_impl_gen.conf
 
+GeneratedEventClasses.h: GeneratedEvents.cpp
+
 GeneratedEvents.cpp: DictionaryHelpers.h \
+                     GeneratedEvents.h \
                      $(srcdir)/dictionary_helper_gen.conf \
                      event_impl_gen.conf \
                      $(srcdir)/dictionary_helper_gen.py \
@@ -130,17 +135,19 @@ GeneratedEvents.cpp: DictionaryHelpers.h \
 	  -I$(LIBXUL_DIST)/sdk/bin \
 	  $(srcdir)/event_impl_gen.py \
 	  -I $(DEPTH)/dist/idl \
-	  --header-output GeneratedEvents.h \
+	  --class-declarations GeneratedEventClasses.h \
 	  --stub-output GeneratedEvents.cpp \
 	  --makedepend-output $(MDDEPDIR)/event_impl_gen.pp \
 	  event_impl_gen.conf
 
-_EXTRA_EXPORT_FILES = \
-  DictionaryHelpers.h \
-  $(NULL)
-
-libs:: $(_EXTRA_EXPORT_FILES)
-	$(INSTALL) $(foreach f,$^,"$f") $(DEPTH)/dist/include
+GeneratedEvents-webidl: event_impl_gen.conf
+	$(PYTHON) $(topsrcdir)/config/pythonpath.py \
+	  $(PLY_INCLUDE) \
+	  -I$(LIBXUL_DIST)/sdk/bin \
+	  $(srcdir)/event_impl_gen.py \
+	  -I $(DEPTH)/dist/idl \
+	  --webidltarget=$(top_srcdir)/dom/webidl \
+	  event_impl_gen.conf
 
 GARBAGE += \
 		dom_quickstubs.h \
@@ -149,6 +156,7 @@ GARBAGE += \
 		DictionaryHelpers.cpp \
 		GeneratedEvents.h \
 		GeneratedEvents.cpp \
+		GeneratedEventClasses.h \
 		event_impl_gen.conf \
 		xpidl_debug \
 		$(MDDEPDIR)/dom_qsgen.pp \
@@ -157,5 +165,3 @@ GARBAGE += \
 		$(MDDEPDIR)/event_impl_gen.pp \
 		$(wildcard $(topsrcdir)/other-licenses/ply/ply/*.pyc) \
 		$(NULL)
-
-DEFINES += -D_IMPL_NS_LAYOUT

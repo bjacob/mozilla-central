@@ -78,10 +78,30 @@ VARIABLES = {
         This variable contains a list of C source files to compile.
         """),
 
-    'DEFINES': (StrictOrderingOnAppendList, list, [],
-        """Compiler defines to declare.
+    'DEFINES': (OrderedDict, dict, OrderedDict(),
+        """Dictionary of compiler defines to declare.
 
-        Command line -D flags passed to the compiler.
+        These are passed in to the compiler as -Dkey='value' for string values,
+        -Dkey=value for numeric values, or -Dkey if the value is True. Note
+        that for string values, the outer-level of single-quotes will be
+        consumed by the shell. If you want to have a string-literal in the
+        program, the value needs to have double-quotes.
+
+        Example:
+        DEFINES['NS_NO_XPCOM'] = True
+        DEFINES['MOZ_EXTENSIONS_DB_SCHEMA'] = 15
+        DEFINES['DLL_SUFFIX'] = '".so"'
+
+        This will result in the compiler flags -DNS_NO_XPCOM,
+        -DMOZ_EXTENSIONS_DB_SCHEMA=15, and -DDLL_SUFFIX='".so"',
+        respectively. These could also be combined into a single
+        update:
+
+        DEFINES.update({
+            'NS_NO_XPCOM': True,
+            'MOZ_EXTENSIONS_DB_SCHEMA': 15,
+            'DLL_SUFFIX': '".so"',
+        })
         """),
 
     'DIRS': (list, list, [],
@@ -98,6 +118,10 @@ VARIABLES = {
         delimiters.
         """),
 
+    'EXPORT_LIBRARY': (bool, bool, False,
+        """Install the library to the static libraries folder.
+        """),
+
     'EXTRA_COMPONENTS': (StrictOrderingOnAppendList, list, [],
         """Additional component files to distribute.
 
@@ -107,8 +131,17 @@ VARIABLES = {
     'EXTRA_JS_MODULES': (StrictOrderingOnAppendList, list, [],
         """Additional JavaScript files to distribute.
 
-        This variable contains a list of files to copy into JS_MODULES_PATH,
-        which is $(FINAL_TARGET)/modules by default.
+        This variable contains a list of files to copy into
+        $(FINAL_TARGET)/$(JS_MODULES_PATH). JS_MODULES_PATH defaults to
+        "modules" if left undefined.
+        """),
+
+    'EXTRA_PP_JS_MODULES': (StrictOrderingOnAppendList, list, [],
+        """Additional JavaScript files to distribute.
+
+        This variable contains a list of files to copy into
+        $(FINAL_TARGET)/$(JS_MODULES_PATH), after preprocessing.
+        JS_MODULES_PATH defaults to "modules" if left undefined.
         """),
 
     'EXTRA_PP_COMPONENTS': (StrictOrderingOnAppendList, list, [],
@@ -118,10 +151,60 @@ VARIABLES = {
        files will be installed in the /components directory of the distribution.
         """),
 
+    'CPP_UNIT_TESTS': (StrictOrderingOnAppendList, list, [],
+        """C++ source files for unit tests.
+
+        This is a list of C++ unit test sources. Entries must be files that
+        exist. These generally have .cpp extensions.
+        """),
+
+    'FAIL_ON_WARNINGS': (bool, bool, False,
+        """Whether to treat warnings as errors.
+        """),
+
+    'FORCE_SHARED_LIB': (bool, bool, False,
+        """Whether the library in this directory is a shared library.
+        """),
+
+    'FORCE_STATIC_LIB': (bool, bool, False,
+        """Whether the library in this directory is a static library.
+        """),
+
+    'GTEST_C_SOURCES': (StrictOrderingOnAppendList, list, [],
+        """C code source files for GTest unit tests.
+
+        This variable contains a list of C GTEST unit test source files to
+        compile.
+        """),
+
+    'GTEST_CMM_SOURCES': (StrictOrderingOnAppendList, list, [],
+        """Sources for GTest unit tests to compile with the Objective C/C++ compiler.
+
+        This variable contains a list of objective-C++ GTest unit test sources
+        to compile.
+        """),
+
+    'GTEST_CPP_SOURCES': (list, list, [],
+        """C++ source files for GTest unit tests.
+
+        This is a list of C++ GTest unit test sources. Entries must be files
+        that exist. These generally have .cpp, .cc, or .cxx extensions.
+        """),
+
+    'HOST_CPPSRCS': (StrictOrderingOnAppendList, list, [],
+        """C++ source files to compile with the host compiler.
+
+        This variable contains a list of C++ source files to compile.
+        """),
+
     'HOST_CSRCS': (StrictOrderingOnAppendList, list, [],
         """C source files to compile with the host compiler.
 
         This variable contains a list of C source files to compile.
+        """),
+
+    'IS_COMPONENT': (bool, bool, False,
+        """Whether the library contains a binary XPCOM component manifest.
         """),
 
     'PARALLEL_DIRS': (list, list, [],
@@ -138,10 +221,12 @@ VARIABLES = {
         """),
 
     'JS_MODULES_PATH': (unicode, unicode, "",
-        """Path to install EXTRA_JS_MODULES.
+        """Sub-directory of $(FINAL_TARGET) to install EXTRA_JS_MODULES.
 
-        EXTRA_JS_MODULES files are copied to this path, which defaults to
-        $(FINAL_TARGET)/modules if unspecified.
+        EXTRA_JS_MODULES files are copied to
+        $(FINAL_TARGET)/$(JS_MODULES_PATH). This variable does not
+        need to be defined if the desired destination directory is
+        $(FINAL_TARGET)/modules.
         """),
 
     'LIBRARY_NAME': (unicode, unicode, "",
@@ -158,6 +243,38 @@ VARIABLES = {
         """Linker libraries and flags.
 
         A list of libraries and flags to include when linking.
+        """),
+
+    'LIBXUL_LIBRARY': (bool, bool, False,
+        """Whether the library in this directory is linked into libxul.
+
+        Implies MOZILLA_INTERNAL_API and FORCE_STATIC_LIB.
+        """),
+
+    'LOCAL_INCLUDES': (StrictOrderingOnAppendList, list, [],
+        """Additional directories to be searched for include files by the compiler.
+        """),
+
+    'MSVC_ENABLE_PGO': (bool, bool, False,
+        """Whether profile-guided optimization is enabled in this directory.
+        """),
+
+    'OS_LIBS': (list, list, [],
+        """System link libraries.
+
+        This variable contains a list of system libaries to link against.
+        """),
+
+    'SDK_LIBRARY': (StrictOrderingOnAppendList, list, [],
+        """Elements of the distributed SDK.
+
+        Files on this list will be copied into SDK_LIB_DIR ($DIST/sdk/lib).
+        """),
+
+    'SHARED_LIBRARY_LIBS': (StrictOrderingOnAppendList, list, [],
+        """Libraries linked into a shared library.
+
+        A list of static library paths which should be linked into the current shared library.
         """),
 
     'SIMPLE_PROGRAMS': (StrictOrderingOnAppendList, list, [],
@@ -238,10 +355,8 @@ VARIABLES = {
         """Module name.
 
         Historically, this variable was used to describe where to install header
-        files, but that feature is now handled by EXPORTS_NAMESPACES. Currently
-        it is used as the XPIDL module name if XPIDL_MODULE is not defined, but
-        using XPIDL_MODULE directly is preferred. MODULE will likely be removed
-        in the future.
+        files, but that feature is now handled by EXPORTS_NAMESPACES. MODULE
+        will likely be removed in the future.
         """),
 
     'EXPORTS': (HierarchicalStringList, list, HierarchicalStringList(),
@@ -274,6 +389,13 @@ VARIABLES = {
         exist. These generally have .cpp, .cc, or .cxx extensions.
         """),
 
+    'NO_DIST_INSTALL': (bool, bool, False,
+        """Disable installing certain files into the distribution directory.
+
+        If present, some files defined by other variables won't be
+        distributed/shipped with the produced build.
+        """),
+
     # IDL Generation.
     'XPIDL_SOURCES': (StrictOrderingOnAppendList, list, [],
         """XPCOM Interface Definition Files (xpidl).
@@ -291,19 +413,62 @@ VARIABLES = {
         MODULE.
         """),
 
-    'XPIDL_FLAGS': (list, list, [],
-        """XPCOM Interface Definition Module Flags.
+    'IPDL_SOURCES': (StrictOrderingOnAppendList, list, [],
+        """IPDL source files.
 
-        This is a list of extra flags that are passed to the IDL compiler.
-        Typically this is a set of -I flags that denote extra include
-        directories to search for included .idl files.
+        These are .ipdl files that will be parsed and converted to .cpp files.
+        """),
+
+    'WEBIDL_FILES': (list, list, [],
+        """WebIDL source files.
+
+        These will be parsed and converted to .cpp and .h files.
+        """),
+
+    'GENERATED_EVENTS_WEBIDL_FILES': (StrictOrderingOnAppendList, list, [],
+        """WebIDL source files for generated events.
+
+        These will be parsed and converted to .cpp and .h files.
+        """),
+
+    'TEST_WEBIDL_FILES': (StrictOrderingOnAppendList, list, [],
+         """Test WebIDL source files.
+
+         These will be parsed and converted to .cpp and .h files if tests are
+         enabled.
+         """),
+
+    'GENERATED_WEBIDL_FILES': (StrictOrderingOnAppendList, list, [],
+         """Generated WebIDL source files.
+
+         These will be generated from some other files.
+         """),
+
+    'PREPROCESSED_WEBIDL_FILES': (StrictOrderingOnAppendList, list, [],
+         """Preprocessed WebIDL source files.
+
+         These will be preprocessed before being parsed and converted.
+         """),
+
+    # Test declaration.
+    'A11Y_MANIFESTS': (StrictOrderingOnAppendList, list, [],
+        """List of manifest files defining a11y tests.
+        """),
+
+    'BROWSER_CHROME_MANIFESTS': (StrictOrderingOnAppendList, list, [],
+        """List of manifest files defining browser chrome tests.
+        """),
+
+    'MOCHITEST_MANIFESTS': (StrictOrderingOnAppendList, list, [],
+        """List of manifest files defining mochitest tests.
+        """),
+
+    'MOCHITEST_CHROME_MANIFESTS': (StrictOrderingOnAppendList, list, [],
+        """List of manifest files defining mochitest chrome tests.
         """),
 
     'XPCSHELL_TESTS_MANIFESTS': (StrictOrderingOnAppendList, list, [],
-        """XPCSHELL Test Manifest list
-
-        This is a list of xpcshell.ini manifest files.
-        Formerly XPCSHELL_TESTS=
+        """List of manifest files defining xpcshell tests.
         """),
 }
 
@@ -340,7 +505,7 @@ FUNCTIONS = {
         include('/elsewhere/foo.build')
         """),
 
-    'add_tier_dir': ('_add_tier_directory', (str, [str, list], bool),
+    'add_tier_dir': ('_add_tier_directory', (str, [str, list], bool, bool),
         """Register a directory for tier traversal.
 
         This is the preferred way to populate the TIERS variable.
@@ -369,6 +534,10 @@ FUNCTIONS = {
 
         # Register a directory as having static content (no dependencies).
         add_tier_dir('base', 'foo', static=True)
+
+        # Register a directory as having external content (same as static
+        # content, but traversed with export, libs, and tools subtiers.
+        add_tier_dir('base', 'bar', external=True)
         """),
 
     'warning': ('_warning', (str,),

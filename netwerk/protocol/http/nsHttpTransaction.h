@@ -7,30 +7,24 @@
 #define nsHttpTransaction_h__
 
 #include "nsHttp.h"
-#include "nsHttpHeaderArray.h"
 #include "nsAHttpTransaction.h"
 #include "nsAHttpConnection.h"
 #include "EventTokenBucket.h"
 #include "nsCOMPtr.h"
-
-#include "nsIPipe.h"
-#include "nsIInputStream.h"
+#include "nsThreadUtils.h"
 #include "nsILoadGroup.h"
-#include "nsIOutputStream.h"
 #include "nsIInterfaceRequestor.h"
-#include "nsISocketTransportService.h"
-#include "nsITransport.h"
-#include "nsIEventTarget.h"
 #include "TimingStruct.h"
 
 //-----------------------------------------------------------------------------
 
-class nsHttpTransaction;
 class nsHttpRequestHead;
 class nsHttpResponseHead;
 class nsHttpChunkedDecoder;
 class nsIHttpActivityObserver;
-class UpdateSecurityCallbacks;
+class nsIEventTarget;
+class nsIInputStream;
+class nsIOutputStream;
 
 //-----------------------------------------------------------------------------
 // nsHttpTransaction represents a single HTTP transaction.  It is thread-safe,
@@ -43,7 +37,7 @@ class nsHttpTransaction : public nsAHttpTransaction
                         , public nsIOutputStreamCallback
 {
 public:
-    NS_DECL_ISUPPORTS
+    NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSAHTTPTRANSACTION
     NS_DECL_NSIINPUTSTREAMCALLBACK
     NS_DECL_NSIOUTPUTSTREAMCALLBACK

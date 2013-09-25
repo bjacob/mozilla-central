@@ -15,7 +15,6 @@
 #include "nsIThreadInternal.h"
 #include "nsPIDOMWindow.h"
 
-#include "jsapi.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/CondVar.h"
 #include "mozilla/Mutex.h"
@@ -23,7 +22,7 @@
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsEventQueue.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsTArray.h"
 #include "nsTPriorityQueue.h"
 #include "StructuredCloneTags.h"
@@ -35,13 +34,11 @@
 class JSAutoStructuredCloneBuffer;
 class nsIChannel;
 class nsIDocument;
-class nsIMemoryMultiReporter;
 class nsIPrincipal;
 class nsIScriptContext;
 class nsIURI;
 class nsPIDOMWindow;
 class nsITimer;
-class nsIXPCScriptNotify;
 
 namespace JS {
 class RuntimeStats;
@@ -65,7 +62,7 @@ protected:
   ClearingBehavior mClearingBehavior;
 
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
 
   bool
   Dispatch(JSContext* aCx);
@@ -109,8 +106,6 @@ protected:
 
   virtual void
   PostRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate, bool aRunResult);
-
-  void NotifyScriptExecutedIfNeeded() const;
 
 public:
   NS_DECL_NSIRUNNABLE
@@ -267,7 +262,6 @@ private:
   // Main-thread things.
   nsCOMPtr<nsPIDOMWindow> mWindow;
   nsCOMPtr<nsIScriptContext> mScriptContext;
-  nsCOMPtr<nsIXPCScriptNotify> mScriptNotify;
   nsCOMPtr<nsIURI> mBaseURI;
   nsCOMPtr<nsIURI> mScriptURI;
   nsCOMPtr<nsIPrincipal> mPrincipal;
@@ -276,6 +270,9 @@ private:
 
   // Only used for top level workers.
   nsTArray<nsRefPtr<WorkerRunnable> > mQueuedRunnables;
+
+  // Only for ChromeWorkers without window and only touched on the main thread.
+  nsTArray<nsCString> mHostObjectURIs;
 
   // Protected by mMutex.
   JSSettings mJSSettings;
@@ -463,13 +460,6 @@ public:
     return mScriptContext;
   }
 
-  nsIXPCScriptNotify*
-  GetScriptNotify() const
-  {
-    AssertIsOnMainThread();
-    return mScriptNotify;
-  }
-
   JSObject*
   GetJSObject() const
   {
@@ -615,6 +605,10 @@ public:
   AssertInnerWindowIsCorrect() const
   { }
 #endif
+
+  void RegisterHostObjectURI(const nsACString& aURI);
+  void UnregisterHostObjectURI(const nsACString& aURI);
+  void StealHostObjectURIs(nsTArray<nsCString>& aArray);
 };
 
 class WorkerPrivate : public WorkerPrivateParent<WorkerPrivate>
@@ -902,10 +896,6 @@ private:
                 nsCOMPtr<nsIContentSecurityPolicy>& aCSP, bool aEvalAllowed,
                 bool aReportCSPViolations, bool aXHRParamsAllowed);
 
-  static bool
-  GetContentSecurityPolicy(JSContext *aCx,
-                           nsIContentSecurityPolicy** aCsp);
-
   bool
   Dispatch(WorkerRunnable* aEvent, EventQueue* aQueue);
 
@@ -976,6 +966,12 @@ private:
 
 WorkerPrivate*
 GetWorkerPrivateFromContext(JSContext* aCx);
+
+bool
+IsCurrentThreadRunningChromeWorker();
+
+JSContext*
+GetCurrentThreadJSContext();
 
 enum WorkerStructuredDataType
 {

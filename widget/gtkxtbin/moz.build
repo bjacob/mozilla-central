@@ -10,3 +10,11 @@ EXPORTS += [
     'gtk2xtbin.h',
 ]
 
+LIBRARY_NAME = 'gtkxtbin'
+
+LIBXUL_LIBRARY = True
+
+if CONFIG['MOZ_ENABLE_GTK2']:
+    CSRCS += [
+        'gtk2xtbin.c',
+    ]

@@ -9,15 +9,17 @@
 
 #include "mozilla/ipc/Shmem.h"
 #include "mozilla/ipc/SharedMemory.h"
-
+#include "cairo.h"
+ 
 #include "gfxASurface.h"
 #include "gfxImageSurface.h"
-#include "cairo.h"
+#include "pratom.h"
 
 struct SharedImageInfo {
     int32_t width;
     int32_t height;
     int32_t format;
+    int32_t readCount;
 };
 
 inline SharedImageInfo*
@@ -33,6 +35,7 @@ template <typename Base, typename Sub>
 class gfxBaseSharedMemorySurface : public Base {
     typedef mozilla::ipc::SharedMemory SharedMemory;
     typedef mozilla::ipc::Shmem Shmem;
+    friend class gfxReusableSharedImageSurfaceWrapper;
 
 public:
     virtual ~gfxBaseSharedMemorySurface()
@@ -53,7 +56,7 @@ public:
     static already_AddRefed<Sub>
     Create(ShmemAllocator* aAllocator,
            const gfxIntSize& aSize,
-           gfxASurface::gfxImageFormat aFormat,
+           gfxImageFormat aFormat,
            SharedMemory::SharedMemoryType aShmType = SharedMemory::TYPE_BASIC)
     {
         return Create<ShmemAllocator, false>(aAllocator, aSize, aFormat, aShmType);
@@ -73,7 +76,7 @@ public:
         if (!gfxASurface::CheckSurfaceSize(size))
             return nullptr;
        
-        gfxASurface::gfxImageFormat format = (gfxASurface::gfxImageFormat)shmInfo->format;
+        gfxImageFormat format = (gfxImageFormat)shmInfo->format;
         long stride = gfxImageSurface::ComputeStride(size, format);
 
         nsRefPtr<Sub> s =
@@ -89,7 +92,7 @@ public:
     static already_AddRefed<Sub>
     CreateUnsafe(ShmemAllocator* aAllocator,
                  const gfxIntSize& aSize,
-                 gfxASurface::gfxImageFormat aFormat,
+                 gfxImageFormat aFormat,
                  SharedMemory::SharedMemoryType aShmType = SharedMemory::TYPE_BASIC)
     {
         return Create<ShmemAllocator, true>(aAllocator, aSize, aFormat, aShmType);
@@ -100,13 +103,13 @@ public:
     static bool IsSharedImage(gfxASurface *aSurface)
     {
         return (aSurface
-                && aSurface->GetType() == gfxASurface::SurfaceTypeImage
+                && aSurface->GetType() == gfxSurfaceTypeImage
                 && aSurface->GetData(&SHM_KEY));
     }
 
 protected:
     gfxBaseSharedMemorySurface(const gfxIntSize& aSize, long aStride, 
-                               gfxASurface::gfxImageFormat aFormat, 
+                               gfxImageFormat aFormat, 
                                const Shmem& aShmem)
       : Base(aShmem.get<unsigned char>(), aSize, aStride, aFormat)
     {
@@ -123,6 +126,28 @@ private:
         shmInfo->width = this->mSize.width;
         shmInfo->height = this->mSize.height;
         shmInfo->format = this->mFormat;
+        shmInfo->readCount = 0;
+    }
+
+    int32_t
+    ReadLock()
+    {
+        SharedImageInfo* shmInfo = GetShmInfoPtr(mShmem);
+        return PR_ATOMIC_INCREMENT(&shmInfo->readCount);
+    }
+
+    int32_t
+    ReadUnlock()
+    {
+        SharedImageInfo* shmInfo = GetShmInfoPtr(mShmem);
+        return PR_ATOMIC_DECREMENT(&shmInfo->readCount);
+    }
+
+    int32_t
+    GetReadCount()
+    {
+        SharedImageInfo* shmInfo = GetShmInfoPtr(mShmem);
+        return shmInfo->readCount;
     }
 
     static size_t GetAlignedSize(const gfxIntSize& aSize, long aStride)
@@ -135,7 +160,7 @@ private:
     static already_AddRefed<Sub>
     Create(ShmemAllocator* aAllocator,
            const gfxIntSize& aSize,
-           gfxASurface::gfxImageFormat aFormat,
+           gfxImageFormat aFormat,
            SharedMemory::SharedMemoryType aShmType)
     {
         if (!gfxASurface::CheckSurfaceSize(aSize))

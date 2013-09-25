@@ -11,6 +11,7 @@
 #include "mozilla/RefPtr.h"
 #include "Zip.h"
 #include "Elfxx.h"
+#include "Mappable.h"
 
 /**
  * dlfcn.h replacement functions
@@ -53,6 +54,9 @@ __dl_mmap(void *handle, void *addr, size_t length, off_t offset);
 MFBT_API void
 __dl_munmap(void *handle, void *addr, size_t length);
 
+MFBT_API bool
+IsSignalHandlingBroken();
+
 }
 
 /**
@@ -66,7 +70,7 @@ class LibHandle;
 namespace mozilla {
 namespace detail {
 
-template <> inline void RefCounted<LibHandle, AtomicRefCount>::Release();
+template <> inline void RefCounted<LibHandle, AtomicRefCount>::Release() const;
 
 template <> inline RefCounted<LibHandle, AtomicRefCount>::~RefCounted()
 {
@@ -75,9 +79,6 @@ template <> inline RefCounted<LibHandle, AtomicRefCount>::~RefCounted()
 
 } /* namespace detail */
 } /* namespace mozilla */
-
-/* Forward declaration */
-class Mappable;
 
 /**
  * Abstract class for loaded libraries. Libraries may be loaded through the
@@ -200,7 +201,7 @@ private:
   char *path;
 
   /* Mappable object keeping the result of GetMappable() */
-  mutable Mappable *mappable;
+  mutable mozilla::RefPtr<Mappable> mappable;
 };
 
 /**
@@ -214,7 +215,7 @@ private:
 namespace mozilla {
 namespace detail {
 
-template <> inline void RefCounted<LibHandle, AtomicRefCount>::Release() {
+template <> inline void RefCounted<LibHandle, AtomicRefCount>::Release() const {
 #ifdef DEBUG
   if (refCnt > 0x7fff0000)
     MOZ_ASSERT(refCnt > 0x7fffdead);
@@ -227,7 +228,7 @@ template <> inline void RefCounted<LibHandle, AtomicRefCount>::Release() {
 #else
       refCnt = 1;
 #endif
-      delete static_cast<LibHandle*>(this);
+      delete static_cast<const LibHandle*>(this);
     }
   }
 }
@@ -297,6 +298,10 @@ public:
     return registeredHandler;
   }
 
+  bool isSignalHandlingBroken() {
+    return signalHandlingBroken;
+  }
+
 protected:
   SEGVHandler();
   ~SEGVHandler();
@@ -316,6 +321,11 @@ private:
   static void handler(int signum, siginfo_t *info, void *context);
 
   /**
+   * Temporary test handler.
+   */
+  static void test_handler(int signum, siginfo_t *info, void *context);
+
+  /**
    * Size of the alternative stack. The printf family requires more than 8KB
    * of stack, and our signal handler may print a few things.
    */
@@ -333,6 +343,7 @@ private:
   MappedPtr stackPtr;
 
   bool registeredHandler;
+  bool signalHandlingBroken;
 };
 
 /**
@@ -549,7 +560,7 @@ private:
       {
         if (other.item == NULL)
           return item ? true : false;
-        MOZ_NOT_REACHED("DebuggerHelper::iterator::operator< called with something else than DebuggerHelper::end()");
+        MOZ_CRASH("DebuggerHelper::iterator::operator< called with something else than DebuggerHelper::end()");
       }
     protected:
       friend class DebuggerHelper;

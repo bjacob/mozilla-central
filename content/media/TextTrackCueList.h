@@ -7,10 +7,11 @@
 #ifndef mozilla_dom_TextTrackCueList_h
 #define mozilla_dom_TextTrackCueList_h
 
-#include "mozilla/dom/TextTrackCue.h"
+#include "nsTArray.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsWrapperCache.h"
+#include "mozilla/ErrorResult.h"
 
 namespace mozilla {
 namespace dom {
@@ -47,7 +48,7 @@ public:
   TextTrackCue* GetCueById(const nsAString& aId);
 
   void AddCue(TextTrackCue& cue);
-  void RemoveCue(TextTrackCue& cue);
+  void RemoveCue(TextTrackCue& cue, ErrorResult& aRv);
 
 private:
   nsCOMPtr<nsISupports> mParent;

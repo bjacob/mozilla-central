@@ -5,11 +5,11 @@
 
 #include "base/basictypes.h"
 #include "ipc/IPCMessageUtils.h"
+#include "mozilla/GfxMessageUtils.h"
 #include "nsDOMNotifyPaintEvent.h"
 #include "nsContentUtils.h"
 #include "nsClientRect.h"
 #include "nsPaintRequest.h"
-#include "nsIFrame.h"
 
 nsDOMNotifyPaintEvent::nsDOMNotifyPaintEvent(mozilla::dom::EventTarget* aOwner,
                                              nsPresContext* aPresContext,
@@ -24,7 +24,6 @@ nsDOMNotifyPaintEvent::nsDOMNotifyPaintEvent(mozilla::dom::EventTarget* aOwner,
   if (aInvalidateRequests) {
     mInvalidateRequests.MoveElementsFrom(aInvalidateRequests->mRequests);
   }
-  SetIsDOMBinding();
 }
 
 NS_INTERFACE_MAP_BEGIN(nsDOMNotifyPaintEvent)
@@ -93,7 +92,7 @@ nsDOMNotifyPaintEvent::ClientRects()
 }
 
 NS_IMETHODIMP
-nsDOMNotifyPaintEvent::GetPaintRequests(nsIDOMPaintRequestList** aResult)
+nsDOMNotifyPaintEvent::GetPaintRequests(nsISupports** aResult)
 {
   nsRefPtr<nsPaintRequestList> requests = PaintRequests();
   requests.forget(aResult);
@@ -163,9 +162,6 @@ nsresult NS_NewDOMNotifyPaintEvent(nsIDOMEvent** aInstancePtrResult,
   nsDOMNotifyPaintEvent* it =
     new nsDOMNotifyPaintEvent(aOwner, aPresContext, aEvent, aEventType,
                               aInvalidateRequests);
-  if (nullptr == it) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
 
   return CallQueryInterface(it, aInstancePtrResult);
 }

@@ -8,13 +8,12 @@
 #include "nsIDocShell.h"
 #include "nsPresContext.h"
 #include "nsCOMPtr.h"
-#include "nsDOMClassInfoID.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsLayoutUtils.h"
 #include "nsDOMEvent.h"
-#include "nsGlobalWindow.h"
 #include "nsJSUtils.h"
 #include "mozilla/dom/ScreenBinding.h"
+#include "nsDeviceContext.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -198,7 +197,7 @@ nsScreen::GetMozOrientation(nsString& aOrientation)
     break;
   case eScreenOrientation_None:
   default:
-    MOZ_NOT_REACHED("Unacceptable mOrientation value");
+    MOZ_CRASH("Unacceptable mOrientation value");
   }
 }
 
@@ -259,7 +258,7 @@ nsScreen::MozLockOrientation(const JS::Value& aOrientation, JSContext* aCx,
 
       for (uint32_t i = 0; i < length; ++i) {
         JS::Rooted<JS::Value> temp(aCx);
-        if (!JS_GetElement(aCx, seq, i, temp.address())) {
+        if (!JS_GetElement(aCx, seq, i, &temp)) {
           return NS_ERROR_FAILURE;
         }
 
@@ -371,8 +370,7 @@ nsScreen::MozLockOrientation(const Sequence<nsString>& aOrientations,
 
   // This is only for compilers that don't understand that the previous switch
   // will always return.
-  MOZ_NOT_REACHED("unexpected lock orientation permission value");
-  return false;
+  MOZ_CRASH("unexpected lock orientation permission value");
 }
 
 void

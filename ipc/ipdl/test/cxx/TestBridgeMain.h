@@ -31,9 +31,9 @@ public:
     void Main();
 
 protected:
-    virtual PTestBridgeMainSubParent*
-    AllocPTestBridgeMainSub(Transport* transport,
-                            ProcessId otherProcess) MOZ_OVERRIDE;
+    virtual bool
+    AllocPTestBridgeMainSubParent(Transport* transport,
+                                  ProcessId otherProcess) MOZ_OVERRIDE;
 
     virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
 };
@@ -105,9 +105,9 @@ public:
 protected:
     virtual bool RecvPing() MOZ_OVERRIDE;
 
-    virtual PTestBridgeMainSubChild*
-    AllocPTestBridgeMainSub(Transport* transport,
-                            ProcessId otherProcess) MOZ_OVERRIDE;
+    virtual bool
+    AllocPTestBridgeMainSubChild(Transport* transport,
+                                 ProcessId otherProcess) MOZ_OVERRIDE;
 
     virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
 };

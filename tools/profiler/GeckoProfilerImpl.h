@@ -2,6 +2,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+// IWYU pragma: private, include "GeckoProfiler.h"
 
 #ifndef TOOLS_SPS_SAMPLER_H_
 #define TOOLS_SPS_SAMPLER_H_
@@ -12,11 +13,9 @@
 #include <algorithm>
 #include "mozilla/ThreadLocal.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/TimeStamp.h"
 #include "mozilla/Util.h"
 #include "nsAlgorithm.h"
 #include "nscore.h"
-#include "jsfriendapi.h"
 #include "GeckoProfilerFunc.h"
 #include "PseudoStack.h"
 #include "nsISupports.h"
@@ -36,6 +35,10 @@
 struct PseudoStack;
 class TableTicker;
 class JSCustomObject;
+
+namespace mozilla {
+class TimeStamp;
+}
 
 extern mozilla::ThreadLocal<PseudoStack *> tlsPseudoStack;
 extern mozilla::ThreadLocal<TableTicker *> tlsTicker;
@@ -65,9 +68,10 @@ void profiler_shutdown()
 
 static inline
 void profiler_start(int aProfileEntries, int aInterval,
-                       const char** aFeatures, uint32_t aFeatureCount)
+                       const char** aFeatures, uint32_t aFeatureCount,
+                       const char** aThreadNameFilters, uint32_t aFilterCount)
 {
-  mozilla_sampler_start(aProfileEntries, aInterval, aFeatures, aFeatureCount);
+  mozilla_sampler_start(aProfileEntries, aInterval, aFeatures, aFeatureCount, aThreadNameFilters, aFilterCount);
 }
 
 static inline
@@ -189,6 +193,7 @@ bool profiler_in_privacy_mode()
 #define PROFILER_LABEL(name_space, info) mozilla::SamplerStackFrameRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(name_space "::" info, __LINE__)
 #define PROFILER_LABEL_PRINTF(name_space, info, ...) mozilla::SamplerStackFramePrintfRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(name_space "::" info, __LINE__, __VA_ARGS__)
 #define PROFILER_MARKER(info) mozilla_sampler_add_marker(info)
+#define PROFILER_MARKER_PAYLOAD(info, payload) mozilla_sampler_add_marker(info, payload)
 #define PROFILER_MAIN_THREAD_LABEL(name_space, info)  MOZ_ASSERT(NS_IsMainThread(), "This can only be called on the main thread"); mozilla::SamplerStackFrameRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(name_space "::" info, __LINE__)
 #define PROFILER_MAIN_THREAD_LABEL_PRINTF(name_space, info, ...)  MOZ_ASSERT(NS_IsMainThread(), "This can only be called on the main thread"); mozilla::SamplerStackFramePrintfRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(name_space "::" info, __LINE__, __VA_ARGS__)
 #define PROFILER_MAIN_THREAD_MARKER(info)  MOZ_ASSERT(NS_IsMainThread(), "This can only be called on the main thread"); mozilla_sampler_add_marker(info)
@@ -323,7 +328,7 @@ inline void mozilla_sampler_call_exit(void *aHandle)
   stack->pop();
 }
 
-inline void mozilla_sampler_add_marker(const char *aMarker)
+inline void mozilla_sampler_add_marker(const char *aMarker, ProfilerMarkerPayload *aPayload)
 {
   if (!stack_key_initialized)
     return;
@@ -343,7 +348,7 @@ inline void mozilla_sampler_add_marker(const char *aMarker)
   if (!stack) {
     return;
   }
-  stack->addMarker(aMarker);
+  stack->addMarker(aMarker, aPayload);
 }
 
 #endif /* ndef TOOLS_SPS_SAMPLER_H_ */

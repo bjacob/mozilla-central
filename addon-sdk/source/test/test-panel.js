@@ -1,23 +1,35 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- 'use strict';
+'use strict';
+
+module.metadata = {
+  'engines': {
+    'Firefox': '*'
+  }
+};
 
 const { Cc, Ci } = require("chrome");
 const { Loader } = require('sdk/test/loader');
 const { LoaderWithHookedConsole } = require("sdk/test/loader");
 const timer = require("sdk/timers");
 const self = require('sdk/self');
-const { open, close, focus } = require('sdk/window/helpers');
+const { open, close, focus, ready } = require('sdk/window/helpers');
 const { isPrivate } = require('sdk/private-browsing');
 const { isWindowPBSupported, isGlobalPBSupported } = require('sdk/private-browsing/utils');
-const { defer } = require('sdk/core/promise');
+const { defer, all } = require('sdk/core/promise');
 const { getMostRecentBrowserWindow } = require('sdk/window/utils');
 const { getWindow } = require('sdk/panel/window');
 const { pb } = require('./private-browsing/helper');
 const { URL } = require('sdk/url');
 
 const SVG_URL = self.data.url('mofo_logo.SVG');
+const Isolate = fn => '(' + fn + ')()';
+
+function ignorePassingDOMNodeWarning(type, message) {
+  if (type !== 'warn' || !message.startsWith('Passing a DOM node'))
+    console[type](message);
+}
 
 function makeEmptyPrivateBrowserWindow(options) {
   options = options || {};
@@ -118,26 +130,32 @@ exports["test Show Hide Panel"] = function(assert, done) {
 exports["test Document Reload"] = function(assert, done) {
   const { Panel } = require('sdk/panel');
 
+  let url2 = "data:text/html;charset=utf-8,page2";
   let content =
     "<script>" +
-    "window.onload = function() {" +
-    "  setTimeout(function () {" +
-    "    window.location = 'about:blank';" +
-    "  }, 0);" +
-    "}" +
+    "window.addEventListener('message', function({ data }) {"+
+    "  if (data == 'move') window.location = '" + url2 + "';" +
+    '}, false);' +
     "</script>";
   let messageCount = 0;
   let panel = Panel({
     // using URL here is intentional, see bug 859009
     contentURL: URL("data:text/html;charset=utf-8," + encodeURIComponent(content)),
-    contentScript: "self.postMessage(window.location.href)",
+    contentScript: "self.postMessage(window.location.href);" +
+                   // initiate change to url2
+                   "self.port.once('move', function() document.defaultView.postMessage('move', '*'));",
     onMessage: function (message) {
       messageCount++;
+      assert.notEqual(message, "about:blank", "about:blank is not a message " + messageCount);
+
       if (messageCount == 1) {
-        assert.ok(/data:text\/html/.test(message), "First document had a content script " + message);
+        assert.ok(/data:text\/html/.test(message), "First document had a content script; " + message);
+        panel.port.emit('move');
+        assert.pass('move message was sent');
+        return;
       }
       else if (messageCount == 2) {
-        assert.equal(message, "about:blank", "Second document too");
+        assert.equal(message, url2, "Second document too; " + message);
         panel.destroy();
         done();
       }
@@ -146,53 +164,61 @@ exports["test Document Reload"] = function(assert, done) {
   assert.pass('Panel was created');
 };
 
+// Test disabled because of bug 910230
+/*
 exports["test Parent Resize Hack"] = function(assert, done) {
   const { Panel } = require('sdk/panel');
 
-  let browserWindow = Cc["@mozilla.org/appshell/window-mediator;1"].
-                      getService(Ci.nsIWindowMediator).
-                      getMostRecentWindow("navigator:browser");
-  let docShell = browserWindow.QueryInterface(Ci.nsIInterfaceRequestor)
-                  .getInterface(Ci.nsIWebNavigation)
-                  .QueryInterface(Ci.nsIDocShell);
-  if (!("allowWindowControl" in docShell)) {
-    // bug 635673 is not fixed in this firefox build
-    assert.pass("allowWindowControl attribute that allow to fix browser window " +
-              "resize is not available on this build.");
-    return;
-  }
+  let browserWindow = getMostRecentBrowserWindow();
 
-  let previousWidth = browserWindow.outerWidth, previousHeight = browserWindow.outerHeight;
+  let previousWidth = browserWindow.outerWidth;
+  let previousHeight = browserWindow.outerHeight;
 
   let content = "<script>" +
                 "function contentResize() {" +
                 "  resizeTo(200,200);" +
                 "  resizeBy(200,200);" +
+                "  window.postMessage('resize-attempt', '*');" +
                 "}" +
                 "</script>" +
                 "Try to resize browser window";
+
   let panel = Panel({
     contentURL: "data:text/html;charset=utf-8," + encodeURIComponent(content),
-    contentScript: "self.on('message', function(message){" +
-                   "  if (message=='resize') " +
-                   "    unsafeWindow.contentResize();" +
-                   "});",
     contentScriptWhen: "ready",
-    onMessage: function (message) {
+    contentScript: Isolate(() => {
+        self.on('message', message => {
+          if (message === 'resize') unsafeWindow.contentResize();
+        });
 
-    },
-    onShow: function () {
-      panel.postMessage('resize');
-      timer.setTimeout(function () {
-        assert.equal(previousWidth,browserWindow.outerWidth,"Size doesn't change by calling resizeTo/By/...");
-        assert.equal(previousHeight,browserWindow.outerHeight,"Size doesn't change by calling resizeTo/By/...");
+        window.addEventListener('message', ({ data }) => self.postMessage(data));
+      }),
+    onMessage: function (message) {
+      if (message !== "resize-attempt") return;
+
+      assert.equal(browserWindow, getMostRecentBrowserWindow(),
+        "The browser window is still the same");
+      assert.equal(previousWidth, browserWindow.outerWidth,
+        "Size doesn't change by calling resizeTo/By/...");
+      assert.equal(previousHeight, browserWindow.outerHeight,
+        "Size doesn't change by calling resizeTo/By/...");
+
+      try {
         panel.destroy();
-        done();
-      },0);
-    }
+      }
+      catch (e) {
+        assert.fail(e);
+        throw e;
+      }
+
+      done();
+    },
+    onShow: () => panel.postMessage('resize')
   });
+
   panel.show();
 }
+*/
 
 exports["test Resize Panel"] = function(assert, done) {
   const { Panel } = require('sdk/panel');
@@ -291,7 +317,8 @@ exports["test Several Show Hides"] = function(assert, done) {
 };
 
 exports["test Anchor And Arrow"] = function(assert, done) {
-  const { Panel } = require('sdk/panel');
+  let { loader } = LoaderWithHookedConsole(module, ignorePassingDOMNodeWarning);
+  let { Panel } = loader.require('sdk/panel');
 
   let count = 0;
   let queue = [];
@@ -457,6 +484,24 @@ exports["test Panel Text Color"] = function(assert, done) {
   });
 };
 
+// Bug 866333
+exports["test watch event name"] = function(assert, done) {
+  const { Panel } = require('sdk/panel');
+
+  let html = "<html><head><style>body {color: yellow}</style></head>" +
+             "<body><p>Foo</p></body></html>";
+
+  let panel = Panel({
+    contentURL: "data:text/html;charset=utf-8," + encodeURI(html),
+    contentScript: "self.port.emit('watch', 'test');"
+  });
+  panel.port.on("watch", function (msg) {
+    assert.equal(msg, "test", 'watch event name works');
+    panel.destroy();
+    done();
+  });
+}
+
 // Bug 696552: Ensure panel.contentURL modification support
 exports["test Change Content URL"] = function(assert, done) {
   const { Panel } = require('sdk/panel');
@@ -620,7 +665,7 @@ exports["test console.log in Panel"] = function(assert, done) {
 
 if (isWindowPBSupported) {
   exports.testPanelDoesNotShowInPrivateWindowNoAnchor = function(assert, done) {
-    let loader = Loader(module);
+    let { loader } = LoaderWithHookedConsole(module, ignorePassingDOMNodeWarning);
     let { Panel } = loader.require("sdk/panel");
     let browserWindow = getMostRecentBrowserWindow();
 
@@ -674,7 +719,7 @@ if (isWindowPBSupported) {
   }
 
   exports.testPanelDoesNotShowInPrivateWindowWithAnchor = function(assert, done) {
-    let loader = Loader(module);
+    let { loader } = LoaderWithHookedConsole(module, ignorePassingDOMNodeWarning);
     let { Panel } = loader.require("sdk/panel");
     let browserWindow = getMostRecentBrowserWindow();
 
@@ -810,6 +855,93 @@ exports['test Only One Panel Open Concurrently'] = function (assert, done) {
   panelB.show();
 };
 
+exports['test passing DOM node as first argument'] = function (assert, done) {
+  let warned = defer();
+  let shown = defer();
+
+  function onMessage(type, message) {
+    let warning = 'Passing a DOM node to Panel.show() method is an unsupported ' +
+                  'feature that will be soon replaced. ' +
+                  'See: https://bugzilla.mozilla.org/show_bug.cgi?id=878877';
+
+    assert.equal(type, 'warn',
+      'the message logged is a warning');
+
+    assert.equal(message, warning,
+      'the warning content is correct');
+
+    warned.resolve();
+  }
+
+  let { loader } = LoaderWithHookedConsole(module, onMessage);
+  let { Panel } = loader.require('sdk/panel');
+  let { Widget } = loader.require('sdk/widget');
+  let { document } = getMostRecentBrowserWindow();
+  let widgetId = 'widget:' + self.id + '-panel-widget';
+
+  let panel = Panel({
+    onShow: function() {
+      let panelNode = document.getElementById('mainPopupSet').lastChild;
+
+      assert.equal(panelNode.anchorNode, widgetNode,
+        'the panel is properly anchored to the widget');
+
+      shown.resolve();
+    }
+  });
+
+  let widget = Widget({
+    id: 'panel-widget',
+    label: 'panel widget',
+    content: '<i></i>',
+  });
+
+  let widgetNode = document.getElementById(widgetId);
+
+  all(warned.promise, shown.promise).
+    then(loader.unload).
+    then(done, assert.fail)
+
+  panel.show(widgetNode);
+};
+
+// This test is checking that `onpupshowing` events emitted by panel's children
+// are not considered.
+// See Bug 886329
+exports['test nested popups'] = function (assert, done) {
+  let loader = Loader(module);
+  let { Panel } = loader.require('sdk/panel');
+  let { getActiveView } = loader.require('sdk/view/core');
+  let url = '<select><option>1<option>2<option>3</select>';
+
+  let getContentWindow = panel => {
+    return getActiveView(panel).querySelector('iframe').contentWindow;
+  }
+
+  let panel = Panel({
+    contentURL: 'data:text/html;charset=utf-8,' + encodeURIComponent(url),
+    onShow: () => {
+      ready(getContentWindow(panel)).then(({ window, document }) => {
+        let select = document.querySelector('select');
+        let event = document.createEvent('UIEvent');
+
+        event.initUIEvent('popupshowing', true, true, window, null);
+        select.dispatchEvent(event);
+
+        assert.equal(
+          select,
+          getContentWindow(panel).document.querySelector('select'),
+          'select is still loaded in panel'
+        );
+
+        done();
+      });
+    }
+  });
+
+  panel.show();
+};
+
 if (isWindowPBSupported) {
   exports.testGetWindow = function(assert, done) {
     let activeWindow = getMostRecentBrowserWindow();
@@ -846,20 +978,6 @@ else if (isGlobalPBSupported) {
       })
     });
     pb.activate();
-  }
-}
-
-try {
-  require("sdk/panel");
-}
-catch (e) {
-  if (!/^Unsupported Application/.test(e.message))
-    throw e;
-
-  module.exports = {
-    "test Unsupported Application": function Unsupported (assert) {
-      assert.pass(e.message);
-    }
   }
 }
 

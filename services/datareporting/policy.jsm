@@ -134,7 +134,7 @@ Object.freeze(NotifyPolicyRequest.prototype);
  * Receivers of instances of this type should not attempt to do anything with
  * the instance except call one of the on* methods.
  */
-function DataSubmissionRequest(promise, expiresDate, isDelete) {
+this.DataSubmissionRequest = function (promise, expiresDate, isDelete) {
   this.promise = promise;
   this.expiresDate = expiresDate;
   this.isDelete = isDelete;
@@ -143,7 +143,7 @@ function DataSubmissionRequest(promise, expiresDate, isDelete) {
   this.reason = null;
 }
 
-DataSubmissionRequest.prototype = {
+this.DataSubmissionRequest.prototype = Object.freeze({
   NO_DATA_AVAILABLE: "no-data-available",
   SUBMISSION_SUCCESS: "success",
   SUBMISSION_FAILURE_SOFT: "failure-soft",
@@ -210,9 +210,7 @@ DataSubmissionRequest.prototype = {
     this.promise.resolve(this);
     return this.promise.promise;
   },
-};
-
-Object.freeze(DataSubmissionRequest.prototype);
+});
 
 /**
  * Manages scheduling of Firefox Health Report data submission.
@@ -317,7 +315,7 @@ this.DataReportingPolicy = function (prefs, healthReportPrefs, listener) {
   this._inProgressSubmissionRequest = null;
 };
 
-DataReportingPolicy.prototype = Object.freeze({
+this.DataReportingPolicy.prototype = Object.freeze({
   /**
    * How long after first run we should notify about data submission.
    */
@@ -648,6 +646,13 @@ DataReportingPolicy.prototype = Object.freeze({
   // to ensure appropriate side-effects are performed.
   set healthReportUploadEnabled(value) {
     this._healthReportPrefs.set("uploadEnabled", !!value);
+  },
+
+  /**
+   * Whether the FHR upload enabled setting is locked and can't be changed.
+   */
+  get healthReportUploadLocked() {
+    return this._healthReportPrefs.locked("uploadEnabled");
   },
 
   /**

@@ -15,15 +15,12 @@
 #include "nsIUnicodeDecoder.h"
 #include "nsIPlatformCharset.h"
 #include "nsICharsetConverterManager.h"
-#include "nsIDOMMimeType.h"
 #include "nsPluginLogging.h"
 #include "nsNPAPIPlugin.h"
-#include "mozilla/TimeStamp.h"
 #include "mozilla/Preferences.h"
 #include <cctype>
 
 using namespace mozilla;
-using mozilla::TimeStamp;
 
 // These legacy flags are used in the plugin registry. The states are now
 // stored in prefs, but we still need to be able to import them.
@@ -63,26 +60,7 @@ GetStatePrefNameForPlugin(nsPluginTag* aTag)
   return MakePrefNameForPlugin("state", aTag);
 }
 
-NS_IMPL_ISUPPORTS1(DOMMimeTypeImpl, nsIDOMMimeType)
-
 /* nsPluginTag */
-
-nsPluginTag::nsPluginTag(nsPluginTag* aPluginTag)
-  : mName(aPluginTag->mName),
-    mDescription(aPluginTag->mDescription),
-    mMimeTypes(aPluginTag->mMimeTypes),
-    mMimeDescriptions(aPluginTag->mMimeDescriptions),
-    mExtensions(aPluginTag->mExtensions),
-    mLibrary(nullptr),
-    mIsJavaPlugin(aPluginTag->mIsJavaPlugin),
-    mIsFlashPlugin(aPluginTag->mIsFlashPlugin),
-    mFileName(aPluginTag->mFileName),
-    mFullPath(aPluginTag->mFullPath),
-    mVersion(aPluginTag->mVersion),
-    mLastModifiedTime(0),
-    mNiceFileName()
-{
-}
 
 nsPluginTag::nsPluginTag(nsPluginInfo* aPluginInfo)
   : mName(aPluginInfo->fName),
@@ -94,7 +72,9 @@ nsPluginTag::nsPluginTag(nsPluginInfo* aPluginInfo)
     mFullPath(aPluginInfo->fFullPath),
     mVersion(aPluginInfo->fVersion),
     mLastModifiedTime(0),
-    mNiceFileName()
+    mNiceFileName(),
+    mCachedBlocklistState(nsIBlocklistService::STATE_NOT_BLOCKED),
+    mCachedBlocklistStateValid(false)
 {
   InitMime(aPluginInfo->fMimeTypeArray,
            aPluginInfo->fMimeDescriptionArray,
@@ -123,7 +103,9 @@ nsPluginTag::nsPluginTag(const char* aName,
     mFullPath(aFullPath),
     mVersion(aVersion),
     mLastModifiedTime(aLastModifiedTime),
-    mNiceFileName()
+    mNiceFileName(),
+    mCachedBlocklistState(nsIBlocklistService::STATE_NOT_BLOCKED),
+    mCachedBlocklistStateValid(false)
 {
   InitMime(aMimeTypes, aMimeDescriptions, aExtensions,
            static_cast<uint32_t>(aVariants));
@@ -326,14 +308,7 @@ nsPluginTag::GetDisabled(bool* aDisabled)
 bool
 nsPluginTag::IsBlocklisted()
 {
-  nsCOMPtr<nsIBlocklistService> bls = do_GetService("@mozilla.org/extensions/blocklist;1");
-  if (!bls) {
-    return false;
-  }
-
-  uint32_t state = nsIBlocklistService::STATE_NOT_BLOCKED;
-  bls->GetPluginBlocklistState(this, EmptyString(), EmptyString(), &state);
-  return state == nsIBlocklistService::STATE_BLOCKED;
+  return GetBlocklistState() == nsIBlocklistService::STATE_BLOCKED;
 }
 
 NS_IMETHODIMP
@@ -406,9 +381,9 @@ nsPluginTag::GetPluginState()
 void
 nsPluginTag::SetPluginState(PluginState state)
 {
-  MOZ_STATIC_ASSERT((uint32_t)nsPluginTag::ePluginState_Disabled == nsIPluginTag::STATE_DISABLED, "nsPluginTag::ePluginState_Disabled must match nsIPluginTag::STATE_DISABLED");
-  MOZ_STATIC_ASSERT((uint32_t)nsPluginTag::ePluginState_Clicktoplay == nsIPluginTag::STATE_CLICKTOPLAY, "nsPluginTag::ePluginState_Clicktoplay must match nsIPluginTag::STATE_CLICKTOPLAY");
-  MOZ_STATIC_ASSERT((uint32_t)nsPluginTag::ePluginState_Enabled == nsIPluginTag::STATE_ENABLED, "nsPluginTag::ePluginState_Enabled must match nsIPluginTag::STATE_ENABLED");
+  static_assert((uint32_t)nsPluginTag::ePluginState_Disabled == nsIPluginTag::STATE_DISABLED, "nsPluginTag::ePluginState_Disabled must match nsIPluginTag::STATE_DISABLED");
+  static_assert((uint32_t)nsPluginTag::ePluginState_Clicktoplay == nsIPluginTag::STATE_CLICKTOPLAY, "nsPluginTag::ePluginState_Clicktoplay must match nsIPluginTag::STATE_CLICKTOPLAY");
+  static_assert((uint32_t)nsPluginTag::ePluginState_Enabled == nsIPluginTag::STATE_ENABLED, "nsPluginTag::ePluginState_Enabled must match nsIPluginTag::STATE_ENABLED");
   SetEnabledState((uint32_t)state);
 }
 
@@ -537,4 +512,36 @@ void nsPluginTag::ImportFlagsToPrefs(uint32_t flags)
   if (!(flags & NS_PLUGIN_FLAG_ENABLED)) {
     SetPluginState(ePluginState_Disabled);
   }
+}
+
+uint32_t
+nsPluginTag::GetBlocklistState()
+{
+  if (mCachedBlocklistStateValid) {
+    return mCachedBlocklistState;
+  }
+
+  nsCOMPtr<nsIBlocklistService> blocklist = do_GetService("@mozilla.org/extensions/blocklist;1");
+  if (!blocklist) {
+    return nsIBlocklistService::STATE_NOT_BLOCKED;
+  }
+
+  // The EmptyString()s are so we use the currently running application
+  // and toolkit versions
+  uint32_t state;
+  if (NS_FAILED(blocklist->GetPluginBlocklistState(this, EmptyString(),
+                                                   EmptyString(), &state))) {
+    return nsIBlocklistService::STATE_NOT_BLOCKED;
+  }
+
+  MOZ_ASSERT(state <= UINT16_MAX);
+  mCachedBlocklistState = (uint16_t) state;
+  mCachedBlocklistStateValid = true;
+  return state;
+}
+
+void
+nsPluginTag::InvalidateBlocklistState()
+{
+  mCachedBlocklistStateValid = false;
 }

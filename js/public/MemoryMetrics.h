@@ -10,11 +10,16 @@
 // These declarations are not within jsapi.h because they are highly likely to
 // change in the future. Depend on them at your own risk.
 
+#include "mozilla/MemoryReporting.h"
+#include "mozilla/NullPtr.h"
+#include "mozilla/PodOperations.h"
+
 #include <string.h>
 
 #include "jsalloc.h"
 #include "jspubtd.h"
 
+#include "js/HashTable.h"
 #include "js/Utility.h"
 #include "js/Vector.h"
 
@@ -28,160 +33,26 @@ namespace js {
 // MemoryReportingSundriesThreshold() bytes.
 //
 // We need to define this value here, rather than in the code which actually
-// generates the memory reports, because HugeStringInfo uses this value.
+// generates the memory reports, because NotableStringInfo uses this value.
 JS_FRIEND_API(size_t) MemoryReportingSundriesThreshold();
 
-} // namespace js
-
-namespace JS {
-
-// Data for tracking memory usage of things hanging off objects.
-struct ObjectsExtraSizes
+// This hash policy avoids flattening ropes (which perturbs the site being
+// measured and requires a JSContext) at the expense of doing a FULL ROPE COPY
+// on every hash and match! Beware.
+struct InefficientNonFlatteningStringHashPolicy
 {
-    size_t slots;
-    size_t elementsNonAsmJS;
-    size_t elementsAsmJSHeap;
-    size_t elementsAsmJSNonHeap;
-    size_t argumentsData;
-    size_t regExpStatics;
-    size_t propertyIteratorData;
-    size_t ctypesData;
-    size_t private_;    // The '_' suffix is required because |private| is a keyword.
-                        // Note that this field is measured separately from the others.
-
-    ObjectsExtraSizes() { memset(this, 0, sizeof(ObjectsExtraSizes)); }
-
-    void add(ObjectsExtraSizes &sizes) {
-        this->slots                += sizes.slots;
-        this->elementsNonAsmJS     += sizes.elementsNonAsmJS;
-        this->elementsAsmJSHeap    += sizes.elementsAsmJSHeap;
-        this->elementsAsmJSNonHeap += sizes.elementsAsmJSNonHeap;
-        this->argumentsData        += sizes.argumentsData;
-        this->regExpStatics        += sizes.regExpStatics;
-        this->propertyIteratorData += sizes.propertyIteratorData;
-        this->ctypesData           += sizes.ctypesData;
-        this->private_             += sizes.private_;
-    }
+    typedef JSString *Lookup;
+    static HashNumber hash(const Lookup &l);
+    static bool match(const JSString *const &k, const Lookup &l);
 };
 
-// Data for tracking analysis/inference memory usage.
-struct TypeInferenceSizes
+struct ZoneStatsPod
 {
-    size_t typeScripts;
-    size_t typeResults;
-    size_t analysisPool;
-    size_t pendingArrays;
-    size_t allocationSiteTables;
-    size_t arrayTypeTables;
-    size_t objectTypeTables;
-
-    TypeInferenceSizes() { memset(this, 0, sizeof(TypeInferenceSizes)); }
-
-    void add(TypeInferenceSizes &sizes) {
-        this->typeScripts          += sizes.typeScripts;
-        this->typeResults          += sizes.typeResults;
-        this->analysisPool         += sizes.analysisPool;
-        this->pendingArrays        += sizes.pendingArrays;
-        this->allocationSiteTables += sizes.allocationSiteTables;
-        this->arrayTypeTables      += sizes.arrayTypeTables;
-        this->objectTypeTables     += sizes.objectTypeTables;
-    }
-};
-
-// Data for tracking JIT-code memory usage.
-struct CodeSizes
-{
-    size_t ion;
-    size_t asmJS;
-    size_t baseline;
-    size_t regexp;
-    size_t other;
-    size_t unused;
-
-    CodeSizes() { memset(this, 0, sizeof(CodeSizes)); }
-};
-
-// Holds data about a huge string (one which uses more HugeStringInfo::MinSize
-// bytes of memory), so we can report it individually.
-struct HugeStringInfo
-{
-    HugeStringInfo() : length(0), size(0) { memset(&buffer, 0, sizeof(buffer)); }
-
-    // A string needs to take up this many bytes of storage before we consider
-    // it to be "huge".
-    static size_t MinSize() {
-        return js::MemoryReportingSundriesThreshold();
+    ZoneStatsPod() {
+        mozilla::PodZero(this);
     }
 
-    // A string's size in memory is not necessarily equal to twice its length
-    // because the allocator and the JS engine both may round up.
-    size_t length;
-    size_t size;
-
-    // We record the first 32 chars of the escaped string here.  (We escape the
-    // string so we can use a char[] instead of a jschar[] here.
-    char buffer[32];
-};
-
-// These measurements relate directly to the JSRuntime, and not to
-// compartments within it.
-struct RuntimeSizes
-{
-    RuntimeSizes() { memset(this, 0, sizeof(RuntimeSizes)); }
-
-    size_t object;
-    size_t atomsTable;
-    size_t contexts;
-    size_t dtoa;
-    size_t temporary;
-    size_t regexpData;
-    size_t stack;
-    size_t gcMarker;
-    size_t mathCache;
-    size_t scriptData;
-    size_t scriptSources;
-
-    CodeSizes code;
-};
-
-struct ZoneStats
-{
-    ZoneStats()
-      : extra(NULL),
-        gcHeapArenaAdmin(0),
-        gcHeapUnusedGcThings(0),
-        gcHeapStringsNormal(0),
-        gcHeapStringsShort(0),
-        gcHeapLazyScripts(0),
-        gcHeapTypeObjects(0),
-        gcHeapIonCodes(0),
-        stringCharsNonHuge(0),
-        lazyScripts(0),
-        typeObjects(0),
-        typePool(0),
-        hugeStrings()
-    {}
-
-    ZoneStats(const ZoneStats &other)
-      : extra(other.extra),
-        gcHeapArenaAdmin(other.gcHeapArenaAdmin),
-        gcHeapUnusedGcThings(other.gcHeapUnusedGcThings),
-        gcHeapStringsNormal(other.gcHeapStringsNormal),
-        gcHeapStringsShort(other.gcHeapStringsShort),
-        gcHeapLazyScripts(other.gcHeapLazyScripts),
-        gcHeapTypeObjects(other.gcHeapTypeObjects),
-        gcHeapIonCodes(other.gcHeapIonCodes),
-        stringCharsNonHuge(other.stringCharsNonHuge),
-        lazyScripts(other.lazyScripts),
-        typeObjects(other.typeObjects),
-        typePool(other.typePool),
-        hugeStrings()
-    {
-        hugeStrings.append(other.hugeStrings);
-    }
-
-    // Add other's numbers to this object's numbers.
-    void add(ZoneStats &other) {
+    void add(const ZoneStatsPod &other) {
         #define ADD(x)  this->x += other.x
 
         ADD(gcHeapArenaAdmin);
@@ -193,14 +64,12 @@ struct ZoneStats
         ADD(gcHeapTypeObjects);
         ADD(gcHeapIonCodes);
 
-        ADD(stringCharsNonHuge);
+        ADD(stringCharsNonNotable);
         ADD(lazyScripts);
         ADD(typeObjects);
         ADD(typePool);
 
         #undef ADD
-
-        hugeStrings.append(other.hugeStrings);
     }
 
     // This field can be used by embedders.
@@ -216,12 +85,231 @@ struct ZoneStats
     size_t gcHeapTypeObjects;
     size_t gcHeapIonCodes;
 
-    size_t stringCharsNonHuge;
+    size_t stringCharsNonNotable;
     size_t lazyScripts;
     size_t typeObjects;
     size_t typePool;
+};
 
-    js::Vector<HugeStringInfo, 0, js::SystemAllocPolicy> hugeStrings;
+} // namespace js
+
+namespace JS {
+
+// Data for tracking memory usage of things hanging off objects.
+struct ObjectsExtraSizes
+{
+    size_t slots;
+    size_t elementsNonAsmJS;
+    size_t elementsAsmJSHeap;
+    size_t elementsAsmJSNonHeap;
+    size_t asmJSModuleCode;
+    size_t asmJSModuleData;
+    size_t argumentsData;
+    size_t regExpStatics;
+    size_t propertyIteratorData;
+    size_t ctypesData;
+    size_t private_;    // The '_' suffix is required because |private| is a keyword.
+                        // Note that this field is measured separately from the others.
+
+    ObjectsExtraSizes() { memset(this, 0, sizeof(ObjectsExtraSizes)); }
+
+    void add(ObjectsExtraSizes &sizes) {
+        this->slots                += sizes.slots;
+        this->elementsNonAsmJS     += sizes.elementsNonAsmJS;
+        this->elementsAsmJSHeap    += sizes.elementsAsmJSHeap;
+        this->elementsAsmJSNonHeap += sizes.elementsAsmJSNonHeap;
+        this->asmJSModuleCode      += sizes.asmJSModuleCode;
+        this->asmJSModuleData      += sizes.asmJSModuleData;
+        this->argumentsData        += sizes.argumentsData;
+        this->regExpStatics        += sizes.regExpStatics;
+        this->propertyIteratorData += sizes.propertyIteratorData;
+        this->ctypesData           += sizes.ctypesData;
+        this->private_             += sizes.private_;
+    }
+};
+
+// Data for tracking analysis/inference memory usage.
+struct TypeInferenceSizes
+{
+    size_t typeScripts;
+    size_t typeResults;
+    size_t pendingArrays;
+    size_t allocationSiteTables;
+    size_t arrayTypeTables;
+    size_t objectTypeTables;
+
+    TypeInferenceSizes() { memset(this, 0, sizeof(TypeInferenceSizes)); }
+
+    void add(TypeInferenceSizes &sizes) {
+        this->typeScripts          += sizes.typeScripts;
+        this->typeResults          += sizes.typeResults;
+        this->pendingArrays        += sizes.pendingArrays;
+        this->allocationSiteTables += sizes.allocationSiteTables;
+        this->arrayTypeTables      += sizes.arrayTypeTables;
+        this->objectTypeTables     += sizes.objectTypeTables;
+    }
+};
+
+// Data for tracking JIT-code memory usage.
+struct CodeSizes
+{
+    size_t ion;
+    size_t baseline;
+    size_t regexp;
+    size_t other;
+    size_t unused;
+
+    CodeSizes() { memset(this, 0, sizeof(CodeSizes)); }
+};
+
+
+// This class holds information about the memory taken up by identical copies of
+// a particular string.  Multiple JSStrings may have their sizes aggregated
+// together into one StringInfo object.
+struct StringInfo
+{
+    StringInfo()
+      : length(0), numCopies(0), sizeOfShortStringGCThings(0),
+        sizeOfNormalStringGCThings(0), sizeOfAllStringChars(0)
+    {}
+
+    StringInfo(size_t len, size_t shorts, size_t normals, size_t chars)
+      : length(len),
+        numCopies(1),
+        sizeOfShortStringGCThings(shorts),
+        sizeOfNormalStringGCThings(normals),
+        sizeOfAllStringChars(chars)
+    {}
+
+    void add(size_t shorts, size_t normals, size_t chars) {
+        sizeOfShortStringGCThings += shorts;
+        sizeOfNormalStringGCThings += normals;
+        sizeOfAllStringChars += chars;
+        numCopies++;
+    }
+
+    void add(const StringInfo& info) {
+        MOZ_ASSERT(length == info.length);
+
+        sizeOfShortStringGCThings += info.sizeOfShortStringGCThings;
+        sizeOfNormalStringGCThings += info.sizeOfNormalStringGCThings;
+        sizeOfAllStringChars += info.sizeOfAllStringChars;
+        numCopies += info.numCopies;
+    }
+
+    size_t totalSizeOf() const {
+        return sizeOfShortStringGCThings + sizeOfNormalStringGCThings + sizeOfAllStringChars;
+    }
+
+    size_t totalGCThingSizeOf() const {
+        return sizeOfShortStringGCThings + sizeOfNormalStringGCThings;
+    }
+
+    // The string's length, excluding the null-terminator.
+    size_t length;
+
+    // How many copies of the string have we seen?
+    size_t numCopies;
+
+    // These are all totals across all copies of the string we've seen.
+    size_t sizeOfShortStringGCThings;
+    size_t sizeOfNormalStringGCThings;
+    size_t sizeOfAllStringChars;
+};
+
+// Holds data about a notable string (one which uses more than
+// NotableStringInfo::notableSize() bytes of memory), so we can report it
+// individually.
+//
+// Essentially the only difference between this class and StringInfo is that
+// NotableStringInfo holds a copy of the string's chars.
+struct NotableStringInfo : public StringInfo
+{
+    NotableStringInfo();
+    NotableStringInfo(JSString *str, const StringInfo &info);
+    NotableStringInfo(const NotableStringInfo& info);
+    NotableStringInfo(mozilla::MoveRef<NotableStringInfo> info);
+    NotableStringInfo &operator=(mozilla::MoveRef<NotableStringInfo> info);
+
+    ~NotableStringInfo() {
+        js_free(buffer);
+    }
+
+    // A string needs to take up this many bytes of storage before we consider
+    // it to be "notable".
+    static size_t notableSize() {
+        return js::MemoryReportingSundriesThreshold();
+    }
+
+    // The amount of memory we requested for |buffer|; i.e.
+    // buffer = malloc(bufferSize).
+    size_t bufferSize;
+    char *buffer;
+};
+
+// These measurements relate directly to the JSRuntime, and not to
+// compartments within it.
+struct RuntimeSizes
+{
+    RuntimeSizes() { memset(this, 0, sizeof(RuntimeSizes)); }
+
+    size_t object;
+    size_t atomsTable;
+    size_t contexts;
+    size_t dtoa;
+    size_t temporary;
+    size_t regexpData;
+    size_t interpreterStack;
+    size_t gcMarker;
+    size_t mathCache;
+    size_t scriptData;
+    size_t scriptSources;
+
+    CodeSizes code;
+};
+
+struct ZoneStats : js::ZoneStatsPod
+{
+    ZoneStats() {
+        strings.init();
+    }
+
+    ZoneStats(mozilla::MoveRef<ZoneStats> other)
+        : ZoneStatsPod(other),
+          strings(mozilla::OldMove(other->strings)),
+          notableStrings(mozilla::OldMove(other->notableStrings))
+    {}
+
+    // Add other's numbers to this object's numbers.  Both objects'
+    // notableStrings vectors must be empty at this point, because we can't
+    // merge them.  (A NotableStringInfo contains only a prefix of the string,
+    // so we can't tell whether two NotableStringInfo objects correspond to the
+    // same string.)
+    void add(const ZoneStats &other) {
+        ZoneStatsPod::add(other);
+
+        MOZ_ASSERT(notableStrings.empty());
+        MOZ_ASSERT(other.notableStrings.empty());
+
+        for (StringsHashMap::Range r = other.strings.all(); !r.empty(); r.popFront()) {
+            StringsHashMap::AddPtr p = strings.lookupForAdd(r.front().key);
+            if (p) {
+                // We've seen this string before; add its size to our tally.
+                p->value.add(r.front().value);
+            } else {
+                // We haven't seen this string before; add it to the hashtable.
+                strings.add(p, r.front().key, r.front().value);
+            }
+        }
+    }
+
+    typedef js::HashMap<JSString*,
+                        StringInfo,
+                        js::InefficientNonFlatteningStringHashPolicy,
+                        js::SystemAllocPolicy> StringsHashMap;
+
+    StringsHashMap strings;
+    js::Vector<NotableStringInfo, 0, js::SystemAllocPolicy> notableStrings;
 
     // The size of all the live things in the GC heap that don't belong to any
     // compartment.
@@ -231,7 +319,7 @@ struct ZoneStats
 struct CompartmentStats
 {
     CompartmentStats()
-      : extra(NULL),
+      : extra(nullptr),
         gcHeapObjectsOrdinary(0),
         gcHeapObjectsFunction(0),
         gcHeapObjectsDenseArray(0),
@@ -363,7 +451,7 @@ struct CompartmentStats
 
 struct RuntimeStats
 {
-    RuntimeStats(JSMallocSizeOfFun mallocSizeOf)
+    RuntimeStats(mozilla::MallocSizeOf mallocSizeOf)
       : runtime(),
         gcHeapChunkTotal(0),
         gcHeapDecommittedArenas(0),
@@ -376,7 +464,7 @@ struct RuntimeStats
         zTotals(),
         compartmentStatsVector(),
         zoneStatsVector(),
-        currZoneStats(NULL),
+        currZoneStats(nullptr),
         mallocSizeOf_(mallocSizeOf)
     {}
 
@@ -420,7 +508,7 @@ struct RuntimeStats
 
     ZoneStats *currZoneStats;
 
-    JSMallocSizeOfFun mallocSizeOf_;
+    mozilla::MallocSizeOf mallocSizeOf_;
 
     virtual void initExtraCompartmentStats(JSCompartment *c, CompartmentStats *cstats) = 0;
     virtual void initExtraZoneStats(JS::Zone *zone, ZoneStats *zstats) = 0;
@@ -435,7 +523,7 @@ class ObjectPrivateVisitor
 
     // A callback that gets a JSObject's nsISupports pointer, if it has one.
     // Note: this function does *not* addref |iface|.
-    typedef JSBool(*GetISupportsFun)(JSObject *obj, nsISupports **iface);
+    typedef bool(*GetISupportsFun)(JSObject *obj, nsISupports **iface);
     GetISupportsFun getISupports_;
 
     ObjectPrivateVisitor(GetISupportsFun getISupports)
@@ -457,4 +545,4 @@ PeakSizeOfTemporary(const JSRuntime *rt);
 
 } // namespace JS
 
-#endif // js_MemoryMetrics_h
+#endif /* js_MemoryMetrics_h */

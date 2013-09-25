@@ -13,7 +13,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
     <script type="application/javascript"
             src="../common.js"></script>
     <script type="application/javascript"
-            src="./utterance.js"></script>
+            src="./output.js"></script>
     <script type="application/javascript">
 
       function doTest() {
@@ -23,6 +23,23 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
         var tests = [{
           accOrElmOrID: "anchor",
           expected: [["link", "title"], ["title", "link"]]
+        }, {
+          accOrElmOrID: "anchor_titleandtext",
+          expected: [[
+            "link", "goes to the tests -", "Tests"
+          ], [
+            "Tests", "- goes to the tests", "link"
+          ]]
+        }, {
+          accOrElmOrID: "anchor_duplicatedtitleandtext",
+          expected: [["link", "Tests"], ["Tests", "link"]]
+        }, {
+          accOrElmOrID: "anchor_arialabelandtext",
+          expected: [[
+            "link", "goes to the tests - Tests"
+          ], [
+            "Tests - goes to the tests", "link"
+          ]]
         }, {
           accOrElmOrID: "textarea",
           expected: [[
@@ -39,8 +56,8 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
         }, {
           accOrElmOrID: "list",
           expected: [
-            ["list 1 items", "First item", "1.", "list one"],
-            ["1.", "list one", "First item", "list 1 items"]
+            ["list 1 item", "First item", "1.", "list one"],
+            ["1.", "list one", "First item", "list 1 item"]
           ]
         }, {
           accOrElmOrID: "dlist",
@@ -51,27 +68,28 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
         }, {
           accOrElmOrID: "li_one",
           expected: [
-            ["list 1 items", "First item", "1.", "list one"],
-            ["1.", "list one", "First item", "list 1 items"]
+            ["list 1 item", "First item", "1.", "list one"],
+            ["1.", "list one", "First item", "list 1 item"]
           ]
         }, {
           accOrElmOrID: "cell",
           expected: [[
-            "table", "Fruits and vegetables", "list 4 items", "First item",
-            "link", "Apples", "link", "Bananas", "link", "Peaches",
-            "Last item", "link", "Plums"
+            "table with 1 column and 1 row", "Fruits and vegetables",
+            "Column 1 Row 1", "list 4 items", "First item", "link", "Apples",
+            "link", "Bananas", "link", "Peaches", "Last item", "link", "Plums"
           ], [
             "Apples", "link", "First item", "Bananas", "link", "Peaches",
             "link", "Plums", "link", "Last item", "list 4 items",
-            "Fruits and vegetables", "table"
+            "Column 1 Row 1", "Fruits and vegetables",
+            "table with 1 column and 1 row"
           ]]
         }, {
           // Test pivot to list from li_one.
           accOrElmOrID: "list",
           oldAccOrElmOrID: "li_one",
           expected: [
-            ["list 1 items", "First item", "1.", "list one"],
-            ["1.", "list one", "First item", "list 1 items"]
+            ["list 1 item", "First item", "1.", "list one"],
+            ["1.", "list one", "First item", "list 1 item"]
           ]
         }, {
           // Test pivot to "apples" link from the table cell.
@@ -111,6 +129,16 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
           accOrElmOrID: 'hasPopupButton',
           expected: [["has pop up button menu", "I have a popup"],
             ["I have a popup", "has pop up button menu"]]
+        }, {
+          // Test selected tab
+          accOrElmOrID: 'tab1',
+          expected: [['tab list', 'selected tab 1 of 2', 'Account'],
+            ['Account', 'selected tab 1 of 2', 'tab list']]
+        }, {
+          // Test unselected tab
+          accOrElmOrID: 'tab2',
+          expected: [['tab list', 'tab 2 of 2', 'Advanced'],
+            ['Advanced', 'tab 2 of 2', 'tab list']]
         }];
 
         // Test all possible utterance order preference values.
@@ -120,7 +148,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
             function testUtteranceOrder(utteranceOrder) {
               SpecialPowers.setIntPref(PREF_UTTERANCE_ORDER, utteranceOrder);
               var expected = test.expected[utteranceOrder];
-              testUtterance(expected, test.accOrElmOrID, test.oldAccOrElmOrID);
+              testOutput(expected, test.accOrElmOrID, test.oldAccOrElmOrID, 1);
             }
           );
         });
@@ -141,10 +169,17 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
          href="https://bugzilla.mozilla.org/show_bug.cgi?id=753984"
          title="[AccessFu] utterance order test">
          Mozilla Bug 753984</a>
+      <a target="_blank"
+         href="https://bugzilla.mozilla.org/show_bug.cgi?id=758675"
+         title="[AccessFu] Add support for accDescription">
+         Mozilla Bug 758675</a>
       <p id="display"></p>
       <div id="content" style="display: none"></div>
       <pre id="test"></pre>
       <a id="anchor" href="#test" title="title"></a>
+      <a id="anchor_titleandtext" href="#test" title="goes to the tests">Tests</a>
+      <a id="anchor_duplicatedtitleandtext" href="#test" title="Tests">Tests</a>
+      <a id="anchor_arialabelandtext" href="#test" aria-label="Tests" title="goes to the tests">Tests</a>
       <textarea id="textarea" cols="80" rows="5">
         This is the text area text.
       </textarea>
@@ -179,6 +214,10 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=753984
       <button id="collapsedButton" aria-expanded="false">I am collapsed</button>
       <input id="requiredInput" required placeholder="I am required" />
       <button id="hasPopupButton" aria-haspopup="true">I have a popup</button>
+      <div role="tablist">
+        <a id="tab1" href="#" role="tab" aria-selected="true">Account</a>
+        <a id="tab2" href="#" role="tab" aria-selected="false">Advanced</a>
+      </div>
     </div>
   </body>
 </html>

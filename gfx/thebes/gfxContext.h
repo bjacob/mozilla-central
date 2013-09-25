@@ -67,7 +67,7 @@ public:
      */
     already_AddRefed<gfxASurface> CurrentSurface(gfxFloat *dx, gfxFloat *dy);
     already_AddRefed<gfxASurface> CurrentSurface() {
-        return CurrentSurface(NULL, NULL);
+        return CurrentSurface(nullptr, nullptr);
     }
 
     /**
@@ -204,6 +204,7 @@ public:
      * @param snapToPixels ?
      */
     void Rectangle(const gfxRect& rect, bool snapToPixels = false);
+    void SnappedRectangle(const gfxRect& rect) { return Rectangle(rect, true); }
 
     /**
      * Draw an ellipse at the center corner with the given dimensions.
@@ -452,7 +453,7 @@ public:
     void SetDash(gfxLineType ltype);
     void SetDash(gfxFloat *dashes, int ndash, gfxFloat offset);
     // Return true if dashing is set, false if it's not enabled or the
-    // context is in an error state.  |offset| can be NULL to mean
+    // context is in an error state.  |offset| can be nullptr to mean
     // "don't care".
     bool CurrentDash(FallibleTArray<gfxFloat>& dashes, gfxFloat* offset) const;
     // Returns 0.0 if dashing isn't enabled.
@@ -616,10 +617,10 @@ public:
     /**
      * Groups
      */
-    void PushGroup(gfxASurface::gfxContentType content = gfxASurface::CONTENT_COLOR);
+    void PushGroup(gfxContentType content = GFX_CONTENT_COLOR);
     /**
-     * Like PushGroup, but if the current surface is CONTENT_COLOR and
-     * content is CONTENT_COLOR_ALPHA, makes the pushed surface CONTENT_COLOR
+     * Like PushGroup, but if the current surface is GFX_CONTENT_COLOR and
+     * content is GFX_CONTENT_COLOR_ALPHA, makes the pushed surface GFX_CONTENT_COLOR
      * instead and copies the contents of the current surface to the pushed
      * surface. This is good for pushing opacity groups, since blending the
      * group back to the current surface with some alpha applied will give
@@ -628,7 +629,7 @@ public:
      * This API really only makes sense if you do a PopGroupToSource and
      * immediate Paint with OPERATOR_OVER.
      */
-    void PushGroupAndCopyBackground(gfxASurface::gfxContentType content = gfxASurface::CONTENT_COLOR);
+    void PushGroupAndCopyBackground(gfxContentType content = GFX_CONTENT_COLOR);
     already_AddRefed<gfxPattern> PopGroup();
     void PopGroupToSource();
 
@@ -740,6 +741,7 @@ private:
     nsRefPtr<gfxPattern> pattern;
     nsRefPtr<gfxASurface> sourceSurfCairo;
     mozilla::RefPtr<SourceSurface> sourceSurface;
+    mozilla::gfx::Point sourceSurfaceDeviceOffset;
     Matrix surfTransform;
     Matrix transform;
     struct PushedClip {
@@ -772,7 +774,7 @@ private:
   Rect GetAzureDeviceSpaceClipBounds();
   Matrix GetDeviceTransform() const;
   Matrix GetDTTransform() const;
-  void PushNewDT(gfxASurface::gfxContentType content);
+  void PushNewDT(gfxContentType content);
 
   bool mPathIsRect;
   bool mTransformChanged;

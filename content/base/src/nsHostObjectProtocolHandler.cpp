@@ -10,12 +10,13 @@
 #include "nsIPrincipal.h"
 #include "nsIDOMFile.h"
 #include "nsIDOMMediaStream.h"
+#include "mozilla/dom/MediaSource.h"
 
 // -----------------------------------------------------------------------
 // Hash table
 struct DataInfo
 {
-  // mObject must be an nsIDOMBlob or an nsIDOMMediaStream
+  // mObject is expected to be an nsIDOMBlob, nsIDOMMediaStream, or MediaSource
   nsCOMPtr<nsISupports> mObject;
   nsCOMPtr<nsIPrincipal> mPrincipal;
 };
@@ -28,25 +29,11 @@ nsHostObjectProtocolHandler::AddDataEntry(const nsACString& aScheme,
                                           nsIPrincipal* aPrincipal,
                                           nsACString& aUri)
 {
-  nsresult rv;
-  nsCOMPtr<nsIUUIDGenerator> uuidgen =
-    do_GetService("@mozilla.org/uuid-generator;1", &rv);
+  nsresult rv = GenerateURIString(aScheme, aUri);
   NS_ENSURE_SUCCESS(rv, rv);
-
-  nsID id;
-  rv = uuidgen->GenerateUUIDInPlace(&id);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  char chars[NSID_LENGTH];
-  id.ToProvidedString(chars);
-
-  aUri += aScheme;
-  aUri += NS_LITERAL_CSTRING(":");
-  aUri += Substring(chars + 1, chars + NSID_LENGTH - 2);
 
   if (!gDataTable) {
     gDataTable = new nsClassHashtable<nsCStringHashKey, DataInfo>;
-    gDataTable->Init();
   }
 
   DataInfo* info = new DataInfo;
@@ -68,6 +55,29 @@ nsHostObjectProtocolHandler::RemoveDataEntry(const nsACString& aUri)
       gDataTable = nullptr;
     }
   }
+}
+
+nsresult
+nsHostObjectProtocolHandler::GenerateURIString(const nsACString &aScheme,
+                                               nsACString& aUri)
+{
+  nsresult rv;
+  nsCOMPtr<nsIUUIDGenerator> uuidgen =
+    do_GetService("@mozilla.org/uuid-generator;1", &rv);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsID id;
+  rv = uuidgen->GenerateUUIDInPlace(&id);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  char chars[NSID_LENGTH];
+  id.ToProvidedString(chars);
+
+  aUri += aScheme;
+  aUri += NS_LITERAL_CSTRING(":");
+  aUri += Substring(chars + 1, chars + NSID_LENGTH - 2);
+
+  return NS_OK;
 }
 
 nsIPrincipal*
@@ -183,7 +193,8 @@ nsHostObjectProtocolHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
     return NS_ERROR_DOM_BAD_URI;
   }
   nsCOMPtr<nsIDOMBlob> blob = do_QueryInterface(info->mObject);
-  if (!blob) {
+  nsCOMPtr<mozilla::dom::MediaSource> mediasource = do_QueryInterface(info->mObject);
+  if (!blob && !mediasource) {
     return NS_ERROR_DOM_BAD_URI;
   }
 
@@ -197,7 +208,12 @@ nsHostObjectProtocolHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
 #endif
 
   nsCOMPtr<nsIInputStream> stream;
-  nsresult rv = blob->GetInternalStream(getter_AddRefs(stream));
+  nsresult rv = NS_OK;
+  if (blob) {
+    rv = blob->GetInternalStream(getter_AddRefs(stream));
+  } else {
+    stream = mediasource->CreateInternalStream();
+  }
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIChannel> channel;
@@ -209,25 +225,30 @@ nsHostObjectProtocolHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
   nsCOMPtr<nsISupports> owner = do_QueryInterface(info->mPrincipal);
 
   nsString type;
-  rv = blob->GetType(type);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCOMPtr<nsIDOMFile> file = do_QueryInterface(info->mObject);
-  if (file) {
-    nsString filename;
-    rv = file->GetName(filename);
+  if (blob) {
+    rv = blob->GetType(type);
     NS_ENSURE_SUCCESS(rv, rv);
-    channel->SetContentDispositionFilename(filename);
-  }
 
-  uint64_t size;
-  rv = blob->GetSize(&size);
-  NS_ENSURE_SUCCESS(rv, rv);
+    uint64_t size;
+    rv = blob->GetSize(&size);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsCOMPtr<nsIDOMFile> file = do_QueryInterface(info->mObject);
+    if (file) {
+      nsString filename;
+      rv = file->GetName(filename);
+      NS_ENSURE_SUCCESS(rv, rv);
+      channel->SetContentDispositionFilename(filename);
+    }
+
+    channel->SetContentLength(size);
+  } else {
+    type = mediasource->GetType();
+  }
 
   channel->SetOwner(owner);
   channel->SetOriginalURI(uri);
   channel->SetContentType(NS_ConvertUTF16toUTF8(type));
-  channel->SetContentLength(size);
 
   channel.forget(result);
 
@@ -254,6 +275,20 @@ NS_IMETHODIMP
 nsMediaStreamProtocolHandler::GetScheme(nsACString &result)
 {
   result.AssignLiteral(MEDIASTREAMURI_SCHEME);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMediaSourceProtocolHandler::GetScheme(nsACString &result)
+{
+  result.AssignLiteral(MEDIASOURCEURI_SCHEME);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsFontTableProtocolHandler::GetScheme(nsACString &result)
+{
+  result.AssignLiteral(FONTTABLEURI_SCHEME);
   return NS_OK;
 }
 
@@ -286,5 +321,54 @@ NS_GetStreamForMediaStreamURI(nsIURI* aURI, nsIDOMMediaStream** aStream)
 
   *aStream = stream;
   NS_ADDREF(*aStream);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsFontTableProtocolHandler::NewURI(const nsACString& aSpec,
+                                   const char *aCharset,
+                                   nsIURI *aBaseURI,
+                                   nsIURI **aResult)
+{
+  nsRefPtr<nsIURI> uri;
+
+  // Either you got here via a ref or a fonttable: uri
+  if (aSpec.Length() && aSpec.CharAt(0) == '#') {
+    nsresult rv = aBaseURI->CloneIgnoringRef(getter_AddRefs(uri));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    uri->SetRef(aSpec);
+  } else {
+    // Relative URIs (other than #ref) are not meaningful within the
+    // fonttable: scheme.
+    // If aSpec is a relative URI -other- than a bare #ref,
+    // this will leave uri empty, and we'll return a failure code below.
+    uri = new nsSimpleURI();
+    uri->SetSpec(aSpec);
+  }
+
+  bool schemeIs;
+  if (NS_FAILED(uri->SchemeIs(FONTTABLEURI_SCHEME, &schemeIs)) || !schemeIs) {
+    NS_WARNING("Non-fonttable spec in nsFontTableProtocolHander");
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  uri.forget(aResult);
+  return NS_OK;
+}
+
+nsresult
+NS_GetSourceForMediaSourceURI(nsIURI* aURI, mozilla::dom::MediaSource** aSource)
+{
+  NS_ASSERTION(IsMediaSourceURI(aURI), "Only call this with mediasource URIs");
+
+  *aSource = nullptr;
+
+  nsCOMPtr<mozilla::dom::MediaSource> source = do_QueryInterface(GetDataObject(aURI));
+  if (!source) {
+    return NS_ERROR_DOM_BAD_URI;
+  }
+
+  source.forget(aSource);
   return NS_OK;
 }

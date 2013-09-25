@@ -67,9 +67,9 @@ static mozilla::LinkedList<nsHtml5TreeOpExecutor>* gBackgroundFlushList = nullpt
 static nsITimer* gFlushTimer = nullptr;
 
 nsHtml5TreeOpExecutor::nsHtml5TreeOpExecutor(bool aRunsToCompletion)
+  : mPreloadedURLs(23)  // Mean # of preloadable resources per page on dmoz
 {
   mRunsToCompletion = aRunsToCompletion;
-  mPreloadedURLs.Init(23); // Mean # of preloadable resources per page on dmoz
   // zeroing operator new for everything else
 }
 
@@ -101,7 +101,7 @@ nsHtml5TreeOpExecutor::WillParse()
 NS_IMETHODIMP
 nsHtml5TreeOpExecutor::WillBuildModel(nsDTDMode aDTDMode)
 {
-  if (mDocShell && !GetDocument()->GetScriptGlobalObject() &&
+  if (mDocShell && !GetDocument()->GetWindow() &&
       !IsExternalViewSource()) {
     // Not loading as data but script global object not ready
     return MarkAsBroken(NS_ERROR_DOM_INVALID_STATE_ERR);
@@ -682,13 +682,13 @@ nsHtml5TreeOpExecutor::IsScriptEnabled()
 {
   if (!mDocument || !mDocShell)
     return true;
-  nsCOMPtr<nsIScriptGlobalObject> globalObject = mDocument->GetScriptGlobalObject();
+  nsCOMPtr<nsIScriptGlobalObject> globalObject = do_QueryInterface(mDocument->GetWindow());
   // Getting context is tricky if the document hasn't had its
   // GlobalObject set yet
   if (!globalObject) {
     nsCOMPtr<nsIScriptGlobalObjectOwner> owner = do_GetInterface(mDocShell);
     NS_ENSURE_TRUE(owner, true);
-    globalObject = owner->GetScriptGlobalObject();
+    globalObject = do_QueryInterface(mDocument->GetWindow());
     NS_ENSURE_TRUE(globalObject, true);
   }
   nsIScriptContext *scriptContext = globalObject->GetContext();
@@ -887,7 +887,7 @@ nsHtml5TreeOpExecutor::MaybeComplainAboutCharset(const char* aMsgId,
   mAlreadyComplainedAboutCharset = true;
   nsContentUtils::ReportToConsole(aError ? nsIScriptError::errorFlag
                                          : nsIScriptError::warningFlag,
-                                  "HTML parser",
+                                  NS_LITERAL_CSTRING("HTML parser"),
                                   mDocument,
                                   nsContentUtils::eHTMLPARSER_PROPERTIES,
                                   aMsgId,
@@ -905,7 +905,7 @@ nsHtml5TreeOpExecutor::ComplainAboutBogusProtocolCharset(nsIDocument* aDoc)
                "How come we already managed to complain?");
   mAlreadyComplainedAboutCharset = true;
   nsContentUtils::ReportToConsole(nsIScriptError::errorFlag,
-                                  "HTML parser",
+                                  NS_LITERAL_CSTRING("HTML parser"),
                                   aDoc,
                                   nsContentUtils::eHTMLPARSER_PROPERTIES,
                                   "EncProtocolUnsupported");

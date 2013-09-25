@@ -10,7 +10,12 @@ if CONFIG['MOZ_X11']:
 MODULE = 'widget'
 
 CPP_SOURCES += [
+    'WidgetEventImpl.cpp',
     'WidgetUtils.cpp',
     'nsShmImage.cpp',
 ]
+
+LIBXUL_LIBRARY = True
+
+LIBRARY_NAME = 'widget_shared'
 

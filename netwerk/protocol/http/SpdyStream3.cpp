@@ -4,8 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "mozilla/Telemetry.h"
-#include "nsAlgorithm.h"
 #include "nsHttp.h"
 #include "nsHttpHandler.h"
 #include "nsHttpRequestHead.h"
@@ -15,6 +17,7 @@
 #include "SpdyPush3.h"
 #include "SpdySession3.h"
 #include "SpdyStream3.h"
+#include "PSpdyPush3.h"
 
 #include <algorithm>
 
@@ -375,12 +378,11 @@ SpdyStream3::ParseHttpRequestHeaders(const char *buf,
   else
     versionHeader = NS_LITERAL_CSTRING("HTTP/1.0");
 
-  nsClassHashtable<nsCStringHashKey, nsCString> hdrHash;
-
   // use mRequestHead() to get a sense of how big to make the hash,
   // even though we are parsing the actual text stream because
   // it is legit to append headers.
-  hdrHash.Init(1 + (mTransaction->RequestHead()->Headers().Count() * 2));
+  nsClassHashtable<nsCStringHashKey, nsCString>
+    hdrHash(1 + (mTransaction->RequestHead()->Headers().Count() * 2));
 
   const char *beginBuffer = mFlatHttpRequestHeaders.BeginReading();
 
@@ -1015,14 +1017,17 @@ SpdyStream3::Uncompress(z_stream *context,
     if (zlib_rv == Z_NEED_DICT) {
       if (triedDictionary) {
         LOG3(("SpdySession3::Uncompress %p Dictionary Error\n", this));
-        return NS_ERROR_FAILURE;
+        return NS_ERROR_ILLEGAL_VALUE;
       }
 
       triedDictionary = true;
       inflateSetDictionary(context, kDictionary, sizeof(kDictionary));
     }
 
-    if (zlib_rv == Z_DATA_ERROR || zlib_rv == Z_MEM_ERROR)
+    if (zlib_rv == Z_DATA_ERROR)
+      return NS_ERROR_ILLEGAL_VALUE;
+
+    if (zlib_rv == Z_MEM_ERROR)
       return NS_ERROR_FAILURE;
 
     // zlib's inflate() decreases context->avail_out by the amount it places
@@ -1213,7 +1218,7 @@ SpdyStream3::ConvertHeaders(nsACString &aHeadersOut)
         aHeadersOut.Append(nameString);
         aHeadersOut.Append(NS_LITERAL_CSTRING(": "));
 
-        // expand NULL bytes in the value string
+        // expand nullptr bytes in the value string
         for (char *cPtr = valueString.BeginWriting();
              cPtr && cPtr < valueString.EndWriting();
              ++cPtr) {

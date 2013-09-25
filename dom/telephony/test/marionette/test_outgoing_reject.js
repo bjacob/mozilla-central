@@ -23,7 +23,7 @@ function getExistingCalls() {
 function cancelExistingCalls(callList) {
   if (callList.length && callList[0] != "OK") {
     // Existing calls remain; get rid of the next one in the list
-    nextCall = callList.shift().split(' ')[2].trim();
+    nextCall = callList.shift().split(/\s+/)[2].trim();
     log("Cancelling existing call '" + nextCall +"'");
     runEmulatorCmd("gsm cancel " + nextCall, function(result) {
       if (result[0] == "OK") {
@@ -101,14 +101,26 @@ function reject() {
     is(telephony.active, null);
     is(telephony.calls.length, 0);
 
-    runEmulatorCmd("gsm list", function(result) {
-      log("Call list is now: " + result);
-      is(result[0], "OK");
-      cleanUp();
+    // Wait for emulator to catch up before continuing
+    waitFor(verifyCallList,function() {
+      return(rcvdEmulatorCallback);
     });
   };
-  runEmulatorCmd("gsm cancel " + number);
+
+  let rcvdEmulatorCallback = false;
+  runEmulatorCmd("gsm cancel " + number, function(result) {
+    is(result[0], "OK", "emulator callback");
+    rcvdEmulatorCallback = true;
+  });
 };
+
+function verifyCallList(){
+  runEmulatorCmd("gsm list", function(result) {
+    log("Call list is now: " + result);
+    is(result[0], "OK");
+    cleanUp();
+  });
+}
 
 function cleanUp() {
   SpecialPowers.removePermission("telephony", document);

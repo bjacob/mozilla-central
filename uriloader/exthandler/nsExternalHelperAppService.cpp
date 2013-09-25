@@ -15,6 +15,7 @@
 #include "mozilla/Util.h"
 
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/TabChild.h"
 #include "nsXULAppAPI.h"
 
 #include "nsExternalHelperAppService.h"
@@ -347,9 +348,6 @@ static nsresult GetDownloadDirectory(nsIFile **_directory)
   else {
     return NS_ERROR_FAILURE;
   }
-#elif defined(MOZ_PLATFORM_MAEMO)
-  nsresult rv = NS_GetSpecialDirectory(NS_UNIX_XDG_DOCUMENTS_DIR, getter_AddRefs(dir));
-  NS_ENSURE_SUCCESS(rv, rv);
 #elif defined(XP_WIN)
   // On metro we want to be able to search opened files and the temp directory
   // is exlcuded in searches.
@@ -397,6 +395,7 @@ static nsDefaultMimeTypeEntry defaultMimeEntries [] =
   { TEXT_CSS, "css" },
   { IMAGE_JPEG, "jpeg" },
   { IMAGE_JPEG, "jpg" },
+  { IMAGE_SVG_XML, "svg" },
   { TEXT_HTML, "html" },
   { TEXT_HTML, "htm" },
   { APPLICATION_XPINSTALL, "xpi" },
@@ -465,6 +464,7 @@ static nsExtraMimeTypeEntry extraMimeEntries [] =
   { "application/x-arj", "arj", "ARJ file" },
   { "application/rtf", "rtf", "Rich Text Format File" },
   { APPLICATION_XPINSTALL, "xpi", "XPInstall Install" },
+  { APPLICATION_PDF, "pdf", "Portable Document Format" },
   { APPLICATION_POSTSCRIPT, "ps,eps,ai", "Postscript File" },
   { APPLICATION_XJAVASCRIPT, "js", "Javascript Source File" },
   { APPLICATION_XJAVASCRIPT, "jsm", "Javascript Module Source File" },
@@ -479,10 +479,7 @@ static nsExtraMimeTypeEntry extraMimeEntries [] =
   { IMAGE_PNG, "png", "PNG Image" },
   { IMAGE_TIFF, "tiff,tif", "TIFF Image" },
   { IMAGE_XBM, "xbm", "XBM Image" },
-#ifdef MOZ_WBMP
-  { IMAGE_WBMP, "wbmp", "WBMP Image" },
-#endif
-  { "image/svg+xml", "svg", "Scalable Vector Graphics" },
+  { IMAGE_SVG_XML, "svg", "Scalable Vector Graphics" },
   { MESSAGE_RFC822, "eml", "RFC-822 data" },
   { TEXT_PLAIN, "txt,text", "Text File" },
   { TEXT_HTML, "html,htm,shtml,ehtml", "HyperText Markup Language" },
@@ -583,6 +580,9 @@ NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeConte
     channel->GetContentLength(&contentLength);
   }
   if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    nsCOMPtr<nsIDOMWindow> window = do_GetInterface(aWindowContext);
+    NS_ENSURE_STATE(window);
+
     // We need to get a hold of a ContentChild so that we can begin forwarding
     // this data to the parent.  In the HTTP case, this is unfortunate, since
     // we're actually passing data from parent->child->parent wastefully, but
@@ -613,7 +613,8 @@ NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeConte
       child->SendPExternalHelperAppConstructor(uriParams,
                                                nsCString(aMimeContentType),
                                                disp, aForceSave, contentLength,
-                                               referrerParams);
+                                               referrerParams,
+                                               mozilla::dom::TabChild::GetFrom(window));
     ExternalHelperAppChild *childListener = static_cast<ExternalHelperAppChild *>(pc);
 
     NS_ADDREF(*aStreamListener = childListener);
@@ -624,9 +625,8 @@ NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeConte
                                reason, aForceSave);
     if (!handler)
       return NS_ERROR_OUT_OF_MEMORY;
-    
-    childListener->SetHandler(handler);
 
+    childListener->SetHandler(handler);
     return NS_OK;
   }
 
@@ -963,11 +963,6 @@ nsExternalHelperAppService::DeleteTemporaryPrivateFileWhenPossible(nsIFile* aTem
   return DeleteTemporaryFileHelper(aTemporaryFile, mTemporaryPrivateFilesList);
 }
 
-void nsExternalHelperAppService::FixFilePermissions(nsIFile* aFile)
-{
-  // This space intentionally left blank
-}
-
 void nsExternalHelperAppService::ExpungeTemporaryFilesHelper(nsCOMArray<nsIFile> &fileList)
 {
   int32_t numEntries = fileList.Count();
@@ -1086,8 +1081,8 @@ nsExternalHelperAppService::Observe(nsISupports *aSubject, const char *aTopic, c
 // begin external app handler implementation 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
-NS_IMPL_THREADSAFE_ADDREF(nsExternalAppHandler)
-NS_IMPL_THREADSAFE_RELEASE(nsExternalAppHandler)
+NS_IMPL_ADDREF(nsExternalAppHandler)
+NS_IMPL_RELEASE(nsExternalAppHandler)
 
 NS_INTERFACE_MAP_BEGIN(nsExternalAppHandler)
    NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIStreamListener)
@@ -1817,63 +1812,55 @@ NS_IMETHODIMP
 nsExternalAppHandler::OnSaveComplete(nsIBackgroundFileSaver *aSaver,
                                      nsresult aStatus)
 {
-  if (mCanceled)
-    return NS_OK;
-
-  // Save the hash
-  nsresult rv = mSaver->GetSha256Hash(mHash);
-  // Free the reference that the saver keeps on us, even if we couldn't get the
-  // hash.
-  mSaver = nullptr;
-
-  if (NS_FAILED(aStatus)) {
-    nsAutoString path;
-    mTempFile->GetPath(path);
-    SendStatusChange(kWriteError, aStatus, nullptr, path);
-    if (!mCanceled)
-      Cancel(aStatus);
-    return NS_OK;
+  if (!mCanceled) {
+    // Save the hash
+    (void)mSaver->GetSha256Hash(mHash);
+    // Free the reference that the saver keeps on us, even if we couldn't get
+    // the hash.
+    mSaver = nullptr;
+  
+    if (NS_FAILED(aStatus)) {
+      nsAutoString path;
+      mTempFile->GetPath(path);
+      SendStatusChange(kWriteError, aStatus, nullptr, path);
+      if (!mCanceled)
+        Cancel(aStatus);
+      return NS_OK;
+    }
   }
 
   // Notify the transfer object that we are done if the user has chosen an
   // action. If the user hasn't chosen an action, the progress listener
   // (nsITransfer) will be notified in CreateTransfer.
   if (mTransfer) {
-    rv = NotifyTransfer();
-    NS_ENSURE_SUCCESS(rv, rv);
+    NotifyTransfer(aStatus);
   }
 
   return NS_OK;
 }
 
-nsresult nsExternalAppHandler::NotifyTransfer()
+void nsExternalAppHandler::NotifyTransfer(nsresult aStatus)
 {
   MOZ_ASSERT(NS_IsMainThread(), "Must notify on main thread");
-  MOZ_ASSERT(!mCanceled, "Can't notify if canceled or action "
-             "hasn't been chosen");
   MOZ_ASSERT(mTransfer, "We must have an nsITransfer");
 
   LOG(("Notifying progress listener"));
 
-  nsresult rv = mTransfer->SetSha256Hash(mHash);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (NS_SUCCEEDED(aStatus)) {
+    (void)mTransfer->SetSha256Hash(mHash);
+    (void)mTransfer->OnProgressChange64(nullptr, nullptr, mProgress,
+      mContentLength, mProgress, mContentLength);
+  }
 
-  rv = mTransfer->OnProgressChange64(nullptr, nullptr, mProgress,
-    mContentLength, mProgress, mContentLength);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = mTransfer->OnStateChange(nullptr, nullptr,
+  (void)mTransfer->OnStateChange(nullptr, nullptr,
     nsIWebProgressListener::STATE_STOP |
     nsIWebProgressListener::STATE_IS_REQUEST |
-    nsIWebProgressListener::STATE_IS_NETWORK, NS_OK);
-  NS_ENSURE_SUCCESS(rv, rv);
+    nsIWebProgressListener::STATE_IS_NETWORK, aStatus);
 
   // This nsITransfer object holds a reference to us (we are its observer), so
   // we need to release the reference to break a reference cycle (and therefore
-  // to prevent leaking)
+  // to prevent leaking).  We do this even if the previous calls failed.
   mTransfer = nullptr;
-
-  return NS_OK;
 }
 
 NS_IMETHODIMP nsExternalAppHandler::GetMIMEInfo(nsIMIMEInfo ** aMIMEInfo)
@@ -1971,7 +1958,7 @@ nsresult nsExternalAppHandler::CreateTransfer()
   // processing the url. If that's the case then mStopRequestIssued will be
   // true and OnSaveComplete has been called.
   if (mStopRequestIssued && !mSaver && mTransfer) {
-    return NotifyTransfer();
+    NotifyTransfer(NS_OK);
   }
 
   return rv;
@@ -2208,12 +2195,31 @@ NS_IMETHODIMP nsExternalAppHandler::LaunchWithApplication(nsIFile * aApplication
 NS_IMETHODIMP nsExternalAppHandler::Cancel(nsresult aReason)
 {
   NS_ENSURE_ARG(NS_FAILED(aReason));
-  // XXX should not ignore the reason
 
+  if (mCanceled) {
+    return NS_OK;
+  }
   mCanceled = true;
+
   if (mSaver) {
+    // We are still writing to the target file.  Give the saver a chance to
+    // close the target file, then notify the transfer object if necessary in
+    // the OnSaveComplete callback.
     mSaver->Finish(aReason);
     mSaver = nullptr;
+  } else {
+    if (mStopRequestIssued && mTempFile) {
+      // This branch can only happen when the user cancels the helper app dialog
+      // when the request has completed. The temp file has to be removed here,
+      // because mSaver has been released at that time with the temp file left.
+      (void)mTempFile->Remove(false);
+    }
+
+    // Notify the transfer object that the download has been canceled, if the
+    // user has already chosen an action and we didn't notify already.
+    if (mTransfer) {
+      NotifyTransfer(aReason);
+    }
   }
 
   // Break our reference cycle with the helper app dialog (set up in
@@ -2225,7 +2231,6 @@ NS_IMETHODIMP nsExternalAppHandler::Cancel(nsresult aReason)
   // Release the listener, to break the reference cycle with it (we are the
   // observer of the listener).
   mDialogProgressListener = nullptr;
-  mTransfer = nullptr;
 
   return NS_OK;
 }
@@ -2440,6 +2445,10 @@ NS_IMETHODIMP nsExternalHelperAppService::GetTypeFromExtension(const nsACString&
   // 4. our "extras" array
   // 5. Information from plugins
   // 6. The "ext-to-type-mapping" category
+
+  // Early return if called with an empty extension parameter
+  if (aFileExt.IsEmpty())
+    return NS_ERROR_NOT_AVAILABLE;
 
   nsresult rv = NS_OK;
   // First of all, check our default entries

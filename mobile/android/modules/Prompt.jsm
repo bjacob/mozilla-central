@@ -16,15 +16,20 @@ function log(msg) {
 
 function Prompt(aOptions) {
   this.window = "window" in aOptions ? aOptions.window : null;
-  this.msg = { type: "Prompt:Show", async: true };
+  this.msg = { async: true };
 
-  if ("title" in aOptions)
+  if (aOptions.priority === 1)
+    this.msg.type = "Prompt:ShowTop"
+  else
+    this.msg.type = "Prompt:Show"
+
+  if ("title" in aOptions && aOptions.title != null)
     this.msg.title = aOptions.title;
 
-  if ("message" in aOptions)
+  if ("message" in aOptions && aOptions.message != null)
     this.msg.text = aOptions.message;
 
-  if ("buttons" in aOptions)
+  if ("buttons" in aOptions && aOptions.buttons != null)
     this.msg.buttons = aOptions.buttons;
 
   let idService = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator); 
@@ -66,6 +71,16 @@ Prompt.prototype = {
   addTextbox: function(aOptions) {
     return this._addInput({
       type: "textbox",
+      value: aOptions.value,
+      hint: aOptions.hint,
+      autofocus: aOptions.autofocus,
+      id: aOptions.id
+    });
+  },
+
+  addNumber: function(aOptions) {
+    return this._addInput({
+      type: "number",
       value: aOptions.value,
       hint: aOptions.hint,
       autofocus: aOptions.autofocus,
@@ -115,7 +130,7 @@ Prompt.prototype = {
   },
 
   _innerShow: function() {
-    this.bridge.handleGeckoMessage(JSON.stringify(this.msg));
+    Services.androidBridge.handleGeckoMessage(JSON.stringify(this.msg));
   },
 
   observe: function(aSubject, aTopic, aData) {
@@ -172,10 +187,6 @@ Prompt.prototype = {
   setMultiChoiceItems: function(aItems) {
     this.msg.multiple = true;
     return this._setListItems(aItems);
-  },
-
-  get bridge() {
-    return Cc["@mozilla.org/android/bridge;1"].getService(Ci.nsIAndroidBridge);
   },
 
 }

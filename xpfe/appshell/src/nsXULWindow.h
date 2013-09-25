@@ -28,9 +28,15 @@
 #include "nsIXULWindow.h"
 #include "nsIPrompt.h"
 #include "nsIAuthPrompt.h"
-#include "nsGUIEvent.h"
 #include "nsIXULBrowserWindow.h"
 #include "nsIWeakReference.h"
+#include "nsIWidgetListener.h"
+
+namespace mozilla {
+namespace dom {
+class Element;
+}
+}
 
 // nsXULWindow
 
@@ -53,7 +59,7 @@ friend class nsChromeTreeOwner;
 friend class nsContentTreeOwner;
 
 public:
-   NS_DECL_ISUPPORTS
+   NS_DECL_THREADSAFE_ISUPPORTS
 
    NS_DECL_NSIINTERFACEREQUESTOR
    NS_DECL_NSIXULWINDOW
@@ -80,7 +86,7 @@ protected:
    NS_IMETHOD EnsurePrimaryContentTreeOwner();
    NS_IMETHOD EnsurePrompter();
    NS_IMETHOD EnsureAuthPrompter();
-   
+
    void OnChromeLoaded();
    void StaggerPosition(int32_t &aRequestedX, int32_t &aRequestedY,
                         int32_t aSpecWidth, int32_t aSpecHeight);
@@ -91,7 +97,7 @@ protected:
    NS_IMETHOD SavePersistentAttributes();
 
    NS_IMETHOD GetWindowDOMWindow(nsIDOMWindow** aDOMWindow);
-   nsIDOMElement* GetWindowDOMElement() const;
+   mozilla::dom::Element* GetWindowDOMElement() const;
 
    // See nsIDocShellTreeOwner for docs on next two methods
    NS_HIDDEN_(nsresult) ContentShellAdded(nsIDocShellTreeItem* aContentShell,

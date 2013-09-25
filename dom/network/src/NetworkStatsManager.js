@@ -57,13 +57,14 @@ NetworkStatsData.prototype = {
 
 // NetworkStats
 const NETWORKSTATS_CONTRACTID = "@mozilla.org/networkstats;1";
-const NETWORKSTATS_CID        = Components.ID("{037435a6-f563-48f3-99b3-a0106d8ba5bd}");
+const NETWORKSTATS_CID        = Components.ID("{6613ea55-b99c-44f9-91bf-d07da10b9b74}");
 const nsIDOMMozNetworkStats   = Components.interfaces.nsIDOMMozNetworkStats;
 
 function NetworkStats(aWindow, aStats) {
   if (DEBUG) {
     debug("NetworkStats Constructor");
   }
+  this.manifestURL = aStats.manifestURL || null;
   this.connectionType = aStats.connectionType || null;
   this.start = aStats.start || null;
   this.end = aStats.end || null;
@@ -76,6 +77,7 @@ function NetworkStats(aWindow, aStats) {
 
 NetworkStats.prototype = {
   __exposedProps__: {
+                      manifestURL: 'r',
                       connectionType: 'r',
                       start: 'r',
                       end:  'r',
@@ -219,7 +221,7 @@ NetworkStatsManager.prototype = {
       return null;
     }
 
-    this.initHelper(aWindow, ["NetworkStats:Get:Return",
+    this.initDOMRequestHelper(aWindow, ["NetworkStats:Get:Return",
                               "NetworkStats:Clear:Return"]);
   },
 
@@ -232,7 +234,8 @@ NetworkStatsManager.prototype = {
 
   classID : NETWORKSTATSMANAGER_CID,
   QueryInterface : XPCOMUtils.generateQI([nsIDOMMozNetworkStatsManager,
-                                         Ci.nsIDOMGlobalPropertyInitializer]),
+                                         Ci.nsIDOMGlobalPropertyInitializer,
+                                         Ci.nsISupportsWeakReference]),
 
   classInfo : XPCOMUtils.generateCI({classID: NETWORKSTATSMANAGER_CID,
                                      contractID: NETWORKSTATSMANAGER_CONTRACTID,

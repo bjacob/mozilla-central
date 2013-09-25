@@ -19,17 +19,15 @@
 #include "nsCSSRuleProcessor.h"
 #include "nsRuleProcessorData.h"
 #include <algorithm>
-#include "nsCRT.h"
 #include "nsIAtom.h"
 #include "pldhash.h"
 #include "nsICSSPseudoComparator.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/css/StyleRule.h"
 #include "mozilla/css/GroupRule.h"
 #include "nsIDocument.h"
 #include "nsPresContext.h"
-#include "nsEventStateManager.h"
 #include "nsGkAtoms.h"
-#include "nsString.h"
 #include "nsUnicharUtils.h"
 #include "nsError.h"
 #include "nsRuleWalker.h"
@@ -43,17 +41,11 @@
 #include "nsAttrValue.h"
 #include "nsAttrValueInlines.h"
 #include "nsAttrName.h"
-#include "nsServiceManagerUtils.h"
 #include "nsTArray.h"
 #include "nsContentUtils.h"
 #include "nsIMediaList.h"
 #include "nsCSSRules.h"
-#include "nsIPrincipal.h"
 #include "nsStyleSet.h"
-#include "prlog.h"
-#include "nsIObserverService.h"
-#include "nsNetCID.h"
-#include "mozilla/Services.h"
 #include "mozilla/dom/Element.h"
 #include "nsNthIndexCache.h"
 #include "mozilla/Preferences.h"
@@ -456,8 +448,8 @@ public:
   void EnumerateAllRules(Element* aElement, ElementDependentRuleProcessorData* aData,
                          NodeMatchContext& aNodeMatchContext);
 
-  size_t SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
-  size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
+  size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const;
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const;
 
 protected:
   typedef nsTArray<RuleValue> RuleValueList;
@@ -794,14 +786,14 @@ void RuleHash::EnumerateAllRules(Element* aElement, ElementDependentRuleProcesso
 }
 
 static size_t
-SizeOfRuleHashTableEntry(PLDHashEntryHdr* aHdr, nsMallocSizeOfFun aMallocSizeOf, void *)
+SizeOfRuleHashTableEntry(PLDHashEntryHdr* aHdr, MallocSizeOf aMallocSizeOf, void *)
 {
   RuleHashTableEntry* entry = static_cast<RuleHashTableEntry*>(aHdr);
   return entry->mRules.SizeOfExcludingThis(aMallocSizeOf);
 }
 
 size_t
-RuleHash::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+RuleHash::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
   size_t n = 0;
 
@@ -835,7 +827,7 @@ RuleHash::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
 }
 
 size_t
-RuleHash::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+RuleHash::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
@@ -920,6 +912,7 @@ struct RuleCascadeData {
     : mRuleHash(aQuirksMode),
       mStateSelectors(),
       mSelectorDocumentStates(0),
+      mKeyframesRuleTable(16),
       mCacheKey(aMedium),
       mNext(nullptr),
       mQuirksMode(aQuirksMode)
@@ -959,7 +952,7 @@ struct RuleCascadeData {
     }
   }
 
-  size_t SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const;
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const;
 
   RuleHash                 mRuleHash;
   RuleHash*
@@ -981,6 +974,8 @@ struct RuleCascadeData {
   nsTArray<nsCSSFontFeatureValuesRule*> mFontFeatureValuesRules;
   nsTArray<nsCSSPageRule*> mPageRules;
 
+  nsDataHashtable<nsStringHashKey, nsCSSKeyframesRule*> mKeyframesRuleTable;
+
   // Looks up or creates the appropriate list in |mAttributeSelectors|.
   // Returns null only on allocation failure.
   nsTArray<nsCSSSelector*>* AttributeListFor(nsIAtom* aAttribute);
@@ -992,14 +987,14 @@ struct RuleCascadeData {
 };
 
 static size_t
-SizeOfSelectorsEntry(PLDHashEntryHdr* aHdr, nsMallocSizeOfFun aMallocSizeOf, void *)
+SizeOfSelectorsEntry(PLDHashEntryHdr* aHdr, MallocSizeOf aMallocSizeOf, void *)
 {
   AtomSelectorEntry* entry = static_cast<AtomSelectorEntry*>(aHdr);
   return entry->mSelectors.SizeOfExcludingThis(aMallocSizeOf);
 }
 
 size_t
-RuleCascadeData::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+RuleCascadeData::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
   size_t n = aMallocSizeOf(this);
 
@@ -1183,11 +1178,6 @@ InitSystemMetrics()
     sSystemMetrics->AppendElement(nsGkAtoms::touch_enabled);
   }
  
-  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MaemoClassic, &metricResult);
-  if (NS_SUCCEEDED(rv) && metricResult) {
-    sSystemMetrics->AppendElement(nsGkAtoms::maemo_classic);
-  }
-
   rv = LookAndFeel::GetInt(LookAndFeel::eIntID_SwipeAnimationEnabled,
                            &metricResult);
   if (NS_SUCCEEDED(rv) && metricResult) {
@@ -1233,6 +1223,27 @@ InitSystemMetrics()
     }
   }
 #endif
+
+  // os version metrics, currently only defined for Windows.
+  if (NS_SUCCEEDED(
+        LookAndFeel::GetInt(LookAndFeel::eIntID_OperatingSystemVersionIdentifier,
+                            &metricResult))) {
+    switch(metricResult) {
+      case LookAndFeel::eOperatingSystemVersion_WindowsXP:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_version_xp);
+        break;
+      case LookAndFeel::eOperatingSystemVersion_WindowsVista:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_version_vista);
+        break;
+      case LookAndFeel::eOperatingSystemVersion_Windows7:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_version_win7);
+        break;
+      case LookAndFeel::eOperatingSystemVersion_Windows8:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_version_win8);
+        break;
+      // don't add anything for future versions
+    }
+  }
 
   return true;
 }
@@ -1597,10 +1608,10 @@ static const nsEventStates sPseudoClassStates[] = {
   nsEventStates(),
   nsEventStates()
 };
-MOZ_STATIC_ASSERT(NS_ARRAY_LENGTH(sPseudoClassStates) ==
-                  nsCSSPseudoClasses::ePseudoClass_NotPseudoClass + 1,
-                  "ePseudoClass_NotPseudoClass is no longer at the end of"
-                  "sPseudoClassStates");
+static_assert(NS_ARRAY_LENGTH(sPseudoClassStates) ==
+              nsCSSPseudoClasses::ePseudoClass_NotPseudoClass + 1,
+              "ePseudoClass_NotPseudoClass is no longer at the end of"
+              "sPseudoClassStates");
 
 // |aDependence| has two functions:
 //  * when non-null, it indicates that we're processing a negation,
@@ -2285,6 +2296,25 @@ static bool SelectorMatchesTree(Element* aPrevElement,
           // traverse further up the tree.
           aTreeMatchContext.PopStyleScopeForSelectorMatching(element);
         }
+
+        // Compatibility hack: First try matching this selector as though the
+        // <xbl:children> element wasn't in the tree to allow old selectors
+        // were written before <xbl:children> participated in CSS selector
+        // matching to work.
+        if (selector->mOperator == '>' && element->IsActiveChildrenElement()) {
+          Element* styleScope = aTreeMatchContext.mCurrentStyleScope;
+          if (SelectorMatchesTree(element, selector, aTreeMatchContext,
+                                  aLookForRelevantLink)) {
+            // It matched, don't try matching on the <xbl:children> element at
+            // all.
+            return true;
+          }
+          // We want to reset mCurrentStyleScope on aTreeMatchContext
+          // back to its state before the SelectorMatchesTree call, in
+          // case that call happens to traverse past the style scope element
+          // and sets it to null.
+          aTreeMatchContext.mCurrentStyleScope = styleScope;
+        }
       }
     }
     if (!element) {
@@ -2700,7 +2730,7 @@ nsCSSRuleProcessor::MediumFeaturesChanged(nsPresContext* aPresContext)
 }
 
 /* virtual */ size_t
-nsCSSRuleProcessor::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+nsCSSRuleProcessor::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
   size_t n = 0;
   n += mSheets.SizeOfExcludingThis(aMallocSizeOf);
@@ -2713,7 +2743,7 @@ nsCSSRuleProcessor::SizeOfExcludingThis(nsMallocSizeOfFun aMallocSizeOf) const
 }
 
 /* virtual */ size_t
-nsCSSRuleProcessor::SizeOfIncludingThis(nsMallocSizeOfFun aMallocSizeOf) const
+nsCSSRuleProcessor::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 {
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
@@ -2735,21 +2765,17 @@ nsCSSRuleProcessor::AppendFontFaceRules(
   return true;
 }
 
-// Append all the currently-active keyframes rules to aArray.  Return
-// true for success and false for failure.
-bool
-nsCSSRuleProcessor::AppendKeyframesRules(
-                              nsPresContext *aPresContext,
-                              nsTArray<nsCSSKeyframesRule*>& aArray)
+nsCSSKeyframesRule*
+nsCSSRuleProcessor::KeyframesRuleForName(nsPresContext* aPresContext,
+                                         const nsString& aName)
 {
   RuleCascadeData* cascade = GetRuleCascade(aPresContext);
 
   if (cascade) {
-    if (!aArray.AppendElements(cascade->mKeyframesRules))
-      return false;
+    return cascade->mKeyframesRuleTable.Get(aName);
   }
-  
-  return true;
+
+  return nullptr;
 }
 
 // Append all the currently-active page rules to aArray.  Return
@@ -3257,6 +3283,8 @@ FillWeightArray(PLDHashTable *table, PLDHashEntryHdr *hdr,
 RuleCascadeData*
 nsCSSRuleProcessor::GetRuleCascade(nsPresContext* aPresContext)
 {
+  // FIXME:  Make this infallible!
+
   // If anything changes about the presentation context, we will be
   // notified.  Otherwise, our cache is valid if mLastPresContext
   // matches aPresContext.  (The only rule processors used for multiple
@@ -3333,6 +3361,13 @@ nsCSSRuleProcessor::RefreshRuleCascade(nsPresContext* aPresContext)
         }
       }
 
+      // Build mKeyframesRuleTable.
+      for (nsTArray<nsCSSKeyframesRule*>::size_type i = 0,
+             iEnd = newCascade->mKeyframesRules.Length(); i < iEnd; ++i) {
+        nsCSSKeyframesRule* rule = newCascade->mKeyframesRules[i];
+        newCascade->mKeyframesRuleTable.Put(rule->GetName(), rule);
+      }
+
       // Ensure that the current one is always mRuleCascades.
       newCascade->mNext = mRuleCascades;
       mRuleCascades = newCascade.forget();
@@ -3392,6 +3427,7 @@ TreeMatchContext::InitAncestors(Element *aElement)
       if (!parent->IsElement()) {
         break;
       }
+
       cur = parent->AsElement();
     } while (true);
 

@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsDOMFocusEvent.h"
+#include "prtime.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -22,7 +23,6 @@ nsDOMFocusEvent::nsDOMFocusEvent(mozilla::dom::EventTarget* aOwner,
     mEventIsInternal = true;
     mEvent->time = PR_Now();
   }
-  SetIsDOMBinding();
 }
 
 nsDOMFocusEvent::~nsDOMFocusEvent()
@@ -68,7 +68,7 @@ nsDOMFocusEvent::Constructor(const mozilla::dom::GlobalObject& aGlobal,
                              const mozilla::dom::FocusEventInit& aParam,
                              mozilla::ErrorResult& aRv)
 {
-  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.Get());
+  nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.GetAsSupports());
   nsRefPtr<nsDOMFocusEvent> e = new nsDOMFocusEvent(t, nullptr, nullptr);
   bool trusted = e->Init(t);
   aRv = e->InitFocusEvent(aType, aParam.mBubbles, aParam.mCancelable, aParam.mView,

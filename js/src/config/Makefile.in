@@ -3,20 +3,12 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH		= @DEPTH@
-topsrcdir	= @top_srcdir@
-srcdir		= @srcdir@
-VPATH		= @srcdir@
-
-include $(DEPTH)/config/autoconf.mk
-
 # For sanity's sake, we compile nsinstall without the wrapped system
 # headers, so that we can use it to set up the wrapped system headers.
 VISIBILITY_FLAGS =
 
 ifneq (WINNT,$(HOST_OS_ARCH))
 HOST_PROGRAM	= nsinstall_real$(HOST_BIN_SUFFIX)
-DISABLED_HOST_CSRCS	= nsinstall.c pathsub.c
 endif
 
 # IMPORTANT: Disable NSBUILDROOT for this directory only, otherwise we have
@@ -60,6 +52,7 @@ export:: \
   $(call mkdir_deps,system_wrappers_js) \
   $(NULL)
 	$(PYTHON) $(srcdir)/Preprocessor.py $(DEFINES) $(ACDEFINES) \
+		-DMOZ_NATIVE_ICU=$(MOZ_NATIVE_ICU) \
 		$(srcdir)/system-headers | $(PERL) $(srcdir)/make-system-wrappers.pl system_wrappers_js
 	$(INSTALL) system_wrappers_js $(DIST)
 

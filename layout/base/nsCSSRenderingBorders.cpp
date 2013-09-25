@@ -5,29 +5,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsStyleConsts.h"
-#include "nsPoint.h"
-#include "nsRect.h"
-#include "nsViewManager.h"
-#include "nsFrameManager.h"
-#include "nsStyleContext.h"
-#include "nsGkAtoms.h"
-#include "nsCSSAnonBoxes.h"
-#include "nsTransform2D.h"
-#include "nsIContent.h"
-#include "nsIScrollableFrame.h"
-#include "imgIRequest.h"
-#include "imgIContainer.h"
-#include "nsCSSRendering.h"
 #include "nsCSSColorUtils.h"
-#include "nsITheme.h"
-#include "nsThemeConstants.h"
-#include "nsIServiceManager.h"
-#include "nsLayoutUtils.h"
-#include "nsINameSpaceManager.h"
-#include "nsBlockFrame.h"
 #include "GeckoProfiler.h"
 #include "nsExpirationTracker.h"
 #include "RoundedRect.h"
+#include "nsClassHashtable.h"
+#include "nsStyleStruct.h"
 
 #include "gfxContext.h"
 
@@ -124,7 +107,6 @@ class BorderGradientCache MOZ_FINAL : public nsExpirationTracker<BorderGradientC
     BorderGradientCache()
       : nsExpirationTracker<BorderGradientCacheData, 4>(GENERATION_MS)
     {
-      mHashEntries.Init();
       mTimerPeriod = GENERATION_MS;
     }
 
@@ -1242,8 +1224,8 @@ nsCSSBorderRenderer::CreateCornerGradient(mozilla::css::Corner aCorner,
   float gradientOffset;
   
   if (mContext->IsCairo() &&
-      (mContext->OriginalSurface()->GetType() == gfxASurface::SurfaceTypeD2D ||
-       mContext->OriginalSurface()->GetType() == gfxASurface::SurfaceTypeQuartz))
+      (mContext->OriginalSurface()->GetType() == gfxSurfaceTypeD2D ||
+       mContext->OriginalSurface()->GetType() == gfxSurfaceTypeQuartz))
   {
     // On quarz this doesn't do exactly the right thing, but it does do what
     // most other browsers do and doing the 'right' thing seems to be
@@ -1597,6 +1579,8 @@ nsCSSBorderRenderer::DrawNoCompositeColorSolidBorderAzure()
     builder->LineTo(strokeEnd);
     RefPtr<Path> path = builder->Finish();
     dt->Stroke(path, ColorPattern(Color::FromABGR(mBorderColors[i])), StrokeOptions(mBorderWidths[i]));
+    builder = nullptr;
+    path = nullptr;
 
     Pattern *pattern;
 

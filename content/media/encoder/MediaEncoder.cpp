@@ -4,6 +4,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "MediaEncoder.h"
 #include "MediaDecoder.h"
+#include "nsIPrincipal.h"
 #ifdef MOZ_OGG
 #include "OggWriter.h"
 #endif
@@ -184,7 +185,6 @@ MediaEncoder::GetEncodedData(nsTArray<nsTArray<uint8_t> >* aOutputBufs,
         if (NS_SUCCEEDED(rv)) {
           // Successfully get the copy of final container data from writer.
           reloop = false;
-          break;
         }
       } else {
         // No more headers, starts to encode tracks.
@@ -219,7 +219,6 @@ MediaEncoder::GetEncodedData(nsTArray<nsTArray<uint8_t> >* aOutputBufs,
       if (NS_SUCCEEDED(rv)) {
         // Successfully get the copy of final container data from writer.
         reloop = false;
-        break;
       }
 
       mState = (mAudioEncoder->IsEncodingComplete()) ? ENCODE_DONE : ENCODE_TRACK;
@@ -233,8 +232,7 @@ MediaEncoder::GetEncodedData(nsTArray<nsTArray<uint8_t> >* aOutputBufs,
       break;
 
     default:
-      MOZ_NOT_REACHED("Invalid encode state");
-      break;
+      MOZ_CRASH("Invalid encode state");
     }
   }
 }

@@ -3,10 +3,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <stdlib.h>
-#include "nsHttp.h"
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "nsHttpNTLMAuth.h"
-#include "nsIComponentManager.h"
 #include "nsIAuthModule.h"
 #include "nsCOMPtr.h"
 #include "plbase64.h"
@@ -16,12 +16,13 @@
 
 #include "nsIPrefBranch.h"
 #include "nsIPrefService.h"
-#include "nsIServiceManager.h"
 #include "nsIHttpAuthenticableChannel.h"
 #include "nsIURI.h"
+#ifdef XP_WIN
 #include "nsIX509Cert.h"
 #include "nsISSLStatus.h"
 #include "nsISSLStatusProvider.h"
+#endif
 #include "mozilla/Attributes.h"
 
 static const char kAllowProxies[] = "network.automatic-ntlm-auth.allow-proxies";
@@ -362,7 +363,11 @@ nsHttpNTLMAuth::GenerateCredentials(nsIHttpAuthenticableChannel *authChannel,
         serviceName.AppendLiteral("HTTP@");
         serviceName.Append(host);
         // initialize auth module
-        rv = module->Init(serviceName.get(), nsIAuthModule::REQ_DEFAULT, domain, user, pass);
+        uint32_t reqFlags = nsIAuthModule::REQ_DEFAULT;
+        if (isProxyAuth)
+            reqFlags |= nsIAuthModule::REQ_PROXY_AUTH;
+
+        rv = module->Init(serviceName.get(), reqFlags, domain, user, pass);
         if (NS_FAILED(rv))
             return rv;
 

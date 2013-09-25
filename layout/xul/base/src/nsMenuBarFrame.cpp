@@ -149,7 +149,7 @@ nsMenuBarFrame::ToggleMenuActiveState()
       // Activate the menu bar
       SetActive(true);
 
-#ifdef MOZ_WIDGET_GTK2
+#if (MOZ_WIDGET_GTK == 2)
       firstFrame->OpenMenu(true);
 #else
       firstFrame->SelectMenu(true);
@@ -170,7 +170,8 @@ GetInsertionPoint(nsIPresShell* aShell, nsIFrame* aFrame, nsIFrame* aChild,
   nsIContent* child = nullptr;
   if (aChild)
     child = aChild->GetContent();
-  aShell->FrameConstructor()->GetInsertionPoint(aFrame, child, aResult);
+  *aResult = aShell->FrameConstructor()->
+    GetInsertionPoint(aFrame->GetContent(), child);
 }
 
 nsMenuFrame*

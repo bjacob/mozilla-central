@@ -232,7 +232,6 @@ nsSMILTimedElement::nsSMILTimedElement()
   mSimpleDur.SetIndefinite();
   mMin.SetMillis(0L);
   mMax.SetIndefinite();
-  mTimeDependents.Init();
 }
 
 nsSMILTimedElement::~nsSMILTimedElement()
@@ -2220,7 +2219,7 @@ nsSMILTimedElement::GetNextMilestone(nsSMILMilestone& aNextMilestone) const
   case STATE_POSTACTIVE:
     return false;
   }
-  MOZ_NOT_REACHED("Invalid element state");
+  MOZ_CRASH("Invalid element state");
 }
 
 void
@@ -2292,7 +2291,7 @@ nsSMILTimedElement::GetEffectiveBeginInstance() const
       return prevInterval ? prevInterval->Begin() : nullptr;
     }
   }
-  MOZ_NOT_REACHED("Invalid element state");
+  MOZ_CRASH("Invalid element state");
 }
 
 const nsSMILInterval*

@@ -39,6 +39,7 @@ EXPORTS.mozilla.plugins += [
     'PluginStreamChild.h',
     'PluginStreamParent.h',
     'PluginUtilsOSX.h',
+    'ScopedMethodFactory.h',
     'StreamNotifyChild.h',
     'StreamNotifyParent.h',
 ]
@@ -70,6 +71,7 @@ CPP_SOURCES += [
     'BrowserStreamParent.cpp',
     'ChildAsyncCall.cpp',
     'ChildTimer.cpp',
+    'PluginBackgroundDestroyer.cpp',
     'PluginIdentifierChild.cpp',
     'PluginIdentifierParent.cpp',
     'PluginInstanceChild.cpp',
@@ -84,4 +86,28 @@ CPP_SOURCES += [
     'PluginStreamChild.cpp',
     'PluginStreamParent.cpp',
 ]
+
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+    CMMSRCS += [
+        'PluginInterposeOSX.mm',
+        'PluginUtilsOSX.mm',
+    ]
+
+IPDL_SOURCES += [
+    'PBrowserStream.ipdl',
+    'PPluginBackgroundDestroyer.ipdl',
+    'PPluginIdentifier.ipdl',
+    'PPluginInstance.ipdl',
+    'PPluginModule.ipdl',
+    'PPluginScriptableObject.ipdl',
+    'PPluginStream.ipdl',
+    'PPluginSurface.ipdl',
+    'PStreamNotify.ipdl',
+]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+LIBRARY_NAME = 'domplugins_s'
 

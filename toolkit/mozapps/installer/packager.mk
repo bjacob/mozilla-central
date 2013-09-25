@@ -84,6 +84,9 @@ endif
 ifeq ($(_MSC_VER),1700)
 JSSHELL_BINS += $(DIST)/bin/msvcr110.dll
 endif
+ifeq ($(_MSC_VER),1800)
+JSSHELL_BINS += $(DIST)/bin/msvcr120.dll
+endif
 ifdef MOZ_FOLD_LIBS
 JSSHELL_BINS += $(DIST)/bin/$(DLL_PREFIX)nss3$(DLL_SUFFIX)
 else
@@ -247,10 +250,12 @@ ifeq ($(MOZ_PKG_FORMAT),APK)
 JAVA_CLASSPATH = $(ANDROID_SDK)/android.jar
 include $(MOZILLA_DIR)/config/android-common.mk
 
+# DEBUG_JARSIGNER is defined by android-common.mk and always debug
+# signs.  We want to release sign if possible.
 ifdef MOZ_SIGN_CMD
-JARSIGNER := $(MOZ_SIGN_CMD) -f jar
+RELEASE_JARSIGNER := $(MOZ_SIGN_CMD) -f jar
 else
-JARSIGNER ?= echo
+RELEASE_JARSIGNER := $(DEBUG_JARSIGNER)
 endif
 
 DIST_FILES =
@@ -327,32 +332,54 @@ ifeq ($(MOZ_BUILD_APP),mobile/android)
 UPLOAD_EXTRA_FILES += robocop.apk
 UPLOAD_EXTRA_FILES += fennec_ids.txt
 ROBOCOP_PATH = $(call core_abspath,$(_ABS_DIST)/../build/mobile/robocop)
+# Robocop and Fennec need to be signed with the same key, which means
+# release signing them both.
 INNER_ROBOCOP_PACKAGE= \
   $(NSINSTALL) $(GECKO_APP_AP_PATH)/fennec_ids.txt $(_ABS_DIST) && \
-  cp $(ROBOCOP_PATH)/robocop-debug-signed-unaligned.apk $(_ABS_DIST)/robocop-unaligned.apk && \
-  $(JARSIGNER) $(_ABS_DIST)/robocop-unaligned.apk && \
+  cp $(ROBOCOP_PATH)/robocop-debug-unsigned-unaligned.apk $(_ABS_DIST)/robocop-unaligned.apk && \
+  $(RELEASE_JARSIGNER) $(_ABS_DIST)/robocop-unaligned.apk && \
   $(ZIPALIGN) -f -v 4 $(_ABS_DIST)/robocop-unaligned.apk $(_ABS_DIST)/robocop.apk
 endif
 else
 INNER_ROBOCOP_PACKAGE=echo 'Testing is disabled - No Robocop for you'
 endif
 
-ifdef MOZ_OMX_PLUGIN
-DIST_FILES += libomxplugin.so libomxplugingb.so libomxplugingb235.so libomxpluginhc.so libomxpluginsony.so libomxpluginfroyo.so libomxpluginjb-htc.so
+# Create geckoview_library/geckoview_{assets,library}.zip for third-party GeckoView consumers.
+ifndef MOZ_DISABLE_GECKOVIEW
+INNER_MAKE_GECKOVIEW_LIBRARY= \
+  $(MAKE) -C ../mobile/android/geckoview_library package ABI_DIR=$(ABI_DIR)
+else
+INNER_MAKE_GECKOVIEW_LIBRARY=echo 'GeckoView library packaging is disabled'
 endif
 
-SO_LIBRARIES := $(filter-out $(MOZ_CHILD_PROCESS_NAME),$(filter %.so,$(DIST_FILES)))
-# These libraries are moved into the assets/ directory of the APK.
-ASSET_SO_LIBRARIES := $(addprefix assets/,$(SO_LIBRARIES))
+ifdef MOZ_OMX_PLUGIN
+DIST_FILES += libomxplugin.so libomxplugingb.so libomxplugingb235.so libomxpluginhc.so libomxpluginfroyo.so
+endif
+
+SO_LIBRARIES := $(filter %.so,$(DIST_FILES))
+# These libraries are placed in the assets/ directory by packager.py.
+ASSET_SO_LIBRARIES := $(addprefix assets/,$(filter-out libmozglue.so $(MOZ_CHILD_PROCESS_NAME),$(SO_LIBRARIES)))
 
 DIST_FILES := $(filter-out $(SO_LIBRARIES),$(DIST_FILES))
-NON_DIST_FILES += $(SO_LIBARIES)
+NON_DIST_FILES += libmozglue.so $(MOZ_CHILD_PROCESS_NAME) $(ASSET_SO_LIBRARIES)
 
 ifdef MOZ_ENABLE_SZIP
-# These libraries are szipped (before being moved into the assets/
-# directory of the APK).
-SZIP_LIBRARIES := $(SO_LIBRARIES)
+# These libraries are szipped in-place in the assets/ directory.
+SZIP_LIBRARIES := $(ASSET_SO_LIBRARIES)
 endif
+
+# Fennec's OMNIJAR_NAME can include a directory; for example, it might
+# be "assets/omni.ja". This path specifies where the omni.ja file
+# lives in the APK, but should not root the resources it contains
+# under assets/ (i.e., resources should not live at chrome://assets/).
+# packager.py writes /omni.ja in order to be consistent with the
+# layout expected by language repacks. Therefore, we move it to the
+# correct path here, in INNER_MAKE_PACKAGE. See comment about
+# OMNIJAR_NAME in configure.in.
+
+# OMNIJAR_DIR is './' for "omni.ja", 'assets/' for "assets/omni.ja".
+OMNIJAR_DIR := $(dir $(OMNIJAR_NAME))
+OMNIJAR_NAME := $(notdir $(OMNIJAR_NAME))
 
 PKG_SUFFIX      = .apk
 INNER_MAKE_PACKAGE	= \
@@ -360,21 +387,29 @@ INNER_MAKE_PACKAGE	= \
   make -C $(GECKO_APP_AP_PATH) gecko.ap_ && \
   cp $(GECKO_APP_AP_PATH)/gecko.ap_ $(_ABS_DIST) && \
   ( cd $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH) && \
-    mkdir -p assets && \
     mkdir -p lib/$(ABI_DIR) && \
     mv libmozglue.so $(MOZ_CHILD_PROCESS_NAME) lib/$(ABI_DIR) && \
-    mv $(SO_LIBRARIES) assets && \
     unzip -o $(_ABS_DIST)/gecko.ap_ && \
     rm $(_ABS_DIST)/gecko.ap_ && \
-    $(ZIP) -0 $(_ABS_DIST)/gecko.ap_ $(ASSET_SO_LIBRARIES) && \
+    $(ZIP) $(if $(MOZ_ENABLE_SZIP),-0 )$(_ABS_DIST)/gecko.ap_ $(ASSET_SO_LIBRARIES) && \
     $(ZIP) -r9D $(_ABS_DIST)/gecko.ap_ $(DIST_FILES) -x $(NON_DIST_FILES) $(SZIP_LIBRARIES) && \
-    $(ZIP) -0 $(_ABS_DIST)/gecko.ap_ $(OMNIJAR_NAME)) && \
+    $(if $(filter-out ./,$(OMNIJAR_DIR)), \
+      mkdir -p $(OMNIJAR_DIR) && mv $(OMNIJAR_NAME) $(OMNIJAR_DIR) && ) \
+    $(ZIP) -0 $(_ABS_DIST)/gecko.ap_ $(OMNIJAR_DIR)$(OMNIJAR_NAME)) && \
   rm -f $(_ABS_DIST)/gecko.apk && \
-  $(APKBUILDER) $(_ABS_DIST)/gecko.apk -v $(APKBUILDER_FLAGS) -z $(_ABS_DIST)/gecko.ap_ -f $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH)/classes.dex && \
+  cp $(_ABS_DIST)/gecko.ap_ $(_ABS_DIST)/gecko.apk && \
+  $(ZIP) -j0 $(_ABS_DIST)/gecko.apk $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH)/classes.dex && \
   cp $(_ABS_DIST)/gecko.apk $(_ABS_DIST)/gecko-unsigned-unaligned.apk && \
-  $(JARSIGNER) $(_ABS_DIST)/gecko.apk && \
+  $(RELEASE_JARSIGNER) $(_ABS_DIST)/gecko.apk && \
   $(ZIPALIGN) -f -v 4 $(_ABS_DIST)/gecko.apk $(PACKAGE) && \
-  $(INNER_ROBOCOP_PACKAGE)
+  $(INNER_ROBOCOP_PACKAGE) && \
+  $(INNER_MAKE_GECKOVIEW_LIBRARY)
+
+# Language repacks root the resources contained in assets/omni.ja
+# under assets/, but the repacks expect them to be rooted at /.
+# Therefore, we we move the omnijar back to / so the resources are
+# under the root here, in INNER_UNMAKE_PACKAGE. See comments about
+# OMNIJAR_NAME earlier in this file and in configure.in.
 
 INNER_UNMAKE_PACKAGE	= \
   mkdir $(MOZ_PKG_DIR) && \
@@ -382,9 +417,9 @@ INNER_UNMAKE_PACKAGE	= \
     $(UNZIP) $(UNPACKAGE) && \
     mv lib/$(ABI_DIR)/libmozglue.so . && \
     mv lib/$(ABI_DIR)/*plugin-container* $(MOZ_CHILD_PROCESS_NAME) && \
-    mv $(ASSET_SO_LIBRARIES) . && \
-    rm -rf assets && \
-    rm -rf lib/$(ABI_DIR) )
+    rm -rf lib/$(ABI_DIR) \
+    $(if $(filter-out ./,$(OMNIJAR_DIR)), \
+      && mv $(OMNIJAR_DIR)$(OMNIJAR_NAME) $(OMNIJAR_NAME)) )
 endif
 
 ifeq ($(MOZ_PKG_FORMAT),DMG)
@@ -487,7 +522,6 @@ NO_PKG_FILES += \
 	nsinstall \
 	viewer \
 	TestGtkEmbed \
-	codesighs* \
 	elf-dynstr-gc \
 	mangle* \
 	maptsv* \
@@ -502,6 +536,7 @@ NO_PKG_FILES += \
 	ssltunnel* \
 	certutil* \
 	pk12util* \
+	OCSPStaplingServer* \
 	winEmbed.exe \
 	chrome/chrome.rdf \
 	chrome/app-chrome.manifest \
@@ -529,9 +564,7 @@ GARBAGE		+= $(DIST)/$(PACKAGE) $(PACKAGE)
 
 # The following target stages files into two directories: one directory for
 # core files, and one for optional extensions based on the information in
-# the MOZ_PKG_MANIFEST file and the following vars:
-# MOZ_NONLOCALIZED_PKG_LIST
-# MOZ_LOCALIZED_PKG_LIST
+# the MOZ_PKG_MANIFEST file.
 
 PKG_ARG = , "$(pkg)"
 
@@ -583,8 +616,12 @@ endif
 
 export NO_PKG_FILES USE_ELF_HACK ELF_HACK_FLAGS
 
+# Override the value of OMNIJAR_NAME from config.status with the value
+# set earlier in this file.
+
 stage-package: $(MOZ_PKG_MANIFEST)
 	@rm -rf $(DIST)/$(PKG_PATH)$(PKG_BASENAME).tar $(DIST)/$(PKG_PATH)$(PKG_BASENAME).dmg $@ $(EXCLUDE_LIST)
+	OMNIJAR_NAME=$(OMNIJAR_NAME) \
 	$(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/packager.py $(DEFINES) \
 		--format $(MOZ_PACKAGER_FORMAT) \
 		$(addprefix --removals ,$(MOZ_PKG_REMOVALS)) \
@@ -786,16 +823,6 @@ upload: checksum
 	$(PYTHON) $(MOZILLA_DIR)/build/upload.py --base-path $(DIST) \
 		$(UPLOAD_FILES) \
 		$(CHECKSUM_FILES)
-
-ifeq (WINNT,$(OS_TARGET))
-CODESIGHS_PACKAGE = $(INSTALLER_PACKAGE)
-else
-CODESIGHS_PACKAGE = $(DIST)/$(PACKAGE)
-endif
-
-codesighs:
-	$(PYTHON) $(topsrcdir)/tools/codesighs/codesighs.py \
-	  "$(DIST)/$(MOZ_PKG_DIR)" "$(CODESIGHS_PACKAGE)"
 
 ifndef MOZ_PKG_SRCDIR
 MOZ_PKG_SRCDIR = $(topsrcdir)

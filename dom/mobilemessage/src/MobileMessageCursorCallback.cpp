@@ -48,8 +48,7 @@ MobileMessageCursorCallback::NotifyCursorError(int32_t aError)
       cursor->FireError(NS_LITERAL_STRING("InternalError"));
       break;
     default: // SUCCESS_NO_ERROR is handled above.
-      MOZ_NOT_REACHED("Should never get here!");
-      return NS_ERROR_FAILURE;
+      MOZ_CRASH("Should never get here!");
   }
 
   return NS_OK;
@@ -68,7 +67,7 @@ MobileMessageCursorCallback::NotifyCursorResult(nsISupports* aResult)
   AutoPushJSContext cx(scriptContext->GetNativeContext());
   NS_ENSURE_TRUE(cx, NS_ERROR_FAILURE);
 
-  JS::Rooted<JSObject*> global(cx, scriptContext->GetNativeGlobal());
+  JS::Rooted<JSObject*> global(cx, scriptContext->GetWindowProxy());
   NS_ENSURE_TRUE(global, NS_ERROR_FAILURE);
 
   JSAutoCompartment ac(cx, global);

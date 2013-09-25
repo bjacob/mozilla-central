@@ -11,8 +11,11 @@
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/CheckedInt.h"
 
-#include "nsRect.h"
+#if !(defined(XP_WIN) || defined(XP_MACOSX) || defined(LINUX)) || \
+    defined(MOZ_ASAN)
+// For MEDIA_THREAD_STACK_SIZE
 #include "nsIThreadManager.h"
+#endif
 #include "nsThreadUtils.h"
 #include "prtime.h"
 
@@ -20,6 +23,8 @@ using mozilla::CheckedInt64;
 using mozilla::CheckedUint64;
 using mozilla::CheckedInt32;
 using mozilla::CheckedUint32;
+
+struct nsIntSize;
 
 // This file contains stuff we'd rather put elsewhere, but which is
 // dependent on other changes which we don't want to wait for. We plan to
@@ -164,7 +169,7 @@ static const int64_t USECS_PER_S = 1000000;
 static const int64_t USECS_PER_MS = 1000;
 
 // Converts seconds to milliseconds.
-#define SECONDS_TO_MS(s) ((s) / PR_MSEC_PER_SEC)
+#define MS_TO_SECONDS(s) ((double)(s) / (PR_MSEC_PER_SEC))
 
 // The maximum height and width of the video. Used for
 // sanitizing the memory allocation of the RGB buffer.

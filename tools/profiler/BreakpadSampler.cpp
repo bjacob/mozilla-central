@@ -45,7 +45,7 @@
 #include "mozilla/Services.h"
 
 // JS
-#include "jsdbgapi.h"
+#include "js/OldDebugAPI.h"
 
 // This file's exports are listed in GeckoProfilerImpl.h.
 
@@ -54,6 +54,7 @@
 UnwMode sUnwindMode      = UnwINVALID;
 int     sUnwindInterval  = 0;
 int     sUnwindStackScan = 0;
+int     sProfileEntries  = 0;
 
 using std::string;
 using namespace mozilla;
@@ -180,10 +181,13 @@ void TableTicker::UnwinderTick(TickSample* sample)
 
   // Marker(s) come before the sample
   PseudoStack* stack = currThreadProfile.GetPseudoStack();
-  for (int i = 0; stack->getMarker(i) != NULL; i++) {
-    utb__addEntry( utb, ProfileEntry('m', stack->getMarker(i)) );
+  ProfilerMarkerLinkedList* pendingMarkersList = stack->getPendingMarkers();
+  while (pendingMarkersList && pendingMarkersList->peek()) {
+    ProfilerMarker* marker = pendingMarkersList->popHead();
+    stack->addStoredMarker(marker);
+    utb__addEntry( utb, ProfileEntry('m', marker) );
   }
-  stack->mQueueClearMarker = true;
+  stack->updateGeneration(currThreadProfile.GetGenerationID());
 
   bool recordSample = true;
   if (mJankOnly) {

@@ -3,14 +3,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH		= @DEPTH@
-topsrcdir	= @top_srcdir@
-srcdir		= @srcdir@
-VPATH		= @srcdir@
-relativesrcdir  = @relativesrcdir@
-
-include $(DEPTH)/config/autoconf.mk
 MOCHITEST_FILES = \
+	android.json \
 	test_canvas.html \
 	test_isPointInStroke.html \
 	image_transparent50.png \
@@ -40,40 +34,14 @@ MOCHITEST_FILES = \
 	test_2d.composite.canvas.destination-in.html \
 	test_2d.composite.canvas.source-in.html \
 	test_2d.composite.canvas.source-out.html \
-	test_2d.composite.canvas.multiply.html \
-	test_2d.composite.canvas.screen.html \
-	test_2d.composite.canvas.overlay.html \
-	test_2d.composite.canvas.darken.html \
-	test_2d.composite.canvas.lighten.html \
-	test_2d.composite.canvas.color-dodge.html \
-	test_2d.composite.canvas.color-burn.html \
 	test_2d.composite.canvas.hard-light.html \
 	test_2d.composite.canvas.soft-light.html \
-	test_2d.composite.canvas.difference.html \
-	test_2d.composite.canvas.exclusion.html \
-	test_2d.composite.canvas.hue.html \
-	test_2d.composite.canvas.saturation.html \
 	test_2d.composite.canvas.color.html \
-	test_2d.composite.canvas.luminosity.html \
 	test_2d.composite.image.destination-atop.html \
 	test_2d.composite.image.destination-in.html \
 	test_2d.composite.image.source-in.html \
 	test_2d.composite.image.source-out.html \
-	test_2d.composite.solid.multiply.html \
-	test_2d.composite.solid.screen.html \
-	test_2d.composite.solid.overlay.html \
-	test_2d.composite.solid.darken.html \
-	test_2d.composite.solid.lighten.html \
-	test_2d.composite.solid.color-dodge.html \
-	test_2d.composite.solid.color-burn.html \
 	test_2d.composite.solid.hard-light.html \
-	test_2d.composite.solid.soft-light.html \
-	test_2d.composite.solid.difference.html \
-	test_2d.composite.solid.exclusion.html \
-	test_2d.composite.solid.hue.html \
-	test_2d.composite.solid.saturation.html \
-	test_2d.composite.solid.color.html \
-	test_2d.composite.solid.luminosity.html \
 	test_2d.composite.uncovered.image.destination-in.html \
 	test_2d.composite.uncovered.image.source-in.html \
 	test_2d.composite.uncovered.image.source-out.html \
@@ -109,9 +77,42 @@ MOCHITEST_FILES = \
 	test_bug866575.html \
 	test_drawImage_edge_cases.html \
 	test_drawImage_document_domain.html \
-  test_mozDashOffset.html \
+	test_mozDashOffset.html \
 	file_drawImage_document_domain.html \
 	test_windingRuleUndefined.html \
+	test_strokeText_throw.html \
+	test_bug902651.html \
+	$(NULL)
+
+# SkiaGL on Android/Gonk does not implement these composite ops yet
+
+MOCHITEST_FILES += \
+	test_2d.composite.canvas.color-burn.html \
+	test_2d.composite.canvas.color-dodge.html \
+	test_2d.composite.canvas.darken.html \
+	test_2d.composite.canvas.difference.html \
+	test_2d.composite.canvas.exclusion.html \
+	test_2d.composite.canvas.hue.html \
+	test_2d.composite.canvas.lighten.html \
+	test_2d.composite.canvas.luminosity.html \
+	test_2d.composite.canvas.multiply.html \
+	test_2d.composite.canvas.overlay.html \
+	test_2d.composite.canvas.saturation.html \
+	test_2d.composite.canvas.screen.html \
+	test_2d.composite.solid.color-burn.html \
+	test_2d.composite.solid.color-dodge.html \
+	test_2d.composite.solid.color.html \
+	test_2d.composite.solid.darken.html \
+	test_2d.composite.solid.difference.html \
+	test_2d.composite.solid.exclusion.html \
+	test_2d.composite.solid.hue.html \
+	test_2d.composite.solid.lighten.html \
+	test_2d.composite.solid.luminosity.html \
+	test_2d.composite.solid.multiply.html \
+	test_2d.composite.solid.overlay.html \
+	test_2d.composite.solid.saturation.html \
+	test_2d.composite.solid.screen.html \
+	test_2d.composite.solid.soft-light.html \
 	$(NULL)
 
 ifneq (1_Linux,$(MOZ_SUITE)_$(OS_ARCH))
@@ -140,8 +141,11 @@ MOCHITEST_FILES += \
 	test_2d.line.join.parallel.html \
 	$(NULL)
 
+ifneq ($(MOZ_WIDGET_TOOLKIT), android)
+ifneq ($(MOZ_WIDGET_TOOLKIT), gonk)
 # This is an issue with Quartz's handling of radial gradients and some numeric
-# imprecision that results in errors here.
+# imprecision that results in errors here. SkiaGL (on Android/Gonk) also has
+# a similar problem.
 MOCHITEST_FILES += \
 	test_2d.gradient.radial.inside2.html \
 	test_2d.gradient.radial.inside3.html \
@@ -149,6 +153,8 @@ MOCHITEST_FILES += \
 	test_2d.gradient.radial.cone.front.html \
 	test_2d.gradient.radial.cone.top.html \
 	$(NULL)
+endif
+endif
 
 # This is another Quartz bug -- closed paths that don't lie fully within the
 # destination bounds seem to have problems with the BEVEL/SQUARE join/cap combo.
@@ -202,4 +208,3 @@ endif
 # test_2d.path.rect.zero.6.html
 
 # split up into groups to work around command-line length limits
-include $(topsrcdir)/config/rules.mk

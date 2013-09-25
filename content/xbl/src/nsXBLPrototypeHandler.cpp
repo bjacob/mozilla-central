@@ -51,9 +51,6 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
-static NS_DEFINE_CID(kDOMScriptObjectFactoryCID,
-                     NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
-
 uint32_t nsXBLPrototypeHandler::gRefCnt = 0;
 
 int32_t nsXBLPrototypeHandler::kMenuAccessKey = -1;
@@ -356,7 +353,7 @@ nsXBLPrototypeHandler::EnsureEventHandler(nsIScriptGlobalObject* aGlobal,
   if (pWindow) {
     JS::Rooted<JSObject*> cachedHandler(cx, pWindow->GetCachedXBLPrototypeHandler(this));
     if (cachedHandler) {
-      xpc_UnmarkGrayObject(cachedHandler);
+      JS::ExposeObjectToActiveJS(cachedHandler);
       aHandler.set(cachedHandler);
       NS_ENSURE_TRUE(aHandler, NS_ERROR_FAILURE);
       return NS_OK;
@@ -454,7 +451,7 @@ nsXBLPrototypeHandler::DispatchXBLCommand(EventTarget* aTarget, nsIDOMEvent* aEv
       if (!doc)
         return NS_ERROR_FAILURE;
 
-      privateWindow = do_QueryInterface(doc->GetScriptGlobalObject());
+      privateWindow = doc->GetWindow();
       if (!privateWindow)
         return NS_ERROR_FAILURE;
     }
@@ -550,7 +547,7 @@ nsXBLPrototypeHandler::DispatchXULKeyCommand(nsIDOMEvent* aEvent)
     return NS_ERROR_FAILURE;
   }
 
-  // XXX We should use widget::Modifiers for supporting all modifiers.
+  // XXX We should use mozilla::Modifiers for supporting all modifiers.
 
   bool isAlt = false;
   bool isControl = false;
@@ -902,7 +899,7 @@ nsXBLPrototypeHandler::ReportKeyConflict(const PRUnichar* aKey, const PRUnichar*
 
   const PRUnichar* params[] = { aKey, aModifiers };
   nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  "XBL Prototype Handler", doc,
+                                  NS_LITERAL_CSTRING("XBL Prototype Handler"), doc,
                                   nsContentUtils::eXBL_PROPERTIES,
                                   aMessageName,
                                   params, ArrayLength(params),
@@ -914,7 +911,7 @@ nsXBLPrototypeHandler::ModifiersMatchMask(nsIDOMUIEvent* aEvent,
                                           bool aIgnoreShiftKey)
 {
   nsEvent* event = aEvent->GetInternalNSEvent();
-  NS_ENSURE_TRUE(event && NS_IS_INPUT_EVENT(event), false);
+  NS_ENSURE_TRUE(event && event->IsInputDerivedEvent(), false);
   nsInputEvent* inputEvent = static_cast<nsInputEvent*>(event);
 
   if (mKeyMask & cMetaMask) {
@@ -951,8 +948,9 @@ nsXBLPrototypeHandler::ModifiersMatchMask(nsIDOMUIEvent* aEvent,
 }
 
 nsresult
-nsXBLPrototypeHandler::Read(nsIScriptContext* aContext, nsIObjectInputStream* aStream)
+nsXBLPrototypeHandler::Read(nsIObjectInputStream* aStream)
 {
+  AssertInCompilationScope();
   nsresult rv = aStream->Read8(&mPhase);
   NS_ENSURE_SUCCESS(rv, rv);
   rv = aStream->Read8(&mType);
@@ -985,8 +983,9 @@ nsXBLPrototypeHandler::Read(nsIScriptContext* aContext, nsIObjectInputStream* aS
 }
 
 nsresult
-nsXBLPrototypeHandler::Write(nsIScriptContext* aContext, nsIObjectOutputStream* aStream)
+nsXBLPrototypeHandler::Write(nsIObjectOutputStream* aStream)
 {
+  AssertInCompilationScope();
   // Make sure we don't write out NS_HANDLER_TYPE_XUL types, as they are used
   // for <keyset> elements.
   if ((mType & NS_HANDLER_TYPE_XUL) || !mEventName)

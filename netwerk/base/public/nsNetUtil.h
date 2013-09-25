@@ -81,10 +81,14 @@
 #include "nsIOfflineCacheUpdate.h"
 #include "nsIContentSniffer.h"
 #include "nsCategoryCache.h"
+#include "nsStringStream.h"
+#include "nsIViewSourceChannel.h"
 
 #include <limits>
 
 #ifdef MOZILLA_INTERNAL_API
+
+#include "nsReadableUtils.h"
 
 inline already_AddRefed<nsIIOService>
 do_GetIOService(nsresult* error = 0)
@@ -460,6 +464,47 @@ NS_NewInputStreamChannel(nsIChannel      **result,
 {
     return NS_NewInputStreamChannel(result, uri, stream, contentType,
                                     &contentCharset);
+}
+
+inline nsresult
+NS_NewInputStreamChannel(nsIChannel      **result,
+                         nsIURI           *uri,
+                         const nsAString  &data,
+                         const nsACString &contentType,
+                         bool              isSrcdocChannel = false)
+{
+
+    nsresult rv;
+
+    nsCOMPtr<nsIStringInputStream> stream;
+    stream = do_CreateInstance(NS_STRINGINPUTSTREAM_CONTRACTID, &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+#ifdef MOZILLA_INTERNAL_API
+    uint32_t len;
+    char* utf8Bytes = ToNewUTF8String(data, &len);
+    rv = stream->AdoptData(utf8Bytes, len);
+#else
+    char* utf8Bytes = ToNewUTF8String(data);
+    rv = stream->AdoptData(utf8Bytes, strlen(utf8Bytes));
+#endif
+
+    nsCOMPtr<nsIChannel> chan;
+
+    rv = NS_NewInputStreamChannel(getter_AddRefs(chan), uri, stream,
+                                  contentType, NS_LITERAL_CSTRING("UTF-8"));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    if (isSrcdocChannel) {
+        nsCOMPtr<nsIInputStreamChannel> inStrmChan = do_QueryInterface(chan);
+        NS_ENSURE_TRUE(inStrmChan, NS_ERROR_FAILURE);
+        inStrmChan->SetSrcdocData(data);
+    }
+
+    *result = nullptr;
+    chan.swap(*result);
+
+    return NS_OK;
 }
 
 inline nsresult
@@ -1794,7 +1839,8 @@ NS_SecurityCompareURIs(nsIURI* aSourceURI,
         return false;
     }
 
-    // special handling for file: URIs
+    // For file scheme, reject unless the files are identical. See
+    // NS_RelaxStrictFileOriginPolicy for enforcing file same-origin checking
     if (targetScheme.EqualsLiteral("file"))
     {
         // in traditional unsafe behavior all files are the same origin
@@ -1861,6 +1907,100 @@ NS_SecurityCompareURIs(nsIURI* aSourceURI,
     }
 
     return NS_GetRealPort(targetBaseURI) == NS_GetRealPort(sourceBaseURI);
+}
+
+inline bool
+NS_URIIsLocalFile(nsIURI *aURI)
+{
+  nsCOMPtr<nsINetUtil> util = do_GetNetUtil();
+
+  bool isFile;
+  return util && NS_SUCCEEDED(util->ProtocolHasFlags(aURI,
+                                nsIProtocolHandler::URI_IS_LOCAL_FILE,
+                                &isFile)) &&
+         isFile;
+}
+
+// When strict file origin policy is enabled, SecurityCompareURIs will fail for
+// file URIs that do not point to the same local file. This call provides an
+// alternate file-specific origin check that allows target files that are
+// contained in the same directory as the source.
+//
+// https://developer.mozilla.org/en-US/docs/Same-origin_policy_for_file:_URIs
+inline bool
+NS_RelaxStrictFileOriginPolicy(nsIURI *aTargetURI,
+                               nsIURI *aSourceURI,
+                               bool aAllowDirectoryTarget = false)
+{
+  if (!NS_URIIsLocalFile(aTargetURI)) {
+    // This is probably not what the caller intended
+    NS_NOTREACHED("NS_RelaxStrictFileOriginPolicy called with non-file URI");
+    return false;
+  }
+
+  if (!NS_URIIsLocalFile(aSourceURI)) {
+    // If the source is not also a file: uri then forget it
+    // (don't want resource: principals in a file: doc)
+    //
+    // note: we're not de-nesting jar: uris here, we want to
+    // keep archive content bottled up in its own little island
+    return false;
+  }
+
+  //
+  // pull out the internal files
+  //
+  nsCOMPtr<nsIFileURL> targetFileURL(do_QueryInterface(aTargetURI));
+  nsCOMPtr<nsIFileURL> sourceFileURL(do_QueryInterface(aSourceURI));
+  nsCOMPtr<nsIFile> targetFile;
+  nsCOMPtr<nsIFile> sourceFile;
+  bool targetIsDir;
+
+  // Make sure targetFile is not a directory (bug 209234)
+  // and that it exists w/out unescaping (bug 395343)
+  if (!sourceFileURL || !targetFileURL ||
+      NS_FAILED(targetFileURL->GetFile(getter_AddRefs(targetFile))) ||
+      NS_FAILED(sourceFileURL->GetFile(getter_AddRefs(sourceFile))) ||
+      !targetFile || !sourceFile ||
+      NS_FAILED(targetFile->Normalize()) ||
+#ifndef MOZ_WIDGET_ANDROID
+      NS_FAILED(sourceFile->Normalize()) ||
+#endif
+      (!aAllowDirectoryTarget &&
+       (NS_FAILED(targetFile->IsDirectory(&targetIsDir)) || targetIsDir))) {
+    return false;
+  }
+
+  //
+  // If the file to be loaded is in a subdirectory of the source
+  // (or same-dir if source is not a directory) then it will
+  // inherit its source principal and be scriptable by that source.
+  //
+  bool sourceIsDir;
+  bool allowed = false;
+  nsresult rv = sourceFile->IsDirectory(&sourceIsDir);
+  if (NS_SUCCEEDED(rv) && sourceIsDir) {
+    rv = sourceFile->Contains(targetFile, true, &allowed);
+  } else {
+    nsCOMPtr<nsIFile> sourceParent;
+    rv = sourceFile->GetParent(getter_AddRefs(sourceParent));
+    if (NS_SUCCEEDED(rv) && sourceParent) {
+      rv = sourceParent->Equals(targetFile, &allowed);
+      if (NS_FAILED(rv) || !allowed) {
+        rv = sourceParent->Contains(targetFile, true, &allowed);
+      } else {
+        MOZ_ASSERT(aAllowDirectoryTarget,
+                   "sourceFile->Parent == targetFile, but targetFile "
+                   "should've been disallowed if it is a directory");
+      }
+    }
+  }
+
+  if (NS_SUCCEEDED(rv) && allowed) {
+    return true;
+  }
+
+  return false;
 }
 
 inline bool
@@ -2193,6 +2333,28 @@ NS_SniffContent(const char* aSnifferType, nsIRequest* aRequest,
   }
 
   aSniffedType.Truncate();
+}
+
+/**
+ * Whether the channel was created to load a srcdoc document.
+ * Note that view-source:about:srcdoc is classified as a srcdoc document by 
+ * this function, which may not be applicable everywhere.
+ */
+inline bool
+NS_IsSrcdocChannel(nsIChannel *aChannel)
+{
+  bool isSrcdoc;
+  nsCOMPtr<nsIInputStreamChannel> isr = do_QueryInterface(aChannel);
+  if (isr) {
+    isr->GetIsSrcdocChannel(&isSrcdoc);
+    return isSrcdoc;
+  }
+  nsCOMPtr<nsIViewSourceChannel> vsc = do_QueryInterface(aChannel);
+  if (vsc) {
+    vsc->GetIsSrcdocChannel(&isSrcdoc);
+    return isSrcdoc;
+  }
+  return false;
 }
 
 #endif // !nsNetUtil_h__

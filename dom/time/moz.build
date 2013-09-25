@@ -5,7 +5,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 XPIDL_SOURCES += [
-    'nsIDOMNavigatorTime.idl',
     'nsITimeService.idl',
 ]
 
@@ -26,4 +25,10 @@ CPP_SOURCES += [
     'TimeManager.cpp',
     'TimeService.cpp',
 ]
+
+FAIL_ON_WARNINGS = True
+
+LIBXUL_LIBRARY = True
+
+LIBRARY_NAME = 'dom_time_s'
 

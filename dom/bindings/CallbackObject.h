@@ -20,18 +20,16 @@
 #include "nsISupports.h"
 #include "nsISupportsImpl.h"
 #include "nsCycleCollectionParticipant.h"
-#include "jsapi.h"
 #include "jswrapper.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/ErrorResult.h"
+#include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/Util.h"
 #include "nsContentUtils.h"
 #include "nsCxPusher.h"
 #include "nsWrapperCache.h"
 #include "nsJSEnvironment.h"
 #include "xpcpublic.h"
-#include "nsLayoutStatics.h"
-#include "js/RootingAPI.h"
 
 namespace mozilla {
 namespace dom {
@@ -60,7 +58,7 @@ public:
 
   JS::Handle<JSObject*> Callback() const
   {
-    xpc_UnmarkGrayObject(mCallback);
+    JS::ExposeObjectToActiveJS(mCallback);
     return CallbackPreserveColor();
   }
 
@@ -71,16 +69,22 @@ public:
    * This should only be called if you are certain that the return value won't
    * be passed into a JS API function and that it won't be stored without being
    * rooted (or otherwise signaling the stored value to the CC).
-   *
-   * This can return a handle because we trace our mCallback.
    */
   JS::Handle<JSObject*> CallbackPreserveColor() const
   {
-    return JS::Handle<JSObject*>::fromMarkedLocation(&mCallback);
+    // Calling fromMarkedLocation() is safe because we trace our mCallback, and
+    // because the value of mCallback cannot change after if has been set.
+    return JS::Handle<JSObject*>::fromMarkedLocation(mCallback.address());
   }
 
   enum ExceptionHandling {
+    // Report any exception and don't throw it to the caller code.
     eReportExceptions,
+    // Throw an exception to the caller code if the thrown exception is a
+    // binding object for a DOMError from the caller's scope, otherwise report
+    // it.
+    eRethrowContentExceptions,
+    // Throw any exception to the caller code.
     eRethrowExceptions
   };
 
@@ -93,25 +97,26 @@ protected:
 private:
   inline void Init(JSObject* aCallback)
   {
+    MOZ_ASSERT(aCallback && !mCallback);
     // Set mCallback before we hold, on the off chance that a GC could somehow
     // happen in there... (which would be pretty odd, granted).
     mCallback = aCallback;
-    // Make sure we'll be able to drop as needed
-    nsLayoutStatics::AddRef();
-    NS_HOLD_JS_OBJECTS(this, CallbackObject);
+    mozilla::HoldJSObjects(this);
   }
+
+  CallbackObject(const CallbackObject&) MOZ_DELETE;
+  CallbackObject& operator =(const CallbackObject&) MOZ_DELETE;
 
 protected:
   void DropCallback()
   {
     if (mCallback) {
       mCallback = nullptr;
-      NS_DROP_JS_OBJECTS(this, CallbackObject);
-      nsLayoutStatics::Release();
+      mozilla::DropJSObjects(this);
     }
   }
 
-  JSObject* mCallback;
+  JS::Heap<JSObject*> mCallback;
 
   class MOZ_STACK_CLASS CallSetup
   {
@@ -122,8 +127,11 @@ protected:
      * non-null.
      */
   public:
+    // If aExceptionHandling == eRethrowContentExceptions then aCompartment
+    // needs to be set to the caller's compartment.
     CallSetup(JS::Handle<JSObject*> aCallable, ErrorResult& aRv,
-              ExceptionHandling aExceptionHandling);
+              ExceptionHandling aExceptionHandling,
+              JSCompartment* aCompartment = nullptr);
     ~CallSetup();
 
     JSContext* GetContext() const
@@ -135,22 +143,22 @@ protected:
     // We better not get copy-constructed
     CallSetup(const CallSetup&) MOZ_DELETE;
 
+    bool ShouldRethrowException(JS::Handle<JS::Value> aException);
+
     // Members which can go away whenever
     JSContext* mCx;
-    nsCOMPtr<nsIScriptContext> mCtx;
+
+    // Caller's compartment. This will only have a sensible value if
+    // mExceptionHandling == eRethrowContentExceptions.
+    JSCompartment* mCompartment;
 
     // And now members whose construction/destruction order we need to control.
 
-    // Put our nsAutoMicrotask first, so it gets destroyed after everything else
-    // is gone
-    nsAutoMicroTask mMt;
-
-    // We construct our JS::Rooted right after our JSAutoRequest; let's just
-    // hope that the change in ordering wrt the mCxPusher constructor here is
-    // ok.
-    Maybe<JS::Rooted<JSObject*> > mRootedCallable;
-
     nsCxPusher mCxPusher;
+
+    // Constructed the rooter within the scope of mCxPusher above, so that it's
+    // always within a request during its lifetime.
+    Maybe<JS::Rooted<JSObject*> > mRootedCallable;
 
     // Can't construct a JSAutoCompartment without a JSContext either.  Also,
     // Put mAc after mCxPusher so that we exit the compartment before we pop the
@@ -163,6 +171,7 @@ protected:
     ErrorResult& mErrorResult;
     const ExceptionHandling mExceptionHandling;
     uint32_t mSavedJSContextOptions;
+    const bool mIsMainThread;
   };
 };
 

@@ -5,8 +5,6 @@
 
 /*
  * Double hashing implementation.
- *
- * Try to keep this file in sync with js/src/jsdhash.cpp.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +15,7 @@
 #include "nsDebug.h"     /* for PR_ASSERT */
 #include "nsAlgorithm.h"
 #include "mozilla/Likely.h"
+#include "mozilla/MemoryReporting.h"
 
 #include "mozilla/RefgraphInstrumentation.h"
 
@@ -764,7 +763,7 @@ struct SizeOfEntryExcludingThisArg
 {
     size_t total;
     PLDHashSizeOfEntryExcludingThisFun sizeOfEntryExcludingThis;
-    nsMallocSizeOfFun mallocSizeOf;
+    MallocSizeOf mallocSizeOf;
     void *arg;      // the arg passed by the user
 };
 
@@ -780,7 +779,7 @@ SizeOfEntryExcludingThisEnumerator(PLDHashTable *table, PLDHashEntryHdr *hdr,
 size_t
 PL_DHashTableSizeOfExcludingThis(const PLDHashTable *table,
                                  PLDHashSizeOfEntryExcludingThisFun sizeOfEntryExcludingThis,
-                                 nsMallocSizeOfFun mallocSizeOf,
+                                 MallocSizeOf mallocSizeOf,
                                  void *arg /* = NULL */)
 {
     size_t n = 0;
@@ -797,7 +796,7 @@ PL_DHashTableSizeOfExcludingThis(const PLDHashTable *table,
 size_t
 PL_DHashTableSizeOfIncludingThis(const PLDHashTable *table,
                                  PLDHashSizeOfEntryExcludingThisFun sizeOfEntryExcludingThis,
-                                 nsMallocSizeOfFun mallocSizeOf,
+                                 MallocSizeOf mallocSizeOf,
                                  void *arg /* = NULL */)
 {
     return mallocSizeOf(table) +

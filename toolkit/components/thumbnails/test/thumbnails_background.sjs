@@ -8,7 +8,7 @@ var timer;
 
 function handleRequest(req, resp) {
   resp.processAsync();
-  resp.setHeader("Cache-Control", "no-cache", false);
+  resp.setHeader("Cache-Control", "no-cache, no-store", false);
   resp.setHeader("Content-Type", "text/html;charset=utf-8", false);
 
   let opts = {};
@@ -17,8 +17,18 @@ function handleRequest(req, resp) {
   }
   catch (err) {}
 
+  if (opts.setRedCookie)
+    resp.setHeader("Set-Cookie", "red", false);
+
   if (opts.setGreenCookie)
     resp.setHeader("Set-Cookie", "green", false);
+
+  if (req.hasHeader("Cookie") &&
+      req.getHeader("Cookie").split(";").indexOf("red") >= 0) {
+    resp.write('<html style="background: #f00;"></html>');
+    resp.finish();
+    return;
+  }
 
   if (req.hasHeader("Cookie") &&
       req.getHeader("Cookie").split(";").indexOf("green") >= 0) {

@@ -159,11 +159,11 @@ void nsGIFDecoder2::BeginGIF()
 //******************************************************************************
 void nsGIFDecoder2::BeginImageFrame(uint16_t aDepth)
 {
-  gfxASurface::gfxImageFormat format;
+  gfxImageFormat format;
   if (mGIFStruct.is_transparent)
-    format = gfxASurface::ImageFormatARGB32;
+    format = gfxImageFormatARGB32;
   else
-    format = gfxASurface::ImageFormatRGB24;
+    format = gfxImageFormatRGB24;
 
   MOZ_ASSERT(HasSize());
 
@@ -177,17 +177,18 @@ void nsGIFDecoder2::BeginImageFrame(uint16_t aDepth)
   }
 
   // Our first full frame is automatically created by the image decoding
-  // infrastructure. Just use it as long as we're not creating a subframe.
-  else if (mGIFStruct.x_offset != 0 || mGIFStruct.y_offset != 0 ||
-           int32_t(mGIFStruct.width) != mImageMetadata.GetWidth() ||
-           int32_t(mGIFStruct.height) != mImageMetadata.GetHeight()) {
+  // infrastructure. Just use it as long as it matches up.
+  else if (!GetCurrentFrame()->GetRect().IsEqualEdges(nsIntRect(mGIFStruct.x_offset,
+                                                                mGIFStruct.y_offset,
+                                                                mGIFStruct.width,
+                                                                mGIFStruct.height))) {
     // Regardless of depth of input, image is decoded into 24bit RGB
     NeedNewFrame(mGIFStruct.images_decoded, mGIFStruct.x_offset,
                  mGIFStruct.y_offset, mGIFStruct.width, mGIFStruct.height,
                  format);
   } else {
     // Our preallocated frame matches up, with the possible exception of alpha.
-    if (format == gfxASurface::ImageFormatRGB24) {
+    if (format == gfxImageFormatRGB24) {
       GetCurrentFrame()->SetHasNoAlpha();
     }
   }
@@ -199,7 +200,7 @@ void nsGIFDecoder2::BeginImageFrame(uint16_t aDepth)
 //******************************************************************************
 void nsGIFDecoder2::EndImageFrame()
 {
-  RasterImage::FrameAlpha alpha = RasterImage::kFrameHasAlpha;
+  FrameBlender::FrameAlpha alpha = FrameBlender::kFrameHasAlpha;
 
   // First flush all pending image data 
   if (!mGIFStruct.images_decoded) {
@@ -218,7 +219,7 @@ void nsGIFDecoder2::EndImageFrame()
     }
     // This transparency check is only valid for first frame
     if (mGIFStruct.is_transparent && !mSawTransparency) {
-      alpha = RasterImage::kFrameOpaque;
+      alpha = FrameBlender::kFrameOpaque;
     }
   }
   mCurrentRow = mLastFlushedRow = -1;
@@ -241,7 +242,7 @@ void nsGIFDecoder2::EndImageFrame()
 
   // Tell the superclass we finished a frame
   PostFrameStop(alpha,
-                RasterImage::FrameDisposalMethod(mGIFStruct.disposal_method),
+                FrameBlender::FrameDisposalMethod(mGIFStruct.disposal_method),
                 mGIFStruct.delay_time);
 
   // Reset the transparent pixel

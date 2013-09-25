@@ -19,12 +19,12 @@ SYNC_JAVA_FILES := \
   background/announcements/AnnouncementsFetcher.java \
   background/announcements/AnnouncementsFetchResourceDelegate.java \
   background/announcements/AnnouncementsService.java \
-  background/announcements/AnnouncementsStartReceiver.java \
   background/BackgroundService.java \
   background/bagheera/BagheeraClient.java \
   background/bagheera/BagheeraRequestDelegate.java \
   background/bagheera/BoundedByteArrayEntity.java \
   background/bagheera/DeflateHelper.java \
+  background/common/DateUtils.java \
   background/common/log/Logger.java \
   background/common/log/writers/AndroidLevelCachingLogWriter.java \
   background/common/log/writers/AndroidLogWriter.java \
@@ -35,10 +35,13 @@ SYNC_JAVA_FILES := \
   background/common/log/writers/StringLogWriter.java \
   background/common/log/writers/TagLogWriter.java \
   background/common/log/writers/ThreadLocalTagLogWriter.java \
+  background/datareporting/TelemetryRecorder.java \
   background/db/CursorDumper.java \
   background/db/Tab.java \
   background/healthreport/Environment.java \
   background/healthreport/EnvironmentBuilder.java \
+  background/healthreport/HealthReportBroadcastReceiver.java \
+  background/healthreport/HealthReportBroadcastService.java \
   background/healthreport/HealthReportDatabases.java \
   background/healthreport/HealthReportDatabaseStorage.java \
   background/healthreport/HealthReportGenerator.java \
@@ -46,11 +49,13 @@ SYNC_JAVA_FILES := \
   background/healthreport/HealthReportStorage.java \
   background/healthreport/HealthReportUtils.java \
   background/healthreport/ProfileInformationCache.java \
+  background/healthreport/prune/HealthReportPruneService.java \
+  background/healthreport/prune/PrunePolicy.java \
+  background/healthreport/prune/PrunePolicyDatabaseStorage.java \
+  background/healthreport/prune/PrunePolicyStorage.java \
   background/healthreport/upload/AndroidSubmissionClient.java \
-  background/healthreport/upload/HealthReportBroadcastReceiver.java \
-  background/healthreport/upload/HealthReportBroadcastService.java \
   background/healthreport/upload/HealthReportUploadService.java \
-  background/healthreport/upload/HealthReportUploadStartReceiver.java \
+  background/healthreport/upload/ObsoleteDocumentTracker.java \
   background/healthreport/upload/SubmissionClient.java \
   background/healthreport/upload/SubmissionPolicy.java \
   sync/AlreadySyncingException.java \
@@ -126,6 +131,7 @@ SYNC_JAVA_FILES := \
   sync/net/BrowserIDAuthHeaderProvider.java \
   sync/net/ConnectionMonitorThread.java \
   sync/net/HandleProgressException.java \
+  sync/net/HawkAuthHeaderProvider.java \
   sync/net/HMACAuthHeaderProvider.java \
   sync/net/HttpResponseObserver.java \
   sync/net/Resource.java \
@@ -167,7 +173,6 @@ SYNC_JAVA_FILES := \
   sync/repositories/android/CachedSQLiteOpenHelper.java \
   sync/repositories/android/ClientsDatabase.java \
   sync/repositories/android/ClientsDatabaseAccessor.java \
-  sync/repositories/android/FennecControlHelper.java \
   sync/repositories/android/FennecTabsRepository.java \
   sync/repositories/android/FormHistoryRepositorySession.java \
   sync/repositories/android/PasswordsRepositorySession.java \
@@ -197,6 +202,7 @@ SYNC_JAVA_FILES := \
   sync/repositories/domain/HistoryRecordFactory.java \
   sync/repositories/domain/PasswordRecord.java \
   sync/repositories/domain/Record.java \
+  sync/repositories/domain/RecordParseException.java \
   sync/repositories/domain/TabsRecord.java \
   sync/repositories/domain/VersionConstants.java \
   sync/repositories/FetchFailedException.java \
@@ -296,15 +302,15 @@ SYNC_JAVA_FILES := \
   $(NULL)
 
 SYNC_RES_DRAWABLE := \
-  mobile/android/base/resources/drawable/pin_background.xml \
+  res/drawable/pin_background.xml \
   $(NULL)
 
 SYNC_RES_DRAWABLE_LDPI := \
   $(NULL)
 
 SYNC_RES_DRAWABLE_MDPI := \
-  mobile/android/base/resources/drawable-mdpi/desktop.png \
-  mobile/android/base/resources/drawable-mdpi/mobile.png \
+  res/drawable-mdpi/desktop.png \
+  res/drawable-mdpi/mobile.png \
   $(NULL)
 
 SYNC_RES_DRAWABLE_HDPI := \

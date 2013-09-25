@@ -3,11 +3,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DEPTH		= @DEPTH@
-topsrcdir	= @top_srcdir@
-srcdir		= @srcdir@
-VPATH		= @srcdir@
-
 ifndef .PYMAKE
 ifeq (,$(MAKE_VERSION))
 $(error GNU Make is required)
@@ -19,8 +14,6 @@ endif
 
 export TOPLEVEL_BUILD := 1
 
-include $(DEPTH)/config/autoconf.mk
-
 default::
 
 ifdef COMPILE_ENVIRONMENT
@@ -30,23 +23,17 @@ endif
 
 include $(topsrcdir)/config/config.mk
 
-GARBAGE_DIRS += dist _javagen _profile _tests staticlib
+GARBAGE_DIRS += dist _javagen _profile staticlib
 DIST_GARBAGE = config.cache config.log config.status* config-defs.h \
    config/autoconf.mk \
-   unallmakefiles mozilla-config.h \
+   mozilla-config.h \
    netwerk/necko-config.h xpcom/xpcom-config.h xpcom/xpcom-private.h \
-   $(topsrcdir)/.mozconfig.mk $(topsrcdir)/.mozconfig.out
+   .mozconfig.mk
 
 ifndef MOZ_PROFILE_USE
 # We need to explicitly put backend.RecursiveMakeBackend.built here
 # otherwise the rule in rules.mk doesn't run early enough.
-default alldep all:: CLOBBER $(topsrcdir)/configure config.status backend.RecursiveMakeBackend.built
-	$(RM) -r $(DIST)/sdk
-	$(RM) -r $(DIST)/include
-	$(RM) -r $(DIST)/private
-	$(RM) -r $(DIST)/public
-	$(RM) -r $(DIST)/bin
-	$(RM) -r _tests
+libs export tools:: CLOBBER $(topsrcdir)/configure config.status backend.RecursiveMakeBackend.built js-config-status
 endif
 
 CLOBBER: $(topsrcdir)/CLOBBER
@@ -69,22 +56,67 @@ config.status: $(topsrcdir)/configure
 	@echo "but your build might not succeed."
 	@exit 1
 
-# Build pseudo-external modules first when export is explicitly called
-export::
-	$(RM) -r $(DIST)/sdk
-	$(MAKE) -C config export
-	$(MAKE) tier_nspr
+.PHONY: js-config-status
+js-config-status:
+	$(call SUBMAKE,backend.RecursiveMakeBackend.built,js/src,1)
+
+install_manifests := bin idl include public private sdk
+install_manifest_depends = \
+  CLOBBER \
+  $(topsrcdir)/configure \
+  config.status \
+  backend.RecursiveMakeBackend.built \
+  js-config-status \
+  $(NULL)
+
+.PHONY: install-manifests
+install-manifests: $(addprefix install-dist-,$(install_manifests))
+
+.PHONY: $(addprefix install-dist-,$(install_manifests))
+$(addprefix install-dist-,$(install_manifests)): install-dist-%: $(install_manifest_depends)
+	$(call py_action,process_install_manifest,$(if $(NO_REMOVE),--no-remove )$(DIST)/$* _build_manifests/install/dist_$* js/src/_build_manifests/install/dist_$*)
+
+.PHONY: install-tests
+install-manifests: install-tests
+install-tests: $(install_manifest_depends)
+	$(call py_action,process_install_manifest,$(if $(NO_REMOVE),--no-remove )_tests _build_manifests/install/tests js/src/_build_manifests/install/tests)
+
+
+# _tests should be purged during cleaning. However, we don't want it purged
+# during PGO builds because it contains some auto-generated files.
+ifneq ($(filter-out maybe_clobber_profiledbuild,$(MAKECMDGOALS)),)
+GARBAGE_DIRS += _tests
+endif
+
+# Windows PGO builds don't perform a clean before the 2nd pass. So, we want
+# to preserve content for the 2nd pass on Windows. Everywhere else, we always
+# process the install manifests as part of export.
+ifdef MOZ_PROFILE_USE
+ifndef NO_PROFILE_GUIDED_OPTIMIZE
+ifneq ($(OS_ARCH)_$(GNU_CC), WINNT_)
+export:: install-manifests
+endif
+endif
+else # !MOZ_PROFILE_USE (normal build)
+export:: install-manifests
+endif
+
+# For historical reasons that are unknown, $(DIST)/sdk is always blown away
+# with no regard for PGO passes. This decision could probably be revisited.
+export:: install-dist-sdk
 
 ifdef ENABLE_TESTS
 # Additional makefile targets to call automated test suites
 include $(topsrcdir)/testing/testsuite-targets.mk
 endif
 
+default all::
+	$(call BUILDSTATUS,TIERS export $(if $(MOZ_PSEUDO_DERECURSE),compile )libs tools)
+
 include $(topsrcdir)/config/rules.mk
 
 distclean::
-	cat unallmakefiles | $(XARGS) rm -f
-	$(RM) unallmakefiles $(DIST_GARBAGE)
+	$(RM) $(DIST_GARBAGE)
 
 ifeq ($(OS_ARCH),WINNT)
 # we want to copy PDB files on Windows
@@ -154,10 +186,10 @@ ifdef MOZ_CRASHREPORTER
 	$(SHELL) $(topsrcdir)/toolkit/crashreporter/tools/upload_symbols.sh $(SYMBOL_INDEX_NAME) "$(DIST)/$(PKG_PATH)$(SYMBOL_FULL_ARCHIVE_BASENAME).zip"
 endif
 
-codesighs:
-	$(MAKE) -C $(MOZ_BUILD_APP)/installer codesighs
-
-# defined in package-name.mk
+# MOZ_SOURCE_STAMP is defined in package-name.mk with a deferred assignment.
+# exporting it makes make run its $(shell) command for each invoked submake,
+# so transform it to an immediate assignment.
+MOZ_SOURCE_STAMP := $(MOZ_SOURCE_STAMP)
 export MOZ_SOURCE_STAMP
 
 #XXX: this is a hack, since we don't want to clobber for MSVC
@@ -191,4 +223,11 @@ ifdef ENABLE_TESTS
 # into moz.build files someday.
 check::
 	$(call SUBMAKE,$@,js/src)
+endif
+
+ifdef MOZ_PSEUDO_DERECURSE
+# Interdependencies for parallel export.
+js/xpconnect/src/export: config/makefiles/precompile/export
+accessible/src/xpcom/export: config/makefiles/precompile/export
+js/src/export: mfbt/export
 endif

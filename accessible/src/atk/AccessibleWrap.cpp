@@ -23,10 +23,12 @@
 #include "Relation.h"
 #include "RootAccessible.h"
 #include "States.h"
+#include "nsISimpleEnumerator.h"
 
 #include "mozilla/Util.h"
 #include "nsXPCOMStrings.h"
 #include "nsComponentManagerUtils.h"
+#include "nsIPersistentProperties2.h"
 
 using namespace mozilla;
 using namespace mozilla::a11y;
@@ -680,8 +682,7 @@ getRoleCB(AtkObject *aAtkObj)
   switch (accWrap->Role()) {
 #include "RoleMap.h"
     default:
-      MOZ_NOT_REACHED("Unknown role.");
-      aAtkObj->role = ATK_ROLE_UNKNOWN;
+      MOZ_CRASH("Unknown role.");
   };
 
 #undef ROLE

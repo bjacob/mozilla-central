@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef NumericConversions_h___
-#define NumericConversions_h___
+#ifndef vm_NumericConversions_h
+#define vm_NumericConversions_h
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Casting.h"
@@ -13,9 +13,6 @@
 #include "mozilla/TypeTraits.h"
 
 #include <math.h>
-
-/* A NaN whose bit pattern conforms to JS::Value's bit pattern restrictions. */
-extern double js_NaN;
 
 namespace js {
 
@@ -38,8 +35,8 @@ template<typename ResultType>
 inline ResultType
 ToUintWidth(double d)
 {
-    MOZ_STATIC_ASSERT(mozilla::IsUnsigned<ResultType>::value,
-                      "ResultType must be an unsigned type");
+    static_assert(mozilla::IsUnsigned<ResultType>::value,
+                  "ResultType must be an unsigned type");
 
     uint64_t bits = mozilla::BitwiseCast<uint64_t>(d);
 
@@ -69,8 +66,8 @@ ToUintWidth(double d)
     // The significand contains the bits that will determine the final result.
     // Shift those bits left or right, according to the exponent, to their
     // locations in the unsigned binary representation of floor(abs(d)).
-    MOZ_STATIC_ASSERT(sizeof(ResultType) <= sizeof(uint64_t),
-                      "Left-shifting below would lose upper bits");
+    static_assert(sizeof(ResultType) <= sizeof(uint64_t),
+                  "Left-shifting below would lose upper bits");
     ResultType result = (exponent > mozilla::DoubleExponentShift)
                         ? ResultType(bits << (exponent - mozilla::DoubleExponentShift))
                         : ResultType(bits >> (mozilla::DoubleExponentShift - exponent));
@@ -113,8 +110,8 @@ template<typename ResultType>
 inline ResultType
 ToIntWidth(double d)
 {
-    MOZ_STATIC_ASSERT(mozilla::IsSigned<ResultType>::value,
-                      "ResultType must be a signed type");
+    static_assert(mozilla::IsSigned<ResultType>::value,
+                  "ResultType must be a signed type");
 
     const ResultType MaxValue = (1ULL << (CHAR_BIT * sizeof(ResultType) - 1)) - 1;
     const ResultType MinValue = -MaxValue - 1;
@@ -292,11 +289,9 @@ ToInteger(double d)
         return d;
     }
 
-    bool neg = (d < 0);
-    d = floor(neg ? -d : d);
-    return neg ? -d : d;
+    return d < 0 ? ceil(d) : floor(d);
 }
 
 } /* namespace js */
 
-#endif /* NumericConversions_h__ */
+#endif /* vm_NumericConversions_h */

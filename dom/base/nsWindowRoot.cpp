@@ -19,6 +19,7 @@
 #include "nsIDOMHTMLInputElement.h"
 #include "nsIDOMHTMLTextAreaElement.h"
 #include "nsIControllers.h"
+#include "nsIController.h"
 
 #include "nsCycleCollectionParticipant.h"
 
@@ -28,8 +29,6 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
-
-static NS_DEFINE_CID(kEventListenerManagerCID,    NS_EVENTLISTENERMANAGER_CID);
 
 nsWindowRoot::nsWindowRoot(nsPIDOMWindow* aWindow)
 {
@@ -43,7 +42,8 @@ nsWindowRoot::~nsWindowRoot()
   }
 }
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_3(nsWindowRoot,
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_4(nsWindowRoot,
+                                        mWindow,
                                         mListenerManager,
                                         mPopupNode,
                                         mParent)
@@ -113,7 +113,7 @@ nsWindowRoot::AddEventListener(const nsAString& aType,
 
 void
 nsWindowRoot::AddEventListener(const nsAString& aType,
-                                nsIDOMEventListener* aListener,
+                                EventListener* aListener,
                                 bool aUseCapture,
                                 const Nullable<bool>& aWantsUntrusted,
                                 ErrorResult& aRv)

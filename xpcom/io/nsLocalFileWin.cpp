@@ -40,6 +40,7 @@
 
 #include "nsXPIDLString.h"
 #include "prproces.h"
+#include "prlink.h"
 
 #include "mozilla/Mutex.h"
 #include "SpecialSystemDirectory.h"
@@ -979,11 +980,11 @@ nsLocalFile::nsLocalFileConstructor(nsISupports* outer, const nsIID& aIID, void*
 // nsLocalFile::nsISupports
 //-----------------------------------------------------------------------------
 
-NS_IMPL_THREADSAFE_ISUPPORTS4(nsLocalFile,
-                              nsILocalFile,
-                              nsIFile,
-                              nsILocalFileWin,
-                              nsIHashable)
+NS_IMPL_ISUPPORTS4(nsLocalFile,
+                   nsILocalFile,
+                   nsIFile,
+                   nsILocalFileWin,
+                   nsIHashable)
 
 
 //-----------------------------------------------------------------------------

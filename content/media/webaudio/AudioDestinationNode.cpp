@@ -125,11 +125,13 @@ public:
           AudioNode* node = mStream->Engine()->Node();
           if (node) {
             context = node->Context();
+            MOZ_ASSERT(context, "node hasn't kept context alive");
           }
         }
         if (!context) {
           return NS_OK;
         }
+        context->Shutdown(); // drops self reference
 
         AutoPushJSContext cx(context->GetJSContext());
         if (cx) {
@@ -178,6 +180,39 @@ private:
   float mSampleRate;
 };
 
+class DestinationNodeEngine : public AudioNodeEngine
+{
+public:
+  explicit DestinationNodeEngine(AudioDestinationNode* aNode)
+    : AudioNodeEngine(aNode)
+    , mVolume(1.0f)
+  {
+  }
+
+  virtual void ProduceAudioBlock(AudioNodeStream* aStream,
+                                 const AudioChunk& aInput,
+                                 AudioChunk* aOutput,
+                                 bool* aFinished) MOZ_OVERRIDE
+  {
+    *aOutput = aInput;
+    aOutput->mVolume *= mVolume;
+  }
+
+  virtual void SetDoubleParameter(uint32_t aIndex, double aParam) MOZ_OVERRIDE
+  {
+    if (aIndex == VOLUME) {
+      mVolume = aParam;
+    }
+  }
+
+  enum Parameters {
+    VOLUME,
+  };
+
+private:
+  float mVolume;
+};
+
 NS_IMPL_ISUPPORTS_INHERITED0(AudioDestinationNode, AudioNode)
 
 AudioDestinationNode::AudioDestinationNode(AudioContext* aContext,
@@ -197,8 +232,22 @@ AudioDestinationNode::AudioDestinationNode(AudioContext* aContext,
   AudioNodeEngine* engine = aIsOffline ?
                             new OfflineDestinationNodeEngine(this, aNumberOfChannels,
                                                              aLength, aSampleRate) :
-                            new AudioNodeEngine(this);
+                            static_cast<AudioNodeEngine*>(new DestinationNodeEngine(this));
+
   mStream = graph->CreateAudioNodeStream(engine, MediaStreamGraph::EXTERNAL_STREAM);
+}
+
+void
+AudioDestinationNode::DestroyMediaStream()
+{
+  if (!mStream)
+    return;
+
+  MediaStreamGraph* graph = mStream->Graph();
+  if (graph->IsNonRealtime()) {
+    MediaStreamGraph::DestroyNonRealtimeInstance(graph);
+  }
+  AudioNode::DestroyMediaStream();
 }
 
 uint32_t
@@ -219,11 +268,27 @@ AudioDestinationNode::SetChannelCount(uint32_t aChannelCount, ErrorResult& aRv)
 }
 
 void
-AudioDestinationNode::DestroyGraph()
+AudioDestinationNode::Mute()
+{
+  MOZ_ASSERT(Context() && !Context()->IsOffline());
+  SendDoubleParameterToStream(DestinationNodeEngine::VOLUME, 0.0f);
+}
+
+void
+AudioDestinationNode::Unmute()
+{
+  MOZ_ASSERT(Context() && !Context()->IsOffline());
+  SendDoubleParameterToStream(DestinationNodeEngine::VOLUME, 1.0f);
+}
+
+void
+AudioDestinationNode::OfflineShutdown()
 {
   MOZ_ASSERT(Context() && Context()->IsOffline(),
              "Should only be called on a valid OfflineAudioContext");
+
   MediaStreamGraph::DestroyNonRealtimeInstance(mStream->Graph());
+  mOfflineRenderingRef.Drop(this);
 }
 
 JSObject*
@@ -235,6 +300,7 @@ AudioDestinationNode::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
 void
 AudioDestinationNode::StartRendering()
 {
+  mOfflineRenderingRef.Take(this);
   mStream->Graph()->StartNonRealtimeProcessing(mFramesToProduce);
 }
 

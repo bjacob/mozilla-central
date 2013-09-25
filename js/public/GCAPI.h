@@ -4,10 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef js_gc_api_h___
-#define js_gc_api_h___
+#ifndef js_GCAPI_h
+#define js_GCAPI_h
 
-#include "HeapAPI.h"
+#include "mozilla/NullPtr.h"
+ 
+#include "js/HeapAPI.h"
+#include "js/RootingAPI.h"
+#include "js/Value.h"
 
 namespace JS {
 
@@ -15,7 +19,7 @@ namespace JS {
     /* Reasons internal to the JS engine */     \
     D(API)                                      \
     D(MAYBEGC)                                  \
-    D(LAST_CONTEXT)                             \
+    D(DESTROY_RUNTIME)                          \
     D(DESTROY_CONTEXT)                          \
     D(LAST_DITCH)                               \
     D(TOO_MUCH_MALLOC)                          \
@@ -181,6 +185,9 @@ DisableIncrementalGC(JSRuntime *rt);
 extern JS_FRIEND_API(void)
 DisableGenerationalGC(JSRuntime *rt);
 
+extern JS_FRIEND_API(void)
+EnableGenerationalGC(JSRuntime *rt);
+
 extern JS_FRIEND_API(bool)
 IsIncrementalBarrierNeeded(JSRuntime *rt);
 
@@ -203,12 +210,25 @@ PokeGC(JSRuntime *rt);
 extern JS_FRIEND_API(bool)
 WasIncrementalGC(JSRuntime *rt);
 
-class ObjectPtr
-{
-    JSObject *value;
+extern JS_FRIEND_API(size_t)
+GetGCNumber();
+
+class AutoAssertNoGC {
+#ifdef DEBUG
+    size_t gcNumber;
 
   public:
-    ObjectPtr() : value(NULL) {}
+    AutoAssertNoGC();
+    ~AutoAssertNoGC();
+#endif
+};
+
+class JS_PUBLIC_API(ObjectPtr)
+{
+    Heap<JSObject *> value;
+
+  public:
+    ObjectPtr() : value(nullptr) {}
 
     ObjectPtr(JSObject *obj) : value(obj) {}
 
@@ -218,7 +238,7 @@ class ObjectPtr
     void finalize(JSRuntime *rt) {
         if (IsIncrementalBarrierNeeded(rt))
             IncrementalObjectBarrier(value);
-        value = NULL;
+        value = nullptr;
     }
 
     void init(JSObject *obj) { value = obj; }
@@ -229,9 +249,7 @@ class ObjectPtr
         IncrementalObjectBarrier(value);
     }
 
-    bool isAboutToBeFinalized() {
-        return JS_IsAboutToBeFinalized(&value);
-    }
+    bool isAboutToBeFinalized();
 
     ObjectPtr &operator=(JSObject *obj) {
         IncrementalObjectBarrier(value);
@@ -239,9 +257,7 @@ class ObjectPtr
         return *this;
     }
 
-    void trace(JSTracer *trc, const char *name) {
-        JS_CallObjectTracer(trc, &value, name);
-    }
+    void trace(JSTracer *trc, const char *name);
 
     JSObject &operator*() const { return *value; }
     JSObject *operator->() const { return value; }
@@ -252,7 +268,7 @@ class ObjectPtr
  * Unsets the gray bit for anything reachable from |thing|. |kind| should not be
  * JSTRACE_SHAPE. |thing| should be non-null.
  */
-extern JS_FRIEND_API(void)
+extern JS_FRIEND_API(bool)
 UnmarkGrayGCThingRecursively(void *thing, JSGCTraceKind kind);
 
 /*
@@ -289,6 +305,12 @@ ExposeValueToActiveJS(const Value &v)
         ExposeGCThingToActiveJS(v.toGCThing(), v.gcKind());
 }
 
+static JS_ALWAYS_INLINE void
+ExposeObjectToActiveJS(JSObject *obj)
+{
+    ExposeGCThingToActiveJS(obj, JSTRACE_OBJECT);
+}
+
 } /* namespace JS */
 
-#endif /* js_gc_api_h___ */
+#endif /* js_GCAPI_h */

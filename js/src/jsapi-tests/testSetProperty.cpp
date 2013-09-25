@@ -5,14 +5,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "jsapi-tests/tests.h"
 
-#include "tests.h"
-
-static JSBool
+static bool
 nativeGet(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleValue vp)
 {
     vp.set(INT_TO_JSVAL(17));
-    return JS_TRUE;
+    return true;
 }
 
 BEGIN_TEST(testSetProperty_NativeGetterStubSetter)

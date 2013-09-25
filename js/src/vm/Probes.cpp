@@ -4,16 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "Probes-inl.h"
+#include "vm/Probes-inl.h"
 
 #include "jscntxt.h"
-#include "jsscript.h"
 
 #ifdef INCLUDE_MOZILLA_DTRACE
 #include "jsscriptinlines.h" 
 #endif
-
-#include "vm/Stack-inl.h"
 
 #define TYPEOF(cx,v)    (JSVAL_IS_NULL(v) ? JSTYPE_NULL : JS_TypeOfValue(cx,v))
 

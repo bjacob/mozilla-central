@@ -4,7 +4,7 @@
 
 #filter substitution
 
-pref("toolkit.defaultChromeURI", "chrome://browser/content/shell.xul");
+pref("toolkit.defaultChromeURI", "chrome://browser/content/shell.html");
 pref("browser.chromeURL", "chrome://browser/content/");
 
 // Device pixel to CSS px ratio, in percent. Set to -1 to calculate based on display density.
@@ -24,6 +24,8 @@ pref("browser.cache.disk.smart_size.first_run", false);
 
 pref("browser.cache.memory.enable", true);
 pref("browser.cache.memory.capacity", 1024); // kilobytes
+
+pref("browser.cache.memory_limit", 2048); // 2 MB
 
 /* image cache prefs */
 pref("image.cache.size", 1048576); // bytes
@@ -73,6 +75,7 @@ pref("mozilla.widget.force-24bpp", true);
 pref("mozilla.widget.use-buffer-pixmap", true);
 pref("mozilla.widget.disable-native-theme", true);
 pref("layout.reflow.synthMouseMove", false);
+pref("layers.force-tiles", false);
 
 /* download manager (don't show the window or alert) */
 pref("browser.download.useDownloadDir", true);
@@ -134,6 +137,11 @@ pref("browser.search.suggest.enabled", true);
 // tell the search service that we don't really expose the "current engine"
 pref("browser.search.noCurrentEngine", true);
 
+// Enable sparse localization by setting a few package locale overrides
+pref("chrome.override_package.global", "b2g-l10n");
+pref("chrome.override_package.mozapps", "b2g-l10n");
+pref("chrome.override_package.passwordmgr", "b2g-l10n");
+
 // enable xul error pages
 pref("browser.xul.error_pages.enabled", true);
 
@@ -177,6 +185,8 @@ pref("content.sink.perf_parse_time", 50000000);
 
 // Maximum scripts runtime before showing an alert
 pref("dom.max_chrome_script_run_time", 0); // disable slow script dialog for chrome
+// Disable the watchdog thread for B2G. See bug 870043 comment 31.
+pref("dom.use_watchdog", false);
 
 // plugins
 pref("plugin.disable", true);
@@ -249,14 +259,14 @@ pref("layers.acceleration.disabled", false);
 pref("layers.offmainthreadcomposition.async-animations", true);
 pref("layers.async-video.enabled", true);
 pref("layers.async-pan-zoom.enabled", true);
+pref("gfx.content.azure.enabled", true);
+pref("gfx.content.azure.backends", "cairo");
 #endif
 
 // Web Notifications
 pref("notification.feature.enabled", true);
-pref("dom.webnotifications.enabled", false);
 
 // IndexedDB
-pref("indexedDB.feature.enabled", true);
 pref("dom.indexedDB.warningQuota", 5);
 
 // prevent video elements from preloading too much data
@@ -377,10 +387,14 @@ pref("dom.ipc.processCount", 100000);
 
 pref("dom.ipc.browser_frames.oop_by_default", false);
 
-// WebSMS
+// SMS/MMS
 pref("dom.sms.enabled", true);
 pref("dom.sms.strict7BitEncoding", false); // Disabled by default.
 pref("dom.sms.requestStatusReport", true); // Enabled by default.
+pref("dom.mms.requestStatusReport", true); // Enabled by default.
+
+//The waiting time in network manager.
+pref("network.gonk.ms-release-mms-connection", 30000);
 
 // WebContacts
 pref("dom.mozContacts.enabled", true);
@@ -398,8 +412,13 @@ pref("dom.mozAlarms.enabled", true);
 
 // SimplePush
 pref("services.push.enabled", true);
+// Debugging enabled.
+pref("services.push.debug", false);
+// Is the network connection allowed to be up?
+// This preference should be used in UX to enable/disable push.
+pref("services.push.connection.enabled", true);
 // serverURL to be assigned by services team
-pref("services.push.serverURL", "");
+pref("services.push.serverURL", "wss://push.services.mozilla.com/");
 pref("services.push.userAgentID", "");
 // Exponential back-off start is 5 seconds like in HTTP/1.1.
 // Maximum back-off is pingInterval.
@@ -418,8 +437,8 @@ pref("services.push.udp.port", 2442);
 // NetworkStats
 #ifdef MOZ_B2G_RIL
 pref("dom.mozNetworkStats.enabled", true);
-pref("ril.lastKnownMcc", "724");
 pref("ril.cellbroadcast.disabled", false);
+pref("dom.webapps.firstRunWithSIM", false);
 #endif
 
 // WebSettings
@@ -519,6 +538,9 @@ pref("app.update.log", true);
 pref("shutdown.watchdog.timeoutSecs", -1);
 #endif
 
+// Check daily for apps updates.
+pref("webapps.update.interval", 86400);
+
 // Extensions preferences
 pref("extensions.update.enabled", false);
 pref("extensions.getAddons.cache.enabled", false);
@@ -529,6 +551,9 @@ pref("ui.click_hold_context_menus.delay", 750);
 
 // Enable device storage
 pref("device.storage.enabled", true);
+
+// Enable pre-installed applications
+pref("dom.webapps.useCurrentProfile", true);
 
 // Enable system message
 pref("dom.sysmsg.enabled", true);
@@ -543,6 +568,7 @@ pref("dom.disable_window_showModalDialog", true);
 
 // Enable new experimental html forms
 pref("dom.experimental_forms", true);
+pref("dom.forms.number", true);
 
 // Turns on gralloc-based direct texturing for Gonk
 pref("gfx.gralloc.enabled", false);
@@ -553,13 +579,17 @@ pref("javascript.options.mem.log", false);
 // Increase mark slice time from 10ms to 30ms
 pref("javascript.options.mem.gc_incremental_slice_ms", 30);
 
-pref("javascript.options.mem.gc_high_frequency_heap_growth_max", 150);
+// Increase time to get more high frequency GC on benchmarks from 1000ms to 1500ms
+pref("javascript.options.mem.gc_high_frequency_time_limit_ms", 1500);
+
+pref("javascript.options.mem.gc_high_frequency_heap_growth_max", 300);
 pref("javascript.options.mem.gc_high_frequency_heap_growth_min", 120);
 pref("javascript.options.mem.gc_high_frequency_high_limit_mb", 40);
-pref("javascript.options.mem.gc_high_frequency_low_limit_mb", 10);
+pref("javascript.options.mem.gc_high_frequency_low_limit_mb", 0);
 pref("javascript.options.mem.gc_low_frequency_heap_growth", 120);
 pref("javascript.options.mem.high_water_mark", 6);
 pref("javascript.options.mem.gc_allocation_threshold_mb", 1);
+pref("javascript.options.mem.gc_decommit_threshold_mb", 1);
 
 // Show/Hide scrollbars when active/inactive
 pref("ui.showHideScrollbars", 1);
@@ -594,15 +624,15 @@ pref("hal.processPriorityManager.gonk.FOREGROUND.OomScoreAdjust", 134);
 pref("hal.processPriorityManager.gonk.FOREGROUND.KillUnderMB", 6);
 pref("hal.processPriorityManager.gonk.FOREGROUND.Nice", 1);
 
-pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.OomScoreAdjust", 200);
+pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.OomScoreAdjust", 400);
 pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.KillUnderMB", 7);
 pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.Nice", 7);
 
-pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.OomScoreAdjust", 267);
+pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.OomScoreAdjust", 534);
 pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.KillUnderMB", 8);
 pref("hal.processPriorityManager.gonk.BACKGROUND_HOMESCREEN.Nice", 18);
 
-pref("hal.processPriorityManager.gonk.BACKGROUND.OomScoreAdjust", 400);
+pref("hal.processPriorityManager.gonk.BACKGROUND.OomScoreAdjust", 667);
 pref("hal.processPriorityManager.gonk.BACKGROUND.KillUnderMB", 20);
 pref("hal.processPriorityManager.gonk.BACKGROUND.Nice", 18);
 
@@ -641,15 +671,20 @@ pref("dom.disable_window_open_dialog_feature", true);
 
 // Screen reader support
 pref("accessibility.accessfu.activate", 2);
+pref("accessibility.accessfu.quicknav_modes", "Link,Heading,FormElement,Landmark,ListItem");
+// Setting for an utterance order (0 - description first, 1 - description last).
+pref("accessibility.accessfu.utterance", 1);
+// Whether to skip images with empty alt text
+pref("accessibility.accessfu.skip_empty_images", true);
 
 // Enable hit-target fluffing
-pref("ui.touch.radius.enabled", false);
+pref("ui.touch.radius.enabled", true);
 pref("ui.touch.radius.leftmm", 3);
 pref("ui.touch.radius.topmm", 5);
 pref("ui.touch.radius.rightmm", 3);
 pref("ui.touch.radius.bottommm", 2);
 
-pref("ui.mouse.radius.enabled", false);
+pref("ui.mouse.radius.enabled", true);
 pref("ui.mouse.radius.leftmm", 3);
 pref("ui.mouse.radius.topmm", 5);
 pref("ui.mouse.radius.rightmm", 3);
@@ -687,6 +722,8 @@ pref("wap.UAProf.url", "");
 pref("wap.UAProf.tagname", "x-wap-profile");
 
 pref("layout.imagevisibility.enabled", false);
+pref("layout.imagevisibility.numscrollportwidths", 1);
+pref("layout.imagevisibility.numscrollportheights", 1);
 
 // Enable native identity (persona/browserid)
 pref("dom.identity.enabled", true);
@@ -704,6 +741,11 @@ pref("memory_info_dumper.watch_fifo.enabled", true);
 pref("memory_info_dumper.watch_fifo.directory", "/data/local");
 
 pref("general.useragent.enable_overrides", true);
+// See ua-update.json.in for the packaged UA override list
+pref("general.useragent.updates.enabled", true);
+pref("general.useragent.updates.url", "");
+pref("general.useragent.updates.interval", 604800); // 1 week
+pref("general.useragent.updates.retry", 86400); // 1 day
 
 // Make <audio> and <video> talk to the AudioChannelService.
 pref("media.useAudioChannelService", true);
@@ -728,6 +770,39 @@ pref("ping.manifestURL", "https://marketplace.firefox.com/packaged.webapp");
 // Enable the disk space watcher
 pref("disk_space_watcher.enabled", true);
 
-// Enable future
-pref("dom.future.enabled", false);
+// SNTP preferences.
+pref("network.sntp.maxRetryCount", 10);
+pref("network.sntp.refreshPeriod", 86400); // In seconds.
+pref("network.sntp.pools", // Servers separated by ';'.
+     "0.pool.ntp.org;1.pool.ntp.org;2.pool.ntp.org;3.pool.ntp.org");
+pref("network.sntp.port", 123);
+pref("network.sntp.timeout", 30); // In seconds.
 
+// Enable promise
+pref("dom.promise.enabled", false);
+
+// DOM Inter-App Communication API.
+#ifdef MOZ_WIDGET_GONK
+// Enable this only for gonk-specific build but not for desktop build.
+pref("dom.inter-app-communication-api.enabled", true);
+#endif
+
+// Allow ADB to run for this many hours before disabling
+// (only applies when marionette is disabled)
+// 0 disables the timer.
+pref("b2g.adb.timeout-hours", 12);
+
+// Absolute path to the devtool unix domain socket file used
+// to communicate with a usb cable via adb forward
+pref("devtools.debugger.unix-domain-socket", "/data/local/debugger-socket");
+
+// enable Skia/GL (OpenGL-accelerated 2D drawing) for large enough 2d canvases,
+// falling back to Skia/software for smaller canvases
+pref("gfx.canvas.azure.backends", "skia");
+pref("gfx.canvas.azure.accelerated", true);
+
+// Enable Telephony API
+pref("dom.telephony.enabled", true);
+
+// The url of the page used to display network error details.
+pref("b2g.neterror.url", "app://system.gaiamobile.org/net_error.html");

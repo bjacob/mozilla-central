@@ -21,11 +21,8 @@ function ERR(response, responseCode, responseCodeStr, msg)
 
 function DBG(msg)
 {
-  // enable when you want to debug
-  if (0) {
-    // Dump to console only.
-    dump("SERVER DEBUG: " + msg + "\n");
-  }
+  // Dump to console only.
+  dump("SERVER DEBUG: " + msg + "\n");
 }
 
 /* Delivers content in parts to test partially cached content: requires two

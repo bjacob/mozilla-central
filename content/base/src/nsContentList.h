@@ -16,7 +16,7 @@
 #include "nsContentListDeclarations.h"
 #include "nsISupports.h"
 #include "nsTArray.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsIHTMLCollection.h"
 #include "nsIDOMNodeList.h"
 #include "nsINodeList.h"
@@ -122,16 +122,6 @@ public:
 private:
   // This has to be a strong reference, the root might go away before the list.
   nsCOMPtr<nsINode> mRoot;
-};
-
-// This class is used only by form element code and this is a static
-// list of elements. NOTE! This list holds strong references to
-// the elements in the list.
-class nsFormContentList : public nsSimpleContentList
-{
-public:
-  nsFormContentList(nsIContent *aForm,
-                    nsBaseContentList& aContentList);
 };
 
 /**
@@ -309,6 +299,16 @@ public:
       mMatchNameSpaceId == aKey.mMatchNameSpaceId;
   }
 
+  /**
+   * Sets the state to LIST_DIRTY and clears mElements array.
+   * @note This is the only acceptable way to set state to LIST_DIRTY.
+   */
+  void SetDirty()
+  {
+    mState = LIST_DIRTY;
+    Reset();
+  }
+
 protected:
   /**
    * Returns whether the element matches our criterion
@@ -359,16 +359,6 @@ protected:
    * all the nodes we can find.
    */
   inline void BringSelfUpToDate(bool aDoFlush);
-
-  /**
-   * Sets the state to LIST_DIRTY and clears mElements array.
-   * @note This is the only acceptable way to set state to LIST_DIRTY.
-   */
-  void SetDirty()
-  {
-    mState = LIST_DIRTY;
-    Reset();
-  }
 
   /**
    * To be called from non-destructor locations that want to remove from caches.

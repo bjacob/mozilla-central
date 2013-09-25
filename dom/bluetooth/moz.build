@@ -15,14 +15,14 @@
 # limitations under the License.
 
 if CONFIG['MOZ_B2G_BT']:
+    LIBXUL_LIBRARY = True
     MODULE = 'dom'
+    LIBRARY_NAME = 'dombluetooth_s'
     XPIDL_MODULE = 'dom_bluetooth'
     XPIDL_SOURCES += [
-        'nsIDOMBluetoothAdapter.idl',
         'nsIDOMBluetoothDevice.idl',
         'nsIDOMBluetoothDeviceEvent.idl',
-        'nsIDOMBluetoothManager.idl',
-        'nsIDOMNavigatorBluetooth.idl',
+        'nsIDOMBluetoothStatusChangedEvent.idl',
     ]
 
     CPP_SOURCES += [
@@ -39,15 +39,17 @@ if CONFIG['MOZ_B2G_BT']:
         'BluetoothUnixSocketConnector.cpp',
         'BluetoothA2dpManager.cpp',
         'BluetoothHfpManager.cpp',
+        'BluetoothHidManager.cpp',
         'BluetoothOppManager.cpp',
         'ObexBase.cpp',
         'BluetoothUuid.cpp',
         'BluetoothSocket.cpp',
+        'BluetoothProfileController.cpp'
     ]
 
     if CONFIG['MOZ_B2G_RIL']:
         CPP_SOURCES += [
-            'BluetoothTelephonyListener.cpp',
+            'BluetoothRilListener.cpp',
         ]
 
     if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
@@ -62,10 +64,18 @@ if CONFIG['MOZ_B2G_BT']:
             ]
 
 EXPORTS.mozilla.dom.bluetooth.ipc += [
-    'BluetoothMessageUtils.h',
+    'ipc/BluetoothMessageUtils.h',
 ]
 
 EXPORTS.mozilla.dom.bluetooth += [
     'BluetoothCommon.h',
 ]
+
+IPDL_SOURCES += [
+    'ipc/BluetoothTypes.ipdlh',
+    'ipc/PBluetooth.ipdl',
+    'ipc/PBluetoothRequest.ipdl',
+]
+
+FAIL_ON_WARNINGS = True
 

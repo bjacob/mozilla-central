@@ -67,7 +67,21 @@ function toASCIIUpperCase(s) {
  */
 var unicodeLocaleExtensionSequence = "-u(-[a-z0-9]{2,8})+";
 var unicodeLocaleExtensionSequenceRE = new RegExp(unicodeLocaleExtensionSequence);
-var unicodeLocaleExtensionSequenceGlobalRE = new RegExp(unicodeLocaleExtensionSequence, "g");
+
+
+/**
+ * Removes Unicode locale extension sequences from the given language tag.
+ */
+function removeUnicodeExtensions(locale) {
+    // Don't use std_String_replace directly with a regular expression,
+    // as that would set RegExp statics.
+    var extensions;
+    while ((extensions = regexp_exec_no_statics(unicodeLocaleExtensionSequenceRE, locale)) !== null) {
+        locale = callFunction(std_String_replace, locale, extensions[0], "");
+        unicodeLocaleExtensionSequenceRE.lastIndex = 0;
+    }
+    return locale;
+}
 
 
 /**
@@ -247,7 +261,7 @@ var duplicateSingletonRE = (function () {
  */
 function IsStructurallyValidLanguageTag(locale) {
     assert(typeof locale === "string", "IsStructurallyValidLanguageTag");
-    if (!callFunction(std_RegExp_test, languageTagRE, locale))
+    if (!regexp_test_no_statics(languageTagRE, locale))
         return false;
 
     // Before checking for duplicate variant or singleton subtags with
@@ -260,8 +274,8 @@ function IsStructurallyValidLanguageTag(locale) {
         locale = callFunction(std_String_substring, locale, 0, pos);
 
     // Check for duplicate variant or singleton subtags.
-    return !callFunction(std_RegExp_test, duplicateVariantRE, locale) &&
-           !callFunction(std_RegExp_test, duplicateSingletonRE, locale);
+    return !regexp_test_no_statics(duplicateVariantRE, locale) &&
+           !regexp_test_no_statics(duplicateSingletonRE, locale);
 }
 
 
@@ -423,9 +437,9 @@ function DefaultLocale() {
     if (callFunction(std_Object_hasOwnProperty, oldStyleLanguageTagMappings, locale))
         locale = oldStyleLanguageTagMappings[locale];
 
-    if (!(collatorInternalProperties.availableLocales[locale] &&
-          numberFormatInternalProperties.availableLocales[locale] &&
-          dateTimeFormatInternalProperties.availableLocales[locale]))
+    if (!(collatorInternalProperties.availableLocales()[locale] &&
+          numberFormatInternalProperties.availableLocales()[locale] &&
+          dateTimeFormatInternalProperties.availableLocales()[locale]))
     {
         locale = localeOfLastResort;
     }
@@ -443,7 +457,7 @@ function IsWellFormedCurrencyCode(currency) {
     var normalized = toASCIIUpperCase(c);
     if (normalized.length !== 3)
         return false;
-    return !callFunction(std_RegExp_test, /[^A-Z]/, normalized);
+    return !regexp_test_no_statics(/[^A-Z]/, normalized);
 }
 
 
@@ -511,9 +525,9 @@ function CanonicalizeLocaleList(locales) {
  * Spec: RFC 4647, section 3.4.
  */
 function BestAvailableLocale(availableLocales, locale) {
-    assert(IsStructurallyValidLanguageTag(locale), "BestAvailableLocale");
-    assert(locale === CanonicalizeLanguageTag(locale), "BestAvailableLocale");
-    assert(callFunction(std_String_indexOf, locale, "-u-") === -1, "BestAvailableLocale");
+    assert(IsStructurallyValidLanguageTag(locale), "invalid BestAvailableLocale locale structure");
+    assert(locale === CanonicalizeLanguageTag(locale), "non-canonical BestAvailableLocale locale");
+    assert(callFunction(std_String_indexOf, locale, "-u-") === -1, "locale shouldn't contain -u-");
 
     var candidate = locale;
     while (true) {
@@ -548,7 +562,7 @@ function LookupMatcher(availableLocales, requestedLocales) {
     var locale, noExtensionsLocale;
     while (i < len && availableLocale === undefined) {
         locale = requestedLocales[i];
-        noExtensionsLocale = callFunction(std_String_replace, locale, unicodeLocaleExtensionSequenceGlobalRE, "");
+        noExtensionsLocale = removeUnicodeExtensions(locale);
         availableLocale = BestAvailableLocale(availableLocales, noExtensionsLocale);
         i++;
     }
@@ -557,7 +571,7 @@ function LookupMatcher(availableLocales, requestedLocales) {
     if (availableLocale !== undefined) {
         result.locale = availableLocale;
         if (locale !== noExtensionsLocale) {
-            var extensionMatch = callFunction(std_String_match, locale, unicodeLocaleExtensionSequenceRE);
+            var extensionMatch = regexp_exec_no_statics(unicodeLocaleExtensionSequenceRE, locale);
             var extension = extensionMatch[0];
             var extensionIndex = extensionMatch.index;
             result.extension = extension;
@@ -741,7 +755,7 @@ function LookupSupportedLocales(availableLocales, requestedLocales) {
     while (k < len) {
         // Steps 4.a-b.
         var locale = requestedLocales[k];
-        var noExtensionsLocale = callFunction(std_String_replace, locale, unicodeLocaleExtensionSequenceGlobalRE, "");
+        var noExtensionsLocale = removeUnicodeExtensions(locale);
 
         // Step 4.c-d.
         var availableLocale = BestAvailableLocale(availableLocales, noExtensionsLocale);
@@ -1027,7 +1041,7 @@ function InitializeCollator(collator, locales, options) {
     var relevantExtensionKeys = Collator.relevantExtensionKeys;
 
     // Step 15.
-    var r = ResolveLocale(Collator.availableLocales,
+    var r = ResolveLocale(Collator.availableLocales(),
                           requestedLocales, opt,
                           relevantExtensionKeys,
                           localeData);
@@ -1100,7 +1114,7 @@ function InitializeCollator(collator, locales, options) {
 function Intl_Collator_supportedLocalesOf(locales /*, options*/) {
     var options = arguments.length > 1 ? arguments[1] : undefined;
 
-    var availableLocales = collatorInternalProperties.availableLocales;
+    var availableLocales = collatorInternalProperties.availableLocales();
     var requestedLocales = CanonicalizeLocaleList(locales);
     return SupportedLocales(availableLocales, requestedLocales, options);
 }
@@ -1114,7 +1128,15 @@ function Intl_Collator_supportedLocalesOf(locales /*, options*/) {
 var collatorInternalProperties = {
     sortLocaleData: collatorSortLocaleData,
     searchLocaleData: collatorSearchLocaleData,
-    availableLocales: addOldStyleLanguageTags(intl_Collator_availableLocales()),
+    _availableLocales: null,
+    availableLocales: function()
+    {
+        var locales = this._availableLocales;
+        if (locales)
+            return locales;
+        return (this._availableLocales =
+          addOldStyleLanguageTags(intl_Collator_availableLocales()));
+    },
     relevantExtensionKeys: ["co", "kn"]
 };
 
@@ -1253,7 +1275,7 @@ function InitializeNumberFormat(numberFormat, locales, options) {
     var localeData = NumberFormat.localeData;
 
     // Step 11.
-    var r = ResolveLocale(NumberFormat.availableLocales,
+    var r = ResolveLocale(NumberFormat.availableLocales(),
                           requestedLocales, opt,
                           NumberFormat.relevantExtensionKeys,
                           localeData);
@@ -1378,7 +1400,7 @@ var currencyDigits = {
  */
 function CurrencyDigits(currency) {
     assert(typeof currency === "string", "CurrencyDigits");
-    assert(callFunction(std_RegExp_test, /^[A-Z]{3}$/, currency), "CurrencyDigits");
+    assert(regexp_test_no_statics(/^[A-Z]{3}$/, currency), "CurrencyDigits");
 
     if (callFunction(std_Object_hasOwnProperty, currencyDigits, currency))
         return currencyDigits[currency];
@@ -1396,7 +1418,7 @@ function CurrencyDigits(currency) {
 function Intl_NumberFormat_supportedLocalesOf(locales /*, options*/) {
     var options = arguments.length > 1 ? arguments[1] : undefined;
 
-    var availableLocales = numberFormatInternalProperties.availableLocales;
+    var availableLocales = numberFormatInternalProperties.availableLocales();
     var requestedLocales = CanonicalizeLocaleList(locales);
     return SupportedLocales(availableLocales, requestedLocales, options);
 }
@@ -1409,7 +1431,15 @@ function Intl_NumberFormat_supportedLocalesOf(locales /*, options*/) {
  */
 var numberFormatInternalProperties = {
     localeData: numberFormatLocaleData,
-    availableLocales: addOldStyleLanguageTags(intl_NumberFormat_availableLocales()),
+    _availableLocales: null,
+    availableLocales: function()
+    {
+        var locales = this._availableLocales;
+        if (locales)
+            return locales;
+        return (this._availableLocales =
+          addOldStyleLanguageTags(intl_NumberFormat_availableLocales()));
+    },
     relevantExtensionKeys: ["nu"]
 };
 
@@ -1582,7 +1612,7 @@ function InitializeDateTimeFormat(dateTimeFormat, locales, options) {
     var localeData = DateTimeFormat.localeData;
 
     // Step 10.
-    var r = ResolveLocale(DateTimeFormat.availableLocales,
+    var r = ResolveLocale(DateTimeFormat.availableLocales(),
                           requestedLocales, opt,
                           DateTimeFormat.relevantExtensionKeys,
                           localeData);
@@ -1992,7 +2022,7 @@ function BestFitFormatMatcher(options, formats) {
 function Intl_DateTimeFormat_supportedLocalesOf(locales /*, options*/) {
     var options = arguments.length > 1 ? arguments[1] : undefined;
 
-    var availableLocales = dateTimeFormatInternalProperties.availableLocales;
+    var availableLocales = dateTimeFormatInternalProperties.availableLocales();
     var requestedLocales = CanonicalizeLocaleList(locales);
     return SupportedLocales(availableLocales, requestedLocales, options);
 }
@@ -2005,7 +2035,15 @@ function Intl_DateTimeFormat_supportedLocalesOf(locales /*, options*/) {
  */
 var dateTimeFormatInternalProperties = {
     localeData: dateTimeFormatLocaleData,
-    availableLocales: addOldStyleLanguageTags(intl_DateTimeFormat_availableLocales()),
+    _availableLocales: null,
+    availableLocales: function()
+    {
+        var locales = this._availableLocales;
+        if (locales)
+            return locales;
+        return (this._availableLocales =
+          addOldStyleLanguageTags(intl_DateTimeFormat_availableLocales()));
+    },
     relevantExtensionKeys: ["ca", "nu"]
 };
 

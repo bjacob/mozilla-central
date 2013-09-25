@@ -5,11 +5,12 @@
 #include "nsIDOMEventTarget.idl"
 #include "SimToolKit.idl"
 
-interface nsIDOMEventListener;
-interface nsIDOMDOMRequest;
 interface nsIDOMContact;
+interface nsIDOMDOMRequest;
+interface nsIDOMEventListener;
+interface nsIDOMMozIccInfo;
 
-[scriptable, builtinclass, uuid(b4e16bb0-a258-11e2-9e96-0800200c9a66)]
+[scriptable, builtinclass, uuid(904b92cb-dad3-416f-88cf-0291012cf448)]
 interface nsIDOMMozIccManager : nsIDOMEventTarget
 {
   /**
@@ -240,7 +241,7 @@ interface nsIDOMMozIccManager : nsIDOMEventTarget
 
   /**
    * Send the "Timer Expiration" Envelope command to ICC for TIMER MANAGEMENT.
-  `*
+   *
    * @param timer
    *        The identifier and value for a timer.
    *        timerId: Identifier of the timer that has expired.
@@ -274,6 +275,39 @@ interface nsIDOMMozIccManager : nsIDOMEventTarget
    * ICC.
    */
   [implicit_jscontext] attribute jsval onstksessionend;
+
+  // UICC Card Information.
+
+  /**
+   * Information stored in the device's ICC card.
+   *
+   * Null if the card is not detected.
+   */
+  readonly attribute nsIDOMMozIccInfo iccInfo;
+
+  /**
+   * The 'iccinfochange' event is notified whenever the icc info object
+   * changes.
+   */
+  [implicit_jscontext] attribute jsval oniccinfochange;
+
+  // UICC Card State.
+
+  /**
+   * Indicates the state of the device's ICC card.
+   *
+   * Possible values: null, 'unknown', 'absent', 'pinRequired', 'pukRequired',
+   * 'personalizationInProgress', 'networkLocked', 'corporateLocked',
+   * 'serviceProviderLocked', 'networkPukRequired', 'corporatePukRequired',
+   * 'serviceProviderPukRequired', 'personalizationReady', 'ready'.
+   */
+  readonly attribute DOMString cardState;
+
+  /**
+   * The 'cardstatechange' event is notified when the 'cardState' attribute
+   * changes value.
+   */
+  [implicit_jscontext] attribute jsval oncardstatechange;
 
   // UICC Card Lock interfaces.
 
@@ -329,6 +363,23 @@ interface nsIDOMMozIccManager : nsIDOMEventTarget
    *
    *   unlockCardLock({lockType: "spck",
    *                   pin: "..."});
+   *
+   * (6) Network PUK depersonalization. Unlocking the network control key (NCK).
+   *
+   *   unlockCardLock({lockType: "nckPuk",
+   *                   puk: "..."});
+   *
+   * (7) Corporate PUK depersonalization. Unlocking the corporate control key
+   *     (CCK).
+   *
+   *   unlockCardLock({lockType: "cckPuk",
+   *                   puk: "..."});
+   *
+   * (8) Service Provider PUK depersonalization. Unlocking the service provider
+   *     control key (SPCK).
+   *
+   *   unlockCardLock({lockType: "spckPuk",
+   *                   puk: "..."});
    *
    * @return a nsIDOMDOMRequest.
    *         The request's result will be an object containing
@@ -415,6 +466,20 @@ interface nsIDOMMozIccManager : nsIDOMEventTarget
    * e.g. {lockType: "pin", retryCount: 2}.
    */
   [implicit_jscontext] attribute jsval onicccardlockerror;
+
+  /**
+   * Retrieve the number of remaining tries for unlocking the card.
+   *
+   * @param lockType
+   *        Identifies the lock type, e.g. "pin" for the PIN lock, "puk" for
+   *        the PUK lock.
+   *
+   * @return a DOM Request.
+   *         If the lock type is "pin", or "puk", the request's result will be
+   *         an object containing the number of retries for the specified
+   *         lock. For any other lock type, the result is undefined.
+   */
+  nsIDOMDOMRequest getCardLockRetryCount(in DOMString lockType);
 
   // UICC Phonebook Interfaces.
 

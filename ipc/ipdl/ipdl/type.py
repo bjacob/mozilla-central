@@ -1,10 +1,11 @@
+# vim: set ts=4 sw=4 tw=99 et:
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import os, sys
 
-from ipdl.ast import CxxInclude, Decl, Loc, QualifiedId, State, StructDecl, TransitionStmt, TypeSpec, UnionDecl, UsingStmt, Visitor, ASYNC, SYNC, RPC, IN, OUT, INOUT, ANSWER, CALL, RECV, SEND
+from ipdl.ast import CxxInclude, Decl, Loc, QualifiedId, State, StructDecl, TransitionStmt, TypeSpec, UnionDecl, UsingStmt, Visitor, ASYNC, SYNC, RPC, IN, OUT, INOUT, ANSWER, CALL, RECV, SEND, URGENT
 import ipdl.builtin as builtin
 
 _DELETE_MSG = '__delete__'
@@ -203,7 +204,8 @@ class IPDLType(Type):
 
     def isAsync(self): return self.sendSemantics is ASYNC
     def isSync(self): return self.sendSemantics is SYNC
-    def isRpc(self): return self.sendSemantics is RPC
+    def isRpc(self): return self.sendSemantics is RPC or self.sendSemantics is URGENT
+    def isUrgent(self): return self.sendSemantics is URGENT
 
     def talksAsync(self): return True
     def talksSync(self): return self.isSync() or self.isRpc()
@@ -1621,7 +1623,7 @@ class ProcessGraph:
         for b in cls.iterbridges():
             if b.parent == actor:
                 endpoints.append(Actor(b.bridgeProto, 'parent'))
-            elif b.child == actor:
+            if b.child == actor:
                 endpoints.append(Actor(b.bridgeProto, 'child'))
         return endpoints
 
@@ -1774,11 +1776,12 @@ class BuildProcessGraph(TcheckVisitor):
 
             if pproc == cproc:
                 if parentSideActor is not None:
-                    self.error(bridges.loc,
-                               "ambiguous bridge `%s' between `%s' and `%s'",
-                               bridgeProto.type.name(),
-                               parentSideProto.name(),
-                               childSideProto.name())
+                    if parentSideProto != childSideProto:
+                        self.error(bridges.loc,
+                                   "ambiguous bridge `%s' between `%s' and `%s'",
+                                   bridgeProto.name(),
+                                   parentSideProto.name(),
+                                   childSideProto.name())
                 else:
                     parentSideActor, childSideActor = pactor.other(), cactor.other()
 

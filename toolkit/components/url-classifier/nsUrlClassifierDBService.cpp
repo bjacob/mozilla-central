@@ -30,6 +30,7 @@
 #include "nsThreadUtils.h"
 #include "nsXPCOMStrings.h"
 #include "nsProxyRelease.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/TimeStamp.h"
@@ -83,7 +84,7 @@ nsIThread* nsUrlClassifierDBService::gDbBackgroundThread = nullptr;
 // thread.
 static bool gShuttingDownThread = false;
 
-static int32_t gFreshnessGuarantee = CONFIRM_AGE_DEFAULT_SEC;
+static mozilla::Atomic<int32_t> gFreshnessGuarantee(CONFIRM_AGE_DEFAULT_SEC);
 
 static void
 SplitTables(const nsACString& str, nsTArray<nsCString>& tables)
@@ -111,7 +112,7 @@ class nsUrlClassifierDBServiceWorker MOZ_FINAL :
 public:
   nsUrlClassifierDBServiceWorker();
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERDBSERVICE
   NS_DECL_NSIURLCLASSIFIERDBSERVICEWORKER
 
@@ -154,6 +155,7 @@ private:
   nsCOMPtr<nsICryptoHash> mCryptoHash;
 
   nsAutoPtr<Classifier> mClassifier;
+  // The class that actually parses the update chunks.
   nsAutoPtr<ProtocolParser> mProtocolParser;
 
   // Directory where to store the SB databases.
@@ -196,7 +198,7 @@ private:
   nsTArray<PendingLookup> mPendingLookups;
 };
 
-NS_IMPL_THREADSAFE_ISUPPORTS2(nsUrlClassifierDBServiceWorker,
+NS_IMPL_ISUPPORTS2(nsUrlClassifierDBServiceWorker,
                               nsIUrlClassifierDBServiceWorker,
                               nsIUrlClassifierDBService)
 
@@ -457,6 +459,7 @@ nsUrlClassifierDBServiceWorker::BeginUpdate(nsIUrlClassifierUpdateObserver *obse
   return NS_OK;
 }
 
+// Called from the stream updater.
 NS_IMETHODIMP
 nsUrlClassifierDBServiceWorker::BeginStream(const nsACString &table,
                                             const nsACString &serverMAC)
@@ -538,6 +541,7 @@ nsUrlClassifierDBServiceWorker::UpdateStream(const nsACString& chunk)
 
   HandlePendingLookups();
 
+  // Feed the chunk to the parser.
   return mProtocolParser->AppendStream(chunk);
 }
 
@@ -712,14 +716,15 @@ nsUrlClassifierDBServiceWorker::CacheCompletions(CacheResultArray *results)
     for (uint32_t table = 0; table < tables.Length(); table++) {
       if (tables[table].Equals(resultsPtr->ElementAt(i).table)) {
         activeTable = true;
+        break;
       }
     }
     if (activeTable) {
       TableUpdate * tu = pParse->GetTableUpdate(resultsPtr->ElementAt(i).table);
       LOG(("CacheCompletion Addchunk %d hash %X", resultsPtr->ElementAt(i).entry.addChunk,
-           resultsPtr->ElementAt(i).entry.hash.prefix));
+           resultsPtr->ElementAt(i).entry.ToUint32()));
       tu->NewAddComplete(resultsPtr->ElementAt(i).entry.addChunk,
-                         resultsPtr->ElementAt(i).entry.hash.complete);
+                         resultsPtr->ElementAt(i).entry.complete);
       tu->NewAddChunk(resultsPtr->ElementAt(i).entry.addChunk);
       tu->SetLocalUpdate();
       updates.AppendElement(tu);
@@ -788,7 +793,7 @@ class nsUrlClassifierLookupCallback MOZ_FINAL : public nsIUrlClassifierLookupCal
                                               , public nsIUrlClassifierHashCompleterCallback
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERLOOKUPCALLBACK
   NS_DECL_NSIURLCLASSIFIERHASHCOMPLETERCALLBACK
 
@@ -815,7 +820,7 @@ private:
   nsCOMPtr<nsIUrlClassifierCallback> mCallback;
 };
 
-NS_IMPL_THREADSAFE_ISUPPORTS2(nsUrlClassifierLookupCallback,
+NS_IMPL_ISUPPORTS2(nsUrlClassifierLookupCallback,
                               nsIUrlClassifierLookupCallback,
                               nsIUrlClassifierHashCompleterCallback)
 
@@ -917,7 +922,7 @@ nsUrlClassifierLookupCallback::Completion(const nsACString& completeHash,
   if (verified) {
     CacheResult result;
     result.entry.addChunk = chunkId;
-    result.entry.hash.complete = hash;
+    result.entry.complete = hash;
     result.table = tableName;
 
     // OK if this fails, we just won't cache the item.
@@ -1005,7 +1010,7 @@ nsUrlClassifierLookupCallback::HandleResults()
 class nsUrlClassifierClassifyCallback MOZ_FINAL : public nsIUrlClassifierCallback
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERCALLBACK
 
   nsUrlClassifierClassifyCallback(nsIURIClassifierCallback *c,
@@ -1022,7 +1027,7 @@ private:
   bool mCheckPhishing;
 };
 
-NS_IMPL_THREADSAFE_ISUPPORTS1(nsUrlClassifierClassifyCallback,
+NS_IMPL_ISUPPORTS1(nsUrlClassifierClassifyCallback,
                               nsIUrlClassifierCallback)
 
 NS_IMETHODIMP
@@ -1059,7 +1064,7 @@ nsUrlClassifierClassifyCallback::HandleEvent(const nsACString& tables)
 // -------------------------------------------------------------------------
 // Proxy class implementation
 
-NS_IMPL_THREADSAFE_ISUPPORTS3(nsUrlClassifierDBService,
+NS_IMPL_ISUPPORTS3(nsUrlClassifierDBService,
                               nsIUrlClassifierDBService,
                               nsIURIClassifier,
                               nsIObserver)
@@ -1141,7 +1146,7 @@ nsUrlClassifierDBService::Init()
     prefs->AddObserver(GETHASH_TABLES_PREF, this, false);
 
     rv = prefs->GetIntPref(CONFIRM_AGE_PREF, &tmpint);
-    PR_ATOMIC_SET(&gFreshnessGuarantee, NS_SUCCEEDED(rv) ? tmpint : CONFIRM_AGE_DEFAULT_SEC);
+    gFreshnessGuarantee = NS_SUCCEEDED(rv) ? tmpint : CONFIRM_AGE_DEFAULT_SEC;
 
     prefs->AddObserver(CONFIRM_AGE_PREF, this, false);
   }
@@ -1176,8 +1181,6 @@ nsUrlClassifierDBService::Init()
 
   // Proxy for calling the worker on the background thread
   mWorkerProxy = new UrlClassifierDBServiceWorkerProxy(mWorker);
-
-  mCompleters.Init();
 
   // Add an observer for shutdown
   nsCOMPtr<nsIObserverService> observerService =
@@ -1300,6 +1303,7 @@ nsUrlClassifierDBService::LookupURI(nsIPrincipal* aPrincipal,
   rv = mWorker->QueueLookup(key, proxyCallback);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  // This seems to just call HandlePendingLookups.
   return mWorkerProxy->Lookup(nullptr, nullptr);
 }
 
@@ -1458,7 +1462,7 @@ nsUrlClassifierDBService::Observe(nsISupports *aSubject, const char *aTopic,
     } else if (NS_LITERAL_STRING(CONFIRM_AGE_PREF).Equals(aData)) {
       int32_t tmpint;
       rv = prefs->GetIntPref(CONFIRM_AGE_PREF, &tmpint);
-      PR_ATOMIC_SET(&gFreshnessGuarantee, NS_SUCCEEDED(rv) ? tmpint : CONFIRM_AGE_DEFAULT_SEC);
+      gFreshnessGuarantee = NS_SUCCEEDED(rv) ? tmpint : CONFIRM_AGE_DEFAULT_SEC;
     }
   } else if (!strcmp(aTopic, "profile-before-change") ||
              !strcmp(aTopic, "xpcom-shutdown-threads")) {

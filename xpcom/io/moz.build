@@ -73,6 +73,8 @@ EXPORTS += [
     'nsAppDirectoryServiceDefs.h',
     'nsDirectoryService.h',
     'nsDirectoryServiceAtomList.h',
+    'nsDirectoryServiceDefs.h',
+    'nsDirectoryServiceUtils.h',
     'nsEscape.h',
     'nsLinebreakConverter.h',
     'nsLocalFile.h',
@@ -115,8 +117,14 @@ CPP_SOURCES += [
     'nsWildCard.cpp',
 ]
 
-
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     CMMSRCS += [
         'CocoaFileUtils.mm',
     ]
+
+LIBXUL_LIBRARY = True
+
+MSVC_ENABLE_PGO = True
+
+LIBRARY_NAME = 'xpcomio_s'
+

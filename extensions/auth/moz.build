@@ -21,3 +21,8 @@ else:
     CPP_SOURCES += [
         'nsAuthSambaNTLM.cpp',
     ]
+
+LIBRARY_NAME = 'auth'
+
+LIBXUL_LIBRARY = True
+

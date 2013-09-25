@@ -37,3 +37,7 @@ CPP_SOURCES += [
     'mozStorageStatementRow.cpp',
 ]
 
+LIBRARY_NAME = 'storage_s'
+
+LIBXUL_LIBRARY = True
+

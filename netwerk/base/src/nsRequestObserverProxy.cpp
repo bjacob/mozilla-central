@@ -8,9 +8,7 @@
 #include "nscore.h"
 #include "nsRequestObserverProxy.h"
 #include "nsIRequest.h"
-#include "nsIServiceManager.h"
 #include "nsAutoPtr.h"
-#include "nsString.h"
 #include "prlog.h"
 
 using namespace mozilla;
@@ -115,9 +113,9 @@ public:
 // nsRequestObserverProxy::nsISupports implementation...
 //-----------------------------------------------------------------------------
 
-NS_IMPL_THREADSAFE_ISUPPORTS2(nsRequestObserverProxy,
-                              nsIRequestObserver,
-                              nsIRequestObserverProxy)
+NS_IMPL_ISUPPORTS2(nsRequestObserverProxy,
+                   nsIRequestObserver,
+                   nsIRequestObserverProxy)
 
 //-----------------------------------------------------------------------------
 // nsRequestObserverProxy::nsIRequestObserver implementation...

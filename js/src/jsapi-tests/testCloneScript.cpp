@@ -7,9 +7,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
-#include "tests.h"
-#include "jsdbgapi.h"
+#include "js/OldDebugAPI.h"
+#include "jsapi-tests/tests.h"
 
 BEGIN_TEST(test_cloneScript)
 {
@@ -123,7 +122,8 @@ BEGIN_TEST(test_cloneScriptWithPrincipals)
         CHECK(cloned = JS_CloneFunctionObject(cx, obj, B));
 
         JSFunction *fun;
-        CHECK(fun = JS_ValueToFunction(cx, JS::ObjectValue(*cloned)));
+        JS::RootedValue clonedValue(cx, JS::ObjectValue(*cloned));
+        CHECK(fun = JS_ValueToFunction(cx, clonedValue));
 
         JSScript *script;
         CHECK(script = JS_GetFunctionScript(cx, fun));

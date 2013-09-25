@@ -10,14 +10,14 @@
 #include "MediaConduitInterface.h"
 
 // Video Engine Includes
-#include "common_types.h"
-#include "video_engine/include/vie_base.h"
-#include "video_engine/include/vie_capture.h"
-#include "video_engine/include/vie_codec.h"
-#include "video_engine/include/vie_render.h"
-#include "video_engine/include/vie_network.h"
-#include "video_engine/include/vie_file.h"
-#include "video_engine/include/vie_rtp_rtcp.h"
+#include "webrtc/common_types.h"
+#include "webrtc/video_engine/include/vie_base.h"
+#include "webrtc/video_engine/include/vie_capture.h"
+#include "webrtc/video_engine/include/vie_codec.h"
+#include "webrtc/video_engine/include/vie_render.h"
+#include "webrtc/video_engine/include/vie_network.h"
+#include "webrtc/video_engine/include/vie_file.h"
+#include "webrtc/video_engine/include/vie_rtp_rtcp.h"
 
 /** This file hosts several structures identifying different aspects
  * of a RTP Session.
@@ -104,6 +104,14 @@ public:
   virtual MediaConduitErrorCode AttachTransport(mozilla::RefPtr<TransportInterface> aTransport);
 
   /**
+   * Function to select and change the encoding resolution based on incoming frame size
+   * and current available bandwidth.
+   * @param width, height: dimensions of the frame
+   */
+  virtual bool SelectSendResolution(unsigned short width,
+                                    unsigned short height);
+
+  /**
    * Function to deliver a capture video frame for encoding and transport
    * @param video_frame: pointer to captured video-frame.
    * @param video_frame_length: size of the frame
@@ -160,7 +168,9 @@ public:
                       mEngineReceiving(false),
                       mChannel(-1),
                       mCapId(-1),
-                      mCurSendCodecConfig(nullptr)
+                      mCurSendCodecConfig(nullptr),
+                      mSendingWidth(0),
+                      mSendingHeight(0)
   {
   }
 
@@ -218,6 +228,8 @@ private:
   int mCapId;   // Capturer for this conduit
   RecvCodecList    mRecvCodecList;
   VideoCodecConfig* mCurSendCodecConfig;
+  unsigned short mSendingWidth;
+  unsigned short mSendingHeight;
 
   mozilla::RefPtr<WebrtcAudioConduit> mSyncedTo;
 };

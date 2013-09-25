@@ -20,6 +20,7 @@
 #include "mozilla/Likely.h"
 #include "nsContentUtils.h"
 
+using namespace JS;
 using namespace js;
 using namespace mozilla;
 
@@ -58,7 +59,12 @@ WrapperFactory::GetXrayWaiver(JSObject *obj)
 
     if (!scope->mWaiverWrapperMap)
         return NULL;
-    return xpc_UnmarkGrayObject(scope->mWaiverWrapperMap->Find(obj));
+
+    JSObject* xrayWaiver = scope->mWaiverWrapperMap->Find(obj);
+    if (xrayWaiver)
+        JS::ExposeObjectToActiveJS(xrayWaiver);
+
+    return xrayWaiver;
 }
 
 JSObject *
@@ -93,7 +99,7 @@ WrapperFactory::CreateXrayWaiver(JSContext *cx, HandleObject obj)
           JSObject2JSObjectMap::newMap(XPC_WRAPPER_MAP_SIZE);
         MOZ_ASSERT(scope->mWaiverWrapperMap);
     }
-    if (!scope->mWaiverWrapperMap->Add(obj, waiver))
+    if (!scope->mWaiverWrapperMap->Add(cx, obj, waiver))
         return nullptr;
     return waiver;
 }
@@ -199,7 +205,7 @@ WrapperFactory::PrepareForWrapping(JSContext *cx, HandleObject scope,
     if (!IS_WN_REFLECTOR(obj) || !js::GetObjectParent(obj))
         return DoubleWrap(cx, obj, flags);
 
-    XPCWrappedNative *wn = static_cast<XPCWrappedNative *>(xpc_GetJSPrivate(obj));
+    XPCWrappedNative *wn = XPCWrappedNative::Get(obj);
 
     JSAutoCompartment ac(cx, obj);
     XPCCallContext ccx(JS_CALLER, cx, obj);
@@ -295,7 +301,7 @@ WrapperFactory::PrepareForWrapping(JSContext *cx, HandleObject scope,
     NS_ENSURE_SUCCESS(rv, nullptr);
 
     obj = JSVAL_TO_OBJECT(v);
-    NS_ASSERTION(IS_WN_REFLECTOR(obj), "bad object");
+    MOZ_ASSERT(IS_WN_REFLECTOR(obj), "bad object");
 
     // Because the underlying native didn't have a PreCreate hook, we had
     // to a new (or possibly pre-existing) XPCWN in our compartment.
@@ -306,7 +312,7 @@ WrapperFactory::PrepareForWrapping(JSContext *cx, HandleObject scope,
     // So whenever we pull an XPCWN across compartments in this manner, we
     // give the destination object the union of the two native sets. We try
     // to do this cleverly in the common case to avoid too much overhead.
-    XPCWrappedNative *newwn = static_cast<XPCWrappedNative *>(xpc_GetJSPrivate(obj));
+    XPCWrappedNative *newwn = XPCWrappedNative::Get(obj);
     XPCNativeSet *unionSet = XPCNativeSet::GetNewOrUsed(newwn->GetSet(),
                                                         wn->GetSet(), false);
     if (!unionSet)
@@ -521,7 +527,7 @@ WrapperFactory::WrapForSameCompartment(JSContext *cx, HandleObject objArg)
         return obj;
 
     // Extract the WN. It should exist.
-    XPCWrappedNative *wn = static_cast<XPCWrappedNative *>(xpc_GetJSPrivate(obj));
+    XPCWrappedNative *wn = XPCWrappedNative::Get(obj);
     MOZ_ASSERT(wn, "Trying to wrap a dead WN!");
 
     // The WN knows what to do.
@@ -576,7 +582,7 @@ WrapperFactory::WrapSOWObject(JSContext *cx, JSObject *objArg)
     // XUL domain, in which we can't have SOWs. We should never be called in
     // that case.
     MOZ_ASSERT(xpc::AllowXBLScope(js::GetContextCompartment(cx)));
-    if (!JS_GetPrototype(cx, obj, proto.address()))
+    if (!JS_GetPrototype(cx, obj, &proto))
         return NULL;
     JSObject *wrapperObj =
         Wrapper::New(cx, obj, proto, JS_GetGlobalForObject(cx, obj),
@@ -596,7 +602,7 @@ JSObject *
 WrapperFactory::WrapComponentsObject(JSContext *cx, HandleObject obj)
 {
     RootedObject proto(cx);
-    if (!JS_GetPrototype(cx, obj, proto.address()))
+    if (!JS_GetPrototype(cx, obj, &proto))
         return NULL;
     JSObject *wrapperObj =
         Wrapper::New(cx, obj, proto, JS_GetGlobalForObject(cx, obj),
@@ -604,32 +610,6 @@ WrapperFactory::WrapComponentsObject(JSContext *cx, HandleObject obj)
 
     return wrapperObj;
 }
-
-JSObject *
-WrapperFactory::WrapForSameCompartmentXray(JSContext *cx, JSObject *obj)
-{
-    // We should be same-compartment here.
-    MOZ_ASSERT(js::IsObjectInContextCompartment(obj, cx));
-
-    // Sort out what kind of Xray we can do. If we can't Xray, bail.
-    XrayType type = GetXrayType(obj);
-    if (type == NotXray)
-        return NULL;
-
-    // Select the appropriate proxy handler.
-    Wrapper *wrapper = NULL;
-    if (type == XrayForWrappedNative)
-        wrapper = &SCPermissiveXrayXPCWN::singleton;
-    else if (type == XrayForDOMObject)
-        wrapper = &SCPermissiveXrayDOM::singleton;
-    else
-        MOZ_NOT_REACHED("Bad Xray type");
-
-    // Make the Xray.
-    JSObject *parent = JS_GetGlobalForObject(cx, obj);
-    return Wrapper::New(cx, obj, NULL, parent, wrapper);
-}
-
 
 bool
 WrapperFactory::XrayWrapperNotShadowing(JSObject *wrapper, jsid id)
@@ -673,7 +653,7 @@ FixWaiverAfterTransplant(JSContext *cx, HandleObject oldWaiver, HandleObject new
 }
 
 JSObject *
-TransplantObject(JSContext *cx, JSObject *origobj, JSObject *target)
+TransplantObject(JSContext *cx, JS::HandleObject origobj, JS::HandleObject target)
 {
     RootedObject oldWaiver(cx, WrapperFactory::GetXrayWaiver(origobj));
     RootedObject newIdentity(cx, JS_TransplantObject(cx, origobj, target));
@@ -687,8 +667,8 @@ TransplantObject(JSContext *cx, JSObject *origobj, JSObject *target)
 
 JSObject *
 TransplantObjectWithWrapper(JSContext *cx,
-                            JSObject *origobj, JSObject *origwrapper,
-                            JSObject *targetobj, JSObject *targetwrapper)
+                            HandleObject origobj, HandleObject origwrapper,
+                            HandleObject targetobj, HandleObject targetwrapper)
 {
     RootedObject oldWaiver(cx, WrapperFactory::GetXrayWaiver(origobj));
     RootedObject newSameCompartmentWrapper(cx,

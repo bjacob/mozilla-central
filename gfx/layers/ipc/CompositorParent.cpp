@@ -4,26 +4,50 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include <map>
-
-#include "mozilla/DebugOnly.h"
-
-#include "AsyncPanZoomController.h"
-#include "AutoOpenSurface.h"
 #include "CompositorParent.h"
-#include "mozilla/layers/CompositorOGL.h"
-#include "mozilla/layers/BasicCompositor.h"
+#include <stdio.h>                      // for fprintf, stdout
+#include <stdint.h>                     // for uint64_t
+#include <map>                          // for _Rb_tree_iterator, etc
+#include <utility>                      // for pair
+#include "AutoOpenSurface.h"            // for AutoOpenSurface
+#include "LayerTransactionParent.h"     // for LayerTransactionParent
+#include "RenderTrace.h"                // for RenderTraceLayers
+#include "base/message_loop.h"          // for MessageLoop
+#include "base/process.h"               // for ProcessHandle
+#include "base/process_util.h"          // for OpenProcessHandle
+#include "base/task.h"                  // for CancelableTask, etc
+#include "base/thread.h"                // for Thread
+#include "base/tracked.h"               // for FROM_HERE
+#include "gfxContext.h"                 // for gfxContext
+#include "gfxPlatform.h"                // for gfxPlatform
+#include "ipc/ShadowLayersManager.h"    // for ShadowLayersManager
+#include "mozilla/AutoRestore.h"        // for AutoRestore
+#include "mozilla/DebugOnly.h"          // for DebugOnly
+#include "mozilla/gfx/Point.h"          // for IntSize
+#include "mozilla/ipc/Transport.h"      // for Transport
+#include "mozilla/layers/APZCTreeManager.h"  // for APZCTreeManager
+#include "mozilla/layers/AsyncCompositionManager.h"
+#include "mozilla/layers/BasicCompositor.h"  // for BasicCompositor
+#include "mozilla/layers/Compositor.h"  // for Compositor
+#include "mozilla/layers/CompositorOGL.h"  // for CompositorOGL
+#include "mozilla/layers/CompositorTypes.h"
+#include "mozilla/layers/LayerManagerComposite.h"
+#include "mozilla/layers/LayersTypes.h"
+#include "mozilla/layers/PLayerTransactionParent.h"
+#include "mozilla/mozalloc.h"           // for operator new, etc
+#include "nsCOMPtr.h"                   // for already_AddRefed
+#include "nsDebug.h"                    // for NS_ABORT_IF_FALSE, etc
+#include "nsIWidget.h"                  // for nsIWidget
+#include "nsRect.h"                     // for nsIntRect
+#include "nsTArray.h"                   // for nsTArray
+#include "nsThreadUtils.h"              // for NS_IsMainThread
+#include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
+#include "nsXULAppAPI.h"                // for XRE_GetIOMessageLoop
 #ifdef XP_WIN
 #include "mozilla/layers/CompositorD3D11.h"
+#include "mozilla/layers/CompositorD3D9.h"
 #endif
-#include "LayerTransactionParent.h"
-#include "nsIWidget.h"
-#include "nsGkAtoms.h"
-#include "RenderTrace.h"
-#include "gfxPlatform.h"
-#include "mozilla/AutoRestore.h"
-#include "mozilla/layers/AsyncCompositionManager.h"
-#include "mozilla/layers/LayerManagerComposite.h"
+#include "GeckoProfiler.h"
 
 using namespace base;
 using namespace mozilla;
@@ -33,10 +57,17 @@ using namespace std;
 namespace mozilla {
 namespace layers {
 
+CompositorParent::LayerTreeState::LayerTreeState()
+  : mParent(nullptr)
+{
+}
+
+typedef map<uint64_t, CompositorParent::LayerTreeState> LayerTreeMap;
+static LayerTreeMap sIndirectLayerTrees;
+
 // FIXME/bug 774386: we're assuming that there's only one
 // CompositorParent, but that's not always true.  This assumption only
 // affects CrossProcessCompositorParent below.
-static CompositorParent* sCurrentCompositor;
 static Thread* sCompositorThread = nullptr;
 // manual reference count of the compositor thread.
 static int sCompositorThreadRefCount = 0;
@@ -133,7 +164,7 @@ CompositorParent::CompositorParent(nsIWidget* aWidget,
                                    bool aUseExternalSurfaceSize,
                                    int aSurfaceWidth, int aSurfaceHeight)
   : mWidget(aWidget)
-  , mCurrentCompositeTask(NULL)
+  , mCurrentCompositeTask(nullptr)
   , mIsTesting(false)
   , mPaused(false)
   , mUseExternalSurfaceSize(aUseExternalSurfaceSize)
@@ -153,9 +184,10 @@ CompositorParent::CompositorParent(nsIWidget* aWidget,
   CompositorLoop()->PostTask(FROM_HERE, NewRunnableFunction(&AddCompositor,
                                                           this, &mCompositorID));
 
-  if (!sCurrentCompositor) {
-    sCurrentCompositor = this;
-  }
+  mRootLayerTreeID = AllocateLayerTreeId();
+  sIndirectLayerTrees[mRootLayerTreeID].mParent = this;
+
+  mApzcTreeManager = new APZCTreeManager();
   ++sCompositorThreadRefCount;
 }
 
@@ -165,13 +197,22 @@ CompositorParent::CompositorThreadID()
   return sCompositorThread ? sCompositorThread->thread_id() : sCompositorThreadID;
 }
 
+bool
+CompositorParent::IsInCompositorThread()
+{
+  return CompositorThreadID() == PlatformThread::CurrentId();
+}
+
+uint64_t
+CompositorParent::RootLayerTreeId()
+{
+  return mRootLayerTreeID;
+}
+
 CompositorParent::~CompositorParent()
 {
   MOZ_COUNT_DTOR(CompositorParent);
 
-  if (this == sCurrentCompositor) {
-    sCurrentCompositor = NULL;
-  }
   ReleaseCompositorThread();
 }
 
@@ -184,6 +225,9 @@ CompositorParent::Destroy()
   // Ensure that the layer manager is destructed on the compositor thread.
   mLayerManager = nullptr;
   mCompositionManager = nullptr;
+  mApzcTreeManager->ClearTree();
+  mApzcTreeManager = nullptr;
+  sIndirectLayerTrees.erase(mRootLayerTreeID);
 }
 
 void
@@ -200,6 +244,14 @@ CompositorParent::RecvWillStop()
 
   // Ensure that the layer manager is destroyed before CompositorChild.
   if (mLayerManager) {
+    for (LayerTreeMap::iterator it = sIndirectLayerTrees.begin();
+         it != sIndirectLayerTrees.end(); it++)
+    {
+      LayerTreeState* lts = &it->second;
+      if (lts->mParent == this) {
+        mLayerManager->ClearCachedResources(lts->mRoot);
+      }
+    }
     mLayerManager->Destroy();
     mLayerManager = nullptr;
     mCompositionManager = nullptr;
@@ -246,6 +298,18 @@ CompositorParent::RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
   nsRefPtr<gfxContext> target = new gfxContext(opener.Get());
   ComposeToTarget(target);
   *aOutSnapshot = aInSnapshot;
+  return true;
+}
+
+bool
+CompositorParent::RecvFlushRendering()
+{
+  // If we're waiting to do a composite, then cancel it
+  // and do it immediately instead.
+  if (mCurrentCompositeTask) {
+    mCurrentCompositeTask->Cancel();
+    ComposeToTarget(nullptr);
+  }
   return true;
 }
 
@@ -382,13 +446,15 @@ CompositorParent::ScheduleTask(CancelableTask* task, int time)
 }
 
 void
-CompositorParent::NotifyShadowTreeTransaction()
+CompositorParent::NotifyShadowTreeTransaction(uint64_t aId, bool aIsFirstPaint)
 {
-  if (mLayerManager) {
-    LayerManagerComposite* managerComposite = mLayerManager->AsLayerManagerComposite();
-    if (managerComposite) {
-      managerComposite->NotifyShadowTreeTransaction();
-    }
+  if (mApzcTreeManager &&
+      mLayerManager &&
+      mLayerManager->GetRoot()) {
+    AutoResolveRefLayers resolve(mCompositionManager);
+    mApzcTreeManager->UpdatePanZoomControllerTree(this, mLayerManager->GetRoot(), aIsFirstPaint, aId);
+
+    mLayerManager->AsLayerManagerComposite()->NotifyShadowTreeTransaction();
   }
   ScheduleComposition();
 }
@@ -426,6 +492,7 @@ CompositorParent::ScheduleComposition()
 void
 CompositorParent::Composite()
 {
+  PROFILER_LABEL("CompositorParent", "Composite");
   NS_ABORT_IF_FALSE(CompositorThreadID() == PlatformThread::CurrentId(),
                     "Composite can only be called on the compositor thread");
   mCurrentCompositeTask = nullptr;
@@ -476,6 +543,7 @@ CompositorParent::Composite()
 void
 CompositorParent::ComposeToTarget(gfxContext* aTarget)
 {
+  PROFILER_LABEL("CompositorParent", "ComposeToTarget");
   AutoRestore<bool> override(mOverrideComposeReadiness);
   mOverrideComposeReadiness = true;
 
@@ -522,7 +590,7 @@ CompositorParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
   if (!isFirstPaint &&
       !mCompositionManager->IsFirstPaint() &&
       mCompositionManager->RequiresReorientation(aTargetConfig.orientation())) {
-    if (mForceCompositionTask != NULL) {
+    if (mForceCompositionTask != nullptr) {
       mForceCompositionTask->Cancel();
     }
     mForceCompositionTask = NewRunnableMethod(this, &CompositorParent::ForceComposition);
@@ -537,6 +605,12 @@ CompositorParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
   mCompositionManager->Updated(isFirstPaint, aTargetConfig);
   Layer* root = aLayerTree->GetRoot();
   mLayerManager->SetRoot(root);
+
+  if (mApzcTreeManager) {
+    AutoResolveRefLayers resolve(mCompositionManager);
+    mApzcTreeManager->UpdatePanZoomControllerTree(this, root, isFirstPaint, mRootLayerTreeID);
+  }
+
   if (root) {
     SetShadowProperties(root);
     if (mIsTesting) {
@@ -550,10 +624,50 @@ CompositorParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
   }
 }
 
+void
+CompositorParent::InitializeLayerManager(const nsTArray<LayersBackend>& aBackendHints)
+{
+  NS_ASSERTION(!mLayerManager, "Already initialised mLayerManager");
+
+  for (size_t i = 0; i < aBackendHints.Length(); ++i) {
+    RefPtr<LayerManagerComposite> layerManager;
+    if (aBackendHints[i] == LAYERS_OPENGL) {
+      layerManager =
+        new LayerManagerComposite(new CompositorOGL(mWidget,
+                                                    mEGLSurfaceSize.width,
+                                                    mEGLSurfaceSize.height,
+                                                    mUseExternalSurfaceSize));
+    } else if (aBackendHints[i] == LAYERS_BASIC) {
+      layerManager =
+        new LayerManagerComposite(new BasicCompositor(mWidget));
+#ifdef XP_WIN
+    } else if (aBackendHints[i] == LAYERS_D3D11) {
+      layerManager =
+        new LayerManagerComposite(new CompositorD3D11(mWidget));
+    } else if (aBackendHints[i] == LAYERS_D3D9) {
+      layerManager =
+        new LayerManagerComposite(new CompositorD3D9(mWidget));
+#endif
+    }
+
+    if (!layerManager) {
+      continue;
+    }
+
+    layerManager->SetCompositorID(mCompositorID);
+
+    if (layerManager->Initialize()) {
+      mLayerManager = layerManager;
+      return;
+    }
+  }
+}
+
 PLayerTransactionParent*
-CompositorParent::AllocPLayerTransaction(const LayersBackend& aBackendHint,
-                                         const uint64_t& aId,
-                                         TextureFactoryIdentifier* aTextureFactoryIdentifier)
+CompositorParent::AllocPLayerTransactionParent(const nsTArray<LayersBackend>& aBackendHints,
+                                               const uint64_t& aId,
+                                               TextureFactoryIdentifier* aTextureFactoryIdentifier,
+                                               bool *aSuccess)
 {
   MOZ_ASSERT(aId == 0);
 
@@ -561,42 +675,24 @@ CompositorParent::AllocPLayerTransaction(const LayersBackend& aBackendHint,
   // nullptr before returning from this method, to avoid accessing it elsewhere.
   nsIntRect rect;
   mWidget->GetClientBounds(rect);
-
-  if (aBackendHint == mozilla::layers::LAYERS_OPENGL) {
-    mLayerManager =
-      new LayerManagerComposite(new CompositorOGL(mWidget,
-                                                  mEGLSurfaceSize.width,
-                                                  mEGLSurfaceSize.height,
-                                                  mUseExternalSurfaceSize));
-  } else if (aBackendHint == mozilla::layers::LAYERS_BASIC) {
-    mLayerManager =
-      new LayerManagerComposite(new BasicCompositor(mWidget));
-#ifdef XP_WIN
-  } else if (aBackendHint == mozilla::layers::LAYERS_D3D11) {
-    mLayerManager =
-      new LayerManagerComposite(new CompositorD3D11(mWidget));
-#endif
-  } else {
-    NS_ERROR("Unsupported backend selected for Async Compositor");
-    return nullptr;
-  }
-
+  InitializeLayerManager(aBackendHints);
   mWidget = nullptr;
-  mLayerManager->SetCompositorID(mCompositorID);
 
-  if (!mLayerManager->Initialize()) {
-    NS_ERROR("Failed to init Compositor");
-    return nullptr;
+  if (!mLayerManager) {
+    NS_WARNING("Failed to initialise Compositor");
+    *aSuccess = false;
+    return new LayerTransactionParent(nullptr, this, 0);
   }
 
   mCompositionManager = new AsyncCompositionManager(mLayerManager);
 
   *aTextureFactoryIdentifier = mLayerManager->GetTextureFactoryIdentifier();
+  *aSuccess = true;
   return new LayerTransactionParent(mLayerManager, this, 0);
 }
 
 bool
-CompositorParent::DeallocPLayerTransaction(PLayerTransactionParent* actor)
+CompositorParent::DeallocPLayerTransactionParent(PLayerTransactionParent* actor)
 {
   delete actor;
   return true;
@@ -658,19 +754,31 @@ CompositorParent::SetTimeAndSampleAnimations(TimeStamp aTime, bool aIsTesting)
   for (CompositorMap::iterator it = sCompositorMap->begin(); it != sCompositorMap->end(); ++it) {
     it->second->mIsTesting = aIsTesting;
     it->second->mTestTime = aTime;
-    it->second->mCompositionManager->TransformShadowTree(aTime);
+    if (it->second->mCompositionManager) {
+      it->second->mCompositionManager->TransformShadowTree(aTime);
+    }
   }
 }
 
-typedef map<uint64_t, CompositorParent::LayerTreeState> LayerTreeMap;
-static LayerTreeMap sIndirectLayerTrees;
+bool
+CompositorParent::RecvNotifyChildCreated(const uint64_t& child)
+{
+  NotifyChildCreated(child);
+  return true;
+}
+
+void
+CompositorParent::NotifyChildCreated(uint64_t aChild)
+{
+  sIndirectLayerTrees[aChild].mParent = this;
+}
 
 /*static*/ uint64_t
 CompositorParent::AllocateLayerTreeId()
 {
   MOZ_ASSERT(CompositorLoop());
   MOZ_ASSERT(NS_IsMainThread());
-  static uint64_t ids;
+  static uint64_t ids = 0;
   return ++ids;
 }
 
@@ -690,20 +798,30 @@ CompositorParent::DeallocateLayerTreeId(uint64_t aId)
 
 static void
 UpdateControllerForLayersId(uint64_t aLayersId,
-                            AsyncPanZoomController* aController)
+                            GeckoContentController* aController)
 {
-  // Adopt ref given to us by SetPanZoomControllerForLayerTree()
+  // Adopt ref given to us by SetControllerForLayerTree()
   sIndirectLayerTrees[aLayersId].mController =
-    already_AddRefed<AsyncPanZoomController>(aController);
+    already_AddRefed<GeckoContentController>(aController);
+}
 
-  // Notify the AsyncPanZoomController about the current compositor so that it
-  // can request composites off the compositor thread.
-  aController->SetCompositorParent(sCurrentCompositor);
+ScopedLayerTreeRegistration::ScopedLayerTreeRegistration(uint64_t aLayersId,
+                                                         Layer* aRoot,
+                                                         GeckoContentController* aController)
+    : mLayersId(aLayersId)
+{
+  sIndirectLayerTrees[aLayersId].mRoot = aRoot;
+  sIndirectLayerTrees[aLayersId].mController = aController;
+}
+
+ScopedLayerTreeRegistration::~ScopedLayerTreeRegistration()
+{
+  sIndirectLayerTrees.erase(mLayersId);
 }
 
 /*static*/ void
-CompositorParent::SetPanZoomControllerForLayerTree(uint64_t aLayersId,
-                                                   AsyncPanZoomController* aController)
+CompositorParent::SetControllerForLayerTree(uint64_t aLayersId,
+                                            GeckoContentController* aController)
 {
   // This ref is adopted by UpdateControllerForLayersId().
   aController->AddRef();
@@ -711,6 +829,16 @@ CompositorParent::SetPanZoomControllerForLayerTree(uint64_t aLayersId,
                              NewRunnableFunction(&UpdateControllerForLayersId,
                                                  aLayersId,
                                                  aController));
+}
+
+/*static*/ APZCTreeManager*
+CompositorParent::GetAPZCTreeManager(uint64_t aLayersId)
+{
+  const CompositorParent::LayerTreeState* state = CompositorParent::GetIndirectShadowTree(aLayersId);
+  if (state && state->mParent) {
+    return state->mParent->mApzcTreeManager;
+  }
+  return nullptr;
 }
 
 /**
@@ -740,16 +868,19 @@ public:
   virtual bool RecvStop() MOZ_OVERRIDE { return true; }
   virtual bool RecvPause() MOZ_OVERRIDE { return true; }
   virtual bool RecvResume() MOZ_OVERRIDE { return true; }
+  virtual bool RecvNotifyChildCreated(const uint64_t& child) MOZ_OVERRIDE;
   virtual bool RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
                                 SurfaceDescriptor* aOutSnapshot)
   { return true; }
+  virtual bool RecvFlushRendering() MOZ_OVERRIDE { return true; }
 
   virtual PLayerTransactionParent*
-    AllocPLayerTransaction(const LayersBackend& aBackendType,
-                           const uint64_t& aId,
-                           TextureFactoryIdentifier* aTextureFactoryIdentifier) MOZ_OVERRIDE;
+    AllocPLayerTransactionParent(const nsTArray<LayersBackend>& aBackendHints,
+                                 const uint64_t& aId,
+                                 TextureFactoryIdentifier* aTextureFactoryIdentifier,
+                                 bool *aSuccess) MOZ_OVERRIDE;
 
-  virtual bool DeallocPLayerTransaction(PLayerTransactionParent* aLayers) MOZ_OVERRIDE;
+  virtual bool DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers) MOZ_OVERRIDE;
 
   virtual void ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
                                    const TargetConfig& aTargetConfig,
@@ -774,7 +905,7 @@ OpenCompositor(CrossProcessCompositorParent* aCompositor,
   MOZ_ASSERT(ok);
 }
 
-/*static*/ PCompositorParent*
+/*static*/ bool
 CompositorParent::Create(Transport* aTransport, ProcessId aOtherProcess)
 {
   nsRefPtr<CrossProcessCompositorParent> cpcp =
@@ -782,28 +913,21 @@ CompositorParent::Create(Transport* aTransport, ProcessId aOtherProcess)
   ProcessHandle handle;
   if (!base::OpenProcessHandle(aOtherProcess, &handle)) {
     // XXX need to kill |aOtherProcess|, it's boned
-    return nullptr;
+    return false;
   }
   cpcp->mSelfRef = cpcp;
   CompositorLoop()->PostTask(
     FROM_HERE,
     NewRunnableFunction(OpenCompositor, cpcp.get(),
                         aTransport, handle, XRE_GetIOMessageLoop()));
-  // The return value is just compared to null for success checking,
-  // we're not sharing a ref.
-  return cpcp.get();
+  return true;
 }
 
 static void
-UpdateIndirectTree(uint64_t aId, Layer* aRoot, const TargetConfig& aTargetConfig, bool isFirstPaint)
+UpdateIndirectTree(uint64_t aId, Layer* aRoot, const TargetConfig& aTargetConfig)
 {
   sIndirectLayerTrees[aId].mRoot = aRoot;
   sIndirectLayerTrees[aId].mTargetConfig = aTargetConfig;
-  if (ContainerLayer* root = aRoot->AsContainerLayer()) {
-    if (AsyncPanZoomController* apzc = sIndirectLayerTrees[aId].mController) {
-      apzc->NotifyLayersUpdated(root->GetFrameMetrics(), isFirstPaint);
-    }
-  }
 }
 
 /* static */ const CompositorParent::LayerTreeState*
@@ -831,23 +955,40 @@ CrossProcessCompositorParent::ActorDestroy(ActorDestroyReason aWhy)
 }
 
 PLayerTransactionParent*
-CrossProcessCompositorParent::AllocPLayerTransaction(const LayersBackend& aBackendType,
-                                                     const uint64_t& aId,
-                                                     TextureFactoryIdentifier* aTextureFactoryIdentifier)
+CrossProcessCompositorParent::AllocPLayerTransactionParent(const nsTArray<LayersBackend>&,
+                                                           const uint64_t& aId,
+                                                           TextureFactoryIdentifier* aTextureFactoryIdentifier,
+                                                           bool *aSuccess)
 {
   MOZ_ASSERT(aId != 0);
 
-  nsRefPtr<LayerManager> lm = sCurrentCompositor->GetLayerManager();
-  *aTextureFactoryIdentifier = lm->GetTextureFactoryIdentifier();
-  return new LayerTransactionParent(lm->AsLayerManagerComposite(), this, aId);
+  if (sIndirectLayerTrees[aId].mParent) {
+    LayerManagerComposite* lm = sIndirectLayerTrees[aId].mParent->GetLayerManager();
+    *aTextureFactoryIdentifier = lm->GetTextureFactoryIdentifier();
+    *aSuccess = true;
+    return new LayerTransactionParent(lm, this, aId);
+  }
+
+  NS_WARNING("Created child without a matching parent?");
+  // XXX: should be false, but that causes us to fail some tests on Mac w/ OMTC.
+  // Bug 900745. change *aSuccess to false to see test failures.
+  *aSuccess = true;
+  return new LayerTransactionParent(nullptr, this, aId);
 }
 
 bool
-CrossProcessCompositorParent::DeallocPLayerTransaction(PLayerTransactionParent* aLayers)
+CrossProcessCompositorParent::DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers)
 {
   LayerTransactionParent* slp = static_cast<LayerTransactionParent*>(aLayers);
   RemoveIndirectTree(slp->GetId());
   delete aLayers;
+  return true;
+}
+
+bool
+CrossProcessCompositorParent::RecvNotifyChildCreated(const uint64_t& child)
+{
+  sIndirectLayerTrees[child].mParent->NotifyChildCreated(child);
   return true;
 }
 
@@ -863,9 +1004,9 @@ CrossProcessCompositorParent::ShadowLayersUpdated(
   if (shadowRoot) {
     SetShadowProperties(shadowRoot);
   }
-  UpdateIndirectTree(id, shadowRoot, aTargetConfig, isFirstPaint);
+  UpdateIndirectTree(id, shadowRoot, aTargetConfig);
 
-  sCurrentCompositor->NotifyShadowTreeTransaction();
+  sIndirectLayerTrees[id].mParent->NotifyShadowTreeTransaction(id, isFirstPaint);
 }
 
 void

@@ -4,24 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// HttpLog.h should generally be included first
+#include "HttpLog.h"
+
 #include "HttpChannelParentListener.h"
 #include "mozilla/net/HttpChannelParent.h"
-#include "mozilla/dom/TabParent.h"
-#include "mozilla/net/NeckoParent.h"
 #include "mozilla/unused.h"
-#include "nsHttpChannel.h"
-#include "nsHttpHandler.h"
-#include "nsNetUtil.h"
-#include "nsISupportsPriority.h"
-#include "nsIAuthPromptProvider.h"
-#include "nsICacheEntryDescriptor.h"
-#include "nsSerializationHelper.h"
-#include "nsISerializable.h"
-#include "nsIAssociatedContentSecurity.h"
-#include "nsISecureBrowserUI.h"
 #include "nsIRedirectChannelRegistrar.h"
-
-#include "nsIFTPChannel.h"
+#include "nsIHttpEventSink.h"
 
 using mozilla::unused;
 

@@ -5,7 +5,7 @@
 
 #include "SVGMotionSMILPathUtils.h"
 #include "nsCharSeparatedTokenizer.h"
-#include "nsContentUtils.h"
+#include "nsContentUtils.h" // for NS_ENSURE_FINITE2
 #include "SVGContentUtils.h"
 #include "SVGLength.h"
 
@@ -106,7 +106,7 @@ SVGMotionSMILPathUtils::PathGenerator::
     return false;
   }
 
-  if (tokenizer.lastTokenEndedWithSeparator() || // Trailing comma.
+  if (tokenizer.separatorAfterCurrentToken() ||  // Trailing comma.
       tokenizer.hasMoreTokens()) {               // More text remains
     return false;
   }

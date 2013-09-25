@@ -6,8 +6,9 @@
 #include "domstubs.idl"
 
 %{C++
-#include "nsEvent.h"
+#include "mozilla/EventForwards.h"
 #include "mozilla/dom/Nullable.h"
+#include "js/TypeDecls.h"
 
 using mozilla::dom::Nullable;
 
@@ -20,7 +21,6 @@ class EventTarget;
 class nsPresContext;
 class nsEventChainPreVisitor;
 class nsEventChainPostVisitor;
-struct JSContext;
 class nsEventListenerManager;
 %}
 

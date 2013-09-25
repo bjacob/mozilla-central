@@ -7,9 +7,10 @@
 #define nsProxyRelease_h__
 
 #include "nsIEventTarget.h"
+#include "nsIThread.h"
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
-#include "nsThreadUtils.h"
+#include "MainThreadUtils.h"
 #include "mozilla/Likely.h"
 
 #ifdef XPCOM_GLUE_AVOID_NSPR
@@ -122,7 +123,8 @@ public:
     if (NS_IsMainThread()) {
       NS_IF_RELEASE(mRawPtr);
     } else if (mRawPtr) {
-      nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
+      nsCOMPtr<nsIThread> mainThread;
+      NS_GetMainThread(getter_AddRefs(mainThread));
       if (!mainThread) {
         NS_WARNING("Couldn't get main thread! Leaking pointer.");
         return;
@@ -142,13 +144,9 @@ public:
 
   bool operator==(const nsMainThreadPtrHolder<T>& aOther) const { return mRawPtr == aOther.mRawPtr; }
 
-  NS_IMETHOD_(nsrefcnt) Release();
-  NS_IMETHOD_(nsrefcnt) AddRef();
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsMainThreadPtrHolder<T>)
 
 private:
-  // This class is threadsafe and reference-counted.
-  nsAutoRefCnt mRefCnt;
-
   // Our wrapped pointer.
   T* mRawPtr;
 
@@ -160,11 +158,6 @@ private:
   T& operator=(nsMainThreadPtrHolder& other);
   nsMainThreadPtrHolder(const nsMainThreadPtrHolder& other);
 };
-
-template<class T>
-NS_IMPL_THREADSAFE_ADDREF(nsMainThreadPtrHolder<T>)
-template<class T>
-NS_IMPL_THREADSAFE_RELEASE(nsMainThreadPtrHolder<T>)
 
 template<class T>
 class nsMainThreadPtrHandle
@@ -179,8 +172,6 @@ class nsMainThreadPtrHandle
     mPtr = aOther.mPtr;
     return *this;
   }
-
-  operator nsMainThreadPtrHolder<T>*() { return mPtr.get(); }
 
   // These all call through to nsMainThreadPtrHolder, and thus implicitly
   // assert that we're on the main thread. Off-main-thread consumers must treat
@@ -202,8 +193,6 @@ class nsMainThreadPtrHandle
 
   operator T*() { return get(); }
   T* operator->() { return get(); }
-
-  operator bool() { return get(); }
 
   // These are safe to call on other threads with appropriate external locking.
   bool operator==(const nsMainThreadPtrHandle<T>& aOther) const {

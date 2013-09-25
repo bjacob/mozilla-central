@@ -34,16 +34,15 @@
 #include "nsAutoPtr.h"
 #include "nsStyledElement.h"
 #include "nsIFrameLoader.h"
-#include "jspubtd.h"
 #include "nsFrameLoader.h"
 
 class nsIDocument;
 class nsString;
 class nsIDocShell;
+class nsXULPrototypeDocument;
 
 class nsIObjectInputStream;
 class nsIObjectOutputStream;
-class nsIScriptGlobalObject;
 class nsXULPrototypeNode;
 typedef nsTArray<nsRefPtr<nsXULPrototypeNode> > nsPrototypeArray;
 
@@ -110,10 +109,10 @@ public:
 
     virtual ~nsXULPrototypeNode() {}
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
-                               nsIScriptGlobalObject* aGlobal,
+                               nsXULPrototypeDocument* aProtoDoc,
                                const nsCOMArray<nsINodeInfo> *aNodeInfos) = 0;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
-                                 nsIScriptGlobalObject* aGlobal,
+                                 nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
                                  const nsCOMArray<nsINodeInfo> *aNodeInfos) = 0;
 
@@ -174,10 +173,10 @@ public:
     }
 
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
-                               nsIScriptGlobalObject* aGlobal,
+                               nsXULPrototypeDocument* aProtoDoc,
                                const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
-                                 nsIScriptGlobalObject* aGlobal,
+                                 nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
                                  const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
 
@@ -217,21 +216,22 @@ public:
 #endif
 
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
-                               nsIScriptGlobalObject* aGlobal,
+                               nsXULPrototypeDocument* aProtoDoc,
                                const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
     nsresult SerializeOutOfLine(nsIObjectOutputStream* aStream,
-                                nsIScriptGlobalObject* aGlobal);
+                                nsXULPrototypeDocument* aProtoDoc);
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
-                                 nsIScriptGlobalObject* aGlobal,
+                                 nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
                                  const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
     nsresult DeserializeOutOfLine(nsIObjectInputStream* aInput,
-                                  nsIScriptGlobalObject* aGlobal);
+                                  nsXULPrototypeDocument* aProtoDoc);
 
     nsresult Compile(const PRUnichar* aText, int32_t aTextLength,
                      nsIURI* aURI, uint32_t aLineNo,
                      nsIDocument* aDocument,
-                     nsIScriptGlobalObject* aGlobal);
+                     nsXULPrototypeDocument* aProtoDoc,
+                     nsIOffThreadScriptReceiver *aOffThreadReceiver = nullptr);
 
     void UnlinkJSObjects();
 
@@ -243,13 +243,16 @@ public:
     // &mScriptObject pointer can't go stale.
     JS::Handle<JSScript*> GetScriptObject()
     {
-        return JS::Handle<JSScript*>::fromMarkedLocation(&mScriptObject);
+        // Calling fromMarkedLocation() is safe because we trace mScriptObject in
+        // TraceScriptObject() and because its value is never changed after it has
+        // been set.
+        return JS::Handle<JSScript*>::fromMarkedLocation(mScriptObject.address());
     }
 
     void TraceScriptObject(JSTracer* aTrc)
     {
         if (mScriptObject) {
-            JS_CallScriptTracer(aTrc, &mScriptObject, "active window XUL prototype script");
+            JS_CallHeapScriptTracer(aTrc, &mScriptObject, "active window XUL prototype script");
         }
     }
 
@@ -267,7 +270,7 @@ public:
     mozilla::dom::XULDocument* mSrcLoadWaiters;   // [OWNER] but not COMPtr
     uint32_t                 mLangVersion;
 private:
-    JSScript*                mScriptObject;
+    JS::Heap<JSScript*>      mScriptObject;
 };
 
 class nsXULPrototypeText : public nsXULPrototypeNode
@@ -288,10 +291,10 @@ public:
 #endif
 
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
-                               nsIScriptGlobalObject* aGlobal,
+                               nsXULPrototypeDocument* aProtoDoc,
                                const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
-                                 nsIScriptGlobalObject* aGlobal,
+                                 nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
                                  const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
 
@@ -316,10 +319,10 @@ public:
 #endif
 
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
-                               nsIScriptGlobalObject* aGlobal,
+                               nsXULPrototypeDocument* aProtoDoc,
                                const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
-                                 nsIScriptGlobalObject* aGlobal,
+                                 nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
                                  const nsCOMArray<nsINodeInfo> *aNodeInfos) MOZ_OVERRIDE;
 
@@ -350,8 +353,8 @@ ASSERT_NODE_FLAGS_SPACE(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + 3);
 
 class nsScriptEventHandlerOwnerTearoff;
 
-class nsXULElement : public nsStyledElement,
-                     public nsIDOMXULElement
+class nsXULElement MOZ_FINAL : public nsStyledElement,
+                               public nsIDOMXULElement
 {
 public:
     nsXULElement(already_AddRefed<nsINodeInfo> aNodeInfo);

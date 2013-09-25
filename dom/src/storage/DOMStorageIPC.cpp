@@ -10,6 +10,7 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/unused.h"
 #include "nsIDiskSpaceWatcher.h"
+#include "nsThreadUtils.h"
 
 namespace mozilla {
 namespace dom {
@@ -18,7 +19,7 @@ namespace dom {
 // Child
 // ----------------------------------------------------------------------------
 
-NS_IMPL_THREADSAFE_ADDREF(DOMStorageDBChild)
+NS_IMPL_ADDREF(DOMStorageDBChild)
 
 NS_IMETHODIMP_(nsrefcnt) DOMStorageDBChild::Release(void)
 {
@@ -58,7 +59,6 @@ DOMStorageDBChild::DOMStorageDBChild(DOMLocalStorageManager* aManager)
   , mStatus(NS_OK)
   , mIPCOpen(false)
 {
-  mLoadingCaches.Init();
 }
 
 DOMStorageDBChild::~DOMStorageDBChild()
@@ -68,11 +68,11 @@ DOMStorageDBChild::~DOMStorageDBChild()
 nsTHashtable<nsCStringHashKey>&
 DOMStorageDBChild::ScopesHavingData()
 {
-  if (!mScopesHavingData.IsInitialized()) {
-    mScopesHavingData.Init();
+  if (!mScopesHavingData) {
+    mScopesHavingData = new nsTHashtable<nsCStringHashKey>;
   }
 
-  return mScopesHavingData;
+  return *mScopesHavingData;
 }
 
 nsresult
@@ -201,8 +201,7 @@ DOMStorageDBChild::ShouldPreloadScope(const nsACString& aScope)
   // Return true if we didn't receive the aScope list yet.
   // I tend to rather preserve a bit of early-after-start performance
   // then a bit of memory here.
-  return !mScopesHavingData.IsInitialized() ||
-         mScopesHavingData.Contains(aScope);
+  return !mScopesHavingData || mScopesHavingData->Contains(aScope);
 }
 
 bool
@@ -274,8 +273,8 @@ DOMStorageDBChild::RecvError(const nsresult& aRv)
 // Parent
 // ----------------------------------------------------------------------------
 
-NS_IMPL_THREADSAFE_ADDREF(DOMStorageDBParent)
-NS_IMPL_THREADSAFE_RELEASE(DOMStorageDBParent)
+NS_IMPL_ADDREF(DOMStorageDBParent)
+NS_IMPL_RELEASE(DOMStorageDBParent)
 
 void
 DOMStorageDBParent::AddIPDLReference()

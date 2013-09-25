@@ -12,7 +12,8 @@ include protocol PStreamNotify;
 include protocol PPluginSurface;
 
 include "mozilla/plugins/PluginMessageUtils.h";
-include "IPC/nsGUIEventIPC.h";
+include "ipc/nsGUIEventIPC.h";
+include "gfxTypes.h";
 
 using NPError;
 using NPRemoteWindow;
@@ -23,7 +24,7 @@ using NPNURLVariable;
 using NPCoordinateSpace;
 using NPNVariable;
 using mozilla::plugins::NativeWindowHandle;
-using mozilla::gfxSurfaceType;
+using gfxSurfaceType;
 using gfxIntSize;
 using mozilla::null_t;
 using mozilla::plugins::WindowsSharedMemoryHandle;
@@ -138,11 +139,6 @@ child:
   // within the plugin process.  |background| is either null_t to
   // refer to the existing background or a fresh descriptor.
   async UpdateBackground(SurfaceDescriptor background, nsIntRect rect);
-
-  rpc HandleTextEvent(nsTextEvent event)
-    returns (bool handled);
-  rpc HandleKeyEvent(nsKeyEvent event)
-    returns (bool handled);
 
   async NPP_DidComposite();
 

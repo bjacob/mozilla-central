@@ -45,14 +45,14 @@ private:
   friend class DrawTargetSkia;
 
   void DrawTargetWillChange();
-  void DrawTargetDestroyed();
-  void MarkIndependent();
+  void MaybeUnlock();
 
   SkBitmap mBitmap;
   SurfaceFormat mFormat;
   IntSize mSize;
   int32_t mStride;
-  DrawTargetSkia* mDrawTarget;
+  RefPtr<DrawTargetSkia> mDrawTarget;
+  bool mLocked;
 };
 
 }

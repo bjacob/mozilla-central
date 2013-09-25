@@ -31,7 +31,9 @@ class LayerManager;
 
 namespace dom {
 
+class FileCallback;
 class HTMLCanvasPrintState;
+class PrintCallback;
 
 class HTMLCanvasElement MOZ_FINAL : public nsGenericHTMLElement,
                                     public nsICanvasElementExternal,
@@ -53,15 +55,6 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
-
-  // nsIDOMNode
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE
-
-  // nsIDOMElement
-  NS_FORWARD_NSIDOMELEMENT_TO_GENERIC
-
-  // nsIDOMHTMLElement
-  NS_FORWARD_NSIDOMHTMLELEMENT_TO_GENERIC
 
   // nsIDOMHTMLCanvasElement
   NS_DECL_NSIDOMHTMLCANVASELEMENT
@@ -100,11 +93,11 @@ public:
                      : JS::UndefinedValue();
     aRv = ToDataURL(aType, params, aCx, aDataURL);
   }
-  void ToBlob(nsIFileCallback* aCallback, const nsAString& aType,
-              ErrorResult& aRv)
-  {
-    aRv = ToBlob(aCallback, aType);
-  }
+  void ToBlob(JSContext* aCx,
+              FileCallback& aCallback,
+              const nsAString& aType,
+              const Optional<JS::Handle<JS::Value> >& aParams,
+              ErrorResult& aRv);
 
   bool MozOpaque() const
   {
@@ -129,8 +122,8 @@ public:
   {
     aRv = MozFetchAsStream(aCallback, aType);
   }
-  nsIPrintCallback* GetMozPrintCallback() const;
-  // Using XPCOM SetMozPrintCallback.
+  PrintCallback* GetMozPrintCallback() const;
+  void SetMozPrintCallback(PrintCallback* aCallback);
 
   /**
    * Get the size in pixels of this canvas element
@@ -218,8 +211,6 @@ public:
 
   nsresult GetContext(const nsAString& aContextId, nsISupports** aContext);
 
-  virtual nsIDOMNode* AsDOMNode() MOZ_OVERRIDE { return this; }
-
 protected:
   virtual JSObject* WrapNode(JSContext* aCx,
                              JS::Handle<JSObject*> aScope) MOZ_OVERRIDE;
@@ -227,6 +218,11 @@ protected:
   nsIntSize GetWidthHeight();
 
   nsresult UpdateContext(JSContext* aCx, JS::Handle<JS::Value> options);
+  nsresult ParseParams(JSContext* aCx,
+                       const nsAString& aType,
+                       const JS::Value& aEncoderOptions,
+                       nsAString& aParams,
+                       bool* usingCustomParseOptions);
   nsresult ExtractData(const nsAString& aType,
                        const nsAString& aOptions,
                        nsIInputStream** aStream,
@@ -244,9 +240,9 @@ protected:
 
   nsString mCurrentContextId;
   nsRefPtr<HTMLCanvasElement> mOriginalCanvas;
-  nsCOMPtr<nsIPrintCallback> mPrintCallback;
+  nsRefPtr<PrintCallback> mPrintCallback;
   nsCOMPtr<nsICanvasRenderingContextInternal> mCurrentContext;
-  nsCOMPtr<HTMLCanvasPrintState> mPrintState;
+  nsRefPtr<HTMLCanvasPrintState> mPrintState;
 
 public:
   // Record whether this canvas should be write-only or not.
@@ -264,6 +260,41 @@ public:
   void ResetPrintCallback();
 
   HTMLCanvasElement* GetOriginalCanvas();
+};
+
+class HTMLCanvasPrintState MOZ_FINAL : public nsWrapperCache
+{
+public:
+  HTMLCanvasPrintState(HTMLCanvasElement* aCanvas,
+                       nsICanvasRenderingContextInternal* aContext,
+                       nsITimerCallback* aCallback);
+
+  nsISupports* Context() const;
+
+  void Done();
+
+  void NotifyDone();
+
+  bool mIsDone;
+
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(HTMLCanvasPrintState)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(HTMLCanvasPrintState)
+
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> scope) MOZ_OVERRIDE;
+
+  HTMLCanvasElement* GetParentObject()
+  {
+    return mCanvas;
+  }
+
+private:
+  ~HTMLCanvasPrintState();
+  bool mPendingNotify;
+
+protected:
+  nsRefPtr<HTMLCanvasElement> mCanvas;
+  nsCOMPtr<nsICanvasRenderingContextInternal> mContext;
+  nsCOMPtr<nsITimerCallback> mCallback;
 };
 
 } // namespace dom

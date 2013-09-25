@@ -14,3 +14,7 @@ CPP_SOURCES += [
     'nsRDFModule.cpp',
 ]
 
+LIBRARY_NAME = 'rdf'
+
+LIBXUL_LIBRARY = True
+

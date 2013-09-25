@@ -4,12 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef jsdtoa_h___
-#define jsdtoa_h___
+#ifndef jsdtoa_h
+#define jsdtoa_h
+
 /*
  * Public interface to portable double-precision floating point to string
  * and back conversion package.
  */
+
 #include <stddef.h>
 
 struct DtoaState;
@@ -29,10 +31,10 @@ js_DestroyDtoaState(DtoaState *state);
  * scan. If no number can be formed, *se receives a pointer to the first
  * unparseable character in s00, and zero is returned.
  *
- * *err is set to zero on success; it's set to JS_DTOA_ERANGE on range
- * errors and JS_DTOA_ENOMEM on memory failure.
+ * On overflow, this function returns infinity and does not indicate an error.
+ *
+ * *err is set to zero on success; it's set to JS_DTOA_ENOMEM on memory failure.
  */
-#define JS_DTOA_ERANGE 1
 #define JS_DTOA_ENOMEM 2
 double
 js_strtod_harder(DtoaState *state, const char *s00, char **se, int *err);
@@ -107,4 +109,4 @@ js_dtostr(DtoaState *state, char *buffer, size_t bufferSize, JSDToStrMode mode, 
 char *
 js_dtobasestr(DtoaState *state, int base, double d);
 
-#endif /* jsdtoa_h___ */
+#endif /* jsdtoa_h */

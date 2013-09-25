@@ -10,6 +10,7 @@
 #include "WMFByteStream.h"
 #include "WMFSourceReaderCallback.h"
 #include "mozilla/dom/TimeRanges.h"
+#include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/Preferences.h"
 #include "DXVA2Manager.h"
 #include "ImageContainer.h"
@@ -54,7 +55,8 @@ WMFReader::WMFReader(AbstractMediaDecoder* aDecoder)
     mHasVideo(false),
     mUseHwAccel(false),
     mMustRecaptureAudioPosition(true),
-    mIsMP3Enabled(WMFDecoder::IsMP3Supported())
+    mIsMP3Enabled(WMFDecoder::IsMP3Supported()),
+    mCOMInitialized(false)
 {
   NS_ASSERTION(NS_IsMainThread(), "Must be on main thread.");
   MOZ_COUNT_CTOR(WMFReader);
@@ -79,15 +81,22 @@ void
 WMFReader::OnDecodeThreadStart()
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
-  HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
-  NS_ENSURE_TRUE_VOID(SUCCEEDED(hr));
+
+  // XXX WebAudio will call this on the main thread so CoInit will definitely
+  // fail. You cannot change the concurrency model once already set.
+  // The main thread will continue to be STA, which seems to work, but MSDN
+  // recommends that MTA be used.
+  mCOMInitialized = SUCCEEDED(CoInitializeEx(0, COINIT_MULTITHREADED));
+  NS_ENSURE_TRUE_VOID(mCOMInitialized);
 }
 
 void
 WMFReader::OnDecodeThreadFinish()
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
-  CoUninitialize();
+  if (mCOMInitialized) {
+    CoUninitialize();
+  }
 }
 
 bool
@@ -108,10 +117,8 @@ WMFReader::InitializeDXVA()
   HTMLMediaElement* element = owner->GetMediaElement();
   NS_ENSURE_TRUE(element, false);
 
-  nsIDocument* doc = element->GetOwnerDocument();
-  NS_ENSURE_TRUE(doc, false);
-
-  nsRefPtr<LayerManager> layerManager = nsContentUtils::LayerManagerForDocument(doc);
+  nsRefPtr<LayerManager> layerManager =
+    nsContentUtils::LayerManagerForDocument(element->OwnerDoc());
   NS_ENSURE_TRUE(layerManager, false);
 
   if (layerManager->GetBackendType() != LayersBackend::LAYERS_D3D9 &&
@@ -582,10 +589,23 @@ WMFReader::ReadMetadata(VideoInfo* aInfo,
       ULONG_PTR manager = ULONG_PTR(mDXVA2Manager->GetDXVADeviceManager());
       hr = videoDecoder->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER,
                                         manager);
+      if (hr == MF_E_TRANSFORM_TYPE_NOT_SET) {
+        // Ignore MF_E_TRANSFORM_TYPE_NOT_SET. Vista returns this here
+        // on some, perhaps all, video cards. This may be because activating
+        // DXVA changes the available output types. It seems to be safe to
+        // ignore this error.
+        hr = S_OK;
+      }
     }
     if (FAILED(hr)) {
-      LOG("Failed to set DXVA2 D3D Device manager on decoder");
+      LOG("Failed to set DXVA2 D3D Device manager on decoder hr=0x%x", hr);
       mUseHwAccel = false;
+      // Re-run the configuration process, so that the output video format
+      // is set correctly to reflect that hardware acceleration is disabled.
+      // Without this, we'd be running with !mUseHwAccel and the output format
+      // set to NV12, which is the format we expect when using hardware
+      // acceleration. This would cause us to misinterpret the frame contents.
+      hr = ConfigureVideoDecoder();
     }
   }
   if (mInfo.mHasVideo) {
@@ -668,7 +688,6 @@ WMFReader::DecodeAudioData()
   if (FAILED(hr)) {
     LOG("WMFReader::DecodeAudioData() ReadSample failed with hr=0x%x", hr);
     // End the stream.
-    mAudioQueue.Finish();
     return false;
   }
 
@@ -683,7 +702,6 @@ WMFReader::DecodeAudioData()
     LOG("WMFReader::DecodeAudioData() ReadSample failed with hr=0x%x flags=0x%x",
         hr, flags);
     // End the stream.
-    mAudioQueue.Finish();
     return false;
   }
 
@@ -744,8 +762,6 @@ WMFReader::DecodeAudioData()
   LOG("Decoded audio sample! timestamp=%lld duration=%lld currentLength=%u",
       timestamp, duration, currentLength);
   #endif
-
-  NotifyBytesConsumed();
 
   return true;
 }
@@ -905,8 +921,6 @@ WMFReader::DecodeVideoFrame(bool &aKeyframeSkip,
                                  nullptr);
   if (FAILED(hr)) {
     LOG("WMFReader::DecodeVideoData() ReadSample failed with hr=0x%x", hr);
-    // End the stream.
-    mVideoQueue.Finish();
     return false;
   }
 
@@ -918,7 +932,6 @@ WMFReader::DecodeVideoFrame(bool &aKeyframeSkip,
   if (flags & MF_SOURCE_READERF_ERROR) {
     NS_WARNING("WMFReader: Catastrophic failure reading video sample");
     // Future ReadSample() calls will fail, so give up and report end of stream.
-    mVideoQueue.Finish();
     return false;
   }
 
@@ -930,8 +943,6 @@ WMFReader::DecodeVideoFrame(bool &aKeyframeSkip,
   if (!sample) {
     if ((flags & MF_SOURCE_READERF_ENDOFSTREAM)) {
       LOG("WMFReader; Null sample after video decode, at end of stream");
-      // End the stream.
-      mVideoQueue.Finish();
       return false;
     }
     LOG("WMFReader; Null sample after video decode. Maybe insufficient data...");
@@ -946,7 +957,6 @@ WMFReader::DecodeVideoFrame(bool &aKeyframeSkip,
     if (FAILED(hr) ||
         FAILED(ConfigureVideoFrameGeometry(mediaType))) {
       NS_WARNING("Failed to reconfigure video media type");
-      mVideoQueue.Finish();
       return false;
     }
   }
@@ -977,23 +987,11 @@ WMFReader::DecodeVideoFrame(bool &aKeyframeSkip,
 
   if ((flags & MF_SOURCE_READERF_ENDOFSTREAM)) {
     // End of stream.
-    mVideoQueue.Finish();
     LOG("End of video stream");
     return false;
   }
 
-  NotifyBytesConsumed();
-
   return true;
-}
-
-void
-WMFReader::NotifyBytesConsumed()
-{
-  uint32_t bytesConsumed = mByteStream->GetAndResetBytesConsumedCount();
-  if (bytesConsumed > 0) {
-    mDecoder->NotifyBytesConsumed(bytesConsumed);
-  }
 }
 
 nsresult

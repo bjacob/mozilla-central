@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef Object_h___
-#define Object_h___
+#ifndef builtin_Object_h
+#define builtin_Object_h
 
 #include "jsobj.h"
 
@@ -14,10 +14,16 @@ namespace js {
 extern const JSFunctionSpec object_methods[];
 extern const JSFunctionSpec object_static_methods[];
 
-/* Object constructor native. Exposed only so the JIT can know its address. */
-extern JSBool
+// Object constructor native. Exposed only so the JIT can know its address.
+bool
 obj_construct(JSContext *cx, unsigned argc, js::Value *vp);
+
+#if JS_HAS_TOSOURCE
+// Object.prototype.toSource. Function.prototype.toSource and uneval use this.
+JSString *
+ObjectToSource(JSContext *cx, HandleObject obj);
+#endif // JS_HAS_TOSOURCE
 
 } /* namespace js */
 
-#endif
+#endif /* builtin_Object_h */

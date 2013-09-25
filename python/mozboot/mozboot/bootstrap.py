@@ -11,6 +11,7 @@ import sys
 from mozboot.centos import CentOSBootstrapper
 from mozboot.debian import DebianBootstrapper
 from mozboot.fedora import FedoraBootstrapper
+from mozboot.freebsd import FreeBSDBootstrapper
 from mozboot.gentoo import GentooBootstrapper
 from mozboot.mint import MintBootstrapper
 from mozboot.osx import OSXBootstrapper
@@ -52,6 +53,8 @@ class Bootstrapper(object):
                 cls = MintBootstrapper
             elif distro == 'Ubuntu':
                 cls = UbuntuBootstrapper
+            elif distro == 'Elementary':
+                cls = UbuntuBootstrapper
             else:
                 raise NotImplementedError('Bootstrap support for this Linux '
                                           'distro not yet available.')
@@ -70,11 +73,17 @@ class Bootstrapper(object):
             cls = OpenBSDBootstrapper
             args['version'] = platform.uname()[2]
 
+        elif sys.platform.startswith('freebsd'):
+            cls = FreeBSDBootstrapper
+            args['version'] = platform.release()
+
         if cls is None:
             raise NotImplementedError('Bootstrap support is not yet available '
                                       'for your OS.')
 
         instance = cls(**args)
         instance.install_system_packages()
+        instance.ensure_mercurial_modern()
+        instance.ensure_python_modern()
 
         print(FINISHED)

@@ -39,4 +39,3 @@ if CONFIG['DEHYDRA_PATH']:
     DIRS += ['analysis']
 
 MODULE = 'xpcom'
-

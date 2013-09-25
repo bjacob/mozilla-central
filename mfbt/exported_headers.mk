@@ -9,6 +9,9 @@
 EXPORTS_NAMESPACES += mozilla
 
 EXPORTS_mozilla += \
+  Alignment.h \
+  AllocPolicy.h \
+  Array.h \
   Assertions.h \
   Atomics.h \
   Attributes.h \
@@ -25,27 +28,33 @@ EXPORTS_mozilla += \
   FloatingPoint.h \
   GuardObjects.h \
   HashFunctions.h \
+  IntegerPrintfMacros.h \
   Likely.h \
   LinkedList.h \
   MathAlgorithms.h \
+  Maybe.h \
   MemoryChecking.h \
-  MSStdInt.h \
+  MemoryReporting.h \
+  MSIntTypes.h \
+  Move.h \
   NullPtr.h \
   PodOperations.h \
   Poison.h \
   Range.h \
   RangedPtr.h \
+  ReentrancyGuard.h \
   RefgraphInstrumentation.h \
   RefgraphSTLAllocatorBypassingInstrumentation.h \
   RefPtr.h \
   Scoped.h \
   SHA1.h \
   SplayTree.h \
-  StandardInteger.h \
+  TemplateLib.h \
   ThreadLocal.h \
   TypedEnum.h \
   Types.h \
   TypeTraits.h \
   Util.h \
+  Vector.h \
   WeakPtr.h \
   $(NULL)

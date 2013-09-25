@@ -144,11 +144,16 @@ const DEFAULT_SNIPPETS_URLS = [
 
 const SNIPPETS_UPDATE_INTERVAL_MS = 86400000; // 1 Day.
 
+// IndexedDB storage constants.
+const DATABASE_NAME = "abouthome";
+const DATABASE_VERSION = 1;
+const SNIPPETS_OBJECTSTORE_NAME = "snippets";
+
 // This global tracks if the page has been set up before, to prevent double inits
 let gInitialized = false;
 let gObserver = new MutationObserver(function (mutations) {
   for (let mutation of mutations) {
-    if (mutation.attributeName == "searchEngineURL") {
+    if (mutation.attributeName == "searchEngineName") {
       setupSearchEngine();
       if (!gInitialized) {
         ensureSnippetsMapThen(loadSnippets);
@@ -165,6 +170,10 @@ window.addEventListener("pageshow", function () {
   window.gObserver.observe(document.documentElement, { attributes: true });
   fitToWidth();
   window.addEventListener("resize", fitToWidth);
+
+  // Ask chrome to update snippets.
+  var event = new CustomEvent("AboutHomeLoad", {bubbles:true});
+  document.dispatchEvent(event);
 });
 
 window.addEventListener("pagehide", function() {
@@ -200,63 +209,103 @@ function ensureSnippetsMapThen(aCallback)
     return;
   }
 
-  // TODO (bug 789348): use a real asynchronous storage here.  This setTimeout
-  // is done just to catch bugs with the asynchronous behavior.
-  setTimeout(function() {
-    // Populate the cache from the persistent storage.
-    let cache = new Map();
-    for (let key of [ "snippets-last-update",
-                      "snippets-cached-version",
-                      "snippets" ]) {
-      cache.set(key, localStorage[key]);
+  let invokeCallbacks = function () {
+    if (!gSnippetsMap) {
+      gSnippetsMap = Object.freeze(new Map());
     }
-
-    gSnippetsMap = Object.freeze({
-      get: function (aKey) cache.get(aKey),
-      set: function (aKey, aValue) {
-        localStorage[aKey] = aValue;
-        return cache.set(aKey, aValue);
-      },
-      has: function(aKey) cache.has(aKey),
-      delete: function(aKey) {
-        delete localStorage[aKey];
-        return cache.delete(aKey);
-      },
-      clear: function() {
-        localStorage.clear();
-        return cache.clear();
-      },
-      get size() cache.size
-    });
 
     for (let callback of gSnippetsMapCallbacks) {
       callback(gSnippetsMap);
     }
     gSnippetsMapCallbacks.length = 0;
-  }, 0);
+  }
+
+  let openRequest = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+
+  openRequest.onerror = function (event) {
+    // Try to delete the old database so that we can start this process over
+    // next time.
+    indexedDB.deleteDatabase(DATABASE_NAME);
+    invokeCallbacks();
+  };
+
+  openRequest.onupgradeneeded = function (event) {
+    let db = event.target.result;
+    if (!db.objectStoreNames.contains(SNIPPETS_OBJECTSTORE_NAME)) {
+      db.createObjectStore(SNIPPETS_OBJECTSTORE_NAME);
+    }
+  }
+
+  openRequest.onsuccess = function (event) {
+    let db = event.target.result;
+
+    db.onerror = function (event) {
+      invokeCallbacks();
+    }
+
+    db.onversionchange = function (event) {
+      event.target.close();
+      invokeCallbacks();
+    }
+
+    let cache = new Map();
+    let cursorRequest = db.transaction(SNIPPETS_OBJECTSTORE_NAME)
+                          .objectStore(SNIPPETS_OBJECTSTORE_NAME).openCursor();
+    cursorRequest.onerror = function (event) {
+      invokeCallbacks();
+    }
+
+    cursorRequest.onsuccess = function(event) {
+      let cursor = event.target.result;
+
+      // Populate the cache from the persistent storage.
+      if (cursor) {
+        cache.set(cursor.key, cursor.value);
+        cursor.continue();
+        return;
+      }
+
+      // The cache has been filled up, create the snippets map.
+      gSnippetsMap = Object.freeze({
+        get: function (aKey) cache.get(aKey),
+        set: function (aKey, aValue) {
+          db.transaction(SNIPPETS_OBJECTSTORE_NAME, "readwrite")
+            .objectStore(SNIPPETS_OBJECTSTORE_NAME).put(aValue, aKey);
+          return cache.set(aKey, aValue);
+        },
+        has: function (aKey) cache.has(aKey),
+        delete: function (aKey) {
+          db.transaction(SNIPPETS_OBJECTSTORE_NAME, "readwrite")
+            .objectStore(SNIPPETS_OBJECTSTORE_NAME).delete(aKey);
+          return cache.delete(aKey);
+        },
+        clear: function () {
+          db.transaction(SNIPPETS_OBJECTSTORE_NAME, "readwrite")
+            .objectStore(SNIPPETS_OBJECTSTORE_NAME).clear();
+          return cache.clear();
+        },
+        get size() cache.size
+      });
+
+      setTimeout(invokeCallbacks, 0);
+    }
+  }
 }
 
 function onSearchSubmit(aEvent)
 {
   let searchTerms = document.getElementById("searchText").value;
-  let searchURL = document.documentElement.getAttribute("searchEngineURL");
+  let engineName = document.documentElement.getAttribute("searchEngineName");
 
-  if (searchURL && searchTerms.length > 0) {
-    const SEARCH_TOKENS = {
-      "_searchTerms_": encodeURIComponent(searchTerms)
-    }
-    for (let key in SEARCH_TOKENS) {
-      searchURL = searchURL.replace(key, SEARCH_TOKENS[key]);
-    }
-
-    // Send an event that a search was performed. This was originally
-    // added so Firefox Health Report could record that a search from
-    // about:home had occurred.
-    let engineName = document.documentElement.getAttribute("searchEngineName");
-    let event = new CustomEvent("AboutHomeSearchEvent", {detail: engineName});
+  if (engineName && searchTerms.length > 0) {
+    // Send an event that will perform a search and Firefox Health Report will
+    // record that a search from about:home has occurred.
+    let eventData = JSON.stringify({
+      engineName: engineName,
+      searchTerms: searchTerms
+    });
+    let event = new CustomEvent("AboutHomeSearchEvent", {detail: eventData});
     document.dispatchEvent(event);
-
-    window.location.href = searchURL;
   }
 
   aEvent.preventDefault();
@@ -293,6 +342,15 @@ function setupSearchEngine()
 }
 
 /**
+ * Inform the test harness that we're done loading the page.
+ */
+function loadSucceeded()
+{
+  var event = new CustomEvent("AboutHomeLoadSnippetsSucceeded", {bubbles:true});
+  document.dispatchEvent(event);
+}
+
+/**
  * Update the local snippets from the remote storage, then show them through
  * showSnippets.
  */
@@ -300,6 +358,10 @@ function loadSnippets()
 {
   if (!gSnippetsMap)
     throw new Error("Snippets map has not properly been initialized");
+
+  // Allow tests to modify the snippets map before using it.
+  var event = new CustomEvent("AboutHomeLoadSnippets", {bubbles:true});
+  document.dispatchEvent(event);
 
   // Check cached snippets version.
   let cachedVersion = gSnippetsMap.get("snippets-cached-version") || 0;
@@ -321,6 +383,7 @@ function loadSnippets()
       xhr.open("GET", updateURL, true);
     } catch (ex) {
       showSnippets();
+      loadSucceeded();
       return;
     }
     // Even if fetching should fail we don't want to spam the server, thus
@@ -336,10 +399,12 @@ function loadSnippets()
         gSnippetsMap.set("snippets-cached-version", currentVersion);
       }
       showSnippets();
+      loadSucceeded();
     };
     xhr.send(null);
   } else {
     showSnippets();
+    loadSucceeded();
   }
 }
 
