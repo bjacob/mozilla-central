@@ -924,7 +924,7 @@ RefgraphVertex::BackWeakEdge(uint32_t index) const
 
 already_AddRefed<RefgraphController>
 RefgraphController::Constructor(mozilla::dom::GlobalObject& aGlobal, mozilla::ErrorResult&) {
-  nsRefPtr<RefgraphController> r = new RefgraphController(aGlobal.Get());
+  nsRefPtr<RefgraphController> r = new RefgraphController(aGlobal.GetAsSupports());
   return r.forget();
 }
 
@@ -958,13 +958,7 @@ RefgraphController::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
     return RefgraphControllerBinding::Wrap(cx, scope, this);
 }
 
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphController)
-NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphController)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_1(RefgraphController, mParent)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphController, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphController, Release)
@@ -980,13 +974,7 @@ Refgraph::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
     return RefgraphBinding::Wrap(cx, scope, this);
 }
 
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Refgraph)
-NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Refgraph)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_1(Refgraph, mParent)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(Refgraph, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(Refgraph, Release)
@@ -997,11 +985,7 @@ RefgraphTypeSearchResult::WrapObject(JSContext *cx, JS::Handle<JSObject*> scope)
     return RefgraphTypeSearchResultBinding::Wrap(cx, scope, this);
 }
 
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphTypeSearchResult)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphTypeSearchResult)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_1(RefgraphTypeSearchResult, mDummy)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphTypeSearchResult, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphTypeSearchResult, Release)
@@ -1017,13 +1001,7 @@ RefgraphVertex::GetParentObject() const {
   return mParent->GetParentObject();
 }
 
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphVertex)
-NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphVertex)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_1(RefgraphVertex, mParent)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphVertex, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphVertex, Release)
@@ -1039,13 +1017,7 @@ RefgraphEdge::GetParentObject() const {
   return mParent->GetParentObject();
 }
 
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphEdge)
-NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphEdge)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_1(RefgraphEdge, mParent)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdge, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdge, Release)
@@ -1061,13 +1033,7 @@ RefgraphEdgeRefInfo::GetParentObject() const {
   return mParent->GetParentObject();
 }
 
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphEdgeRefInfo)
-NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphEdgeRefInfo)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_1(RefgraphEdgeRefInfo, mParent)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphEdgeRefInfo, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphEdgeRefInfo, Release)
@@ -1083,13 +1049,7 @@ RefgraphCycle::GetParentObject() const {
   return mParent->GetParentObject();
 }
 
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(RefgraphCycle)
-NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(RefgraphCycle)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_1(RefgraphCycle, mParent)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RefgraphCycle, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RefgraphCycle, Release)
@@ -1184,6 +1144,11 @@ public:
           MOZ_ASSERT(ret > 0);
           (void) ret;
         }
+        return NS_OK;
+    }
+    NS_IMETHOD NoteWeakMapEntry(uint64_t aMap, uint64_t aKey,
+                                uint64_t aKeyDelegate, uint64_t aValue)
+    {
         return NS_OK;
     }
     NS_IMETHOD BeginResults()

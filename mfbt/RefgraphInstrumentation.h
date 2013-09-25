@@ -10,7 +10,7 @@
 
 #include "mozmemory.h"
 
-#include "mozilla/StandardInteger.h"
+#include <stdint.h>
 #include "mozilla/Assertions.h"
 #include "mozilla/Types.h"
 #include "mozilla/NullPtr.h"

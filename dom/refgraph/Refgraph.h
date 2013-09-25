@@ -22,6 +22,7 @@ class RefgraphTypeSearchResult {
 
   uint32_t mObjectCount;
   nsString mTypeName;
+  nsRefPtr<nsISupports> mDummy;
 
 public:
 
