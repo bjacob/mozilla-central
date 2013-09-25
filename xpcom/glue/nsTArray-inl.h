@@ -33,9 +33,6 @@ const nsTArrayHeader* nsTArray_base<Alloc, Copy>::GetAutoArrayBufferUnsafe(size_
 
   // We don't support alignments greater than 8 bytes.
   NS_ABORT_IF_FALSE(elemAlign <= 4 || elemAlign == 8, "unsupported alignment.");
-  if (sizeof(void*) == 4 && elemAlign == 8) {
-    autoBuf = reinterpret_cast<const char*>(autoBuf) + 4;
-  }
 
   return reinterpret_cast<const Header*>(autoBuf);
 }
