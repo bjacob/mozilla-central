@@ -855,7 +855,6 @@ DumpProcessMemoryInfoToTempDir(const nsAString& aIdentifier)
 
     LOG("logging refgraph to %s", NS_ConvertUTF16toUTF8(tmpFilePath).get());
     refgraph::RefgraphController(nullptr).SnapshotToFile(tmpFilePath);
-    return NS_OK;
   }
 
 #ifdef MOZ_DMD
