@@ -4,16 +4,18 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'dom'
-
-CPP_SOURCES += [
+SOURCES += [
     'AndroidLocationProvider.cpp',
     'nsHapticFeedback.cpp',
 ]
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-LIBRARY_NAME = 'domsystemandroid_s'
+FINAL_LIBRARY = 'gklayout'
+LOCAL_INCLUDES += [
+    '/content/events/src',
+    '/dom/src/geolocation',
+]
 

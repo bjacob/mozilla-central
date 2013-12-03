@@ -203,7 +203,7 @@ class RunState
 
     JSScript *script() const { return script_; }
 
-    virtual StackFrame *pushInterpreterFrame(JSContext *cx, FrameGuard *fg) = 0;
+    virtual StackFrame *pushInterpreterFrame(JSContext *cx) = 0;
     virtual void setReturnValue(Value v) = 0;
 
   private:
@@ -240,7 +240,7 @@ class ExecuteState : public RunState
     JSObject *scopeChain() const { return scopeChain_; }
     ExecuteType type() const { return type_; }
 
-    virtual StackFrame *pushInterpreterFrame(JSContext *cx, FrameGuard *fg);
+    virtual StackFrame *pushInterpreterFrame(JSContext *cx);
 
     virtual void setReturnValue(Value v) {
         if (result_)
@@ -269,7 +269,7 @@ class InvokeState : public RunState
     bool constructing() const { return InitialFrameFlagsAreConstructing(initial_); }
     CallArgs &args() const { return args_; }
 
-    virtual StackFrame *pushInterpreterFrame(JSContext *cx, FrameGuard *fg);
+    virtual StackFrame *pushInterpreterFrame(JSContext *cx);
 
     virtual void setReturnValue(Value v) {
         args_.rval().set(v);
@@ -288,7 +288,7 @@ class GeneratorState : public RunState
     GeneratorState(JSContext *cx, JSGenerator *gen, JSGeneratorState futureState);
     ~GeneratorState();
 
-    virtual StackFrame *pushInterpreterFrame(JSContext *cx, FrameGuard *fg);
+    virtual StackFrame *pushInterpreterFrame(JSContext *cx);
     virtual void setReturnValue(Value) { }
 
     JSGenerator *gen() const { return gen_; }
@@ -355,6 +355,9 @@ bool
 GetProperty(JSContext *cx, HandleValue value, HandlePropertyName name, MutableHandleValue vp);
 
 bool
+CallProperty(JSContext *cx, HandleValue value, HandlePropertyName name, MutableHandleValue vp);
+
+bool
 GetScopeName(JSContext *cx, HandleObject obj, HandlePropertyName name, MutableHandleValue vp);
 
 bool
@@ -382,34 +385,22 @@ InitElementArray(JSContext *cx, jsbytecode *pc,
                  HandleObject obj, uint32_t index, HandleValue value);
 
 bool
-AddValues(JSContext *cx, HandleScript script, jsbytecode *pc,
-          MutableHandleValue lhs, MutableHandleValue rhs,
-          Value *res);
+AddValues(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Value *res);
 
 bool
-SubValues(JSContext *cx, HandleScript script, jsbytecode *pc,
-          MutableHandleValue lhs, MutableHandleValue rhs,
-          Value *res);
+SubValues(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Value *res);
 
 bool
-MulValues(JSContext *cx, HandleScript script, jsbytecode *pc,
-          MutableHandleValue lhs, MutableHandleValue rhs,
-          Value *res);
+MulValues(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Value *res);
 
 bool
-DivValues(JSContext *cx, HandleScript script, jsbytecode *pc,
-          MutableHandleValue lhs, MutableHandleValue rhs,
-          Value *res);
+DivValues(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Value *res);
 
 bool
-ModValues(JSContext *cx, HandleScript script, jsbytecode *pc,
-          MutableHandleValue lhs, MutableHandleValue rhs,
-          Value *res);
+ModValues(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Value *res);
 
 bool
-UrshValues(JSContext *cx, HandleScript script, jsbytecode *pc,
-           MutableHandleValue lhs, MutableHandleValue rhs,
-           Value *res);
+UrshValues(JSContext *cx, MutableHandleValue lhs, MutableHandleValue rhs, Value *res);
 
 template <bool strict>
 bool

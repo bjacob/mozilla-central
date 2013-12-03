@@ -7,12 +7,17 @@
 #ifndef gc_GCInternals_h
 #define gc_GCInternals_h
 
+#include "jscntxt.h"
 #include "jsworkers.h"
 
+#include "gc/Zone.h"
 #include "vm/Runtime.h"
 
 namespace js {
 namespace gc {
+
+void
+MarkPersistentRootedChains(JSTracer *trc);
 
 void
 MarkRuntime(JSTracer *trc, bool useSavedRoots = false);
@@ -20,11 +25,13 @@ MarkRuntime(JSTracer *trc, bool useSavedRoots = false);
 void
 BufferGrayRoots(GCMarker *gcmarker);
 
-class AutoCopyFreeListToArenas {
+class AutoCopyFreeListToArenas
+{
     JSRuntime *runtime;
+    ZoneSelector selector;
 
   public:
-    AutoCopyFreeListToArenas(JSRuntime *rt);
+    AutoCopyFreeListToArenas(JSRuntime *rt, ZoneSelector selector);
     ~AutoCopyFreeListToArenas();
 };
 
@@ -37,20 +44,21 @@ struct AutoFinishGC
  * This class should be used by any code that needs to exclusive access to the
  * heap in order to trace through it...
  */
-class AutoTraceSession {
+class AutoTraceSession
+{
   public:
     AutoTraceSession(JSRuntime *rt, HeapState state = Tracing);
     ~AutoTraceSession();
 
   protected:
+    AutoLockForExclusiveAccess lock;
     JSRuntime *runtime;
 
   private:
     AutoTraceSession(const AutoTraceSession&) MOZ_DELETE;
     void operator=(const AutoTraceSession&) MOZ_DELETE;
 
-    js::HeapState prevState;
-    AutoPauseWorkersForGC pause;
+    HeapState prevState;
 };
 
 struct AutoPrepareForTracing
@@ -59,7 +67,7 @@ struct AutoPrepareForTracing
     AutoTraceSession session;
     AutoCopyFreeListToArenas copy;
 
-    AutoPrepareForTracing(JSRuntime *rt);
+    AutoPrepareForTracing(JSRuntime *rt, ZoneSelector selector);
 };
 
 class IncrementalSafety
@@ -69,14 +77,14 @@ class IncrementalSafety
     IncrementalSafety(const char *reason) : reason_(reason) {}
 
   public:
-    static IncrementalSafety Safe() { return IncrementalSafety(NULL); }
+    static IncrementalSafety Safe() { return IncrementalSafety(nullptr); }
     static IncrementalSafety Unsafe(const char *reason) { return IncrementalSafety(reason); }
 
     typedef void (IncrementalSafety::* ConvertibleToBool)();
     void nonNull() {}
 
     operator ConvertibleToBool() const {
-        return reason_ == NULL ? &IncrementalSafety::nonNull : 0;
+        return reason_ == nullptr ? &IncrementalSafety::nonNull : 0;
     }
 
     const char *reason() {

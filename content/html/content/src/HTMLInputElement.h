@@ -32,6 +32,7 @@ namespace mozilla {
 namespace dom {
 
 class Date;
+class DirPickerFileListBuilderTask;
 
 class UploadLastDir MOZ_FINAL : public nsIObserver, public nsSupportsWeakReference {
 public:
@@ -87,6 +88,8 @@ class HTMLInputElement MOZ_FINAL : public nsGenericHTMLFormElementWithState,
                                    public nsITimerCallback,
                                    public nsIConstraintValidation
 {
+  friend class DirPickerFileListBuilderTask;
+
 public:
   using nsIConstraintValidation::GetValidationMessage;
   using nsIConstraintValidation::CheckValidity;
@@ -105,6 +108,7 @@ public:
 
   virtual int32_t TabIndexDefault() MOZ_OVERRIDE;
   using nsGenericHTMLElement::Focus;
+  virtual void Blur(ErrorResult& aError) MOZ_OVERRIDE;
   virtual void Focus(ErrorResult& aError) MOZ_OVERRIDE;
 
   // nsIDOMHTMLInputElement
@@ -147,8 +151,8 @@ public:
   virtual nsresult PreHandleEvent(nsEventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
   virtual nsresult PostHandleEvent(nsEventChainPostVisitor& aVisitor) MOZ_OVERRIDE;
   void PostHandleEventForRangeThumb(nsEventChainPostVisitor& aVisitor);
-  void StartRangeThumbDrag(nsGUIEvent* aEvent);
-  void FinishRangeThumbDrag(nsGUIEvent* aEvent = nullptr);
+  void StartRangeThumbDrag(WidgetGUIEvent* aEvent);
+  void FinishRangeThumbDrag(WidgetGUIEvent* aEvent = nullptr);
   void CancelRangeThumbDrag(bool aIsForUserEvent = true);
   void SetValueOfRangeForUserEvent(Decimal aValue);
 
@@ -181,8 +185,8 @@ public:
   NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) MOZ_OVERRIDE;
   NS_IMETHOD CreateEditor() MOZ_OVERRIDE;
   NS_IMETHOD_(nsIContent*) GetRootEditorNode() MOZ_OVERRIDE;
-  NS_IMETHOD_(nsIContent*) CreatePlaceholderNode() MOZ_OVERRIDE;
-  NS_IMETHOD_(nsIContent*) GetPlaceholderNode() MOZ_OVERRIDE;
+  NS_IMETHOD_(Element*) CreatePlaceholderNode() MOZ_OVERRIDE;
+  NS_IMETHOD_(Element*) GetPlaceholderNode() MOZ_OVERRIDE;
   NS_IMETHOD_(void) UpdatePlaceholderVisibility(bool aNotify) MOZ_OVERRIDE;
   NS_IMETHOD_(bool) GetPlaceholderVisibility() MOZ_OVERRIDE;
   NS_IMETHOD_(void) InitializeKeyboardEventListeners() MOZ_OVERRIDE;
@@ -402,12 +406,8 @@ public:
   nsDOMFileList* GetFiles();
 
   void OpenDirectoryPicker(ErrorResult& aRv);
+  void CancelDirectoryPickerScanIfRunning();
 
-  void ResetProgressCounters()
-  {
-    mFileListProgress = 0;
-    mLastFileListProgress = 0;
-  }
   void StartProgressEventTimer();
   void MaybeDispatchProgressEvent(bool aFinalProgress);
   void DispatchProgressEvent(const nsAString& aType,
@@ -575,6 +575,13 @@ public:
   void SetType(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::type, aValue, aRv);
+    if (aValue.Equals(NS_LITERAL_STRING("number"))) {
+      // For NS_FORM_INPUT_NUMBER we rely on having frames to process key
+      // events. Make sure we have them in case someone changes the type of
+      // this element to "number" and then expects to be able to send key
+      // events to it (type changes are rare, so not a big perf issue):
+      FlushFrames();
+    }
   }
 
   // XPCOM GetDefaultValue() is OK
@@ -669,6 +676,17 @@ public:
 
   void MozSetFileNameArray(const Sequence< nsString >& aFileNames);
 
+  HTMLInputElement* GetOwnerNumberControl();
+
+  void StartNumberControlSpinnerSpin();
+  void StopNumberControlSpinnerSpin();
+
+  /**
+   * The callback function used by the nsRepeatService that we use to spin the
+   * spinner for <input type=number>.
+   */
+  static void HandleNumberControlSpin(void* aData);
+
   bool MozIsTextField(bool aExcludePassword);
 
   nsIEditor* GetEditor();
@@ -676,13 +694,6 @@ public:
   // XPCOM SetUserInput() is OK
 
   // XPCOM GetPhonetic() is OK
-
-  void SetFileListProgress(uint32_t mFileCount)
-  {
-    MOZ_ASSERT(!NS_IsMainThread(),
-               "Why are we calling this on the main thread?");
-    mFileListProgress = mFileCount;
-  }
 
 protected:
   virtual JSObject* WrapNode(JSContext* aCx,
@@ -1094,9 +1105,13 @@ protected:
    */
   static bool IsExperimentalMobileType(uint8_t aType)
   {
-    return aType == NS_FORM_INPUT_NUMBER || aType == NS_FORM_INPUT_DATE ||
-           aType == NS_FORM_INPUT_TIME;
+    return aType == NS_FORM_INPUT_DATE || aType == NS_FORM_INPUT_TIME;
   }
+
+  /**
+   * Flushes the layout frame tree to make sure we have up-to-date frames.
+   */
+  void FlushFrames();
 
   /**
    * Returns true if the element should prevent dispatching another DOMActivate.
@@ -1162,6 +1177,8 @@ protected:
 
   nsRefPtr<nsDOMFileList>  mFileList;
 
+  nsRefPtr<DirPickerFileListBuilderTask> mDirPickerFileListBuilderTask;
+
   nsString mStaticDocFileList;
   
   /** 
@@ -1203,19 +1220,6 @@ protected:
   static const Decimal kStepAny;
 
   /**
-   * The number of files added to the FileList being built off-main-thread when
-   * mType == NS_FORM_INPUT_FILE and the user selects a directory. This is set
-   * off the main thread, read on main thread.
-   */
-  mozilla::Atomic<uint32_t> mFileListProgress;
-
-  /**
-   * The number of files added to the FileList at the time the last progress
-   * event was fired.
-   */
-  uint32_t mLastFileListProgress;
-
-  /**
    * The type of this input (<input type=...>) as an integer.
    * @see nsIFormControl.h (specifically NS_FORM_INPUT_*)
    */
@@ -1236,8 +1240,12 @@ protected:
   bool                     mHasRange            : 1;
   bool                     mIsDraggingRange     : 1;
   bool                     mProgressTimerIsActive : 1;
+  bool                     mNumberControlSpinnerIsSpinning : 1;
+  bool                     mNumberControlSpinnerSpinsUp : 1;
 
 private:
+  static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
+                                    nsRuleData* aData);
 
   /**
    * Returns true if this input's type will fire a DOM "change" event when it
@@ -1258,7 +1266,8 @@ private:
 
   static bool MayFireChangeOnBlur(uint8_t aType) {
     return IsSingleLineTextControl(false, aType) ||
-           aType == NS_FORM_INPUT_RANGE;
+           aType == NS_FORM_INPUT_RANGE ||
+           aType == NS_FORM_INPUT_NUMBER;
   }
 
   struct nsFilePickerFilter {

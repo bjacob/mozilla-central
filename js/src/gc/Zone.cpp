@@ -11,7 +11,7 @@
 #ifdef JS_ION
 #include "jit/BaselineJIT.h"
 #include "jit/Ion.h"
-#include "jit/IonCompartment.h"
+#include "jit/JitCompartment.h"
 #endif
 #include "vm/Debugger.h"
 #include "vm/Runtime.h"
@@ -38,7 +38,9 @@ JS::Zone::Zone(JSRuntime *rt)
     scheduledForDestruction(false),
     maybeAlive(true),
     gcMallocBytes(0),
+    gcMallocGCTriggered(false),
     gcGrayRoots(),
+    data(nullptr),
     types(this)
 {
     /* Ensure that there are no vtables to mess us up here. */
@@ -51,7 +53,7 @@ JS::Zone::Zone(JSRuntime *rt)
 Zone::~Zone()
 {
     if (this == runtimeFromMainThread()->systemZone)
-        runtimeFromMainThread()->systemZone = NULL;
+        runtimeFromMainThread()->systemZone = nullptr;
 }
 
 bool
@@ -111,6 +113,7 @@ void
 Zone::resetGCMallocBytes()
 {
     gcMallocBytes = ptrdiff_t(gcMaxMallocBytes);
+    gcMallocGCTriggered = false;
 }
 
 void
@@ -127,7 +130,8 @@ Zone::setGCMaxMallocBytes(size_t value)
 void
 Zone::onTooMuchMalloc()
 {
-    TriggerZoneGC(this, gcreason::TOO_MUCH_MALLOC);
+    if (!gcMallocGCTriggered)
+        gcMallocGCTriggered = TriggerZoneGC(this, JS::gcreason::TOO_MUCH_MALLOC);
 }
 
 void
@@ -168,8 +172,8 @@ Zone::sweepBreakpoints(FreeOp *fop)
             continue;
         bool scriptGone = IsScriptAboutToBeFinalized(&script);
         JS_ASSERT(script == i.get<JSScript>());
-        for (unsigned i = 0; i < script->length; i++) {
-            BreakpointSite *site = script->getBreakpointSite(script->code + i);
+        for (unsigned i = 0; i < script->length(); i++) {
+            BreakpointSite *site = script->getBreakpointSite(script->offsetToPC(i));
             if (!site)
                 continue;
             Breakpoint *nextbp;
@@ -183,7 +187,7 @@ Zone::sweepBreakpoints(FreeOp *fop)
 }
 
 void
-Zone::discardJitCode(FreeOp *fop, bool discardConstraints)
+Zone::discardJitCode(FreeOp *fop)
 {
 #ifdef JS_ION
     if (isPreservingCode()) {
@@ -222,21 +226,30 @@ Zone::discardJitCode(FreeOp *fop, bool discardConstraints)
             script->resetUseCount();
         }
 
-        for (CompartmentsInZoneIter comp(this); !comp.done(); comp.next()) {
-            /* Free optimized baseline stubs. */
-            if (comp->ionCompartment())
-                comp->ionCompartment()->optimizedStubSpace()->free();
-
-            comp->types.sweepCompilerOutputs(fop, discardConstraints);
-        }
+        for (CompartmentsInZoneIter comp(this); !comp.done(); comp.next())
+            jit::FinishDiscardJitCode(fop, comp);
     }
 #endif
+}
+
+uint64_t
+Zone::gcNumber()
+{
+    // Zones in use by exclusive threads are not collected, and threads using
+    // them cannot access the main runtime's gcNumber without racing.
+    return usedByExclusiveThread ? 0 : runtimeFromMainThread()->gcNumber;
 }
 
 JS::Zone *
 js::ZoneOfObject(const JSObject &obj)
 {
     return obj.zone();
+}
+
+JS::Zone *
+js::ZoneOfObjectFromAnyThread(const JSObject &obj)
+{
+    return obj.zoneFromAnyThread();
 }
 
 

@@ -31,7 +31,6 @@
 #include "nsIXPConnect.h"
 #include "mozilla/unused.h"
 #include "nsContentUtils.h" // for nsAutoScriptBlocker
-#include "nsIMemoryReporter.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "nsPrintfCString.h"
 #include "nsTHashtable.h"
@@ -84,7 +83,7 @@ struct VisitData {
   }
 
   VisitData(nsIURI* aURI,
-            nsIURI* aReferrer = NULL)
+            nsIURI* aReferrer = nullptr)
   : placeId(0)
   , visitId(0)
   , hidden(true)
@@ -395,7 +394,7 @@ GetIntFromJSObject(JSContext* aCtx,
   NS_ENSURE_ARG(JSVAL_IS_NUMBER(value));
 
   double num;
-  rc = JS_ValueToNumber(aCtx, value, &num);
+  rc = JS::ToNumber(aCtx, value, &num);
   NS_ENSURE_TRUE(rc, NS_ERROR_UNEXPECTED);
   NS_ENSURE_ARG(IntType(num) == num);
 
@@ -787,7 +786,7 @@ private:
 bool
 CanAddURI(nsIURI* aURI,
           const nsCString& aGUID = EmptyCString(),
-          mozIVisitInfoCallback* aCallback = NULL)
+          mozIVisitInfoCallback* aCallback = nullptr)
 {
   nsNavHistory* navHistory = nsNavHistory::GetHistoryService();
   NS_ENSURE_TRUE(navHistory, false);
@@ -838,7 +837,7 @@ public:
    */
   static nsresult Start(mozIStorageConnection* aConnection,
                         nsTArray<VisitData>& aPlaces,
-                        mozIVisitInfoCallback* aCallback = NULL)
+                        mozIVisitInfoCallback* aCallback = nullptr)
   {
     MOZ_ASSERT(NS_IsMainThread(), "This should be called on the main thread");
     MOZ_ASSERT(aPlaces.Length() > 0, "Must pass a non-empty array!");
@@ -869,7 +868,7 @@ public:
     mozStorageTransaction transaction(mDBConn, false,
                                       mozIStorageConnection::TRANSACTION_IMMEDIATE);
 
-    VisitData* lastPlace = NULL;
+    VisitData* lastPlace = nullptr;
     for (nsTArray<VisitData>::size_type i = 0; i < mPlaces.Length(); i++) {
       VisitData& place = mPlaces.ElementAt(i);
       VisitData& referrer = mReferrers.ElementAt(i);
@@ -1872,7 +1871,7 @@ private:
  */
 void
 StoreAndNotifyEmbedVisit(VisitData& aPlace,
-                         mozIVisitInfoCallback* aCallback = NULL)
+                         mozIVisitInfoCallback* aCallback = nullptr)
 {
   MOZ_ASSERT(aPlace.transitionType == nsINavHistoryService::TRANSITION_EMBED,
              "Must only pass TRANSITION_EMBED visits to this!");
@@ -1908,32 +1907,19 @@ StoreAndNotifyEmbedVisit(VisitData& aPlace,
   (void)NS_DispatchToMainThread(event);
 }
 
-class HistoryLinksHashtableReporter MOZ_FINAL : public MemoryUniReporter
-{
-public:
-  HistoryLinksHashtableReporter()
-    : MemoryUniReporter("explicit/history-links-hashtable",
-                         KIND_HEAP, UNITS_BYTES,
-"Memory used by the hashtable that records changes to the visited state of "
-"links.")
-    {}
-private:
-  int64_t Amount() MOZ_OVERRIDE
-  {
-    History* history = History::GetService();
-    return history ? history->SizeOfIncludingThis(MallocSizeOf) : 0;
-  }
-};
-
 } // anonymous namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 //// History
 
-History* History::gService = NULL;
+History* History::gService = nullptr;
 
 History::History()
-  : mShuttingDown(false)
+  : MemoryUniReporter("explicit/history-links-hashtable",
+                      KIND_HEAP, UNITS_BYTES,
+"Memory used by the hashtable that records changes to the visited state of "
+"links.")
+  , mShuttingDown(false)
   , mShutdownMutex("History::mShutdownMutex")
   , mObservers(VISIT_OBSERVERS_INITIAL_CACHE_SIZE)
   , mRecentlyVisitedURIsNextIndex(0)
@@ -1946,19 +1932,22 @@ History::History()
   if (os) {
     (void)os->AddObserver(this, TOPIC_PLACES_SHUTDOWN, false);
   }
-
-  mReporter = new HistoryLinksHashtableReporter();
-  NS_RegisterMemoryReporter(mReporter);
 }
 
 History::~History()
 {
-  NS_UnregisterMemoryReporter(mReporter);
+  UnregisterWeakMemoryReporter(this);
 
   gService = nullptr;
 
   NS_ASSERTION(mObservers.Count() == 0,
                "Not all Links were removed before we disappear!");
+}
+
+void
+History::InitMemoryReporter()
+{
+  RegisterWeakMemoryReporter(this);
 }
 
 NS_IMETHODIMP
@@ -2232,6 +2221,12 @@ History::SizeOfEntryExcludingThis(KeyClass* aEntry, mozilla::MallocSizeOf aMallo
   return aEntry->array.SizeOfExcludingThis(aMallocSizeOf);
 }
 
+int64_t
+History::Amount()
+{
+  return SizeOfIncludingThis(MallocSizeOf);
+}
+
 size_t
 History::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOfThis)
 {
@@ -2261,6 +2256,7 @@ History::GetSingleton()
   if (!gService) {
     gService = new History();
     NS_ENSURE_TRUE(gService, nullptr);
+    gService->InitMemoryReporter();
   }
 
   NS_ADDREF(gService);
@@ -2471,19 +2467,19 @@ History::RegisterVisitedCallback(nsIURI* aURI,
     // database now.
     nsresult rv = VisitedQuery::Start(aURI);
 
-    // In IPC builds, we are passed a NULL Link from
-    // ContentParent::RecvStartVisitedQuery.  Since we won't be adding a NULL
-    // entry to our list of observers, and the code after this point assumes
-    // that aLink is non-NULL, we will need to return now.
+    // In IPC builds, we are passed a nullptr Link from
+    // ContentParent::RecvStartVisitedQuery.  Since we won't be adding a
+    // nullptr entry to our list of observers, and the code after this point
+    // assumes that aLink is non-nullptr, we will need to return now.
     if (NS_FAILED(rv) || !aLink) {
       // Remove our array from the hashtable so we don't keep it around.
       mObservers.RemoveEntry(aURI);
       return rv;
     }
   }
-  // In IPC builds, we are passed a NULL Link from
+  // In IPC builds, we are passed a nullptr Link from
   // ContentParent::RecvStartVisitedQuery.  All of our code after this point
-  // assumes aLink is non-NULL, so we have to return now.
+  // assumes aLink is non-nullptr, so we have to return now.
   else if (!aLink) {
     NS_ASSERTION(XRE_GetProcessType() == GeckoProcessType_Default,
                  "We should only ever get a null Link in the default process!");
@@ -2918,8 +2914,9 @@ History::Observe(nsISupports* aSubject, const char* aTopic,
 ////////////////////////////////////////////////////////////////////////////////
 //// nsISupports
 
-NS_IMPL_ISUPPORTS4(
+NS_IMPL_ISUPPORTS_INHERITED4(
   History
+, MemoryUniReporter
 , IHistory
 , nsIDownloadHistory
 , mozIAsyncHistory

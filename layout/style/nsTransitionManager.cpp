@@ -19,7 +19,7 @@
 #include "nsCSSPropertySet.h"
 #include "nsStyleAnimation.h"
 #include "nsEventDispatcher.h"
-#include "nsGUIEvent.h"
+#include "mozilla/ContentEvents.h"
 #include "mozilla/dom/Element.h"
 #include "nsIFrame.h"
 #include "Layers.h"
@@ -28,6 +28,7 @@
 #include "nsStyleChangeList.h"
 #include "nsStyleSet.h"
 #include "RestyleManager.h"
+#include "ActiveLayerTracker.h"
 
 using mozilla::TimeStamp;
 using mozilla::TimeDuration;
@@ -178,7 +179,8 @@ ElementTransitions::CanPerformOnCompositorThread(CanAnimateFlags aFlags) const
 
     if (!css::CommonElementAnimationData::CanAnimatePropertyOnCompositor(mElement,
                                                                          pt.mProperty,
-                                                                         aFlags)) {
+                                                                         aFlags) ||
+        css::CommonElementAnimationData::IsCompositorAnimationDisabledForFrame(frame)) {
       return false;
     }
     if (pt.mProperty == eCSSProperty_opacity) {
@@ -196,10 +198,10 @@ ElementTransitions::CanPerformOnCompositorThread(CanAnimateFlags aFlags) const
   // This transition can be done on the compositor.  Mark the frame as active, in
   // case we are able to throttle this transition.
   if (hasOpacity) {
-    frame->MarkLayersActive(nsChangeHint_UpdateOpacityLayer);
+    ActiveLayerTracker::NotifyAnimated(frame, eCSSProperty_opacity);
   }
   if (hasTransform) {
-    frame->MarkLayersActive(nsChangeHint_UpdateTransformLayer);
+    ActiveLayerTracker::NotifyAnimated(frame, eCSSProperty_transform);
   }
   return true;
 }
@@ -998,7 +1000,7 @@ nsTransitionManager::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 
 struct TransitionEventInfo {
   nsCOMPtr<nsIContent> mElement;
-  nsTransitionEvent mEvent;
+  InternalTransitionEvent mEvent;
 
   TransitionEventInfo(nsIContent *aElement, nsCSSProperty aProperty,
                       TimeDuration aDuration, const nsAString& aPseudoElement)
@@ -1009,7 +1011,7 @@ struct TransitionEventInfo {
   {
   }
 
-  // nsTransitionEvent doesn't support copy-construction, so we need
+  // InternalTransitionEvent doesn't support copy-construction, so we need
   // to ourselves in order to work with nsTArray
   TransitionEventInfo(const TransitionEventInfo &aOther)
     : mElement(aOther.mElement),

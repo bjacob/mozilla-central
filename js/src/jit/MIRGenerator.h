@@ -17,8 +17,10 @@
 
 #include "jit/CompileInfo.h"
 #include "jit/IonAllocPolicy.h"
-#include "jit/IonCompartment.h"
-#include "jit/PerfSpewer.h"
+#include "jit/JitCompartment.h"
+#ifdef JS_ION_PERF
+# include "jit/PerfSpewer.h"
+#endif
 #include "jit/RegisterSets.h"
 
 namespace js {
@@ -31,22 +33,19 @@ class MStart;
 class MIRGenerator
 {
   public:
-    MIRGenerator(JSCompartment *compartment, TempAllocator *temp, MIRGraph *graph, CompileInfo *info);
+    MIRGenerator(CompileCompartment *compartment, TempAllocator *alloc, MIRGraph *graph, CompileInfo *info);
 
-    TempAllocator &temp() {
-        return *temp_;
+    TempAllocator &alloc() {
+        return *alloc_;
     }
     MIRGraph &graph() {
         return *graph_;
     }
     bool ensureBallast() {
-        return temp().ensureBallast();
+        return alloc().ensureBallast();
     }
-    IonCompartment *ionCompartment() const {
-        return compartment->ionCompartment();
-    }
-    IonRuntime *ionRuntime() const {
-        return GetIonContext()->runtime->ionRuntime();
+    const JitRuntime *jitRuntime() const {
+        return GetIonContext()->runtime->jitRuntime();
     }
     CompileInfo &info() {
         return *info_;
@@ -54,7 +53,7 @@ class MIRGenerator
 
     template <typename T>
     T * allocate(size_t count = 1) {
-        return reinterpret_cast<T *>(temp().allocate(sizeof(T) * count));
+        return reinterpret_cast<T *>(alloc().allocate(sizeof(T) * count));
     }
 
     // Set an error state and prints a message. Returns false so errors can be
@@ -67,7 +66,7 @@ class MIRGenerator
     }
 
     bool instrumentedProfiling() {
-        return GetIonContext()->runtime->spsProfiler.enabled();
+        return GetIonContext()->runtime->spsProfiler().enabled();
     }
 
     // Whether the main thread is trying to cancel this build.
@@ -79,7 +78,7 @@ class MIRGenerator
     }
 
     bool compilingAsmJS() const {
-        return info_->script() == NULL;
+        return info_->script() == nullptr;
     }
 
     uint32_t maxAsmJSStackArgBytes() const {
@@ -124,11 +123,11 @@ class MIRGenerator
     }
 
   public:
-    JSCompartment *compartment;
+    CompileCompartment *compartment;
 
   protected:
     CompileInfo *info_;
-    TempAllocator *temp_;
+    TempAllocator *alloc_;
     JSFunction *fun_;
     uint32_t nslots_;
     MIRGraph *graph_;

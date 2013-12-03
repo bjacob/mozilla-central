@@ -97,13 +97,15 @@ struct LinearTerm
 class LinearSum
 {
   public:
-    LinearSum()
-      : constant_(0)
+    LinearSum(TempAllocator &alloc)
+      : terms_(alloc),
+        constant_(0)
     {
     }
 
     LinearSum(const LinearSum &other)
-      : constant_(other.constant_)
+      : terms_(other.terms_.allocPolicy()),
+        constant_(other.constant_)
     {
         terms_.appendAll(other.terms_);
     }
@@ -118,6 +120,8 @@ class LinearSum
     LinearTerm term(size_t i) const { return terms_[i]; }
 
     void print(Sprinter &sp) const;
+    void dump(FILE *) const;
+    void dump() const;
 
   private:
     Vector<LinearTerm, 2, IonAllocPolicy> terms_;
@@ -125,7 +129,7 @@ class LinearSum
 };
 
 bool
-AnalyzeNewScriptProperties(JSContext *cx, JSFunction *fun,
+AnalyzeNewScriptProperties(JSContext *cx, HandleFunction fun,
                            types::TypeObject *type, HandleObject baseobj,
                            Vector<types::TypeNewScript::Initializer> *initializerList);
 

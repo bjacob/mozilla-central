@@ -41,13 +41,13 @@ IsValidKeyPathString(JSContext* aCx, const nsAString& aKeyPath)
       return false;
     }
 
-    jsval stringVal;
+    JS::Rooted<JS::Value> stringVal(aCx);
     if (!xpc::StringToJsval(aCx, token, &stringVal)) {
       return false;
     }
 
     NS_ASSERTION(stringVal.toString(), "This should never happen");
-    JS::RootedString str(aCx, stringVal.toString());
+    JS::Rooted<JSString*> str(aCx, stringVal.toString());
 
     bool isIdentifier = false;
     if (!JS_IsIdentifier(aCx, str, &isIdentifier) || !isIdentifier) {
@@ -255,8 +255,9 @@ KeyPath::Parse(JSContext* aCx, const mozilla::dom::Sequence<nsString>& aStrings,
 
 // static
 nsresult
-KeyPath::Parse(JSContext* aCx, const JS::Value& aValue, KeyPath* aKeyPath)
+KeyPath::Parse(JSContext* aCx, const JS::Value& aValue_, KeyPath* aKeyPath)
 {
+  JS::Rooted<JS::Value> aValue(aCx, aValue_);
   KeyPath keyPath(0);
 
   aKeyPath->SetType(NONEXISTENT);
@@ -283,7 +284,7 @@ KeyPath::Parse(JSContext* aCx, const JS::Value& aValue, KeyPath* aKeyPath)
       JSString* jsstr;
       nsDependentJSString str;
       if (!JS_GetElement(aCx, obj, index, &val) ||
-          !(jsstr = JS_ValueToString(aCx, val)) ||
+          !(jsstr = JS::ToString(aCx, val)) ||
           !str.init(aCx, jsstr)) {
         return NS_ERROR_FAILURE;
       }
@@ -297,7 +298,7 @@ KeyPath::Parse(JSContext* aCx, const JS::Value& aValue, KeyPath* aKeyPath)
   else if (!JSVAL_IS_NULL(aValue) && !JSVAL_IS_VOID(aValue)) {
     JSString* jsstr;
     nsDependentJSString str;
-    if (!(jsstr = JS_ValueToString(aCx, aValue)) ||
+    if (!(jsstr = JS::ToString(aCx, aValue)) ||
         !str.init(aCx, jsstr)) {
       return NS_ERROR_FAILURE;
     }
@@ -382,7 +383,7 @@ KeyPath::ExtractKeyAsJSVal(JSContext* aCx, const JS::Value& aValue,
   }
 
   const uint32_t len = mStrings.Length();
-  JS::RootedObject arrayObj(aCx, JS_NewArrayObject(aCx, len, nullptr));
+  JS::Rooted<JSObject*> arrayObj(aCx, JS_NewArrayObject(aCx, len, nullptr));
   if (!arrayObj) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -502,7 +503,7 @@ KeyPath::ToJSVal(JSContext* aCx, JS::MutableHandle<JS::Value> aValue) const
     for (uint32_t i = 0; i < len; ++i) {
       JS::Rooted<JS::Value> val(aCx);
       nsString tmp(mStrings[i]);
-      if (!xpc::StringToJsval(aCx, tmp, val.address())) {
+      if (!xpc::StringToJsval(aCx, tmp, &val)) {
         return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
       }
 
@@ -517,7 +518,7 @@ KeyPath::ToJSVal(JSContext* aCx, JS::MutableHandle<JS::Value> aValue) const
 
   if (IsString()) {
     nsString tmp(mStrings[0]);
-    if (!xpc::StringToJsval(aCx, tmp, aValue.address())) {
+    if (!xpc::StringToJsval(aCx, tmp, aValue)) {
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
     }
     return NS_OK;

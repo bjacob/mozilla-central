@@ -76,6 +76,7 @@
 
     <!-- tabs -->
     <command id="cmd_newTab" oncommand="CommandUpdater.doCommand(this.id);"/>
+    <command id="cmd_newTabKey" oncommand="CommandUpdater.doCommand(this.id);"/>
     <command id="cmd_closeTab" oncommand="CommandUpdater.doCommand(this.id);"/>
     <command id="cmd_undoCloseTab" oncommand="CommandUpdater.doCommand(this.id);"/>
 #ifdef MOZ_SERVICES_SYNC
@@ -142,14 +143,18 @@
     <!-- development/testing -->
     <key id="key_console" key="&jsConsole.key;" modifiers="accel,shift" oncommand="PanelUI.show('console-container')"/>
     <key id="key_options" key="&optionsFlyout.key;" modifiers="accel,shift" oncommand="FlyoutPanelsUI.show('PrefsFlyoutPanel')" />
+    <key id="key_options" key="&aboutFlyout.key;" modifiers="accel,shift" oncommand="FlyoutPanelsUI.show('AboutFlyoutPanel')" />
+<!--
+Temporarily disabled until we can have sync prefs together with the
+Desktop browser's sync prefs.
 #ifdef MOZ_SERVICES_SYNC
     <key id="key_options" key="&syncFlyout.key;" modifiers="accel,shift" oncommand="FlyoutPanelsUI.show('SyncFlyoutPanel')" />
 #endif
-    <key id="key_options" key="&aboutFlyout.key;" modifiers="accel,shift" oncommand="FlyoutPanelsUI.show('AboutFlyoutPanel')" />
+-->
 
     <!-- manage tabs -->
-    <key id="key_newTab" key="&newTab.key;" modifiers="accel" command="cmd_newTab"/>
-    <key id="key_newTab2" key="&newTab2.key;" modifiers="accel" command="cmd_newTab"/>
+    <key id="key_newTab" key="&newTab.key;" modifiers="accel" command="cmd_newTabKey"/>
+    <key id="key_newTab2" key="&newTab2.key;" modifiers="accel" command="cmd_newTabKey"/>
     <key id="key_closeTab" key="&closeTab.key;" modifiers="accel" command="cmd_closeTab"/>
     <key id="key_closeTab2" keycode="VK_F4" modifiers="accel" command="cmd_closeTab"/>
     <key id="key_undoCloseTab" key="&newTab.key;" modifiers="accel,shift" command="cmd_undoCloseTab"/>
@@ -210,7 +215,7 @@
 
     <!-- Navigation bar -->
     <appbar id="navbar" mousethrough="never" visible="true">
-      <hbox id="progress-container" layer="true">
+      <hbox id="progress-container" layer="true" observes="bcast_windowState">
         <hbox id="progress-control" />
       </hbox>
 
@@ -238,7 +243,9 @@
                      autocompletesearch="history"
                      autocompletepopup="urlbar-autocomplete"
                      completeselectedindex="true"
-                     placeholder="&urlbar.emptytext;"/>
+                     placeholder="&urlbar.emptytext;"
+                     tabscrolling="true"
+                     onclick="SelectionHelperUI.urlbarClick();"/>
 
             <toolbarbutton id="go-button" class="urlbar-button"
                            command="cmd_go"/>
@@ -254,8 +261,8 @@
             <observes element="bcast_windowState" attribute="*"/>
             <observes element="bcast_urlbarState" attribute="*"/>
             <hbox id="toolbar-context-page" pack="end">
-              <circularprogressindicator id="download-progress"
-                                     oncommand="Downloads.onDownloadButton()"/>
+              <circularprogressindicator id="download-progress" class="appbar-primary"
+                                     oncommand="MetroDownloadsView.onDownloadButton()"/>
               <toolbarbutton id="star-button" class="appbar-primary"
                              type="checkbox"
                              oncommand="Appbar.onStarButton()"/>
@@ -370,12 +377,10 @@
                        oncommand="Appbar.dispatchContextualAction('clear')"/>
       </toolbar>
     </appbar>
-
     <autoscroller class="autoscroller" id="autoscrollerid"/>
-
     <flyoutpanel id="about-flyoutpanel" class="flyout-narrow" headertext="&aboutHeader.title;">
-      <label id="about-product-label" value="&aboutHeader.product.label;"/>
-      <label value="&aboutHeader.company.label;"/>
+      <label id="about-product-label" linewrap="true" value="&aboutHeader.product.label;"/>
+      <label value="&aboutHeader.company.label;" linewrap="true"/>
 #expand <label id="about-version-label">__MOZ_APP_VERSION__</label>
       <vbox id="updateBox">
 #ifdef MOZ_UPDATER
@@ -410,25 +415,24 @@
             <label>&update.otherInstanceHandlingUpdates;</label>
           </hbox>
           <hbox id="manualUpdate" align="center">
-            <label>&update.manual.start;</label><label id="manualLink" class="text-link"/><label>&update.manual.end;</label>
+            <label>&update.manual.start;</label><label id="manualLink" linewrap="true" class="text-link"/><label>&update.manual.end;</label>
           </hbox>
         </deck>
 #endif
       </vbox>
-
 #if MOZ_UPDATE_CHANNEL != release
 #ifdef MOZ_UPDATER
-      <description class="text-blurb" id="currentChannelText">&channel.description.start;<label id="currentChannel"/>&channel.description.end;</description>
+      <description class="text-blurb" id="currentChannelText">&channel.description.start;<label id="currentChannel" linewrap="true"/>&channel.description.end;</description>
 #endif
 #endif
       <label id="about-policy-label"
+            linewrap="true"
             onclick="FlyoutPanelsUI.AboutFlyoutPanel.onPolicyClick(event);"
             class="text-link" value="&aboutHeader.policy.label;"/>
+      <spacer class="flyoutpanel-hack"/>
     </flyoutpanel>
-
 #ifdef MOZ_SERVICES_SYNC
     <flyoutpanel id="sync-flyoutpanel" class="flyout-narrow" headertext="&sync.flyout.title;">
-
       <vbox id="sync-presetup-container" collapsed="true">
         <description>&sync.flyout.presetup.description1;</description>
         <separator />
@@ -438,11 +442,11 @@
           <image src="chrome://browser/skin/images/plus-34.png" />
           <separator />
           <label value="&sync.flyout.presetup.setup.label;"
+                 linewrap="true"
                  class="text-link" />
           <spacer flex="1" />
         </hbox>
       </vbox>
-
       <vbox id="sync-setup-container" collapsed="true">
         <description>&sync.flyout.setup.description1;</description>
         <description>&sync.flyout.setup.description2;</description>
@@ -630,16 +634,6 @@
 #endif
 
     <flyoutpanel id="prefs-flyoutpanel" class="flyout-narrow" headertext="&optionsHeader.title;">
-      <settings id="prefs-startup" label="&optionsHeader.startup.title;"> <!-- note, this element has a custom margin-top -->
-        <setting id="prefs-homepage" title="&optionsHeader.homepage.title;" type="menulist" pref="browser.startup.sessionRestore" class="setting-expanded">
-          <menulist id="prefs-homepage-options">
-            <menupopup id="prefs-homepage-popup" position="after_end">
-              <menuitem id="prefs-homepage-default" label="&optionsHeader.homepage.startPage.button;" value="false"/>
-              <menuitem id="prefs-homepage-session" label="&optionsHeader.homepage.sessionRestore.button;" value="true"/>
-            </menupopup>
-          </menulist>
-        </setting>
-      </settings>
       <settings id="prefs-charencoding" label="&optionsHeader.char.title;">
         <setting pref="browser.menu.showCharacterEncoding" title="&optionsHeader.char.options.label;" type="bool"/>
       </settings>
@@ -679,14 +673,17 @@
         <setting pref="toolkit.telemetry.enabled" type="bool" title="&optionsHeader.telemetry.label;"/>
       </settings>
       <settings id="prefs-dnt" label="&doNotTrack.title;">
-        <description>&doNotTrack.desc;</description>
         <setting id="prefs-dnt-value" pref="privacy.donottrackheader.value" type="radio" >
           <radiogroup id="prefs-dnt-options">
-            <radio id="prefs-dnt-notrack" label="&doNotTrack.options.trackingNotOkay;" value="1"/>
-            <radio id="prefs-dnt-nopref" label="&doNotTrack.options.noPreference;" value="-1"/>
-            <radio id="prefs-dnt-oktrack" label="&doNotTrack.options.trackingOkay;" value="0"/>
+            <radio id="prefs-dnt-notrack" class="flyoutpanel-hack"
+                   label="&doNotTrack.options.doNotTrack;" value="1"/>
+            <radio id="prefs-dnt-oktrack" class="flyoutpanel-hack"
+                   label="&doNotTrack.options.doTrack;" value="0"/>
+            <radio id="prefs-dnt-nopref" class="flyoutpanel-hack"
+                   label="&doNotTrack.options.default;" value="-1"/>
           </radiogroup>
         </setting>
+        <label class="text-link" href="https://www.mozilla.org/dnt">&doNotTrack.learnMoreLink;</label>
       </settings>
     </flyoutpanel>
 
@@ -792,7 +789,13 @@
             <label value="&appbarFindInPage2.label;"/>
           </richlistitem>
           <richlistitem id="context-viewondesktop" type="view-on-desktop" onclick="ContextCommands.viewOnDesktop();">
-            <label value="&appbarViewOnDesktop2.label;"/>
+            <label value="&appbarRelaunchInDesktop.label;"/>
+          </richlistitem>
+          <richlistitem id="context-msmetadata" type="ms-meta-data" onclick="ContextCommands.openWindowsStoreLink();">
+            <label value="&appbarMSMetaData2.label;"/>
+          </richlistitem>
+          <richlistitem id="context-viewpagesource" type="view-page-source" onclick="ContextCommands.viewPageSource();">
+            <label value="&appbarViewPageSource.label;"/>
           </richlistitem>
         </richlistbox>
       </vbox>

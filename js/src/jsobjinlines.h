@@ -34,7 +34,8 @@ JSObject::setGenericAttributes(JSContext *cx, js::HandleObject obj,
 JSObject::changePropertyAttributes(JSContext *cx, js::HandleObject obj,
                                    js::HandleShape shape, unsigned attrs)
 {
-    return !!changeProperty(cx, obj, shape, attrs, 0, shape->getter(), shape->setter());
+    return !!changeProperty<js::SequentialExecution>(cx, obj, shape, attrs, 0,
+                                                     shape->getter(), shape->setter());
 }
 
 /* static */ inline bool
@@ -42,7 +43,6 @@ JSObject::deleteProperty(JSContext *cx, js::HandleObject obj, js::HandleProperty
                          bool *succeeded)
 {
     JS::RootedId id(cx, js::NameToId(name));
-    js::types::AddTypePropertyId(cx, obj, id, js::types::Type::UndefinedType());
     js::types::MarkTypePropertyConfigured(cx, obj, id);
     js::DeletePropertyOp op = obj->getOps()->deleteProperty;
     return (op ? op : js::baseops::DeleteProperty)(cx, obj, name, succeeded);
@@ -51,10 +51,9 @@ JSObject::deleteProperty(JSContext *cx, js::HandleObject obj, js::HandleProperty
 /* static */ inline bool
 JSObject::deleteElement(JSContext *cx, js::HandleObject obj, uint32_t index, bool *succeeded)
 {
-    JS::RootedId id(cx);
+    jsid id;
     if (!js::IndexToId(cx, index, &id))
         return false;
-    js::types::AddTypePropertyId(cx, obj, id, js::types::Type::UndefinedType());
     js::types::MarkTypePropertyConfigured(cx, obj, id);
     js::DeleteElementOp op = obj->getOps()->deleteElement;
     return (op ? op : js::baseops::DeleteElement)(cx, obj, index, succeeded);
@@ -65,16 +64,30 @@ JSObject::deleteSpecial(JSContext *cx, js::HandleObject obj, js::HandleSpecialId
                         bool *succeeded)
 {
     JS::RootedId id(cx, SPECIALID_TO_JSID(sid));
-    js::types::AddTypePropertyId(cx, obj, id, js::types::Type::UndefinedType());
     js::types::MarkTypePropertyConfigured(cx, obj, id);
     js::DeleteSpecialOp op = obj->getOps()->deleteSpecial;
     return (op ? op : js::baseops::DeleteSpecial)(cx, obj, sid, succeeded);
 }
 
+/* static */ inline bool
+JSObject::watch(JSContext *cx, JS::HandleObject obj, JS::HandleId id,
+                JS::HandleObject callable)
+{
+    js::WatchOp op = obj->getOps()->watch;
+    return (op ? op : js::baseops::Watch)(cx, obj, id, callable);
+}
+
+/* static */ inline bool
+JSObject::unwatch(JSContext *cx, JS::HandleObject obj, JS::HandleId id)
+{
+    js::UnwatchOp op = obj->getOps()->unwatch;
+    return (op ? op : js::baseops::Unwatch)(cx, obj, id);
+}
+
 inline void
 JSObject::finalize(js::FreeOp *fop)
 {
-    js::Probes::finalizeObject(this);
+    js::probes::FinalizeObject(this);
 
 #ifdef DEBUG
     JS_ASSERT(isTenured());
@@ -135,28 +148,41 @@ JSObject::setShouldConvertDoubleElements()
     getElementsHeader()->setShouldConvertDoubleElements();
 }
 
-/* static */ inline void
-JSObject::setDenseElementWithType(js::ExclusiveContext *cx, js::HandleObject obj, uint32_t index,
+inline bool
+JSObject::setDenseElementIfHasType(uint32_t index, const js::Value &val)
+{
+    if (!js::types::HasTypePropertyId(this, JSID_VOID, val))
+        return false;
+    setDenseElementMaybeConvertDouble(index, val);
+    return true;
+}
+
+inline void
+JSObject::setDenseElementWithType(js::ExclusiveContext *cx, uint32_t index,
                                   const js::Value &val)
 {
-    js::types::AddTypePropertyId(cx, obj, JSID_VOID, val);
-    obj->setDenseElementMaybeConvertDouble(index, val);
+    // Avoid a slow AddTypePropertyId call if the type is the same as the type
+    // of the previous element.
+    js::types::Type thisType = js::types::GetValueType(val);
+    if (index == 0 || js::types::GetValueType(elements[index - 1]) != thisType)
+        js::types::AddTypePropertyId(cx, this, JSID_VOID, thisType);
+    setDenseElementMaybeConvertDouble(index, val);
 }
 
-/* static */ inline void
-JSObject::initDenseElementWithType(js::ExclusiveContext *cx, js::HandleObject obj, uint32_t index,
+inline void
+JSObject::initDenseElementWithType(js::ExclusiveContext *cx, uint32_t index,
                                    const js::Value &val)
 {
-    JS_ASSERT(!obj->shouldConvertDoubleElements());
-    js::types::AddTypePropertyId(cx, obj, JSID_VOID, val);
-    obj->initDenseElement(index, val);
+    JS_ASSERT(!shouldConvertDoubleElements());
+    js::types::AddTypePropertyId(cx, this, JSID_VOID, val);
+    initDenseElement(index, val);
 }
 
-/* static */ inline void
-JSObject::setDenseElementHole(js::ExclusiveContext *cx, js::HandleObject obj, uint32_t index)
+inline void
+JSObject::setDenseElementHole(js::ExclusiveContext *cx, uint32_t index)
 {
-    js::types::MarkTypeObjectFlags(cx, obj, js::types::OBJECT_FLAG_NON_PACKED);
-    obj->setDenseElement(index, js::MagicValue(JS_ELEMENTS_HOLE));
+    js::types::MarkTypeObjectFlags(cx, this, js::types::OBJECT_FLAG_NON_PACKED);
+    setDenseElement(index, js::MagicValue(JS_ELEMENTS_HOLE));
 }
 
 /* static */ inline void
@@ -170,6 +196,12 @@ JSObject::removeDenseElementForSparseIndex(js::ExclusiveContext *cx,
         obj->setDenseElement(index, js::MagicValue(JS_ELEMENTS_HOLE));
 }
 
+inline bool
+JSObject::writeToIndexWouldMarkNotPacked(uint32_t index)
+{
+    return getElementsHeader()->initializedLength < index;
+}
+
 inline void
 JSObject::markDenseElementsNotPacked(js::ExclusiveContext *cx)
 {
@@ -178,8 +210,11 @@ JSObject::markDenseElementsNotPacked(js::ExclusiveContext *cx)
 }
 
 inline void
-JSObject::ensureDenseInitializedLength(js::ExclusiveContext *cx, uint32_t index, uint32_t extra)
+JSObject::ensureDenseInitializedLengthNoPackedCheck(js::ThreadSafeContext *cx, uint32_t index,
+                                                    uint32_t extra)
 {
+    JS_ASSERT(cx->isThreadLocal(this));
+
     /*
      * Ensure that the array's contents have been initialized up to index, and
      * mark the elements through 'index + extra' as initialized in preparation
@@ -187,8 +222,6 @@ JSObject::ensureDenseInitializedLength(js::ExclusiveContext *cx, uint32_t index,
      */
     JS_ASSERT(index + extra <= getDenseCapacity());
     uint32_t &initlen = getElementsHeader()->initializedLength;
-    if (initlen < index)
-        markDenseElementsNotPacked(cx);
 
     if (initlen < index + extra) {
         JSRuntime *rt = runtimeFromAnyThread();
@@ -201,10 +234,28 @@ JSObject::ensureDenseInitializedLength(js::ExclusiveContext *cx, uint32_t index,
     }
 }
 
+inline void
+JSObject::ensureDenseInitializedLength(js::ExclusiveContext *cx, uint32_t index, uint32_t extra)
+{
+    if (writeToIndexWouldMarkNotPacked(index))
+        markDenseElementsNotPacked(cx);
+    ensureDenseInitializedLengthNoPackedCheck(cx, index, extra);
+}
+
+inline void
+JSObject::ensureDenseInitializedLengthPreservePackedFlag(js::ThreadSafeContext *cx,
+                                                         uint32_t index, uint32_t extra)
+{
+    JS_ASSERT(!writeToIndexWouldMarkNotPacked(index));
+    ensureDenseInitializedLengthNoPackedCheck(cx, index, extra);
+}
+
 JSObject::EnsureDenseResult
 JSObject::extendDenseElements(js::ThreadSafeContext *cx,
                               uint32_t requiredCapacity, uint32_t extra)
 {
+    JS_ASSERT(cx->isThreadLocal(this));
+
     /*
      * Don't grow elements for non-extensible objects or watched objects. Dense
      * elements can be added/written with no extensible or watchpoint checks as
@@ -239,45 +290,7 @@ JSObject::extendDenseElements(js::ThreadSafeContext *cx,
 }
 
 inline JSObject::EnsureDenseResult
-JSObject::parExtendDenseElements(js::ThreadSafeContext *cx, js::Value *v, uint32_t extra)
-{
-    JS_ASSERT(isNative());
-    JS_ASSERT_IF(is<js::ArrayObject>(), as<js::ArrayObject>().lengthIsWritable());
-
-    js::ObjectElements *header = getElementsHeader();
-    uint32_t initializedLength = header->initializedLength;
-    uint32_t requiredCapacity = initializedLength + extra;
-    if (requiredCapacity < initializedLength)
-        return ED_SPARSE; /* Overflow. */
-
-    if (requiredCapacity > header->capacity) {
-        EnsureDenseResult edr = extendDenseElements(cx, requiredCapacity, extra);
-        if (edr != ED_OK)
-            return edr;
-    }
-
-    // Watch out lest the header has been reallocated by
-    // extendDenseElements():
-    header = getElementsHeader();
-
-    js::HeapSlot *sp = elements + initializedLength;
-    if (v) {
-        for (uint32_t i = 0; i < extra; i++) {
-            JS_ASSERT_IF(v[i].isMarkable(), static_cast<js::gc::Cell *>(v[i].toGCThing())->isTenured());
-            *sp[i].unsafeGet() = v[i];
-        }
-    } else {
-        for (uint32_t i = 0; i < extra; i++)
-            *sp[i].unsafeGet() = js::MagicValue(JS_ELEMENTS_HOLE);
-    }
-    header->initializedLength = requiredCapacity;
-    if (header->length < requiredCapacity)
-        header->length = requiredCapacity;
-    return ED_OK;
-}
-
-inline JSObject::EnsureDenseResult
-JSObject::ensureDenseElements(js::ExclusiveContext *cx, uint32_t index, uint32_t extra)
+JSObject::ensureDenseElementsNoPackedCheck(js::ThreadSafeContext *cx, uint32_t index, uint32_t extra)
 {
     JS_ASSERT(isNative());
 
@@ -287,7 +300,7 @@ JSObject::ensureDenseElements(js::ExclusiveContext *cx, uint32_t index, uint32_t
     if (extra == 1) {
         /* Optimize for the common case. */
         if (index < currentCapacity) {
-            ensureDenseInitializedLength(cx, index, 1);
+            ensureDenseInitializedLengthNoPackedCheck(cx, index, 1);
             return ED_OK;
         }
         requiredCapacity = index + 1;
@@ -302,7 +315,7 @@ JSObject::ensureDenseElements(js::ExclusiveContext *cx, uint32_t index, uint32_t
             return ED_SPARSE;
         }
         if (requiredCapacity <= currentCapacity) {
-            ensureDenseInitializedLength(cx, index, extra);
+            ensureDenseInitializedLengthNoPackedCheck(cx, index, extra);
             return ED_OK;
         }
     }
@@ -311,8 +324,24 @@ JSObject::ensureDenseElements(js::ExclusiveContext *cx, uint32_t index, uint32_t
     if (edr != ED_OK)
         return edr;
 
-    ensureDenseInitializedLength(cx, index, extra);
+    ensureDenseInitializedLengthNoPackedCheck(cx, index, extra);
     return ED_OK;
+}
+
+inline JSObject::EnsureDenseResult
+JSObject::ensureDenseElements(js::ExclusiveContext *cx, uint32_t index, uint32_t extra)
+{
+    if (writeToIndexWouldMarkNotPacked(index))
+        markDenseElementsNotPacked(cx);
+    return ensureDenseElementsNoPackedCheck(cx, index, extra);
+}
+
+inline JSObject::EnsureDenseResult
+JSObject::ensureDenseElementsPreservePackedFlag(js::ThreadSafeContext *cx, uint32_t index,
+                                                uint32_t extra)
+{
+    JS_ASSERT(!writeToIndexWouldMarkNotPacked(index));
+    return ensureDenseElementsNoPackedCheck(cx, index, extra);
 }
 
 /* static */ inline bool
@@ -351,7 +380,7 @@ JSObject::clearType(JSContext *cx, js::HandleObject obj)
     JS_ASSERT(!obj->hasSingletonType());
     JS_ASSERT(cx->compartment() == obj->compartment());
 
-    js::types::TypeObject *type = cx->getNewType(obj->getClass(), NULL);
+    js::types::TypeObject *type = cx->getNewType(obj->getClass(), nullptr);
     if (!type)
         return false;
 
@@ -363,8 +392,6 @@ inline void
 JSObject::setType(js::types::TypeObject *newType)
 {
     JS_ASSERT(newType);
-    JS_ASSERT_IF(getClass()->emulatesUndefined(),
-                 newType->hasAnyFlags(js::types::OBJECT_FLAG_EMULATES_UNDEFINED));
     JS_ASSERT(!hasSingletonType());
     type_ = newType;
 }
@@ -391,7 +418,7 @@ inline bool JSObject::isVarObj()
 /* static */ inline JSObject *
 JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::InitialHeap heap,
                  js::HandleShape shape, js::HandleTypeObject type,
-                 js::HeapSlot *extantSlots /* = NULL */)
+                 js::HeapSlot *extantSlots /* = nullptr */)
 {
     /*
      * Callers must use dynamicSlotsCount to size the initial slot array of the
@@ -412,7 +439,7 @@ JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::Initi
         if (nDynamicSlots) {
             slots = cx->pod_malloc<js::HeapSlot>(nDynamicSlots);
             if (!slots)
-                return NULL;
+                return nullptr;
             js::Debug_SetSlotRangeToCrashOnTouch(slots, nDynamicSlots);
         }
     }
@@ -420,7 +447,7 @@ JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::Initi
     JSObject *obj = js_NewGCObject<js::CanGC>(cx, kind, heap);
     if (!obj) {
         js_free(slots);
-        return NULL;
+        return nullptr;
     }
 
 #ifdef JSGC_GENERATIONAL
@@ -435,7 +462,7 @@ JSObject::create(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::Initi
 
     const js::Class *clasp = type->clasp;
     if (clasp->hasPrivate())
-        obj->privateRef(shape->numFixedSlots()) = NULL;
+        obj->privateRef(shape->numFixedSlots()) = nullptr;
 
     size_t span = shape->slotSpan();
     if (span && clasp != &js::ArrayBufferObject::class_)
@@ -471,11 +498,11 @@ JSObject::createArray(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::
 
     JSObject *obj = js_NewGCObject<js::CanGC>(cx, kind, heap);
     if (!obj)
-        return NULL;
+        return nullptr;
 
     obj->shape_.init(shape);
     obj->type_.init(type);
-    obj->slots = NULL;
+    obj->slots = nullptr;
     obj->setFixedElements();
     new (obj->getElementsHeader()) js::ObjectElements(capacity, length);
 
@@ -511,12 +538,21 @@ JSObject::hasProperty(JSContext *cx, js::HandleObject obj,
     return true;
 }
 
-/* static */ inline void
-JSObject::nativeSetSlotWithType(js::ExclusiveContext *cx, js::HandleObject obj, js::Shape *shape,
+inline bool
+JSObject::nativeSetSlotIfHasType(js::Shape *shape, const js::Value &value)
+{
+    if (!js::types::HasTypePropertyId(this, shape->propid(), value))
+        return false;
+    nativeSetSlot(shape->slot(), value);
+    return true;
+}
+
+inline void
+JSObject::nativeSetSlotWithType(js::ExclusiveContext *cx, js::Shape *shape,
                                 const js::Value &value)
 {
-    obj->nativeSetSlot(shape->slot(), value);
-    js::types::AddTypePropertyId(cx, obj, shape->propid(), value);
+    nativeSetSlot(shape->slot(), value);
+    js::types::AddTypePropertyId(cx, this, shape->propid(), value);
 }
 
 /* static */ inline bool
@@ -528,7 +564,7 @@ JSObject::getElement(JSContext *cx, js::HandleObject obj, js::HandleObject recei
         return op(cx, obj, receiver, index, vp);
 
     JS::RootedId id(cx);
-    if (!js::IndexToId(cx, index, &id))
+    if (!js::IndexToId(cx, index, id.address()))
         return false;
     return getGeneric(cx, obj, receiver, id, vp);
 }
@@ -542,7 +578,7 @@ JSObject::getElementNoGC(JSContext *cx, JSObject *obj, JSObject *receiver,
         return false;
 
     jsid id;
-    if (!js::IndexToIdNoGC(cx, index, &id))
+    if (!js::IndexToId(cx, index, &id))
         return false;
     return getGenericNoGC(cx, obj, receiver, id, vp);
 }
@@ -562,7 +598,7 @@ JSObject::getElementIfPresent(JSContext *cx, js::HandleObject obj, js::HandleObj
      * doing index-to-id conversions, we can use those here.
      */
     JS::RootedId id(cx);
-    if (!js::IndexToId(cx, index, &id))
+    if (!js::IndexToId(cx, index, id.address()))
         return false;
 
     JS::RootedObject obj2(cx);
@@ -731,7 +767,7 @@ class AutoPropDescArrayRooter : private AutoGCRooter
 
     PropDesc *append() {
         if (!descriptors.append(PropDesc()))
-            return NULL;
+            return nullptr;
         return &descriptors.back();
     }
 
@@ -840,7 +876,7 @@ inline JSObject *
 NewBuiltinClassInstance(ExclusiveContext *cx, const Class *clasp, gc::AllocKind allocKind,
                         NewObjectKind newKind = GenericObject)
 {
-    return NewObjectWithClassProto(cx, clasp, NULL, NULL, allocKind, newKind);
+    return NewObjectWithClassProto(cx, clasp, nullptr, nullptr, allocKind, newKind);
 }
 
 inline JSObject *
@@ -867,21 +903,26 @@ CopyInitializerObject(JSContext *cx, HandleObject baseobj, NewObjectKind newKind
     RootedObject obj(cx);
     obj = NewBuiltinClassInstance(cx, &JSObject::class_, allocKind, newKind);
     if (!obj)
-        return NULL;
+        return nullptr;
 
     RootedObject metadata(cx, obj->getMetadata());
     RootedShape lastProp(cx, baseobj->lastProperty());
     if (!JSObject::setLastProperty(cx, obj, lastProp))
-        return NULL;
+        return nullptr;
     if (metadata && !JSObject::setMetadata(cx, obj, metadata))
-        return NULL;
+        return nullptr;
 
     return obj;
 }
 
 JSObject *
+NewObjectWithType(JSContext *cx, HandleTypeObject type, JSObject *parent, gc::AllocKind allocKind,
+                  NewObjectKind newKind = GenericObject);
+
+JSObject *
 NewReshapedObject(JSContext *cx, HandleTypeObject type, JSObject *parent,
-                  gc::AllocKind kind, HandleShape shape);
+                  gc::AllocKind allocKind, HandleShape shape,
+                  NewObjectKind newKind = GenericObject);
 
 /*
  * As for gc::GetGCObjectKind, where numSlots is a guess at the final size of
@@ -916,18 +957,18 @@ DefineConstructorAndPrototype(JSContext *cx, Handle<GlobalObject*> global,
     JS_ASSERT(!global->nativeLookup(cx, id));
 
     /* Set these first in case AddTypePropertyId looks for this class. */
-    global->setSlot(key, ObjectValue(*ctor));
-    global->setSlot(key + JSProto_LIMIT, ObjectValue(*proto));
-    global->setSlot(key + JSProto_LIMIT * 2, ObjectValue(*ctor));
+    global->setConstructor(key, ObjectValue(*ctor));
+    global->setPrototype(key, ObjectValue(*proto));
+    global->setConstructorPropertySlot(key, ObjectValue(*ctor));
 
-    types::AddTypePropertyId(cx, global, id, ObjectValue(*ctor));
-    if (!global->addDataProperty(cx, id, key + JSProto_LIMIT * 2, 0)) {
-        global->setSlot(key, UndefinedValue());
-        global->setSlot(key + JSProto_LIMIT, UndefinedValue());
-        global->setSlot(key + JSProto_LIMIT * 2, UndefinedValue());
+    if (!global->addDataProperty(cx, id, GlobalObject::constructorPropertySlot(key), 0)) {
+        global->setConstructor(key, UndefinedValue());
+        global->setPrototype(key, UndefinedValue());
+        global->setConstructorPropertySlot(key, UndefinedValue());
         return false;
     }
 
+    types::AddTypePropertyId(cx, global, id, ObjectValue(*ctor));
     return true;
 }
 
@@ -977,7 +1018,7 @@ DefineConstructorAndPrototype(JSContext *cx, HandleObject obj, JSProtoKey key, H
                               Native constructor, unsigned nargs,
                               const JSPropertySpec *ps, const JSFunctionSpec *fs,
                               const JSPropertySpec *static_ps, const JSFunctionSpec *static_fs,
-                              JSObject **ctorp = NULL,
+                              JSObject **ctorp = nullptr,
                               gc::AllocKind ctorKind = JSFunction::FinalizeKind);
 
 static JS_ALWAYS_INLINE bool
@@ -987,12 +1028,12 @@ NewObjectMetadata(ExclusiveContext *cxArg, JSObject **pmetadata)
     // analysis/compilation/parsing is active as the callback may reenter JS.
     JS_ASSERT(!*pmetadata);
     if (JSContext *cx = cxArg->maybeJSContext()) {
-        if (JS_UNLIKELY((size_t)cx->compartment()->objectMetadataCallback) &&
+        if (JS_UNLIKELY((size_t)cx->compartment()->hasObjectMetadataCallback()) &&
             !cx->compartment()->activeAnalysis &&
             !cx->runtime()->mainThread.activeCompilations)
         {
             gc::AutoSuppressGC suppress(cx);
-            return cx->compartment()->objectMetadataCallback(cx, pmetadata);
+            return cx->compartment()->callObjectMetadataCallback(cx, pmetadata);
         }
     }
     return true;
@@ -1043,7 +1084,7 @@ js_InitClass(JSContext *cx, js::HandleObject obj, JSObject *parent_proto,
              const js::Class *clasp, JSNative constructor, unsigned nargs,
              const JSPropertySpec *ps, const JSFunctionSpec *fs,
              const JSPropertySpec *static_ps, const JSFunctionSpec *static_fs,
-             JSObject **ctorp = NULL,
+             JSObject **ctorp = nullptr,
              js::gc::AllocKind ctorKind = JSFunction::FinalizeKind);
 
 #endif /* jsobjinlines_h */

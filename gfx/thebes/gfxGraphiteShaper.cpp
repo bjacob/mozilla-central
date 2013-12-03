@@ -3,26 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsString.h"
-#include "nsBidiUtils.h"
-#include "nsMathUtils.h"
-
-#include "gfxTypes.h"
-
-#include "gfxContext.h"
-#include "gfxPlatform.h"
 #include "gfxGraphiteShaper.h"
-#include "gfxFontUtils.h"
+#include "nsString.h"
+#include "gfxContext.h"
 
 #include "graphite2/Font.h"
 #include "graphite2/Segment.h"
 
 #include "harfbuzz/hb.h"
-
-#include "cairo.h"
-
-#include "nsUnicodeRange.h"
-#include "nsCRT.h"
 
 #define FloatToFixed(f) (65536 * (f))
 #define FixedToFloat(f) ((f) * (1.0 / 65536.0))
@@ -347,6 +335,8 @@ gfxGraphiteShaper::SetGlyphsFromSegment(gfxContext      *aContext,
 
     return NS_OK;
 }
+
+#undef SMALL_GLYPH_RUN
 
 // for language tag validation - include list of tags from the IANA registry
 #include "gfxLanguageTagList.cpp"

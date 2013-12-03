@@ -131,6 +131,7 @@ public:
   virtual void ApplyARIAState(uint64_t* aState) const;
   virtual mozilla::a11y::role NativeRole();
   virtual uint64_t NativeState();
+  virtual already_AddRefed<nsIPersistentProperties> NativeAttributes() MOZ_OVERRIDE;
 
   // ActionAccessible
   virtual uint8_t ActionCount();
@@ -171,12 +172,16 @@ public:
     mStateFlags |= eHasNumericValue;
   }
 
-  NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_NSIACCESSIBLEVALUE
-
   // Accessible
   virtual void Value(nsString& aValue);
   virtual mozilla::a11y::role NativeRole();
+
+  // Value
+  virtual double MaxValue() const MOZ_OVERRIDE;
+  virtual double MinValue() const MOZ_OVERRIDE;
+  virtual double CurValue() const MOZ_OVERRIDE;
+  virtual double Step() const MOZ_OVERRIDE;
+  virtual bool SetCurValue(double aValue) MOZ_OVERRIDE;
 
   // Widgets
   virtual bool IsWidget() const;
@@ -193,7 +198,7 @@ public:
 
   // Accessible
   virtual mozilla::a11y::role NativeRole();
-  virtual Relation RelationByType(uint32_t aType);
+  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
 
 protected:
   // Accessible
@@ -214,7 +219,7 @@ public:
 
   // Accessible
   virtual mozilla::a11y::role NativeRole();
-  virtual Relation RelationByType(uint32_t aType);
+  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
 };
 
 /**
@@ -228,7 +233,7 @@ public:
   // Accessible
   virtual already_AddRefed<nsIPersistentProperties> NativeAttributes() MOZ_OVERRIDE;
   virtual mozilla::a11y::role NativeRole();
-  virtual Relation RelationByType(uint32_t aType);
+  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
 
 protected:
   // Accessible
@@ -249,7 +254,7 @@ public:
 
   // Accessible
   virtual mozilla::a11y::role NativeRole();
-  virtual Relation RelationByType(uint32_t aType);
+  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
 };
 
 } // namespace a11y

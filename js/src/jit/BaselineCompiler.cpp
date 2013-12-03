@@ -12,7 +12,9 @@
 #include "jit/FixedList.h"
 #include "jit/IonLinker.h"
 #include "jit/IonSpewer.h"
-#include "jit/PerfSpewer.h"
+#ifdef JS_ION_PERF
+# include "jit/PerfSpewer.h"
+#endif
 #include "jit/VMFunctions.h"
 
 #include "jsscriptinlines.h"
@@ -22,8 +24,8 @@
 using namespace js;
 using namespace js::jit;
 
-BaselineCompiler::BaselineCompiler(JSContext *cx, HandleScript script)
-  : BaselineCompilerSpecific(cx, script),
+BaselineCompiler::BaselineCompiler(JSContext *cx, TempAllocator &alloc, HandleScript script)
+  : BaselineCompilerSpecific(cx, alloc, script),
     modifiesArguments_(false)
 {
 }
@@ -31,13 +33,13 @@ BaselineCompiler::BaselineCompiler(JSContext *cx, HandleScript script)
 bool
 BaselineCompiler::init()
 {
-    if (!analysis_.init(cx))
+    if (!analysis_.init(alloc_, cx->runtime()->gsnCache))
         return false;
 
-    if (!labels_.init(script->length))
+    if (!labels_.init(script->length()))
         return false;
 
-    for (size_t i = 0; i < script->length; i++)
+    for (size_t i = 0; i < script->length(); i++)
         new (&labels_[i]) Label();
 
     if (!frame.init())
@@ -51,11 +53,11 @@ BaselineCompiler::addPCMappingEntry(bool addIndexEntry)
 {
     // Don't add multiple entries for a single pc.
     size_t nentries = pcMappingEntries_.length();
-    if (nentries > 0 && pcMappingEntries_[nentries - 1].pcOffset == unsigned(pc - script->code))
+    if (nentries > 0 && pcMappingEntries_[nentries - 1].pcOffset == script->pcToOffset(pc))
         return true;
 
     PCMappingEntry entry;
-    entry.pcOffset = pc - script->code;
+    entry.pcOffset = script->pcToOffset(pc);
     entry.nativeOffset = masm.currentOffset();
     entry.slotInfo = getStackTopSlotInfo();
     entry.addIndexEntry = addIndexEntry;
@@ -72,7 +74,7 @@ BaselineCompiler::compile()
     IonSpew(IonSpew_Codegen, "# Emitting baseline code for script %s:%d",
             script->filename(), script->lineno);
 
-    if (cx->typeInferenceEnabled() && !script->ensureHasBytecodeTypeMap(cx))
+    if (cx->typeInferenceEnabled() && !script->ensureHasTypes(cx))
         return Method_Error;
 
     // Only need to analyze scripts which are marked |argumensHasVarBinding|, to
@@ -85,13 +87,14 @@ BaselineCompiler::compile()
     // Pin analysis info during compilation.
     types::AutoEnterAnalysis autoEnterAnalysis(cx);
 
+    JS_ASSERT(!script->hasBaselineScript());
+
     if (!emitPrologue())
         return Method_Error;
 
     MethodStatus status = emitBody();
     if (status != Method_Compiled)
         return status;
-
 
     if (!emitEpilogue())
         return Method_Error;
@@ -105,11 +108,26 @@ BaselineCompiler::compile()
         return Method_Error;
 
     Linker linker(masm);
-    IonCode *code = linker.newCode(cx, JSC::BASELINE_CODE);
+    IonCode *code = linker.newCode<CanGC>(cx, JSC::BASELINE_CODE);
     if (!code)
         return Method_Error;
 
-    JS_ASSERT(!script->hasBaselineScript());
+    JSObject *templateScope = nullptr;
+    if (script->function()) {
+        RootedFunction fun(cx, script->function());
+        if (fun->isHeavyweight()) {
+            templateScope = CallObject::createTemplateObject(cx, script, gc::TenuredHeap);
+            if (!templateScope)
+                return Method_Error;
+
+            if (fun->isNamedLambda()) {
+                RootedObject declEnvObject(cx, DeclEnvObject::createTemplateObject(cx, fun, gc::TenuredHeap));
+                if (!declEnvObject)
+                    return Method_Error;
+                templateScope->as<ScopeObject>().setEnclosingScope(declEnvObject);
+            }
+        }
+    }
 
     // Encode the pc mapping table. See PCMappingIndexEntry for
     // more information.
@@ -153,15 +171,20 @@ BaselineCompiler::compile()
     prologueOffset_.fixup(&masm);
     spsPushToggleOffset_.fixup(&masm);
 
+    // Note: There is an extra entry in the bytecode type map for the search hint, see below.
+    size_t bytecodeTypeMapEntries = cx->typeInferenceEnabled() ? script->nTypeSets + 1 : 0;
+
     BaselineScript *baselineScript = BaselineScript::New(cx, prologueOffset_.offset(),
                                                          spsPushToggleOffset_.offset(),
                                                          icEntries_.length(),
                                                          pcMappingIndexEntries.length(),
-                                                         pcEntries.length());
+                                                         pcEntries.length(),
+                                                         bytecodeTypeMapEntries);
     if (!baselineScript)
         return Method_Error;
 
     baselineScript->setMethod(code);
+    baselineScript->setTemplateScope(templateScope);
 
     script->setBaselineScript(baselineScript);
 
@@ -208,6 +231,29 @@ BaselineCompiler::compile()
     if (cx->runtime()->spsProfiler.enabled())
         baselineScript->toggleSPS(true);
 
+    if (cx->typeInferenceEnabled()) {
+        uint32_t *bytecodeMap = baselineScript->bytecodeTypeMap();
+
+        uint32_t added = 0;
+        for (jsbytecode *pc = script->code(); pc < script->codeEnd(); pc += GetBytecodeLength(pc)) {
+            JSOp op = JSOp(*pc);
+            if (js_CodeSpec[op].format & JOF_TYPESET) {
+                bytecodeMap[added++] = script->pcToOffset(pc);
+                if (added == script->nTypeSets)
+                    break;
+            }
+        }
+
+        JS_ASSERT(added == script->nTypeSets);
+
+        // The last entry in the last index found, and is used to avoid binary
+        // searches for the sought entry when queries are in linear order.
+        bytecodeMap[script->nTypeSets] = 0;
+    }
+
+    if (script->compartment()->debugMode())
+        baselineScript->setDebugMode();
+
     return Method_Compiled;
 }
 
@@ -236,15 +282,36 @@ BaselineCompiler::emitPrologue()
     // Handle scope chain pre-initialization (in case GC gets run
     // during stack check).  For global and eval scripts, the scope
     // chain is in R1.  For function scripts, the scope chain is in
-    // the callee, NULL is stored for now so that GC doesn't choke on
-    // a bogus ScopeChain value in the frame.
+    // the callee, nullptr is stored for now so that GC doesn't choke
+    // on a bogus ScopeChain value in the frame.
     if (function())
-        masm.storePtr(ImmPtr(NULL), frame.addressOfScopeChain());
+        masm.storePtr(ImmPtr(nullptr), frame.addressOfScopeChain());
     else
         masm.storePtr(R1.scratchReg(), frame.addressOfScopeChain());
 
-    if (!emitStackCheck())
-        return false;
+    // Functions with a large number of locals require two stack checks.
+    // The VMCall for a fallible stack check can only occur after the
+    // scope chain has been initialized, as that is required for proper
+    // exception handling if the VMCall returns false.  The scope chain
+    // initialization can only happen after the UndefinedValues for the
+    // local slots have been pushed.
+    // However by that time, the stack might have grown too much.
+    // In these cases, we emit an extra, early, infallible check
+    // before pushing the locals.  The early check sets a flag on the
+    // frame if the stack check fails (but otherwise doesn't throw an
+    // exception).  If the flag is set, then the jitcode skips past
+    // the pushing of the locals, and directly to scope chain initialization
+    // followed by the actual stack check, which will throw the correct
+    // exception.
+    Label earlyStackCheckFailed;
+    if (needsEarlyStackCheck()) {
+        if (!emitStackCheck(/* earlyCheck = */ true))
+            return false;
+        masm.branchTest32(Assembler::NonZero,
+                          frame.addressOfFlags(),
+                          Imm32(BaselineFrame::OVER_RECURSED),
+                          &earlyStackCheckFailed);
+    }
 
     // Initialize locals to |undefined|. Use R0 to minimize code size.
     // If the number of locals to push is < LOOP_UNROLL_FACTOR, then the
@@ -276,6 +343,9 @@ BaselineCompiler::emitPrologue()
         }
     }
 
+    if (needsEarlyStackCheck())
+        masm.bind(&earlyStackCheckFailed);
+
 #if JS_TRACE_LOGGING
     masm.tracelogStart(script.get());
     masm.tracelogLog(TraceLogging::INFO_ENGINE_BASELINE);
@@ -288,6 +358,9 @@ BaselineCompiler::emitPrologue()
     // Initialize the scope chain before any operation that may
     // call into the VM and trigger a GC.
     if (!initScopeChain())
+        return false;
+
+    if (!emitStackCheck())
         return false;
 
     if (!emitDebugPrologue())
@@ -374,24 +447,59 @@ BaselineCompiler::emitIC(ICStub *stub, bool isForOp)
     return true;
 }
 
-typedef bool (*CheckOverRecursedWithExtraFn)(JSContext *, uint32_t);
+typedef bool (*CheckOverRecursedWithExtraFn)(JSContext *, BaselineFrame *, uint32_t, uint32_t);
 static const VMFunction CheckOverRecursedWithExtraInfo =
     FunctionInfo<CheckOverRecursedWithExtraFn>(CheckOverRecursedWithExtra);
 
 bool
-BaselineCompiler::emitStackCheck()
+BaselineCompiler::emitStackCheck(bool earlyCheck)
 {
     Label skipCall;
     uintptr_t *limitAddr = &cx->runtime()->mainThread.ionStackLimit;
-    uint32_t tolerance = script->nslots * sizeof(Value);
+    uint32_t slotsSize = script->nslots * sizeof(Value);
+    uint32_t tolerance = earlyCheck ? slotsSize : 0;
+
     masm.movePtr(BaselineStackReg, R1.scratchReg());
-    masm.subPtr(Imm32(tolerance), R1.scratchReg());
+
+    // If this is the early stack check, locals haven't been pushed yet.  Adjust the
+    // stack pointer to account for the locals that would be pushed before performing
+    // the guard around the vmcall to the stack check.
+    if (earlyCheck)
+        masm.subPtr(Imm32(tolerance), R1.scratchReg());
+
+    // If this is the late stack check for a frame which contains an early stack check,
+    // then the early stack check might have failed and skipped past the pushing of locals
+    // on the stack.
+    //
+    // If this is a possibility, then the OVER_RECURSED flag should be checked, and the
+    // VMCall to CheckOverRecursed done unconditionally if it's set.
+    Label forceCall;
+    if (!earlyCheck && needsEarlyStackCheck()) {
+        masm.branchTest32(Assembler::NonZero,
+                          frame.addressOfFlags(),
+                          Imm32(BaselineFrame::OVER_RECURSED),
+                          &forceCall);
+    }
+
     masm.branchPtr(Assembler::BelowOrEqual, AbsoluteAddress(limitAddr), R1.scratchReg(),
                    &skipCall);
 
+    if (!earlyCheck && needsEarlyStackCheck())
+        masm.bind(&forceCall);
+
     prepareVMCall();
+    pushArg(Imm32(earlyCheck));
     pushArg(Imm32(tolerance));
-    if (!callVM(CheckOverRecursedWithExtraInfo, /*preInitialize=*/true))
+    masm.loadBaselineFramePtr(BaselineFrameReg, R1.scratchReg());
+    pushArg(R1.scratchReg());
+
+    CallVMPhase phase = POST_INITIALIZE;
+    if (earlyCheck)
+        phase = PRE_INITIALIZE;
+    else if (needsEarlyStackCheck())
+        phase = CHECK_OVER_RECURSED;
+
+    if (!callVM(CheckOverRecursedWithExtraInfo, phase))
         return false;
 
     masm.bind(&skipCall);
@@ -438,6 +546,10 @@ static const VMFunction HeavyweightFunPrologueInfo =
 bool
 BaselineCompiler::initScopeChain()
 {
+    CallVMPhase phase = POST_INITIALIZE;
+    if (needsEarlyStackCheck())
+        phase = CHECK_OVER_RECURSED;
+
     RootedFunction fun(cx, function());
     if (fun) {
         // Use callee->environment as scope chain. Note that we do
@@ -456,7 +568,7 @@ BaselineCompiler::initScopeChain()
             masm.loadBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
             pushArg(R0.scratchReg());
 
-            if (!callVM(HeavyweightFunPrologueInfo))
+            if (!callVM(HeavyweightFunPrologueInfo, phase))
                 return false;
         }
     } else {
@@ -470,7 +582,7 @@ BaselineCompiler::initScopeChain()
             masm.loadBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
             pushArg(R0.scratchReg());
 
-            if (!callVM(StrictEvalPrologueInfo))
+            if (!callVM(StrictEvalPrologueInfo, phase))
                 return false;
         }
     }
@@ -576,7 +688,7 @@ BaselineCompiler::emitDebugTrap()
     bool enabled = script->stepModeEnabled() || script->hasBreakpointsAt(pc);
 
     // Emit patchable call to debug trap handler.
-    IonCode *handler = cx->runtime()->ionRuntime()->debugTrapHandler(cx);
+    IonCode *handler = cx->runtime()->jitRuntime()->debugTrapHandler(cx);
     mozilla::DebugOnly<CodeOffsetLabel> offset = masm.toggledCall(handler, enabled);
 
 #ifdef DEBUG
@@ -586,7 +698,7 @@ BaselineCompiler::emitDebugTrap()
 #endif
 
     // Add an IC entry for the return offset -> pc mapping.
-    ICEntry icEntry(pc - script->code, false);
+    ICEntry icEntry(script->pcToOffset(pc), false);
     icEntry.setReturnOffset(masm.currentOffset());
     if (!icEntries_.append(icEntry))
         return false;
@@ -626,24 +738,28 @@ BaselineCompiler::emitSPSPop()
 MethodStatus
 BaselineCompiler::emitBody()
 {
-    JS_ASSERT(pc == script->code);
+    JS_ASSERT(pc == script->code());
 
     bool lastOpUnreachable = false;
     uint32_t emittedOps = 0;
+    mozilla::DebugOnly<jsbytecode *> prevpc = pc;
 
     while (true) {
         JSOp op = JSOp(*pc);
         IonSpew(IonSpew_BaselineOp, "Compiling op @ %d: %s",
-                int(pc - script->code), js_CodeName[op]);
+                int(script->pcToOffset(pc)), js_CodeName[op]);
 
         BytecodeInfo *info = analysis_.maybeInfo(pc);
 
         // Skip unreachable ops.
         if (!info) {
-            if (op == JSOP_STOP)
-                break;
+            // Test if last instructions and stop emitting in that case.
             pc += GetBytecodeLength(pc);
+            if (pc >= script->codeEnd())
+                break;
+
             lastOpUnreachable = true;
+            prevpc = pc;
             continue;
         }
 
@@ -669,7 +785,7 @@ BaselineCompiler::emitBody()
         // used when we need the native code address for a given pc, for instance
         // for bailouts from Ion, the debugger and exception handling. See
         // PCMappingIndexEntry for more information.
-        bool addIndexEntry = (pc == script->code || lastOpUnreachable || emittedOps > 100);
+        bool addIndexEntry = (pc == script->code() || lastOpUnreachable || emittedOps > 100);
         if (addIndexEntry)
             emittedOps = 0;
         if (!addPCMappingEntry(addIndexEntry))
@@ -693,15 +809,19 @@ OPCODE_LIST(EMIT_OP)
 #undef EMIT_OP
         }
 
-        if (op == JSOP_STOP)
+        // Test if last instructions and stop emitting in that case.
+        pc += GetBytecodeLength(pc);
+        if (pc >= script->codeEnd())
             break;
 
-        pc += GetBytecodeLength(pc);
         emittedOps++;
         lastOpUnreachable = false;
+#ifdef DEBUG
+        prevpc = pc;
+#endif
     }
 
-    JS_ASSERT(JSOp(*pc) == JSOP_STOP);
+    JS_ASSERT(JSOp(*prevpc) == JSOP_RETRVAL);
     return Method_Compiled;
 }
 
@@ -1381,7 +1501,7 @@ BaselineCompiler::emit_JSOP_NEWARRAY()
 
     uint32_t length = GET_UINT24(pc);
     RootedTypeObject type(cx);
-    if (!types::UseNewTypeForInitializer(cx, script, pc, JSProto_Array)) {
+    if (!types::UseNewTypeForInitializer(script, pc, JSProto_Array)) {
         type = types::TypeScript::InitObject(cx, script, pc, JSProto_Array);
         if (!type)
             return false;
@@ -1391,7 +1511,12 @@ BaselineCompiler::emit_JSOP_NEWARRAY()
     masm.move32(Imm32(length), R0.scratchReg());
     masm.movePtr(ImmGCPtr(type), R1.scratchReg());
 
-    ICNewArray_Fallback::Compiler stubCompiler(cx);
+    JSObject *templateObject = NewDenseUnallocatedArray(cx, length, nullptr, TenuredObject);
+    if (!templateObject)
+        return false;
+    templateObject->setType(type);
+
+    ICNewArray_Fallback::Compiler stubCompiler(cx, templateObject);
     if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
         return false;
 
@@ -1425,7 +1550,7 @@ BaselineCompiler::emit_JSOP_NEWOBJECT()
     frame.syncStack(0);
 
     RootedTypeObject type(cx);
-    if (!types::UseNewTypeForInitializer(cx, script, pc, JSProto_Object)) {
+    if (!types::UseNewTypeForInitializer(script, pc, JSProto_Object)) {
         type = types::TypeScript::InitObject(cx, script, pc, JSProto_Object);
         if (!type)
             return false;
@@ -1443,10 +1568,7 @@ BaselineCompiler::emit_JSOP_NEWOBJECT()
             return false;
     }
 
-    // Pass base object in R0.
-    masm.movePtr(ImmGCPtr(templateObject), R0.scratchReg());
-
-    ICNewObject_Fallback::Compiler stubCompiler(cx);
+    ICNewObject_Fallback::Compiler stubCompiler(cx, templateObject);
     if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
         return false;
 
@@ -1461,7 +1583,7 @@ BaselineCompiler::emit_JSOP_NEWINIT()
     JSProtoKey key = JSProtoKey(GET_UINT8(pc));
 
     RootedTypeObject type(cx);
-    if (!types::UseNewTypeForInitializer(cx, script, pc, key)) {
+    if (!types::UseNewTypeForInitializer(script, pc, key)) {
         type = types::TypeScript::InitObject(cx, script, pc, key);
         if (!type)
             return false;
@@ -1472,7 +1594,12 @@ BaselineCompiler::emit_JSOP_NEWINIT()
         masm.move32(Imm32(0), R0.scratchReg());
         masm.movePtr(ImmGCPtr(type), R1.scratchReg());
 
-        ICNewArray_Fallback::Compiler stubCompiler(cx);
+        JSObject *templateObject = NewDenseUnallocatedArray(cx, 0, nullptr, TenuredObject);
+        if (!templateObject)
+            return false;
+        templateObject->setType(type);
+
+        ICNewArray_Fallback::Compiler stubCompiler(cx, templateObject);
         if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
             return false;
     } else {
@@ -1490,10 +1617,7 @@ BaselineCompiler::emit_JSOP_NEWINIT()
                 return false;
         }
 
-        // Pass base object in R0.
-        masm.movePtr(ImmGCPtr(templateObject), R0.scratchReg());
-
-        ICNewObject_Fallback::Compiler stubCompiler(cx);
+        ICNewObject_Fallback::Compiler stubCompiler(cx, templateObject);
         if (!emitOpIC(stubCompiler.getStub(&stubSpace_)))
             return false;
     }
@@ -1797,7 +1921,7 @@ Address
 BaselineCompiler::getScopeCoordinateAddressFromObject(Register objReg, Register reg)
 {
     ScopeCoordinate sc(pc);
-    Shape *shape = ScopeCoordinateToStaticScopeShape(cx, script, pc);
+    Shape *shape = ScopeCoordinateToStaticScopeShape(script, pc);
 
     Address addr;
     if (shape->numFixedSlots() <= sc.slot) {
@@ -1823,7 +1947,7 @@ BaselineCompiler::emit_JSOP_GETALIASEDVAR()
     Address address = getScopeCoordinateAddress(R0.scratchReg());
     masm.loadValue(address, R0);
 
-    ICTypeMonitor_Fallback::Compiler compiler(cx, (ICMonitoredFallbackStub *) NULL);
+    ICTypeMonitor_Fallback::Compiler compiler(cx, (ICMonitoredFallbackStub *) nullptr);
     if (!emitOpIC(compiler.getStub(&stubSpace_)))
         return false;
 
@@ -1840,7 +1964,7 @@ BaselineCompiler::emit_JSOP_CALLALIASEDVAR()
 bool
 BaselineCompiler::emit_JSOP_SETALIASEDVAR()
 {
-    JSScript *outerScript = ScopeCoordinateFunctionScript(cx, script, pc);
+    JSScript *outerScript = ScopeCoordinateFunctionScript(script, pc);
     if (outerScript && outerScript->treatAsRunOnce) {
         // Type updates for this operation might need to be tracked, so treat
         // this as a SETPROP.
@@ -2255,7 +2379,7 @@ BaselineCompiler::emitCall()
     uint32_t argc = GET_ARGC(pc);
 
     frame.syncStack(0);
-    masm.mov(Imm32(argc), R0.scratchReg());
+    masm.mov(ImmWord(argc), R0.scratchReg());
 
     // Call IC
     ICCall_Fallback::Compiler stubCompiler(cx, /* isConstructing = */ JSOp(*pc) == JSOP_NEW);
@@ -2403,7 +2527,7 @@ BaselineCompiler::emit_JSOP_GOSUB()
     // this GOSUB.
     frame.push(BooleanValue(false));
 
-    int32_t nextOffset = GetNextPc(pc) - script->code;
+    int32_t nextOffset = script->pcToOffset(GetNextPc(pc));
     frame.push(Int32Value(nextOffset));
 
     // Jump to the finally block.
@@ -2463,6 +2587,12 @@ BaselineCompiler::emit_JSOP_ENTERLET0()
 
 bool
 BaselineCompiler::emit_JSOP_ENTERLET1()
+{
+    return emitEnterBlock();
+}
+
+bool
+BaselineCompiler::emit_JSOP_ENTERLET2()
 {
     return emitEnterBlock();
 }
@@ -2584,11 +2714,11 @@ BaselineCompiler::emitReturn()
         masm.loadValue(frame.addressOfReturnValue(), JSReturnOperand);
     }
 
-    if (JSOp(*pc) != JSOP_STOP) {
-        // JSOP_STOP is immediately followed by the return label, so we don't
-        // need a jump.
+    // Only emit the jump if this JSOP_RETRVAL is not the last instruction.
+    // Not needed for last instruction, because last instruction flows
+    // into return label.
+    if (pc + GetBytecodeLength(pc) < script->codeEnd())
         masm.jump(&return_);
-    }
 
     return true;
 }
@@ -2603,7 +2733,7 @@ BaselineCompiler::emit_JSOP_RETURN()
 }
 
 bool
-BaselineCompiler::emit_JSOP_STOP()
+BaselineCompiler::emit_JSOP_RETRVAL()
 {
     JS_ASSERT(frame.stackDepth() == 0);
 
@@ -2619,12 +2749,6 @@ BaselineCompiler::emit_JSOP_STOP()
     }
 
     return emitReturn();
-}
-
-bool
-BaselineCompiler::emit_JSOP_RETRVAL()
-{
-    return emit_JSOP_STOP();
 }
 
 typedef bool (*ToIdFn)(JSContext *, HandleScript, jsbytecode *, HandleValue, HandleValue,
@@ -2741,12 +2865,6 @@ BaselineCompiler::emit_JSOP_CALLEE()
     return true;
 }
 
-bool
-BaselineCompiler::emit_JSOP_POPV()
-{
-    return emit_JSOP_SETRVAL();
-}
-
 typedef bool (*NewArgumentsObjectFn)(JSContext *, BaselineFrame *, MutableHandleValue);
 static const VMFunction NewArgumentsObjectInfo =
     FunctionInfo<NewArgumentsObjectFn>(jit::NewArgumentsObject);
@@ -2804,38 +2922,22 @@ BaselineCompiler::emit_JSOP_RUNONCE()
     return callVM(RunOnceScriptPrologueInfo);
 }
 
-static bool
-DoCreateRestParameter(JSContext *cx, BaselineFrame *frame, MutableHandleValue res)
-{
-    unsigned numFormals = frame->numFormalArgs() - 1;
-    unsigned numActuals = frame->numActualArgs();
-    unsigned numRest = numActuals > numFormals ? numActuals - numFormals : 0;
-    Value *rest = frame->argv() + numFormals;
-
-    JSObject *obj = NewDenseCopiedArray(cx, numRest, rest, NULL);
-    if (!obj)
-        return false;
-    types::FixRestArgumentsType(cx, obj);
-    res.setObject(*obj);
-    return true;
-}
-
-typedef bool(*DoCreateRestParameterFn)(JSContext *cx, BaselineFrame *, MutableHandleValue);
-static const VMFunction DoCreateRestParameterInfo =
-    FunctionInfo<DoCreateRestParameterFn>(DoCreateRestParameter);
-
 bool
 BaselineCompiler::emit_JSOP_REST()
 {
     frame.syncStack(0);
 
-    prepareVMCall();
-    masm.loadBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
-    pushArg(R0.scratchReg());
+    JSObject *templateObject = NewDenseUnallocatedArray(cx, 0, nullptr, TenuredObject);
+    if (!templateObject)
+        return false;
+    types::FixRestArgumentsType(cx, templateObject);
 
-    if (!callVM(DoCreateRestParameterInfo))
+    // Call IC.
+    ICRest_Fallback::Compiler compiler(cx, templateObject);
+    if (!emitOpIC(compiler.getStub(&stubSpace_)))
         return false;
 
+    // Mark R0 as pushed stack value.
     frame.push(R0);
     return true;
 }

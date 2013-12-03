@@ -5,7 +5,9 @@
 
 
 #include "mozilla/MemoryReporting.h"
+#if defined(HAVE_POSIX_MEMALIGN)
 #include "gfxAlphaRecovery.h"
+#endif
 #include "gfxImageSurface.h"
 
 #include "cairo.h"
@@ -288,6 +290,29 @@ gfxImageSurface::CopyFrom(gfxImageSurface *other)
     }
 
     CopyForStride(mData, other->mData, mSize, mStride, other->mStride);
+
+    return true;
+}
+
+bool
+gfxImageSurface::CopyTo(SourceSurface *aSurface) {
+    mozilla::RefPtr<DataSourceSurface> data = aSurface->GetDataSurface();
+
+    if (!data) {
+        return false;
+    }
+
+    gfxIntSize size(data->GetSize().width, data->GetSize().height);
+    if (size != mSize) {
+        return false;
+    }
+
+    if (!FormatsAreCompatible(SurfaceFormatToImageFormat(aSurface->GetFormat()),
+                              mFormat)) {
+        return false;
+    }
+
+    CopyForStride(data->GetData(), mData, size, data->Stride(), mStride);
 
     return true;
 }

@@ -39,7 +39,7 @@ namespace layers {
 
 class Compositor;
 class CompositableHost;
-class CompositableQuirks;
+class CompositableBackendSpecificData;
 class SurfaceDescriptor;
 class ISurfaceAllocator;
 class TextureSourceOGL;
@@ -118,10 +118,10 @@ public:
    */
   virtual TileIterator* AsTileIterator() { return nullptr; }
 
-  virtual void SetCompositableQuirks(CompositableQuirks* aQuirks);
+  virtual void SetCompositableBackendSpecificData(CompositableBackendSpecificData* aBackendData);
 
 protected:
-  RefPtr<CompositableQuirks> mQuirks;
+  RefPtr<CompositableBackendSpecificData> mCompositableBackendData;
 };
 
 
@@ -308,7 +308,7 @@ public:
    * @param aRegion The region that has been changed, if nil, it means that the
    * entire surface should be updated.
    */
-  virtual void Updated(const nsIntRegion* aRegion) {}
+  virtual void Updated(const nsIntRegion* aRegion = nullptr) {}
 
   /**
    * Sets this TextureHost's compositor.
@@ -357,7 +357,7 @@ public:
    * Debug facility.
    * XXX - cool kids use Moz2D. See bug 882113.
    */
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() = 0;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() = 0;
 
   /**
    * XXX - Flags should only be set at creation time, this will be removed.
@@ -382,18 +382,20 @@ public:
     return LayerRenderState();
   }
 
-  virtual void SetCompositableQuirks(CompositableQuirks* aQuirks);
+  virtual void SetCompositableBackendSpecificData(CompositableBackendSpecificData* aBackendData);
 
-#ifdef MOZ_LAYERS_HAVE_LOG
+  // If a texture host holds a reference to shmem, it should override this method
+  // to forget about the shmem _without_ releasing it.
+  virtual void OnActorDestroy() {}
+
   virtual const char *Name() { return "TextureHost"; }
   virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
-#endif
 
 protected:
   uint64_t mID;
   RefPtr<TextureHost> mNextTexture;
   TextureFlags mFlags;
-  RefPtr<CompositableQuirks> mQuirks;
+  RefPtr<CompositableBackendSpecificData> mCompositableBackendData;
 };
 
 /**
@@ -420,7 +422,7 @@ public:
 
   virtual uint8_t* GetBuffer() = 0;
 
-  virtual void Updated(const nsIntRegion* aRegion) MOZ_OVERRIDE;
+  virtual void Updated(const nsIntRegion* aRegion = nullptr) MOZ_OVERRIDE;
 
   virtual bool Lock() MOZ_OVERRIDE;
 
@@ -443,7 +445,7 @@ public:
 
   virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
 protected:
   bool Upload(nsIntRegion *aRegion = nullptr);
@@ -469,7 +471,7 @@ class ShmemTextureHost : public BufferTextureHost
 {
 public:
   ShmemTextureHost(uint64_t aID,
-                   const ipc::Shmem& aShmem,
+                   const mozilla::ipc::Shmem& aShmem,
                    gfx::SurfaceFormat aFormat,
                    ISurfaceAllocator* aDeallocator,
                    TextureFlags aFlags);
@@ -480,12 +482,12 @@ public:
 
   virtual uint8_t* GetBuffer() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char *Name() MOZ_OVERRIDE { return "ShmemTextureHost"; }
-#endif
+
+  virtual void OnActorDestroy() MOZ_OVERRIDE;
 
 protected:
-  ipc::Shmem* mShmem;
+  mozilla::ipc::Shmem* mShmem;
   ISurfaceAllocator* mDeallocator;
 };
 
@@ -509,9 +511,7 @@ public:
 
   virtual uint8_t* GetBuffer() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char *Name() MOZ_OVERRIDE { return "MemoryTextureHost"; }
-#endif
 
 protected:
   uint8_t* mBuffer;
@@ -662,12 +662,10 @@ public:
     return LayerRenderState();
   }
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() = 0;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() = 0;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char *Name() = 0;
   virtual void PrintInfo(nsACString& aTo, const char* aPrefix);
-#endif
 
   /**
    * TEMPORARY.
@@ -717,6 +715,8 @@ public:
   // used only for hacky fix in gecko 23 for bug 862324
   // see bug 865908 about fixing this.
   virtual void ForgetBuffer() {}
+
+  void OnActorDestroy();
 
 protected:
   /**
@@ -799,11 +799,19 @@ private:
 class CompositingRenderTarget : public TextureSource
 {
 public:
+  CompositingRenderTarget(const gfx::IntPoint& aOrigin)
+    : mOrigin(aOrigin)
+  {}
   virtual ~CompositingRenderTarget() {}
 
 #ifdef MOZ_DUMP_PAINTING
   virtual already_AddRefed<gfxImageSurface> Dump(Compositor* aCompositor) { return nullptr; }
 #endif
+
+  const gfx::IntPoint& GetOrigin() { return mOrigin; }
+
+private:
+  gfx::IntPoint mOrigin;
 };
 
 /**

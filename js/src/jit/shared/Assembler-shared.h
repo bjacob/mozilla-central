@@ -110,7 +110,7 @@ IsCompilingAsmJS()
 {
     // asm.js compilation pushes an IonContext with a null JSCompartment.
     IonContext *ictx = MaybeGetIonContext();
-    return ictx && ictx->compartment == NULL;
+    return ictx && ictx->compartment == nullptr;
 }
 #endif
 
@@ -170,7 +170,7 @@ struct PatchedImmPtr {
     void *value;
 
     explicit PatchedImmPtr()
-      : value(NULL)
+      : value(nullptr)
     { }
     explicit PatchedImmPtr(const void *value)
       : value(const_cast<void*>(value))
@@ -232,7 +232,7 @@ struct PatchedAbsoluteAddress {
     void *addr;
 
     explicit PatchedAbsoluteAddress()
-      : addr(NULL)
+      : addr(nullptr)
     { }
     explicit PatchedAbsoluteAddress(const void *addr)
       : addr(const_cast<void*>(addr))
@@ -356,12 +356,8 @@ class Label : public LabelBase
     { }
     ~Label()
     {
-#ifdef DEBUG
-        // Note: the condition is a hack to silence this assert when OOM testing,
-        // see bug 756614.
-        if (MaybeGetIonContext() && !OffThreadIonCompilationEnabled(GetIonContext()->runtime))
-            JS_ASSERT_IF(!GetIonContext()->runtime->hadOutOfMemory, !used());
-#endif
+        if (MaybeGetIonContext())
+            JS_ASSERT_IF(!GetIonContext()->runtime->hadOutOfMemory(), !used());
     }
 };
 
@@ -554,7 +550,7 @@ class CodeLocationJump
 
   public:
     CodeLocationJump() {
-        raw_ = NULL;
+        raw_ = nullptr;
         setUninitialized();
 #ifdef JS_SMALL_BRANCH
         jumpTableEntry_ = (uint8_t *) 0xdeadab1e;
@@ -573,7 +569,7 @@ class CodeLocationJump
 #endif
     }
 
-    void repoint(IonCode *code, MacroAssembler* masm = NULL);
+    void repoint(IonCode *code, MacroAssembler* masm = nullptr);
 
     uint8_t *raw() const {
         JS_ASSERT(state_ == Absolute);
@@ -618,7 +614,7 @@ class CodeLocationLabel
 
   public:
     CodeLocationLabel() {
-        raw_ = NULL;
+        raw_ = nullptr;
         setUninitialized();
     }
     CodeLocationLabel(IonCode *code, CodeOffsetLabel base) {
@@ -642,7 +638,7 @@ class CodeLocationLabel
         return raw_ - other.raw_;
     }
 
-    void repoint(IonCode *code, MacroAssembler *masm = NULL);
+    void repoint(IonCode *code, MacroAssembler *masm = nullptr);
 
 #ifdef DEBUG
     bool isSet() const {

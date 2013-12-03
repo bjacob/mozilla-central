@@ -6,8 +6,6 @@ NO_PROFILE_GUIDED_OPTIMIZE = 1
 
 include $(topsrcdir)/config/config.mk
 
-DIST_SUBDIR = metro/install
-
 OS_LIBS = \
 	kernel32.lib \
 	user32.lib \
@@ -16,5 +14,3 @@ OS_LIBS = \
 	shell32.lib \
 	propsys.lib \
 	$(NULL)
-
-DEFINES += -DUNICODE -D_UNICODE

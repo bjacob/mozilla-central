@@ -96,9 +96,9 @@ public:
   already_AddRefed<DOMRequest> StopDiscovery(ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
-    Pair(BluetoothDevice& aDevice, ErrorResult& aRv);
+    Pair(const nsAString& aDeviceAddress, ErrorResult& aRv);
   already_AddRefed<DOMRequest>
-    Unpair(BluetoothDevice& aDevice, ErrorResult& aRv);
+    Unpair(const nsAString& aDeviceAddress, ErrorResult& aRv);
   already_AddRefed<DOMRequest>
     GetPairedDevices(ErrorResult& aRv);
   already_AddRefed<DOMRequest>
@@ -137,12 +137,17 @@ public:
   already_AddRefed<DOMRequest> DisconnectSco(ErrorResult& aRv);
   already_AddRefed<DOMRequest> IsScoConnected(ErrorResult& aRv);
 
+  already_AddRefed<DOMRequest> AnswerWaitingCall(ErrorResult& aRv);
+  already_AddRefed<DOMRequest> IgnoreWaitingCall(ErrorResult& aRv);
+  already_AddRefed<DOMRequest> ToggleCalls(ErrorResult& aRv);
+
   already_AddRefed<DOMRequest>
     SendMediaMetaData(const MediaMetaData& aMediaMetaData, ErrorResult& aRv);
   already_AddRefed<DOMRequest>
     SendMediaPlayStatus(const MediaPlayStatus& aMediaPlayStatus, ErrorResult& aRv);
 
   IMPL_EVENT_HANDLER(devicefound);
+  IMPL_EVENT_HANDLER(discoverystatechanged);
   IMPL_EVENT_HANDLER(a2dpstatuschanged);
   IMPL_EVENT_HANDLER(hfpstatuschanged);
   IMPL_EVENT_HANDLER(pairedstatuschanged);
@@ -166,7 +171,7 @@ private:
   already_AddRefed<mozilla::dom::DOMRequest>
     StartStopDiscovery(bool aStart, ErrorResult& aRv);
   already_AddRefed<mozilla::dom::DOMRequest>
-    PairUnpair(bool aPair, BluetoothDevice& aDevice, ErrorResult& aRv);
+    PairUnpair(bool aPair, const nsAString& aDeviceAddress, ErrorResult& aRv);
 
   JS::Heap<JSObject*> mJsUuids;
   JS::Heap<JSObject*> mJsDeviceAddresses;

@@ -7,6 +7,8 @@
 #ifndef js_HeapAPI_h
 #define js_HeapAPI_h
 
+#include <limits.h>
+
 #include "jspubtd.h"
 
 #include "js/Utility.h"
@@ -16,8 +18,11 @@ namespace js {
 
 // Whether the current thread is permitted access to any part of the specified
 // runtime or zone.
-extern bool CurrentThreadCanAccessRuntime(JSRuntime *rt);
-extern bool CurrentThreadCanAccessZone(JS::Zone *zone);
+JS_FRIEND_API(bool)
+CurrentThreadCanAccessRuntime(JSRuntime *rt);
+
+JS_FRIEND_API(bool)
+CurrentThreadCanAccessZone(JS::Zone *zone);
 
 namespace gc {
 
@@ -111,6 +116,7 @@ namespace gc {
 static JS_ALWAYS_INLINE uintptr_t *
 GetGCThingMarkBitmap(const void *thing)
 {
+    JS_ASSERT(thing);
     uintptr_t addr = uintptr_t(thing);
     addr &= ~js::gc::ChunkMask;
     addr |= js::gc::ChunkMarkBitmapOffset;
@@ -120,6 +126,7 @@ GetGCThingMarkBitmap(const void *thing)
 static JS_ALWAYS_INLINE JS::shadow::Runtime *
 GetGCThingRuntime(const void *thing)
 {
+    JS_ASSERT(thing);
     uintptr_t addr = uintptr_t(thing);
     addr &= ~js::gc::ChunkMask;
     addr |= js::gc::ChunkRuntimeOffset;
@@ -134,8 +141,9 @@ GetGCThingMarkWordAndMask(const void *thing, uint32_t color,
     size_t bit = (addr & js::gc::ChunkMask) / js::gc::CellSize + color;
     JS_ASSERT(bit < js::gc::ChunkMarkBitmapBits);
     uintptr_t *bitmap = GetGCThingMarkBitmap(thing);
-    *maskp = uintptr_t(1) << (bit % JS_BITS_PER_WORD);
-    *wordp = &bitmap[bit / JS_BITS_PER_WORD];
+    const uintptr_t nbits = sizeof(*bitmap) * CHAR_BIT;
+    *maskp = uintptr_t(1) << (bit % nbits);
+    *wordp = &bitmap[bit / nbits];
 }
 
 static JS_ALWAYS_INLINE JS::shadow::ArenaHeader *
@@ -144,6 +152,16 @@ GetGCThingArena(void *thing)
     uintptr_t addr = uintptr_t(thing);
     addr &= ~js::gc::ArenaMask;
     return reinterpret_cast<JS::shadow::ArenaHeader *>(addr);
+}
+
+JS_ALWAYS_INLINE bool
+IsInsideNursery(const JS::shadow::Runtime *runtime, const void *p)
+{
+#ifdef JSGC_GENERATIONAL
+    return uintptr_t(p) >= runtime->gcNurseryStart_ && uintptr_t(p) < runtime->gcNurseryEnd_;
+#else
+    return false;
+#endif
 }
 
 } /* namespace gc */
@@ -175,7 +193,7 @@ GCThingIsMarkedGray(void *thing)
      * each GC slice, so the gray marker never sees nursery things.
      */
     JS::shadow::Runtime *rt = js::gc::GetGCThingRuntime(thing);
-    if (uintptr_t(thing) >= rt->gcNurseryStart_ && uintptr_t(thing) < rt->gcNurseryEnd_)
+    if (js::gc::IsInsideNursery(rt, thing))
         return false;
 #endif
     uintptr_t *word, mask;

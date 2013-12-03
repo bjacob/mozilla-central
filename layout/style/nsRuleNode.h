@@ -127,6 +127,10 @@ struct nsCachedStyleData
     return nsStyleStructID_Reset_Start <= aSID;
   }
 
+  static bool IsInherited(const nsStyleStructID aSID) {
+    return !IsReset(aSID);
+  }
+
   static uint32_t GetBitForSID(const nsStyleStructID aSID) {
     return 1 << aSID;
   }
@@ -304,7 +308,7 @@ private:
                          const PLDHashEntryHdr *aHdr,
                          const void *aKey);
 
-  static PLDHashTableOps ChildrenHashOps;
+  static const PLDHashTableOps ChildrenHashOps;
 
   static PLDHashOperator
   EnqueueRuleNodeChildren(PLDHashTable *table, PLDHashEntryHdr *hdr,
@@ -628,7 +632,7 @@ protected:
                             nsStyleContext* aContext,
                             bool aIsBoxShadow,
                             bool& aCanStoreInRuleTree);
-  void SetStyleFilterToCSSValue(nsStyleFilter* aStyleFilter,
+  bool SetStyleFilterToCSSValue(nsStyleFilter* aStyleFilter,
                                 const nsCSSValue& aValue,
                                 nsStyleContext* aStyleContext,
                                 nsPresContext* aPresContext,

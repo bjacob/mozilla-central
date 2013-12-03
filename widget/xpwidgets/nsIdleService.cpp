@@ -45,7 +45,7 @@ using namespace mozilla;
 #define SECONDS_PER_DAY 86400
 
 #ifdef PR_LOGGING
-static PRLogModuleInfo *sLog = NULL;
+static PRLogModuleInfo *sLog = nullptr;
 #endif
 
 // Use this to find previously added observers in our array:
@@ -105,7 +105,8 @@ nsIdleServiceDaily::Observe(nsISupports *,
                                          nullptr);
 
   // Notify the category observers.
-  const nsCOMArray<nsIObserver> &entries = mCategoryObservers.GetEntries();
+  nsCOMArray<nsIObserver> entries;
+  mCategoryObservers.GetEntries(entries);
   for (int32_t i = 0; i < entries.Count(); ++i) {
     (void)entries[i]->Observe(nullptr, OBSERVER_TOPIC_IDLE_DAILY, nullptr);
   }
@@ -391,7 +392,7 @@ nsIdleService::nsIdleService() : mCurrentlySetToTimeoutAt(TimeStamp()),
                                  mLastUserInteraction(TimeStamp::Now())
 {
 #ifdef PR_LOGGING
-  if (sLog == NULL)
+  if (sLog == nullptr)
     sLog = PR_NewLogModule("idleService");
 #endif
   MOZ_ASSERT(!gIdleService);
@@ -771,10 +772,14 @@ nsIdleService::IdleTimerCallback(void)
 void
 nsIdleService::SetTimerExpiryIfBefore(TimeStamp aNextTimeout)
 {
+#if defined(PR_LOGGING) || defined(MOZ_WIDGET_ANDROID)
   TimeDuration nextTimeoutDuration = aNextTimeout - TimeStamp::Now();
+#endif
+
   PR_LOG(sLog, PR_LOG_DEBUG,
          ("idleService: SetTimerExpiryIfBefore: next timeout %0.f msec from now",
           nextTimeoutDuration.ToMilliseconds()));
+
 #ifdef MOZ_WIDGET_ANDROID
   __android_log_print(ANDROID_LOG_INFO, "IdleService",
                       "SetTimerExpiryIfBefore: next timeout %0.f msec from now",
@@ -824,7 +829,6 @@ nsIdleService::SetTimerExpiryIfBefore(TimeStamp aNextTimeout)
   }
 }
 
-
 void
 nsIdleService::ReconfigureTimer(void)
 {
@@ -850,15 +854,20 @@ nsIdleService::ReconfigureTimer(void)
   TimeStamp nextTimeoutAt = mLastUserInteraction +
                             TimeDuration::FromSeconds(mDeltaToNextIdleSwitchInS);
 
+#if defined(PR_LOGGING) || defined(MOZ_WIDGET_ANDROID)
   TimeDuration nextTimeoutDuration = nextTimeoutAt - curTime;
+#endif
+
   PR_LOG(sLog, PR_LOG_DEBUG,
          ("idleService: next timeout %0.f msec from now",
           nextTimeoutDuration.ToMilliseconds()));
+
 #ifdef MOZ_WIDGET_ANDROID
   __android_log_print(ANDROID_LOG_INFO, "IdleService",
                       "next timeout %0.f msec from now",
                       nextTimeoutDuration.ToMilliseconds());
 #endif
+
   // Check if we should correct the timeout time because we should poll before.
   if ((mIdleObserverCount > 0) && UsePollMode()) {
     TimeStamp pollTimeout =
@@ -879,4 +888,3 @@ nsIdleService::ReconfigureTimer(void)
 
   SetTimerExpiryIfBefore(nextTimeoutAt);
 }
-

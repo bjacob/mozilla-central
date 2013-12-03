@@ -42,8 +42,6 @@
 
 using namespace mozilla;
 
-#define COMPONENT_DIRECTORY     NS_LITERAL_CSTRING("components")
-
 // define home directory
 // For Windows platform, We are choosing Appdata folder as HOME
 #if defined (XP_WIN)
@@ -61,7 +59,8 @@ nsresult
 nsDirectoryService::GetCurrentProcessDirectory(nsIFile** aFile)
 //----------------------------------------------------------------------------------------
 {
-    NS_ENSURE_ARG_POINTER(aFile);
+    if (NS_WARN_IF(!aFile))
+        return NS_ERROR_INVALID_ARG;
     *aFile = nullptr;
     
    //  Set the component registry location:
@@ -227,8 +226,10 @@ nsDirectoryService::nsDirectoryService()
 nsresult
 nsDirectoryService::Create(nsISupports *outer, REFNSIID aIID, void **aResult)
 {
-    NS_ENSURE_ARG_POINTER(aResult);
-    NS_ENSURE_NO_AGGREGATION(outer);
+    if (NS_WARN_IF(!aResult))
+        return NS_ERROR_INVALID_ARG;
+    if (NS_WARN_IF(outer))
+        return NS_ERROR_NO_AGGREGATION;
 
     if (!gService)
     {
@@ -286,7 +287,8 @@ NS_IMPL_ISUPPORTS4(nsDirectoryService, nsIProperties, nsIDirectoryService, nsIDi
 NS_IMETHODIMP
 nsDirectoryService::Undefine(const char* prop)
 {
-    NS_ENSURE_ARG(prop);
+    if (NS_WARN_IF(!prop))
+        return NS_ERROR_INVALID_ARG;
 
     nsDependentCString key(prop);
     if (!mHashtable.Get(key, nullptr))
@@ -362,7 +364,8 @@ static bool FindProviderFile(nsIDirectoryServiceProvider* aElement,
 NS_IMETHODIMP
 nsDirectoryService::Get(const char* prop, const nsIID & uuid, void* *result)
 {
-    NS_ENSURE_ARG(prop);
+    if (NS_WARN_IF(!prop))
+        return NS_ERROR_INVALID_ARG;
 
     nsDependentCString key(prop);
 
@@ -411,7 +414,8 @@ nsDirectoryService::Get(const char* prop, const nsIID & uuid, void* *result)
 NS_IMETHODIMP
 nsDirectoryService::Set(const char* prop, nsISupports* value)
 {
-    NS_ENSURE_ARG(prop);
+    if (NS_WARN_IF(!prop))
+        return NS_ERROR_INVALID_ARG;
 
     nsDependentCString key(prop);
     if (mHashtable.Get(key, nullptr) || !value) {
@@ -433,7 +437,8 @@ nsDirectoryService::Set(const char* prop, nsISupports* value)
 NS_IMETHODIMP
 nsDirectoryService::Has(const char *prop, bool *_retval)
 {
-    NS_ENSURE_ARG(prop);
+    if (NS_WARN_IF(!prop))
+        return NS_ERROR_INVALID_ARG;
 
     *_retval = false;
     nsCOMPtr<nsIFile> value;
@@ -912,7 +917,8 @@ nsDirectoryService::GetFile(const char *prop, bool *persistent, nsIFile **_retva
 NS_IMETHODIMP
 nsDirectoryService::GetFiles(const char *prop, nsISimpleEnumerator **_retval)
 {
-    NS_ENSURE_ARG_POINTER(_retval);
+    if (NS_WARN_IF(!_retval))
+        return NS_ERROR_INVALID_ARG;
     *_retval = nullptr;
         
     return NS_ERROR_FAILURE;

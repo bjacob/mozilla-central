@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-MODULE = 'widget'
-
 EXPORTS += [
     'OrientationObserver.h',
 ]
@@ -23,7 +21,7 @@ EXPORTS += [
 DIRS += ['libdisplay', 'nativewindow']
 
 # libui files
-CPP_SOURCES += [
+SOURCES += ['libui/' + src for src in [
     'EventHub.cpp',
     'Input.cpp',
     'InputApplication.cpp',
@@ -33,33 +31,51 @@ CPP_SOURCES += [
     'InputReader.cpp',
     'InputTransport.cpp',
     'InputWindow.cpp',
+    'Keyboard.cpp',
     'KeyCharacterMap.cpp',
     'KeyLayoutMap.cpp',
-    'Keyboard.cpp',
     'PointerController.cpp',
     'SpriteController.cpp',
     'Tokenizer.cpp',
     'VelocityControl.cpp',
     'VelocityTracker.cpp',
     'VirtualKeyMap.cpp',
-]
+]]
 
-CPP_SOURCES += [
+SOURCES += [
     'Framebuffer.cpp',
     'GfxInfo.cpp',
-    'HwcUtils.cpp',
     'GonkMemoryPressureMonitoring.cpp',
-    'OrientationObserver.cpp',
-    'ProcessOrientation.cpp',
+    'HwcComposer2D.cpp',
+    'HwcUtils.cpp',
     'nsAppShell.cpp',
     'nsIdleServiceGonk.cpp',
     'nsLookAndFeel.cpp',
     'nsWidgetFactory.cpp',
     'nsWindow.cpp',
-    'HwcComposer2D.cpp'
+    'OrientationObserver.cpp',
+    'ParentProcessController.cpp',
+    'ProcessOrientation.cpp'
 ]
-
-LIBXUL_LIBRARY = True
 
 LIBRARY_NAME = 'widget_gonk'
 
+include('/ipc/chromium/chromium-config.mozbuild')
+
+FINAL_LIBRARY = 'xul'
+
+LOCAL_INCLUDES += [
+    '/content/events/src',
+    '/content/media/omx/mediaresourcemanager',
+    '/dom/system/android',
+    '/gfx/skia/include/config',
+    '/gfx/skia/include/core',
+    '/widget/shared',
+    '/widget/xpwidgets',
+]
+
+DEFINES['HAVE_OFF64_T'] = True
+DEFINES['SK_BUILD_FOR_ANDROID_NDK'] = True
+
+if CONFIG['MOZ_OMX_DECODER']:
+    DEFINES['MOZ_OMX_DECODER'] = True

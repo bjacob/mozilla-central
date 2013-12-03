@@ -189,14 +189,15 @@ jsd_GetValueString(JSDContext* jsdc, JSDValue* jsdval)
     {
         JSAutoCompartment ac(cx, scopeObj);
         AutoSaveExceptionState as(cx);
-        string = JS_ValueToString(cx, jsdval->val);
+        JS::RootedValue v(cx, jsdval->val);
+        string = JS::ToString(cx, v);
     }
 
     JSAutoCompartment ac2(cx, jsdc->glob);
     if(string) {
         stringval = STRING_TO_JSVAL(string);
     }
-    if(!string || !JS_WrapValue(cx, stringval.address())) {
+    if(!string || !JS_WrapValue(cx, &stringval)) {
         return nullptr;
     }
 
@@ -253,7 +254,7 @@ jsd_NewValue(JSDContext* jsdc, jsval value)
 
         ok = JS_AddNamedValueRoot(cx, &jsdval->val, "JSDValue");
         if(ok && JSVAL_IS_STRING(val)) {
-            if(!JS_WrapValue(cx, val.address())) {
+            if(!JS_WrapValue(cx, &val)) {
                 ok = false;
             }
         }

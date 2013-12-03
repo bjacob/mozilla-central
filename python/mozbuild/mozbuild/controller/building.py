@@ -297,6 +297,12 @@ class BuildMonitor(MozbuildObject):
 
     def start_resource_recording(self):
         # This should be merged into start() once bug 892342 lands.
+
+        # Resource monitoring on Windows is currently busted because of
+        # multiprocessing issues. Bug 914563.
+        if self._is_windows():
+            return
+
         self.resources.start()
         self._resources_started = True
 
@@ -378,12 +384,17 @@ class BuildMonitor(MozbuildObject):
         if not record_usage:
             return
 
-        usage = self.record_resource_usage()
-        if not usage:
-            return
+        try:
+            usage = self.record_resource_usage()
+            if not usage:
+                return
 
-        with open(self._get_state_filename('build_resources.json'), 'w') as fh:
-            json.dump(usage, fh, indent=2)
+            with open(self._get_state_filename('build_resources.json'), 'w') as fh:
+                json.dump(usage, fh, indent=2)
+        except Exception as e:
+            self.log(logging.WARNING, 'build_resources_error',
+                {'msg': str(e)},
+                'Exception when writing resource usage file: {msg}')
 
     def _get_finder_cpu_usage(self):
         """Obtain the CPU usage of the Finder app on OS X.
@@ -526,3 +537,17 @@ class BuildMonitor(MozbuildObject):
             'Read time: {io_read_time}; Write time: {io_write_time}'
 
         self.log(logging.WARNING, m_type, params, message)
+
+
+class BuildDriver(MozbuildObject):
+    """Provides a high-level API for build actions."""
+
+    def install_tests(self, remove=True):
+        """Install test files (through manifest)."""
+
+        env = {}
+        if not remove:
+            env[b'NO_REMOVE'] = b'1'
+
+        self._run_make(target='install-tests', append_env=env, pass_thru=True,
+            print_directory=False)

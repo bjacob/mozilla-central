@@ -406,8 +406,10 @@ function InitAndStartRefTests()
         DoneTests();
     }
 
-    // Focus the content browser
-    gBrowser.focus();
+    // Focus the content browser.
+    if (gFocusFilterMode != FOCUS_FILTER_NON_NEEDS_FOCUS_TESTS) {
+        gBrowser.focus();
+    }
 
     StartTests();
 }
@@ -634,17 +636,9 @@ function BuildConditionSandbox(aURL) {
 
     // see if we have the test plugin available,
     // and set a sandox prop accordingly
-    sandbox.haveTestPlugin = false;
-
     var navigator = gContainingWindow.navigator;
-    for (var i = 0; i < navigator.mimeTypes.length; i++) {
-        if (navigator.mimeTypes[i].type == "application/x-test" &&
-            navigator.mimeTypes[i].enabledPlugin != null &&
-            navigator.mimeTypes[i].enabledPlugin.name == "Test Plug-in") {
-            sandbox.haveTestPlugin = true;
-            break;
-        }
-    }
+    var testPlugin = navigator.plugins["Test Plug-in"];
+    sandbox.haveTestPlugin = !!testPlugin;
 
     // Set a flag on sandbox if the windows default theme is active
     var box = gContainingWindow.document.createElement("box");
@@ -1154,6 +1148,15 @@ function Focus()
     return true;
 }
 
+function Blur()
+{
+    // On non-remote reftests, this will transfer focus to the dummy window
+    // we created to hold focus for non-needs-focus tests.  Buggy tests
+    // (ones which require focus but don't request needs-focus) will then
+    // fail.
+    gContainingWindow.blur();
+}
+
 function StartCurrentTest()
 {
     gTestLog = [];
@@ -1186,6 +1189,9 @@ function StartCurrentTest()
     }
     else {
         gDumpLog("REFTEST TEST-START | " + gURLs[0].prettyPath + "\n");
+        if (!gURLs[0].needsFocus) {
+            Blur();
+        }
         var currentTest = gTotalTests - gURLs.length;
         gContainingWindow.document.title = "reftest: " + currentTest + " / " + gTotalTests +
             " (" + Math.floor(100 * (currentTest / gTotalTests)) + "%)";

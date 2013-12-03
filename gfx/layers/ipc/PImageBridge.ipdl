@@ -7,12 +7,11 @@ include LayersSurfaces;
 include LayersMessages;
 include protocol PGrallocBuffer;
 include protocol PCompositable;
+include ProtocolTypes;
 
-include "mozilla/layers/CompositorTypes.h";
 include "mozilla/GfxMessageUtils.h";
 
-using ImageHandle;
-using mozilla::layers::TextureInfo;
+using struct mozilla::layers::TextureInfo from "mozilla/layers/CompositorTypes.h";
 
 namespace mozilla {
 namespace layers {
@@ -22,7 +21,7 @@ namespace layers {
  * frames directly to the compositor thread/process without relying on the main thread
  * which might be too busy dealing with content script.
  */
-/*FIXME: sync*/ rpc protocol PImageBridge
+intr protocol PImageBridge
 {
   manages PCompositable;
   manages PGrallocBuffer;

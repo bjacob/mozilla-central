@@ -11,6 +11,7 @@
 #include "mozilla/dom/ipc/nsIRemoteBlob.h"
 #include "nsIOutputStream.h"
 
+#include <algorithm>
 #include "jsfriendapi.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
@@ -18,6 +19,7 @@
 #include "mozilla/dom/StructuredCloneTags.h"
 #include "mozilla/dom/ipc/Blob.h"
 #include "mozilla/dom/quota/FileStreams.h"
+#include "mozilla/Endian.h"
 #include "mozilla/storage.h"
 #include "nsContentUtils.h"
 #include "nsDOMClassInfo.h"
@@ -54,6 +56,9 @@ using namespace mozilla::dom;
 using namespace mozilla::dom::indexedDB::ipc;
 using mozilla::dom::quota::FileOutputStream;
 using mozilla::ErrorResult;
+using mozilla::fallible_t;
+using mozilla::LittleEndian;
+using mozilla::NativeEndian;
 
 BEGIN_INDEXEDDB_NAMESPACE
 
@@ -344,6 +349,58 @@ private:
   SerializedStructuredCloneReadInfo mSerializedCloneReadInfo;
 };
 
+class OpenKeyCursorHelper MOZ_FINAL : public ObjectStoreHelper
+{
+public:
+  OpenKeyCursorHelper(IDBTransaction* aTransaction,
+                      IDBRequest* aRequest,
+                      IDBObjectStore* aObjectStore,
+                      IDBKeyRange* aKeyRange,
+                      IDBCursor::Direction aDirection)
+  : ObjectStoreHelper(aTransaction, aRequest, aObjectStore),
+    mKeyRange(aKeyRange), mDirection(aDirection)
+  { }
+
+  virtual nsresult
+  DoDatabaseWork(mozIStorageConnection* aConnection) MOZ_OVERRIDE;
+
+  virtual nsresult
+  GetSuccessResult(JSContext* aCx, JS::MutableHandle<JS::Value> aVal)
+                   MOZ_OVERRIDE;
+
+  virtual void
+  ReleaseMainThreadObjects() MOZ_OVERRIDE;
+
+  virtual nsresult
+  PackArgumentsForParentProcess(ObjectStoreRequestParams& aParams) MOZ_OVERRIDE;
+
+  virtual ChildProcessSendResult
+  SendResponseToChildProcess(nsresult aResultCode) MOZ_OVERRIDE;
+
+  virtual nsresult
+  UnpackResponseFromParentProcess(const ResponseValue& aResponseValue)
+                                  MOZ_OVERRIDE;
+
+private:
+  ~OpenKeyCursorHelper()
+  { }
+
+  nsresult EnsureCursor();
+
+  // In-params.
+  nsRefPtr<IDBKeyRange> mKeyRange;
+  const IDBCursor::Direction mDirection;
+
+  // Out-params.
+  Key mKey;
+  nsCString mContinueQuery;
+  nsCString mContinueToQuery;
+  Key mRangeKey;
+
+  // Only used in the parent process.
+  nsRefPtr<IDBCursor> mCursor;
+};
+
 class CreateIndexHelper : public NoRequestObjectStoreHelper
 {
 public:
@@ -441,6 +498,47 @@ private:
   nsTArray<StructuredCloneReadInfo> mCloneReadInfos;
 };
 
+class GetAllKeysHelper MOZ_FINAL : public ObjectStoreHelper
+{
+public:
+  GetAllKeysHelper(IDBTransaction* aTransaction,
+                   IDBRequest* aRequest,
+                   IDBObjectStore* aObjectStore,
+                   IDBKeyRange* aKeyRange,
+                   const uint32_t aLimit)
+  : ObjectStoreHelper(aTransaction, aRequest, aObjectStore),
+    mKeyRange(aKeyRange), mLimit(aLimit)
+  { }
+
+  virtual nsresult
+  DoDatabaseWork(mozIStorageConnection* aConnection) MOZ_OVERRIDE;
+
+  virtual nsresult
+  GetSuccessResult(JSContext* aCx, JS::MutableHandle<JS::Value> aVal)
+                   MOZ_OVERRIDE;
+
+  virtual void
+  ReleaseMainThreadObjects() MOZ_OVERRIDE;
+
+  virtual nsresult
+  PackArgumentsForParentProcess(ObjectStoreRequestParams& aParams) MOZ_OVERRIDE;
+
+  virtual ChildProcessSendResult
+  SendResponseToChildProcess(nsresult aResultCode) MOZ_OVERRIDE;
+
+  virtual nsresult
+  UnpackResponseFromParentProcess(const ResponseValue& aResponseValue)
+                                  MOZ_OVERRIDE;
+
+private:
+  ~GetAllKeysHelper()
+  { }
+
+  nsRefPtr<IDBKeyRange> mKeyRange;
+  const uint32_t mLimit;
+  nsTArray<Key> mKeys;
+};
+
 class CountHelper : public ObjectStoreHelper
 {
 public:
@@ -515,7 +613,7 @@ class ThreadLocalJSRuntime
   static const unsigned sRuntimeHeapSize = 768 * 1024;
 
   ThreadLocalJSRuntime()
-  : mRuntime(NULL), mContext(NULL), mGlobal(NULL)
+  : mRuntime(nullptr), mContext(nullptr), mGlobal(nullptr)
   {
       MOZ_COUNT_CTOR(ThreadLocalJSRuntime);
   }
@@ -536,7 +634,7 @@ class ThreadLocalJSRuntime
 
     JSAutoRequest ar(mContext);
 
-    mGlobal = JS_NewGlobalObject(mContext, &sGlobalClass, NULL,
+    mGlobal = JS_NewGlobalObject(mContext, &sGlobalClass, nullptr,
                                  JS::FireOnNewGlobalHook);
     NS_ENSURE_TRUE(mGlobal, NS_ERROR_OUT_OF_MEMORY);
 
@@ -685,7 +783,7 @@ public:
       nsContentUtils::WrapNative(aCx, global,
                                  static_cast<nsIDOMFileHandle*>(fileHandle),
                                  &NS_GET_IID(nsIDOMFileHandle),
-                                 wrappedFileHandle.address());
+                                 &wrappedFileHandle);
     if (NS_FAILED(rv)) {
       NS_WARNING("Failed to wrap native!");
       return nullptr;
@@ -744,7 +842,7 @@ public:
       JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
       rv = nsContentUtils::WrapNative(aCx, global, domBlob,
                                       &NS_GET_IID(nsIDOMBlob),
-                                      wrappedBlob.address());
+                                      &wrappedBlob);
       if (NS_FAILED(rv)) {
         NS_WARNING("Failed to wrap native!");
         return nullptr;
@@ -771,7 +869,7 @@ public:
     JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
     rv = nsContentUtils::WrapNative(aCx, global, domFile,
                                     &NS_GET_IID(nsIDOMFile),
-                                    wrappedFile.address());
+                                    &wrappedFile);
     if (NS_FAILED(rv)) {
       NS_WARNING("Failed to wrap native!");
       return nullptr;
@@ -864,7 +962,7 @@ const JSClass IDBObjectStore::sDummyPropJSClass = {
 already_AddRefed<IDBObjectStore>
 IDBObjectStore::Create(IDBTransaction* aTransaction,
                        ObjectStoreInfo* aStoreInfo,
-                       nsIAtom* aDatabaseId,
+                       const nsACString& aDatabaseId,
                        bool aCreating)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
@@ -1126,6 +1224,8 @@ IDBObjectStore::GetStructuredCloneReadInfoFromStatement(
   const char* compressed = reinterpret_cast<const char*>(blobData);
   size_t compressedLength = size_t(blobDataLength);
 
+  static const fallible_t fallible = fallible_t();
+
   size_t uncompressedLength;
   if (!snappy::GetUncompressedLength(compressed, compressedLength,
                                      &uncompressedLength)) {
@@ -1133,7 +1233,8 @@ IDBObjectStore::GetStructuredCloneReadInfoFromStatement(
     return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
   }
 
-  nsAutoArrayPtr<char> uncompressed(new char[uncompressedLength]);
+  nsAutoArrayPtr<char> uncompressed(new (fallible) char[uncompressedLength]);
+  NS_ENSURE_TRUE(uncompressed, NS_ERROR_OUT_OF_MEMORY);
 
   if (!snappy::RawUncompress(compressed, compressedLength,
                              uncompressed.get())) {
@@ -1248,7 +1349,7 @@ IDBObjectStore::DeserializeValue(JSContext* aCx,
     nullptr
   };
 
-  return buffer.read(aCx, aValue.address(), &callbacks, &aCloneReadInfo);
+  return buffer.read(aCx, aValue, &callbacks, &aCloneReadInfo);
 }
 
 // static
@@ -1274,36 +1375,6 @@ IDBObjectStore::SerializeValue(JSContext* aCx,
   return buffer.write(aCx, aValue, &callbacks, &aCloneWriteInfo);
 }
 
-static inline uint32_t
-SwapBytes(uint32_t u)
-{
-#ifdef IS_BIG_ENDIAN
-  return ((u & 0x000000ffU) << 24) |
-         ((u & 0x0000ff00U) << 8) |
-         ((u & 0x00ff0000U) >> 8) |
-         ((u & 0xff000000U) >> 24);
-#else
-  return u;
-#endif
-}
-
-static inline double
-SwapBytes(uint64_t u)
-{
-#ifdef IS_BIG_ENDIAN
-  return ((u & 0x00000000000000ffLLU) << 56) |
-         ((u & 0x000000000000ff00LLU) << 40) |
-         ((u & 0x0000000000ff0000LLU) << 24) |
-         ((u & 0x00000000ff000000LLU) << 8) |
-         ((u & 0x000000ff00000000LLU) >> 8) |
-         ((u & 0x0000ff0000000000LLU) >> 24) |
-         ((u & 0x00ff000000000000LLU) >> 40) |
-         ((u & 0xff00000000000000LLU) >> 56);
-#else
-  return double(u);
-#endif
-}
-
 static inline bool
 StructuredCloneReadString(JSStructuredCloneReader* aReader,
                           nsCString& aString)
@@ -1313,9 +1384,9 @@ StructuredCloneReadString(JSStructuredCloneReader* aReader,
     NS_WARNING("Failed to read length!");
     return false;
   }
-  length = SwapBytes(length);
+  length = NativeEndian::swapFromLittleEndian(length);
 
-  if (!aString.SetLength(length, mozilla::fallible_t())) {
+  if (!aString.SetLength(length, fallible_t())) {
     NS_WARNING("Out of memory?");
     return false;
   }
@@ -1376,7 +1447,7 @@ IDBObjectStore::ReadBlobOrFile(JSStructuredCloneReader* aReader,
     NS_WARNING("Failed to read size!");
     return false;
   }
-  aRetval->size = SwapBytes(size);
+  aRetval->size = NativeEndian::swapFromLittleEndian(size);
 
   nsCString type;
   if (!StructuredCloneReadString(aReader, type)) {
@@ -1392,11 +1463,16 @@ IDBObjectStore::ReadBlobOrFile(JSStructuredCloneReader* aReader,
   NS_ASSERTION(aTag == SCTAG_DOM_FILE ||
                aTag == SCTAG_DOM_FILE_WITHOUT_LASTMODIFIEDDATE, "Huh?!");
 
-  uint64_t lastModifiedDate = UINT64_MAX;
-  if (aTag != SCTAG_DOM_FILE_WITHOUT_LASTMODIFIEDDATE &&
-      !JS_ReadBytes(aReader, &lastModifiedDate, sizeof(lastModifiedDate))) {
-    NS_WARNING("Failed to read lastModifiedDate");
-    return false;
+  uint64_t lastModifiedDate;
+  if (aTag == SCTAG_DOM_FILE_WITHOUT_LASTMODIFIEDDATE) {
+    lastModifiedDate = UINT64_MAX;
+  }
+  else {
+    if(!JS_ReadBytes(aReader, &lastModifiedDate, sizeof(lastModifiedDate))) {
+      NS_WARNING("Failed to read lastModifiedDate");
+      return false;
+    }
+    lastModifiedDate = NativeEndian::swapFromLittleEndian(lastModifiedDate);
   }
   aRetval->lastModifiedDate = lastModifiedDate;
 
@@ -1487,6 +1563,7 @@ IDBObjectStore::StructuredCloneWriteCallback(JSContext* aCx,
     cloneWriteInfo->mOffsetToKeyProp = js_GetSCOffset(aWriter);
 
     uint64_t value = 0;
+    // Omit endian swap
     return JS_WriteBytes(aWriter, &value, sizeof(value));
   }
 
@@ -1494,7 +1571,7 @@ IDBObjectStore::StructuredCloneWriteCallback(JSContext* aCx,
   FileManager* fileManager = transaction->Database()->Manager();
 
   file::FileHandle* fileHandle = nullptr;
-  if (NS_SUCCEEDED(UNWRAP_OBJECT(FileHandle, aCx, aObj, fileHandle))) {
+  if (NS_SUCCEEDED(UNWRAP_OBJECT(FileHandle, aObj, fileHandle))) {
     nsRefPtr<FileInfo> fileInfo = fileHandle->GetFileInfo();
 
     // Throw when trying to store non IDB file handles or IDB file handles
@@ -1504,10 +1581,12 @@ IDBObjectStore::StructuredCloneWriteCallback(JSContext* aCx,
     }
 
     NS_ConvertUTF16toUTF8 convType(fileHandle->Type());
-    uint32_t convTypeLength = SwapBytes(convType.Length());
+    uint32_t convTypeLength =
+      NativeEndian::swapToLittleEndian(convType.Length());
 
     NS_ConvertUTF16toUTF8 convName(fileHandle->Name());
-    uint32_t convNameLength = SwapBytes(convName.Length());
+    uint32_t convNameLength =
+      NativeEndian::swapToLittleEndian(convName.Length());
 
     if (!JS_WriteUint32Pair(aWriter, SCTAG_DOM_FILEHANDLE,
                             cloneWriteInfo->mFiles.Length()) ||
@@ -1562,7 +1641,7 @@ IDBObjectStore::StructuredCloneWriteCallback(JSContext* aCx,
         NS_WARNING("Failed to get size!");
         return false;
       }
-      size = SwapBytes(size);
+      size = NativeEndian::swapToLittleEndian(size);
 
       nsString type;
       if (NS_FAILED(blob->GetType(type))) {
@@ -1570,7 +1649,8 @@ IDBObjectStore::StructuredCloneWriteCallback(JSContext* aCx,
         return false;
       }
       NS_ConvertUTF16toUTF8 convType(type);
-      uint32_t convTypeLength = SwapBytes(convType.Length());
+      uint32_t convTypeLength =
+        NativeEndian::swapToLittleEndian(convType.Length());
 
       nsCOMPtr<nsIDOMFile> file = do_QueryInterface(blob);
 
@@ -1589,7 +1669,7 @@ IDBObjectStore::StructuredCloneWriteCallback(JSContext* aCx,
           return false;
         }
 
-        lastModifiedDate = SwapBytes(lastModifiedDate);
+        lastModifiedDate = NativeEndian::swapToLittleEndian(lastModifiedDate);
 
         nsString name;
         if (NS_FAILED(file->GetName(name))) {
@@ -1597,7 +1677,8 @@ IDBObjectStore::StructuredCloneWriteCallback(JSContext* aCx,
           return false;
         }
         NS_ConvertUTF16toUTF8 convName(name);
-        uint32_t convNameLength = SwapBytes(convName.Length());
+        uint32_t convNameLength =
+          NativeEndian::swapToLittleEndian(convName.Length());
 
         if (!JS_WriteBytes(aWriter, &lastModifiedDate, sizeof(lastModifiedDate)) || 
             !JS_WriteBytes(aWriter, &convNameLength, sizeof(convNameLength)) ||
@@ -2082,6 +2163,47 @@ IDBObjectStore::GetAllInternal(IDBKeyRange* aKeyRange,
 }
 
 already_AddRefed<IDBRequest>
+IDBObjectStore::GetAllKeysInternal(IDBKeyRange* aKeyRange, uint32_t aLimit,
+                                   ErrorResult& aRv)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!mTransaction->IsOpen()) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
+    return nullptr;
+  }
+
+  nsRefPtr<IDBRequest> request = GenerateRequest(this);
+  if (!request) {
+    NS_WARNING("Failed to generate request!");
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+    return nullptr;
+  }
+
+  nsRefPtr<GetAllKeysHelper> helper =
+    new GetAllKeysHelper(mTransaction, request, this, aKeyRange, aLimit);
+
+  nsresult rv = helper->DispatchToTransactionPool();
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to dispatch!");
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+    return nullptr;
+  }
+
+  IDB_PROFILER_MARK("IndexedDB Request %llu: "
+                    "database(%s).transaction(%s).objectStore(%s)."
+                    "getAllKeys(%s, %lu)",
+                    "IDBRequest[%llu] MT IDBObjectStore.getAllKeys()",
+                    request->GetSerialNumber(),
+                    IDB_PROFILER_STRING(Transaction()->Database()),
+                    IDB_PROFILER_STRING(Transaction()),
+                    IDB_PROFILER_STRING(this), IDB_PROFILER_STRING(aKeyRange),
+                    aLimit);
+
+  return request.forget();
+}
+
+already_AddRefed<IDBRequest>
 IDBObjectStore::DeleteInternal(IDBKeyRange* aKeyRange,
                                ErrorResult& aRv)
 {
@@ -2284,6 +2406,69 @@ IDBObjectStore::OpenCursorFromChildProcess(
 
   cursor.forget(_retval);
   return NS_OK;
+}
+
+nsresult
+IDBObjectStore::OpenCursorFromChildProcess(IDBRequest* aRequest,
+                                           size_t aDirection,
+                                           const Key& aKey,
+                                           IDBCursor** _retval)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aRequest);
+
+  auto direction = static_cast<IDBCursor::Direction>(aDirection);
+
+  nsRefPtr<IDBCursor> cursor =
+    IDBCursor::Create(aRequest, mTransaction, this, direction, Key(),
+                      EmptyCString(), EmptyCString(), aKey);
+  NS_ENSURE_TRUE(cursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  cursor.forget(_retval);
+  return NS_OK;
+}
+
+already_AddRefed<IDBRequest>
+IDBObjectStore::OpenKeyCursorInternal(IDBKeyRange* aKeyRange, size_t aDirection,
+                                      ErrorResult& aRv)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!mTransaction->IsOpen()) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
+    return nullptr;
+  }
+
+  nsRefPtr<IDBRequest> request = GenerateRequest(this);
+  if (!request) {
+    NS_WARNING("Failed to generate request!");
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+    return nullptr;
+  }
+
+  auto direction = static_cast<IDBCursor::Direction>(aDirection);
+
+  nsRefPtr<OpenKeyCursorHelper> helper =
+    new OpenKeyCursorHelper(mTransaction, request, this, aKeyRange, direction);
+
+  nsresult rv = helper->DispatchToTransactionPool();
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to dispatch!");
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+    return nullptr;
+  }
+
+  IDB_PROFILER_MARK("IndexedDB Request %llu: "
+                    "database(%s).transaction(%s).objectStore(%s)."
+                    "openKeyCursor(%s, %s)",
+                    "IDBRequest[%llu] MT IDBObjectStore.openKeyCursor()",
+                    request->GetSerialNumber(),
+                    IDB_PROFILER_STRING(Transaction()->Database()),
+                    IDB_PROFILER_STRING(Transaction()),
+                    IDB_PROFILER_STRING(this), IDB_PROFILER_STRING(aKeyRange),
+                    IDB_PROFILER_STRING(direction));
+
+  return request.forget();
 }
 
 void
@@ -2767,6 +2952,55 @@ IDBObjectStore::Count(JSContext* aCx,
   return CountInternal(keyRange, aRv);
 }
 
+already_AddRefed<IDBRequest>
+IDBObjectStore::GetAllKeys(JSContext* aCx,
+                           const Optional<JS::Handle<JS::Value>>& aKey,
+                           const Optional<uint32_t>& aLimit, ErrorResult& aRv)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!mTransaction->IsOpen()) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
+    return nullptr;
+  }
+
+  nsRefPtr<IDBKeyRange> keyRange;
+  if (aKey.WasPassed()) {
+    aRv = IDBKeyRange::FromJSVal(aCx, aKey.Value(), getter_AddRefs(keyRange));
+    ENSURE_SUCCESS(aRv, nullptr);
+  }
+
+  uint32_t limit = UINT32_MAX;
+  if (aLimit.WasPassed() && aLimit.Value() != 0) {
+    limit = aLimit.Value();
+  }
+
+  return GetAllKeysInternal(keyRange, limit, aRv);
+}
+
+already_AddRefed<IDBRequest>
+IDBObjectStore::OpenKeyCursor(JSContext* aCx,
+                              const Optional<JS::Handle<JS::Value>>& aRange,
+                              IDBCursorDirection aDirection, ErrorResult& aRv)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!mTransaction->IsOpen()) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
+    return nullptr;
+  }
+
+  nsRefPtr<IDBKeyRange> keyRange;
+  if (aRange.WasPassed()) {
+    aRv = IDBKeyRange::FromJSVal(aCx, aRange.Value(), getter_AddRefs(keyRange));
+    ENSURE_SUCCESS(aRv, nullptr);
+  }
+
+  IDBCursor::Direction direction = IDBCursor::ConvertDirection(aDirection);
+
+  return OpenKeyCursorInternal(keyRange, static_cast<size_t>(direction), aRv);
+}
+
 inline nsresult
 CopyData(nsIInputStream* aInputStream, nsIOutputStream* aOutputStream)
 {
@@ -2883,6 +3117,18 @@ NoRequestObjectStoreHelper::OnError()
   mTransaction->Abort(GetResultCode());
 }
 
+// This is a duplicate of the js engine's byte munging in StructuredClone.cpp
+uint64_t
+ReinterpretDoubleAsUInt64(double d)
+{
+  union {
+    double d;
+    uint64_t u;
+  } pun;
+  pun.d = d;
+  return pun.u;
+}
+
 nsresult
 AddHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
 {
@@ -2929,9 +3175,14 @@ AddHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
   if (mObjectStore->IsAutoIncrement()) {
     if (keyUnset) {
       autoIncrementNum = mObjectStore->Info()->nextAutoIncrementId;
+
+      MOZ_ASSERT(autoIncrementNum > 0,
+                 "Generated key must always be a positive integer");
+
       if (autoIncrementNum > (1LL << 53)) {
         return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
       }
+
       mKey.SetFromInteger(autoIncrementNum);
     }
     else if (mKey.IsFloat() &&
@@ -2944,18 +3195,10 @@ AddHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
       // objectStore with no key in its keyPath set. We needed to figure out
       // which row id we would get above before we could set that properly.
 
-      // This is a duplicate of the js engine's byte munging here
-      union {
-        double d;
-        uint64_t u;
-      } pun;
-    
-      pun.d = SwapBytes(static_cast<uint64_t>(autoIncrementNum));
-
-      JSAutoStructuredCloneBuffer& buffer = mCloneWriteInfo.mCloneBuffer;
-      uint64_t offsetToKeyProp = mCloneWriteInfo.mOffsetToKeyProp;
-
-      memcpy((char*)buffer.data() + offsetToKeyProp, &pun.u, sizeof(uint64_t));
+      LittleEndian::writeUint64((char*)mCloneWriteInfo.mCloneBuffer.data() +
+                                mCloneWriteInfo.mOffsetToKeyProp,
+                                ReinterpretDoubleAsUInt64(static_cast<double>(
+                                                          autoIncrementNum)));
     }
   }
 
@@ -2966,10 +3209,12 @@ AddHelper::DoDatabaseWork(mozIStorageConnection* aConnection)
     reinterpret_cast<const char*>(mCloneWriteInfo.mCloneBuffer.data());
   size_t uncompressedLength = mCloneWriteInfo.mCloneBuffer.nbytes();
 
+  static const fallible_t fallible = fallible_t();
   size_t compressedLength = snappy::MaxCompressedLength(uncompressedLength);
   // This will hold our compressed data until the end of the method. The
   // BindBlobByName function will copy it.
-  nsAutoArrayPtr<char> compressed(new char[compressedLength]);
+  nsAutoArrayPtr<char> compressed(new (fallible) char[compressedLength]);
+  NS_ENSURE_TRUE(compressed, NS_ERROR_OUT_OF_MEMORY);
 
   snappy::RawCompress(uncompressed, uncompressedLength, compressed.get(),
                       &compressedLength);
@@ -3804,7 +4049,7 @@ OpenCursorHelper::SendResponseToChildProcess(nsresult aResultCode)
       params.requestParent() = requestActor;
       params.direction() = mDirection;
       params.key() = mKey;
-      params.cloneInfo() = mSerializedCloneReadInfo;
+      params.optionalCloneInfo() = mSerializedCloneReadInfo;
       params.blobsParent().SwapElements(blobsParent);
 
       if (!objectStoreActor->OpenCursor(mCursor, params, openCursorResponse)) {
@@ -3855,6 +4100,311 @@ OpenCursorHelper::UnpackResponseFromParentProcess(
     default:
       NS_NOTREACHED("Unknown response union type!");
       return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+  }
+
+  return NS_OK;
+}
+
+nsresult
+OpenKeyCursorHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+
+  PROFILER_LABEL("IndexedDB",
+                 "OpenKeyCursorHelper::DoDatabaseWork [IDBObjectStore.cpp]");
+
+  NS_NAMED_LITERAL_CSTRING(keyValue, "key_value");
+  NS_NAMED_LITERAL_CSTRING(id, "id");
+  NS_NAMED_LITERAL_CSTRING(openLimit, " LIMIT ");
+
+  nsAutoCString queryStart = NS_LITERAL_CSTRING("SELECT ") + keyValue +
+                             NS_LITERAL_CSTRING(" FROM object_data WHERE "
+                                                "object_store_id = :") +
+                             id;
+
+  nsAutoCString keyRangeClause;
+  if (mKeyRange) {
+    mKeyRange->GetBindingClause(keyValue, keyRangeClause);
+  }
+
+  nsAutoCString directionClause = NS_LITERAL_CSTRING(" ORDER BY ") + keyValue;
+  switch (mDirection) {
+    case IDBCursor::NEXT:
+    case IDBCursor::NEXT_UNIQUE:
+      directionClause.AppendLiteral(" ASC");
+      break;
+
+    case IDBCursor::PREV:
+    case IDBCursor::PREV_UNIQUE:
+      directionClause.AppendLiteral(" DESC");
+      break;
+
+    default:
+      MOZ_ASSUME_UNREACHABLE("Unknown direction type!");
+  }
+
+  nsCString firstQuery = queryStart + keyRangeClause + directionClause +
+                         openLimit + NS_LITERAL_CSTRING("1");
+
+  nsCOMPtr<mozIStorageStatement> stmt =
+    mTransaction->GetCachedStatement(firstQuery);
+  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  mozStorageStatementScoper scoper(stmt);
+
+  nsresult rv = stmt->BindInt64ByName(id, mObjectStore->Id());
+  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  if (mKeyRange) {
+    rv = mKeyRange->BindToStatement(stmt);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  bool hasResult;
+  rv = stmt->ExecuteStep(&hasResult);
+  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  if (!hasResult) {
+    mKey.Unset();
+    return NS_OK;
+  }
+
+  rv = mKey.SetFromStatement(stmt, 0);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Now we need to make the query to get the next match.
+  keyRangeClause.Truncate();
+  nsAutoCString continueToKeyRangeClause;
+
+  NS_NAMED_LITERAL_CSTRING(currentKey, "current_key");
+  NS_NAMED_LITERAL_CSTRING(rangeKey, "range_key");
+
+  switch (mDirection) {
+    case IDBCursor::NEXT:
+    case IDBCursor::NEXT_UNIQUE:
+      AppendConditionClause(keyValue, currentKey, false, false,
+                            keyRangeClause);
+      AppendConditionClause(keyValue, currentKey, false, true,
+                            continueToKeyRangeClause);
+      if (mKeyRange && !mKeyRange->Upper().IsUnset()) {
+        AppendConditionClause(keyValue, rangeKey, true,
+                              !mKeyRange->IsUpperOpen(), keyRangeClause);
+        AppendConditionClause(keyValue, rangeKey, true,
+                              !mKeyRange->IsUpperOpen(),
+                              continueToKeyRangeClause);
+        mRangeKey = mKeyRange->Upper();
+      }
+      break;
+
+    case IDBCursor::PREV:
+    case IDBCursor::PREV_UNIQUE:
+      AppendConditionClause(keyValue, currentKey, true, false, keyRangeClause);
+      AppendConditionClause(keyValue, currentKey, true, true,
+                            continueToKeyRangeClause);
+      if (mKeyRange && !mKeyRange->Lower().IsUnset()) {
+        AppendConditionClause(keyValue, rangeKey, false,
+                              !mKeyRange->IsLowerOpen(), keyRangeClause);
+        AppendConditionClause(keyValue, rangeKey, false,
+                              !mKeyRange->IsLowerOpen(),
+                              continueToKeyRangeClause);
+        mRangeKey = mKeyRange->Lower();
+      }
+      break;
+
+    default:
+      MOZ_ASSUME_UNREACHABLE("Unknown direction type!");
+  }
+
+  mContinueQuery = queryStart + keyRangeClause + directionClause + openLimit;
+  mContinueToQuery = queryStart + continueToKeyRangeClause + directionClause +
+                     openLimit;
+
+  return NS_OK;
+}
+
+nsresult
+OpenKeyCursorHelper::EnsureCursor()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "OpenKeyCursorHelper::EnsureCursor "
+                             "[IDBObjectStore.cpp]");
+
+  if (mCursor || mKey.IsUnset()) {
+    return NS_OK;
+  }
+
+  mCursor = IDBCursor::Create(mRequest, mTransaction, mObjectStore, mDirection,
+                              mRangeKey, mContinueQuery, mContinueToQuery,
+                              mKey);
+  NS_ENSURE_TRUE(mCursor, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  return NS_OK;
+}
+
+nsresult
+OpenKeyCursorHelper::GetSuccessResult(JSContext* aCx,
+                                      JS::MutableHandle<JS::Value> aVal)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "OpenKeyCursorHelper::GetSuccessResult "
+                             "[IDBObjectStore.cpp]");
+
+  nsresult rv = EnsureCursor();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  if (mCursor) {
+    rv = WrapNative(aCx, mCursor, aVal);
+    NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+  }
+  else {
+    aVal.setUndefined();
+  }
+
+  return NS_OK;
+}
+
+void
+OpenKeyCursorHelper::ReleaseMainThreadObjects()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  mKeyRange = nullptr;
+  mCursor = nullptr;
+
+  ObjectStoreHelper::ReleaseMainThreadObjects();
+}
+
+nsresult
+OpenKeyCursorHelper::PackArgumentsForParentProcess(
+                                              ObjectStoreRequestParams& aParams)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!IndexedDatabaseManager::IsMainProcess());
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "OpenKeyCursorHelper::"
+                             "PackArgumentsForParentProcess "
+                             "[IDBObjectStore.cpp]");
+
+  OpenKeyCursorParams params;
+
+  if (mKeyRange) {
+    KeyRange keyRange;
+    mKeyRange->ToSerializedKeyRange(keyRange);
+    params.optionalKeyRange() = keyRange;
+  }
+  else {
+    params.optionalKeyRange() = mozilla::void_t();
+  }
+
+  params.direction() = mDirection;
+
+  aParams = params;
+  return NS_OK;
+}
+
+AsyncConnectionHelper::ChildProcessSendResult
+OpenKeyCursorHelper::SendResponseToChildProcess(nsresult aResultCode)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+  MOZ_ASSERT(!mCursor);
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "OpenKeyCursorHelper::SendResponseToChildProcess "
+                             "[IDBObjectStore.cpp]");
+
+  IndexedDBRequestParentBase* actor = mRequest->GetActorParent();
+  MOZ_ASSERT(actor);
+
+  if (NS_SUCCEEDED(aResultCode)) {
+    nsresult rv = EnsureCursor();
+    if (NS_FAILED(rv)) {
+      NS_WARNING("EnsureCursor failed!");
+      aResultCode = rv;
+    }
+  }
+
+  ResponseValue response;
+  if (NS_FAILED(aResultCode)) {
+    response = aResultCode;
+  } else {
+    OpenCursorResponse openCursorResponse;
+
+    if (!mCursor) {
+      openCursorResponse = mozilla::void_t();
+    }
+    else {
+      IndexedDBObjectStoreParent* objectStoreActor =
+        mObjectStore->GetActorParent();
+      MOZ_ASSERT(objectStoreActor);
+
+      IndexedDBRequestParentBase* requestActor = mRequest->GetActorParent();
+      MOZ_ASSERT(requestActor);
+
+      ObjectStoreCursorConstructorParams params;
+      params.requestParent() = requestActor;
+      params.direction() = mDirection;
+      params.key() = mKey;
+      params.optionalCloneInfo() = mozilla::void_t();
+
+      if (!objectStoreActor->OpenCursor(mCursor, params, openCursorResponse)) {
+        return Error;
+      }
+    }
+
+    response = openCursorResponse;
+  }
+
+  if (!actor->SendResponse(response)) {
+    return Error;
+  }
+
+  return Success_Sent;
+}
+
+nsresult
+OpenKeyCursorHelper::UnpackResponseFromParentProcess(
+                                            const ResponseValue& aResponseValue)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!IndexedDatabaseManager::IsMainProcess());
+  MOZ_ASSERT(aResponseValue.type() == ResponseValue::TOpenCursorResponse);
+  MOZ_ASSERT(aResponseValue.get_OpenCursorResponse().type() ==
+               OpenCursorResponse::Tvoid_t ||
+             aResponseValue.get_OpenCursorResponse().type() ==
+               OpenCursorResponse::TPIndexedDBCursorChild);
+  MOZ_ASSERT(!mCursor);
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "OpenKeyCursorHelper::"
+                             "UnpackResponseFromParentProcess "
+                             "[IDBObjectStore.cpp]");
+
+  const OpenCursorResponse& response =
+    aResponseValue.get_OpenCursorResponse();
+
+  switch (response.type()) {
+    case OpenCursorResponse::Tvoid_t:
+      break;
+
+    case OpenCursorResponse::TPIndexedDBCursorChild: {
+      IndexedDBCursorChild* actor =
+        static_cast<IndexedDBCursorChild*>(
+          response.get_PIndexedDBCursorChild());
+
+      mCursor = actor->ForgetStrongCursor();
+      NS_ASSERTION(mCursor, "This should never be null!");
+
+    } break;
+
+    default:
+      MOZ_CRASH("Unknown response union type!");
   }
 
   return NS_OK;
@@ -3992,7 +4542,7 @@ CreateIndexHelper::InsertDataFromObjectStore(mozIStorageConnection* aConnection)
     };
 
     JS::Rooted<JS::Value> clone(cx);
-    if (!buffer.read(cx, clone.address(), &callbacks, &cloneReadInfo)) {
+    if (!buffer.read(cx, &clone, &callbacks, &cloneReadInfo)) {
       NS_WARNING("Failed to deserialize structured clone data!");
       return NS_ERROR_DOM_DATA_CLONE_ERR;
     }
@@ -4294,6 +4844,196 @@ GetAllHelper::UnpackResponseFromParentProcess(
     IDBObjectStore::ConvertActorsToBlobs(blobs, destInfo->mFiles);
   }
 
+  return NS_OK;
+}
+
+nsresult
+GetAllKeysHelper::DoDatabaseWork(mozIStorageConnection* /* aConnection */)
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+
+  PROFILER_LABEL("IndexedDB",
+                 "GetAllKeysHelper::DoDatabaseWork [IDObjectStore.cpp]");
+
+  NS_NAMED_LITERAL_CSTRING(keyValue, "key_value");
+
+  nsAutoCString keyRangeClause;
+  if (mKeyRange) {
+    mKeyRange->GetBindingClause(keyValue, keyRangeClause);
+  }
+
+  nsAutoCString limitClause;
+  if (mLimit != UINT32_MAX) {
+    limitClause = NS_LITERAL_CSTRING(" LIMIT ");
+    limitClause.AppendInt(mLimit);
+  }
+
+  NS_NAMED_LITERAL_CSTRING(osid, "osid");
+
+  nsCString query = NS_LITERAL_CSTRING("SELECT ") + keyValue +
+                    NS_LITERAL_CSTRING(" FROM object_data WHERE "
+                                       "object_store_id = :") +
+                    osid + keyRangeClause +
+                    NS_LITERAL_CSTRING(" ORDER BY key_value ASC") +
+                    limitClause;
+
+  nsCOMPtr<mozIStorageStatement> stmt = mTransaction->GetCachedStatement(query);
+  NS_ENSURE_TRUE(stmt, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  mozStorageStatementScoper scoper(stmt);
+
+  nsresult rv = stmt->BindInt64ByName(osid, mObjectStore->Id());
+  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  if (mKeyRange) {
+    rv = mKeyRange->BindToStatement(stmt);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  mKeys.SetCapacity(std::min<uint32_t>(50, mLimit));
+
+  bool hasResult;
+  while(NS_SUCCEEDED((rv = stmt->ExecuteStep(&hasResult))) && hasResult) {
+    if (mKeys.Capacity() == mKeys.Length()) {
+      mKeys.SetCapacity(mKeys.Capacity() * 2);
+    }
+
+    Key* key = mKeys.AppendElement();
+    NS_ASSERTION(key, "This shouldn't fail!");
+
+    rv = key->SetFromStatement(stmt, 0);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
+
+  return NS_OK;
+}
+
+nsresult
+GetAllKeysHelper::GetSuccessResult(JSContext* aCx,
+                                   JS::MutableHandle<JS::Value> aVal)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mKeys.Length() <= mLimit);
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "GetAllKeysHelper::GetSuccessResult "
+                             "[IDBObjectStore.cpp]");
+
+  nsTArray<Key> keys;
+  mKeys.SwapElements(keys);
+
+  JS::Rooted<JSObject*> array(aCx, JS_NewArrayObject(aCx, 0, nullptr));
+  if (!array) {
+    NS_WARNING("Failed to make array!");
+    return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+  }
+
+  if (!keys.IsEmpty()) {
+    if (!JS_SetArrayLength(aCx, array, keys.Length())) {
+      NS_WARNING("Failed to set array length!");
+      return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+    }
+
+    for (uint32_t index = 0, count = keys.Length(); index < count; index++) {
+      const Key& key = keys[index];
+      MOZ_ASSERT(!key.IsUnset());
+
+      JS::Rooted<JS::Value> value(aCx);
+      nsresult rv = key.ToJSVal(aCx, &value);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("Failed to get jsval for key!");
+        return rv;
+      }
+
+      if (!JS_SetElement(aCx, array, index, &value)) {
+        NS_WARNING("Failed to set array element!");
+        return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+      }
+    }
+  }
+
+  aVal.setObject(*array);
+  return NS_OK;
+}
+
+void
+GetAllKeysHelper::ReleaseMainThreadObjects()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  mKeyRange = nullptr;
+
+  ObjectStoreHelper::ReleaseMainThreadObjects();
+}
+
+nsresult
+GetAllKeysHelper::PackArgumentsForParentProcess(
+                                              ObjectStoreRequestParams& aParams)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!IndexedDatabaseManager::IsMainProcess());
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "GetAllKeysHelper::PackArgumentsForParentProcess "
+                             "[IDBObjectStore.cpp]");
+
+  GetAllKeysParams params;
+
+  if (mKeyRange) {
+    KeyRange keyRange;
+    mKeyRange->ToSerializedKeyRange(keyRange);
+    params.optionalKeyRange() = keyRange;
+  } else {
+    params.optionalKeyRange() = mozilla::void_t();
+  }
+
+  params.limit() = mLimit;
+
+  aParams = params;
+  return NS_OK;
+}
+
+AsyncConnectionHelper::ChildProcessSendResult
+GetAllKeysHelper::SendResponseToChildProcess(nsresult aResultCode)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+
+  PROFILER_MAIN_THREAD_LABEL("IndexedDB",
+                             "GetAllKeysHelper::SendResponseToChildProcess "
+                             "[IDBObjectStore.cpp]");
+
+  IndexedDBRequestParentBase* actor = mRequest->GetActorParent();
+  MOZ_ASSERT(actor);
+
+  ResponseValue response;
+  if (NS_FAILED(aResultCode)) {
+    response = aResultCode;
+  }
+  else {
+    GetAllKeysResponse getAllKeysResponse;
+    getAllKeysResponse.keys().AppendElements(mKeys);
+    response = getAllKeysResponse;
+  }
+
+  if (!actor->SendResponse(response)) {
+    return Error;
+  }
+
+  return Success_Sent;
+}
+
+nsresult
+GetAllKeysHelper::UnpackResponseFromParentProcess(
+                                            const ResponseValue& aResponseValue)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!IndexedDatabaseManager::IsMainProcess());
+  MOZ_ASSERT(aResponseValue.type() == ResponseValue::TGetAllKeysResponse);
+
+  mKeys.AppendElements(aResponseValue.get_GetAllKeysResponse().keys());
   return NS_OK;
 }
 

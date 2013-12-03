@@ -14,6 +14,9 @@
 #include "nsStyleAnimation.h"
 #include "nsEventDispatcher.h"
 #include "nsLayoutUtils.h"
+#include "nsIFrame.h"
+#include "nsIDocument.h"
+#include "ActiveLayerTracker.h"
 #include <math.h>
 
 using namespace mozilla;
@@ -400,7 +403,8 @@ ElementAnimations::CanPerformOnCompositorThread(CanAnimateFlags aFlags) const
       const AnimationProperty& prop = anim.mProperties[propIdx];
       if (!CanAnimatePropertyOnCompositor(mElement,
                                           prop.mProperty,
-                                          aFlags)) {
+                                          aFlags) ||
+          IsCompositorAnimationDisabledForFrame(frame)) {
         return false;
       }
       if (prop.mProperty == eCSSProperty_opacity) {
@@ -413,10 +417,10 @@ ElementAnimations::CanPerformOnCompositorThread(CanAnimateFlags aFlags) const
   // This animation can be done on the compositor.  Mark the frame as active, in
   // case we are able to throttle this animation.
   if (hasOpacity) {
-    frame->MarkLayersActive(nsChangeHint_UpdateOpacityLayer);
+    ActiveLayerTracker::NotifyAnimated(frame, eCSSProperty_opacity);
   }
   if (hasTransform) {
-    frame->MarkLayersActive(nsChangeHint_UpdateTransformLayer);
+    ActiveLayerTracker::NotifyAnimated(frame, eCSSProperty_transform);
   }
   return true;
 }

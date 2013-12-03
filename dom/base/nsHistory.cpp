@@ -70,7 +70,7 @@ uint32_t
 nsHistory::GetLength(ErrorResult& aRv) const
 {
   nsCOMPtr<nsPIDOMWindow> win(do_QueryReferent(mInnerWindow));
-  if (!win || !nsContentUtils::CanCallerAccess(win->GetOuterWindow())) {
+  if (!win || !win->HasActiveDocument()) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
 
     return 0;
@@ -106,7 +106,7 @@ nsHistory::GetState(JSContext* aCx, ErrorResult& aRv) const
     return JS::UndefinedValue();
   }
 
-  if (!nsContentUtils::CanCallerAccess(win->GetOuterWindow())) {
+  if (!win->HasActiveDocument()) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
 
     return JS::UndefinedValue();
@@ -131,7 +131,7 @@ nsHistory::GetState(JSContext* aCx, ErrorResult& aRv) const
       return JS::UndefinedValue();
     }
 
-    if (!JS_WrapValue(aCx, jsData.address())) {
+    if (!JS_WrapValue(aCx, &jsData)) {
       aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
       return JS::UndefinedValue();
     }
@@ -146,7 +146,7 @@ void
 nsHistory::Go(int32_t aDelta, ErrorResult& aRv)
 {
   nsCOMPtr<nsPIDOMWindow> win(do_QueryReferent(mInnerWindow));
-  if (!win || !nsContentUtils::CanCallerAccess(win->GetOuterWindow())) {
+  if (!win || !win->HasActiveDocument()) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
 
     return;
@@ -202,7 +202,7 @@ void
 nsHistory::Back(ErrorResult& aRv)
 {
   nsCOMPtr<nsPIDOMWindow> win(do_QueryReferent(mInnerWindow));
-  if (!win || !nsContentUtils::CanCallerAccess(win->GetOuterWindow())) {
+  if (!win || !win->HasActiveDocument()) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
 
     return;
@@ -223,7 +223,7 @@ void
 nsHistory::Forward(ErrorResult& aRv)
 {
   nsCOMPtr<nsPIDOMWindow> win(do_QueryReferent(mInnerWindow));
-  if (!win || !nsContentUtils::CanCallerAccess(win->GetOuterWindow())) {
+  if (!win || !win->HasActiveDocument()) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
 
     return;
@@ -268,7 +268,7 @@ nsHistory::PushOrReplaceState(JSContext* aCx, JS::Handle<JS::Value> aData,
     return;
   }
 
-  if (!nsContentUtils::CanCallerAccess(win->GetOuterWindow())) {
+  if (!win->HasActiveDocument()) {
     aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
 
     return;

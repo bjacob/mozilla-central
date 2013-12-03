@@ -40,6 +40,7 @@
 using namespace js;
 
 using mozilla::Abs;
+using mozilla::DoubleEqualsInt32;
 using mozilla::DoubleIsInt32;
 using mozilla::ExponentComponent;
 using mozilla::IsFinite;
@@ -293,22 +294,21 @@ js::math_atan2(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    if (args.length() <= 1) {
-        args.rval().setNaN();
-        return true;
-    }
-
-    double x, y;
-    if (!ToNumber(cx, args[0], &x) || !ToNumber(cx, args[1], &y))
+    double y;
+    if (!ToNumber(cx, args.get(0), &y))
         return false;
 
-    double z = ecmaAtan2(x, y);
+    double x;
+    if (!ToNumber(cx, args.get(1), &x))
+        return false;
+
+    double z = ecmaAtan2(y, x);
     args.rval().setDouble(z);
     return true;
 }
 
 double
-js_math_ceil_impl(double x)
+js::math_ceil_impl(double x)
 {
 #ifdef __APPLE__
     if (x < 0 && x > -1.0)
@@ -318,7 +318,7 @@ js_math_ceil_impl(double x)
 }
 
 bool
-js_math_ceil(JSContext *cx, unsigned argc, Value *vp)
+js::math_ceil(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
@@ -331,7 +331,7 @@ js_math_ceil(JSContext *cx, unsigned argc, Value *vp)
     if (!ToNumber(cx, args[0], &x))
         return false;
 
-    double z = js_math_ceil_impl(x);
+    double z = math_ceil_impl(x);
     args.rval().setNumber(z);
     return true;
 }
@@ -423,13 +423,13 @@ js::math_exp(JSContext *cx, unsigned argc, Value *vp)
 }
 
 double
-js_math_floor_impl(double x)
+js::math_floor_impl(double x)
 {
     return floor(x);
 }
 
 bool
-js_math_floor(JSContext *cx, unsigned argc, Value *vp)
+js::math_floor(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
@@ -442,7 +442,7 @@ js_math_floor(JSContext *cx, unsigned argc, Value *vp)
     if (!ToNumber(cx, args[0], &x))
         return false;
 
-    double z = js_math_floor_impl(x);
+    double z = math_floor_impl(x);
     args.rval().setNumber(z);
     return true;
 }
@@ -611,8 +611,9 @@ js::ecmaPow(double x, double y)
      * Use powi if the exponent is an integer-valued double. We don't have to
      * check for NaN since a comparison with NaN is always false.
      */
-    if (int32_t(y) == y)
-        return powi(x, int32_t(y));
+    int32_t yi;
+    if (DoubleEqualsInt32(y, &yi))
+        return powi(x, yi);
 
     /*
      * Because C99 and ECMA specify different behavior for pow(),
@@ -638,13 +639,12 @@ js_math_pow(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    if (args.length() <= 1) {
-        args.rval().setNaN();
-        return true;
-    }
+    double x;
+    if (!ToNumber(cx, args.get(0), &x))
+        return false;
 
-    double x, y;
-    if (!ToNumber(cx, args[0], &x) || !ToNumber(cx, args[1], &y))
+    double y;
+    if (!ToNumber(cx, args.get(1), &y))
         return false;
 
     /*
@@ -770,8 +770,22 @@ js_math_random(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
+double
+js::math_round_impl(double x)
+{
+    int32_t i;
+    if (DoubleIsInt32(x, &i))
+        return double(i);
+
+    /* Some numbers are so big that adding 0.5 would give the wrong number. */
+    if (ExponentComponent(x) >= 52)
+        return x;
+
+    return js_copysign(floor(x + 0.5), x);
+}
+
 bool /* ES5 15.8.2.15. */
-js_math_round(JSContext *cx, unsigned argc, Value *vp)
+js::math_round(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
@@ -784,19 +798,8 @@ js_math_round(JSContext *cx, unsigned argc, Value *vp)
     if (!ToNumber(cx, args[0], &x))
         return false;
 
-    int32_t i;
-    if (DoubleIsInt32(x, &i)) {
-        args.rval().setInt32(i);
-        return true;
-    }
-
-    /* Some numbers are so big that adding 0.5 would give the wrong number. */
-    if (ExponentComponent(x) >= 52) {
-        args.rval().setNumber(x);
-        return true;
-    }
-
-    args.rval().setNumber(js_copysign(floor(x + 0.5), x));
+    double z = math_round_impl(x);
+    args.rval().setNumber(z);
     return true;
 }
 
@@ -897,7 +900,7 @@ js::math_tan(JSContext *cx, unsigned argc, Value *vp)
 typedef double (*UnaryMathFunctionType)(MathCache *cache, double);
 
 template <UnaryMathFunctionType F>
-bool math_function(JSContext *cx, unsigned argc, Value *vp)
+static bool math_function(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     if (args.length() == 0) {
@@ -1270,39 +1273,18 @@ js::math_atanh(JSContext *cx, unsigned argc, Value *vp)
     return math_function<math_atanh_impl>(cx, argc, vp);
 }
 
-// Math.hypot is disabled pending the resolution of spec issues (bug 896264).
-#if 0
-#if !HAVE_HYPOT
-double hypot(double x, double y)
-{
-    if (mozilla::IsInfinite(x) || mozilla::IsInfinite(y))
-        return PositiveInfinity();
-
-    if (mozilla::IsNaN(x) || mozilla::IsNaN(y))
-        return GenericNaN();
-
-    double xabs = mozilla::Abs(x);
-    double yabs = mozilla::Abs(y);
-
-    double min = std::min(xabs, yabs);
-    double max = std::max(xabs, yabs);
-
-    if (min == 0) {
-        return max;
-    } else {
-        double u = min / max;
-        return max * sqrt(1 + u * u);
-    }
-}
-#endif
-
+/* Consistency wrapper for platform deviations in hypot() */
 double
-js::math_hypot_impl(double x, double y)
+js::ecmaHypot(double x, double y)
 {
 #ifdef XP_WIN
-    // On Windows, hypot(NaN, Infinity) is NaN. ES6 requires Infinity.
-    if (mozilla::IsInfinite(x) || mozilla::IsInfinite(y))
-        return PositiveInfinity();
+    /*
+     * Workaround MS hypot bug, where hypot(Infinity, NaN or Math.MIN_VALUE)
+     * is NaN, not Infinity.
+     */
+    if (mozilla::IsInfinite(x) || mozilla::IsInfinite(y)) {
+        return mozilla::PositiveInfinity();
+    }
 #endif
     return hypot(x, y);
 }
@@ -1311,33 +1293,51 @@ bool
 js::math_hypot(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    if (args.length() < 2) {
-        args.rval().setNumber(GenericNaN());
-        return true;
-    }
 
-    double x, y;
-    if (!ToNumber(cx, args[0], &x))
-        return false;
-
-    if (!ToNumber(cx, args[1], &y))
-        return false;
-
+    // IonMonkey calls the system hypot function directly if two arguments are
+    // given. Do that here as well to get the same results.
     if (args.length() == 2) {
-        args.rval().setNumber(math_hypot_impl(x, y));
+        double x, y;
+        if (!ToNumber(cx, args[0], &x))
+            return false;
+        if (!ToNumber(cx, args[1], &y))
+            return false;
+
+        double result = ecmaHypot(x, y);
+        args.rval().setNumber(result);
         return true;
     }
 
-    /* args.length() > 2 */
-    double z;
-    if (!ToNumber(cx, args[2], &z)) {
-        return false;
+    bool isInfinite = false;
+    bool isNaN = false;
+
+    double scale = 0;
+    double sumsq = 1;
+
+    for (unsigned i = 0; i < args.length(); i++) {
+        double x;
+        if (!ToNumber(cx, args[i], &x))
+            return false;
+
+        isInfinite |= mozilla::IsInfinite(x);
+        isNaN |= mozilla::IsNaN(x);
+
+        double xabs = mozilla::Abs(x);
+
+        if (scale < xabs) {
+            sumsq = 1 + sumsq * (scale / xabs) * (scale / xabs);
+            scale = xabs;
+        } else if (scale != 0) {
+            sumsq += (xabs / scale) * (xabs / scale);
+        }
     }
 
-    args.rval().setNumber(math_hypot_impl(math_hypot_impl(x, y), z));
+    double result = isInfinite ? PositiveInfinity() :
+                    isNaN ? GenericNaN() :
+                    scale * sqrt(sumsq);
+    args.rval().setNumber(result);
     return true;
 }
-#endif
 
 #if !HAVE_TRUNC
 double trunc(double x)
@@ -1364,7 +1364,7 @@ js::math_trunc(JSContext *cx, unsigned argc, Value *vp)
     return math_function<math_trunc_impl>(cx, argc, vp);
 }
 
-double sign(double x)
+static double sign(double x)
 {
     if (mozilla::IsNaN(x))
         return GenericNaN();
@@ -1440,10 +1440,10 @@ static const JSFunctionSpec math_static_methods[] = {
     JS_FN("asin",           math_asin,            1, 0),
     JS_FN("atan",           math_atan,            1, 0),
     JS_FN("atan2",          math_atan2,           2, 0),
-    JS_FN("ceil",           js_math_ceil,         1, 0),
+    JS_FN("ceil",           math_ceil,            1, 0),
     JS_FN("cos",            math_cos,             1, 0),
     JS_FN("exp",            math_exp,             1, 0),
-    JS_FN("floor",          js_math_floor,        1, 0),
+    JS_FN("floor",          math_floor,           1, 0),
     JS_FN("imul",           math_imul,            2, 0),
     JS_FN("fround",         math_fround,          1, 0),
     JS_FN("log",            math_log,             1, 0),
@@ -1451,7 +1451,7 @@ static const JSFunctionSpec math_static_methods[] = {
     JS_FN("min",            js_math_min,          2, 0),
     JS_FN("pow",            js_math_pow,          2, 0),
     JS_FN("random",         js_math_random,       0, 0),
-    JS_FN("round",          js_math_round,        1, 0),
+    JS_FN("round",          math_round,           1, 0),
     JS_FN("sin",            math_sin,             1, 0),
     JS_FN("sqrt",           js_math_sqrt,         1, 0),
     JS_FN("tan",            math_tan,             1, 0),
@@ -1465,10 +1465,7 @@ static const JSFunctionSpec math_static_methods[] = {
     JS_FN("acosh",          math_acosh,           1, 0),
     JS_FN("asinh",          math_asinh,           1, 0),
     JS_FN("atanh",          math_atanh,           1, 0),
-// Math.hypot is disabled pending the resolution of spec issues (bug 896264).
-#if 0
     JS_FN("hypot",          math_hypot,           2, 0),
-#endif
     JS_FN("trunc",          math_trunc,           1, 0),
     JS_FN("sign",           math_sign,            1, 0),
     JS_FN("cbrt",           math_cbrt,            1, 0),
@@ -1478,21 +1475,24 @@ static const JSFunctionSpec math_static_methods[] = {
 JSObject *
 js_InitMathClass(JSContext *cx, HandleObject obj)
 {
-    RootedObject Math(cx, NewObjectWithClassProto(cx, &MathClass, NULL, obj, SingletonObject));
+    RootedObject proto(cx, obj->as<GlobalObject>().getOrCreateObjectPrototype(cx));
+    if (!proto)
+        return nullptr;
+    RootedObject Math(cx, NewObjectWithGivenProto(cx, &MathClass, proto, obj, SingletonObject));
     if (!Math)
-        return NULL;
+        return nullptr;
 
     if (!JS_DefineProperty(cx, obj, js_Math_str, OBJECT_TO_JSVAL(Math),
                            JS_PropertyStub, JS_StrictPropertyStub, 0)) {
-        return NULL;
+        return nullptr;
     }
 
     if (!JS_DefineFunctions(cx, Math, math_static_methods))
-        return NULL;
+        return nullptr;
     if (!JS_DefineConstDoubles(cx, Math, math_constants))
-        return NULL;
+        return nullptr;
 
-    MarkStandardClassInitializedNoProto(obj, &MathClass);
+    obj->as<GlobalObject>().setConstructor(JSProto_Math, ObjectValue(*Math));
 
     return Math;
 }

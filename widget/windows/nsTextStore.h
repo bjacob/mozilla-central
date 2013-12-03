@@ -13,6 +13,7 @@
 #include "nsIWidget.h"
 #include "nsWindowBase.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/TextRange.h"
 
 #include <msctf.h>
 #include <textstor.h>
@@ -273,7 +274,7 @@ protected:
   class Composition MOZ_FINAL
   {
   public:
-    // NULL if no composition is active, otherwise the current composition
+    // nullptr if no composition is active, otherwise the current composition
     nsRefPtr<ITfCompositionView> mView;
 
     // Current copy of the active composition string. Only mString is
@@ -465,7 +466,7 @@ protected:
     // For compositionupdate and compositionend
     nsString mData;
     // For compositionupdate
-    nsTArray<nsTextRange> mRanges;
+    nsTArray<mozilla::TextRange> mRanges;
     // For selectionset
     bool mSelectionReversed;
   };

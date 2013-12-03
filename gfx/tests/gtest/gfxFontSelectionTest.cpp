@@ -122,7 +122,7 @@ struct TestEntry {
         isRTL = true;
     }
 
-    // empty/NULL fontName means ignore font name
+    // Empty/nullptr fontName means ignore font name
     void Expect (const char *platform,
                  const char *fontName,
                  const LiteralArray& glyphs)
@@ -269,7 +269,7 @@ RunTest (TestEntry *test, gfxContext *ctx) {
     }
 
     gfxFontTestStore::NewStore();
-    textRun->Draw(ctx, gfxPoint(0,0), gfxFont::GLYPH_FILL, 0, length, nullptr, nullptr, nullptr);
+    textRun->Draw(ctx, gfxPoint(0,0), DrawMode::GLYPH_FILL, 0, length, nullptr, nullptr, nullptr);
     gfxFontTestStore *s = gfxFontTestStore::CurrentStore();
 
     if (!test->Check(s)) {

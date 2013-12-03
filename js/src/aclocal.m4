@@ -11,8 +11,8 @@ builtin(include, build/autoconf/ccache.m4)dnl
 builtin(include, build/autoconf/wrapper.m4)dnl
 builtin(include, build/autoconf/pkg.m4)dnl
 builtin(include, build/autoconf/nspr.m4)dnl
+builtin(include, build/autoconf/codeset.m4)dnl
 builtin(include, build/autoconf/altoptions.m4)dnl
-builtin(include, build/autoconf/moznbytetype.m4)dnl
 builtin(include, build/autoconf/mozprog.m4)dnl
 builtin(include, build/autoconf/mozheader.m4)dnl
 builtin(include, build/autoconf/mozcommonheader.m4)dnl

@@ -240,14 +240,8 @@
                             <td class="statLabel">readyState</td> <td class="statValue"><span class="statReadyState"/></td>
                         </tr>
                         <tr>
-                            <td class="statLabel">&stats.channels;</td> <td class="statValue"><span class="statChannels"/></td>
-                        </tr>
-                        <tr>
                           <!-- Localization note: networkState is a HTML5 API MediaElement-specific attribute and should not be localized. -->
                           <td class="statLabel">networkState</td> <td class="statValue"><span class="statNetState"/></td>
-                        </tr>
-                        <tr>
-                          <td class="statLabel">&stats.sampleRate;</td> <td class="statValue"><span class="statSampleRate"/></td>
                         </tr>
                         <tr style="height: 1em;"/>
 
@@ -344,7 +338,20 @@
                 firstFrameShown : false,
                 timeUpdateCount : 0,
                 maxCurrentTimeSeen : 0,
-                isAudioOnly : false,
+                _isAudioOnly : false,
+                get isAudioOnly() { return this._isAudioOnly; },
+                set isAudioOnly(val) {
+                    this._isAudioOnly = val;
+                    if (!this.isTopLevelSyntheticDocument)
+                        return;
+                    if (this._isAudioOnly) {
+                        this.video.style.height = this._controlBarHeight + "px";
+                        this.video.style.width = "66%";
+                    } else {
+                        this.video.style.removeProperty("height");
+                        this.video.style.removeProperty("width");
+                    }
+                },
                 suppressError : false,
 
                 setupStatusFader : function(immediate) {
@@ -848,7 +855,10 @@
                 },
 
                 onVolumeMouseInOut : function (event) {
-                    if (this.isVideoWithoutAudioTrack()) {
+                    let doc = this.video.ownerDocument;
+                    let win = doc.defaultView;
+                    if (this.isVideoWithoutAudioTrack() ||
+                        (this.isAudioOnly && this.isTopLevelSyntheticDocument)) {
                         return;
                     }
                     // Ignore events caused by transitions between mute button and volumeStack,
@@ -956,7 +966,7 @@
                 },
 
                 startFade : function (element, fadeIn, immediate) {
-                    if (element.className == "controlBar" && fadeIn) {
+                    if (element.classList.contains("controlBar") && fadeIn) {
                         // Bug 493523, the scrubber doesn't call valueChanged while hidden,
                         // so our dependent state (eg, timestamp in the thumb) will be stale.
                         // As a workaround, update it manually when it first becomes unhidden.
@@ -975,11 +985,11 @@
                         // when we remove the attribute.
                         element.clientTop;
                         element.removeAttribute("fadeout");
-                        if (element.className == "controlBar")
+                        if (element.classList.contains("controlBar"))
                             this.controlsSpacer.removeAttribute("hideCursor");
                     } else {
                         element.setAttribute("fadeout", true);
-                        if (element.className == "controlBar" && !this.hasError() &&
+                        if (element.classList.contains("controlBar") && !this.hasError() &&
                             document.mozFullScreenElement == this.video)
                             this.controlsSpacer.setAttribute("hideCursor", true);
 
@@ -1218,9 +1228,6 @@
                     if (v.muted)
                         volume += " (muted)";
                     s.volume.textContent = volume;
-
-                    s.channels.textContent = v.mozChannels;
-                    s.sampRate.textContent = (v.mozSampleRate / 1000).toFixed(3) + " kHz";
                 },
 
                 keyHandler : function(event) {
@@ -1344,6 +1351,12 @@
                         dump("videoctl: " + msg + "\n");
                 },
 
+                get isTopLevelSyntheticDocument() {
+                  let doc = this.video.ownerDocument;
+                  let win = doc.defaultView;
+                  return doc.mozSyntheticDocument && win === win.top;
+                },
+
                 _playButtonWidth : 0,
                 _durationLabelWidth : 0,
                 _muteButtonWidth : 0,
@@ -1352,14 +1365,10 @@
                 _overlayPlayButtonHeight : 64,
                 _overlayPlayButtonWidth : 64,
                 adjustControlSize : function adjustControlSize() {
-                    if (this.isAudioOnly)
+                    let doc = this.video.ownerDocument;
+                    let isAudioOnly = this.isAudioOnly;
+                    if (isAudioOnly && !this.isTopLevelSyntheticDocument)
                         return;
-
-                    let videoHeight = this.video.clientHeight;
-                    let videoWidth = this.video.clientWidth;
-
-                    if (this._overlayPlayButtonHeight > videoHeight || this._overlayPlayButtonWidth > videoWidth)
-                        this.clickToPlay.hidden = true;
 
                     // The scrubber has |flex=1|, therefore |minScrubberWidth|
                     // was generated by empirical testing.
@@ -1371,6 +1380,12 @@
                                               this._fullscreenButtonWidth;
                     let minHeightForControlBar = this._controlBarHeight;
                     let minWidthOnlyPlayPause = this._playButtonWidth + this._muteButtonWidth;
+
+                    let videoHeight = isAudioOnly ? minHeightForControlBar : this.video.clientHeight;
+                    let videoWidth = isAudioOnly ? minWidthAllControls : this.video.clientWidth;
+
+                    if (this._overlayPlayButtonHeight > videoHeight || this._overlayPlayButtonWidth > videoWidth)
+                        this.clickToPlay.hidden = true;
 
                     let size = "normal";
                     if (videoHeight < minHeightForControlBar)
@@ -1410,8 +1425,6 @@
                     this.stats.size       = document.getAnonymousElementByAttribute(binding, "class", "statSize");
                     this.stats.activity   = document.getAnonymousElementByAttribute(binding, "class", "statActivity");
                     this.stats.volume     = document.getAnonymousElementByAttribute(binding, "class", "statVolume");
-                    this.stats.channels   = document.getAnonymousElementByAttribute(binding, "class", "statChannels");
-                    this.stats.sampRate   = document.getAnonymousElementByAttribute(binding, "class", "statSampleRate");
                     this.stats.readyState = document.getAnonymousElementByAttribute(binding, "class", "statReadyState");
                     this.stats.netState   = document.getAnonymousElementByAttribute(binding, "class", "statNetState");
                     this.stats.framesParsed    = document.getAnonymousElementByAttribute(binding, "class", "statFramesParsed");

@@ -12,22 +12,18 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'dom_voicemail'
 
-MODULE = 'dom'
-
 EXPORTS.mozilla.dom += [
     'Voicemail.h',
 ]
 
-CPP_SOURCES += [
+SOURCES += [
     'Voicemail.cpp',
 ]
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
-
-LIBRARY_NAME = 'domvoicemail_s'
-
 LOCAL_INCLUDES += [
     '../base',
 ]
+
+FINAL_LIBRARY = 'gklayout'

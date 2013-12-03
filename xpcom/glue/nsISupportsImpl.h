@@ -43,7 +43,7 @@ ToSupports(nsISupports* p)
 inline nsISupports*
 ToCanonicalSupports(nsISupports* p)
 {
-    return NULL;
+    return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -73,17 +73,6 @@ private:
 #endif // DEBUG || (NIGHTLY_BUILD && !MOZ_PROFILING)
 
 // Support for ISupports classes which interact with cycle collector.
-
-struct nsPurpleBufferEntry {
-  union {
-    void *mObject;                        // when low bit unset
-    nsPurpleBufferEntry *mNextInFreeList; // when low bit set
-  };
-
-  nsCycleCollectingAutoRefCnt *mRefCnt;
-
-  nsCycleCollectionParticipant *mParticipant; // NULL for nsISupports
-};
 
 #define NS_NUMBER_OF_FLAGS_IN_REFCNT 2
 #define NS_IN_PURPLE_BUFFER (1 << 0)

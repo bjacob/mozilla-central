@@ -77,6 +77,7 @@ struct NrIceCandidate {
   std::string host;
   uint16_t port;
   Type type;
+  std::string codeword;
 };
 
 struct NrIceCandidatePair {
@@ -104,6 +105,13 @@ struct NrIceCandidatePair {
   NrIceCandidate local;
   NrIceCandidate remote;
   // TODO(bcampen@mozilla.com): Is it important to put the foundation in here?
+  std::string codeword;
+};
+
+// Abstract base class for opaque values.
+class NrIceOpaque {
+ public:
+  virtual ~NrIceOpaque() {}
 };
 
 class NrIceMediaStream {
@@ -164,16 +172,18 @@ class NrIceMediaStream {
   // the context has been destroyed.
   void Close();
 
+  // Set an opaque value. Owned by the media stream.
+  void SetOpaque(NrIceOpaque *opaque) { opaque_ = opaque; }
+
+  // Get the opaque
+  NrIceOpaque* opaque() const { return opaque_; }
+
   sigslot::signal2<NrIceMediaStream *, const std::string& >
   SignalCandidate;  // A new ICE candidate:
   sigslot::signal1<NrIceMediaStream *> SignalReady;  // Candidate pair ready.
   sigslot::signal1<NrIceMediaStream *> SignalFailed;  // Candidate pair failed.
   sigslot::signal4<NrIceMediaStream *, int, const unsigned char *, int>
   SignalPacketReceived;  // Incoming packet
-
-  // Emit all the ICE candidates. Note that this doesn't
-  // work for trickle ICE yet--called internally
-  void EmitAllCandidates();
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(NrIceMediaStream)
 
@@ -184,7 +194,8 @@ class NrIceMediaStream {
       ctx_(ctx),
       name_(name),
       components_(components),
-      stream_(nullptr) {}
+      stream_(nullptr),
+      opaque_(nullptr) {}
 
   DISALLOW_COPY_ASSIGN(NrIceMediaStream);
 
@@ -193,6 +204,7 @@ class NrIceMediaStream {
   const std::string name_;
   const int components_;
   nr_ice_media_stream *stream_;
+  ScopedDeletePtr<NrIceOpaque> opaque_;
 };
 
 

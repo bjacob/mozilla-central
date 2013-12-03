@@ -25,6 +25,9 @@ GetThreadPoolLog()
   return sLog;
 }
 #endif
+#ifdef LOG
+#undef LOG
+#endif
 #define LOG(args) PR_LOG(GetThreadPoolLog(), PR_LOG_DEBUG, args)
 
 // DESIGN:
@@ -37,27 +40,9 @@ GetThreadPoolLog()
 #define DEFAULT_IDLE_THREAD_LIMIT 1
 #define DEFAULT_IDLE_THREAD_TIMEOUT PR_SecondsToInterval(60)
 
-class ShutdownHelper MOZ_FINAL : public nsRunnable
-{
-public:
-  NS_DECL_NSIRUNNABLE
-
-  ShutdownHelper(nsCOMArray<nsIThread>& aThreads,
-                 already_AddRefed<nsIThreadPoolListener> aListener)
-  : mListener(aListener)
-  {
-    MOZ_ASSERT(!aThreads.IsEmpty());
-    mThreads.SwapElements(aThreads);
-  }
-
-private:
-  nsCOMArray<nsIThread> mThreads;
-  nsCOMPtr<nsIThreadPoolListener> mListener;
-};
-
 NS_IMPL_ADDREF(nsThreadPool)
 NS_IMPL_RELEASE(nsThreadPool)
-NS_IMPL_CLASSINFO(nsThreadPool, NULL, nsIClassInfo::THREADSAFE,
+NS_IMPL_CLASSINFO(nsThreadPool, nullptr, nsIClassInfo::THREADSAFE,
                   NS_THREADPOOL_CID)
 NS_IMPL_QUERY_INTERFACE3_CI(nsThreadPool, nsIThreadPool, nsIEventTarget,
                             nsIRunnable)
@@ -74,28 +59,9 @@ nsThreadPool::nsThreadPool()
 
 nsThreadPool::~nsThreadPool()
 {
-  // Calling Shutdown() directly is not safe since it will spin the event loop
-  // (perhaps during a GC). Instead we try to delay-shutdown each thread that is
-  // still alive.
-  nsCOMArray<nsIThread> threads;
-  nsCOMPtr<nsIThreadPoolListener> listener;
-  {
-    ReentrantMonitorAutoEnter mon(mEvents.GetReentrantMonitor());
-    if (!mShutdown) {
-      NS_WARNING("nsThreadPool destroyed before Shutdown() was called!");
-
-      mThreads.SwapElements(threads);
-      mListener.swap(listener);
-    }
-  }
-
-  if (!threads.IsEmpty()) {
-    nsRefPtr<ShutdownHelper> helper =
-      new ShutdownHelper(threads, listener.forget());
-    if (NS_FAILED(NS_DispatchToMainThread(helper, NS_DISPATCH_NORMAL))) {
-      NS_WARNING("Unable to shut down threads in this thread pool!");
-    }
-  }
+  // Threads keep a reference to the nsThreadPool until they return from Run()
+  // after removing themselves from mThreads.
+  MOZ_ASSERT(mThreads.IsEmpty());
 }
 
 nsresult
@@ -126,7 +92,8 @@ nsThreadPool::PutEvent(nsIRunnable *event)
   nsThreadManager::get()->NewThread(0,
                                     nsIThreadManager::DEFAULT_STACK_SIZE,
                                     getter_AddRefs(thread));
-  NS_ENSURE_STATE(thread);
+  if (NS_WARN_IF(!thread))
+    return NS_ERROR_UNEXPECTED;
 
   bool killThread = false;
   {
@@ -259,12 +226,14 @@ nsThreadPool::Dispatch(nsIRunnable *event, uint32_t flags)
 {
   LOG(("THRD-P(%p) dispatch [%p %x]\n", this, event, flags));
 
-  NS_ENSURE_STATE(!mShutdown);
+  if (NS_WARN_IF(mShutdown))
+    return NS_ERROR_NOT_AVAILABLE;
 
   if (flags & DISPATCH_SYNC) {
     nsCOMPtr<nsIThread> thread;
     nsThreadManager::get()->GetCurrentThread(getter_AddRefs(thread));
-    NS_ENSURE_STATE(thread);
+    if (NS_WARN_IF(!thread))
+      return NS_ERROR_NOT_AVAILABLE;
 
     nsRefPtr<nsThreadSyncDispatch> wrapper =
         new nsThreadSyncDispatch(thread, event);
@@ -411,19 +380,5 @@ nsThreadPool::SetName(const nsACString& aName)
   }
 
   mName = aName;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ShutdownHelper::Run()
-{
-  MOZ_ASSERT(!mThreads.IsEmpty());
-
-  for (int32_t i = 0; i < mThreads.Count(); ++i)
-    mThreads[i]->Shutdown();
-
-  mThreads.Clear();
-
-  mListener = nullptr;
   return NS_OK;
 }

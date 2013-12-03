@@ -182,11 +182,7 @@ TokenKindIsAssignment(TokenKind tt)
 inline bool
 TokenKindIsDecl(TokenKind tt)
 {
-#if JS_HAS_BLOCK_SCOPE
     return tt == TOK_VAR || tt == TOK_LET;
-#else
-    return tt == TOK_VAR;
-#endif
 }
 
 struct TokenPos {
@@ -235,7 +231,8 @@ struct TokenPos {
 
 enum DecimalPoint { NoDecimal = false, HasDecimal = true };
 
-struct Token {
+struct Token
+{
     TokenKind           type;           // char value or above enumerator
     TokenPos            pos;            // token position in file
     union {
@@ -250,6 +247,24 @@ struct Token {
         RegExpFlag      reflags;        // regexp flags; use tokenbuf to access
                                         //   regexp chars
     } u;
+
+    // This constructor is necessary only for MSVC 2013 and how it compiles the
+    // initialization of TokenStream::tokens.  That field is initialized as
+    // tokens() in the constructor init-list.  This *should* zero the entire
+    // array, then (because Token has a non-trivial constructor, because
+    // TokenPos has a user-provided constructor) call the implicit Token
+    // constructor on each element, which would call the TokenPos constructor
+    // for Token::pos and do nothing.  (All of which is equivalent to just
+    // zeroing TokenStream::tokens.)  But MSVC 2013 (2010/2012 don't have this
+    // bug) doesn't zero out each element, so we need this extra constructor to
+    // make it do the right thing.  (Token is used primarily by reference or
+    // pointer, and it's only initialized a very few places, so having a
+    // user-defined constructor won't hurt perf.)  See also bug 920318.
+    Token()
+      : type(TOK_ERROR),
+        pos(0, 0)
+    {
+    }
 
     // Mutators
 
@@ -311,7 +326,7 @@ struct CompileError {
     char *message;
     ErrorArgumentsType argumentsType;
     CompileError()
-      : message(NULL), argumentsType(ArgumentsAreUnicode)
+      : message(nullptr), argumentsType(ArgumentsAreUnicode)
     {
         mozilla::PodZero(&report);
     }
@@ -393,7 +408,7 @@ class MOZ_STACK_CLASS TokenStream
   public:
     typedef Vector<jschar, 32> CharBuffer;
 
-    TokenStream(ExclusiveContext *cx, const CompileOptions &options,
+    TokenStream(ExclusiveContext *cx, const ReadOnlyCompileOptions &options,
                 const jschar *base, size_t length, StrictModeGetter *smg);
 
     ~TokenStream();
@@ -510,6 +525,15 @@ class MOZ_STACK_CLASS TokenStream
         return tt;
     }
 
+    TokenPos peekTokenPos(Modifier modifier = None) {
+        if (lookahead != 0)
+            return tokens[(cursor + 1) & ntokensMask].pos;
+        getTokenInternal(modifier);
+        ungetToken();
+        JS_ASSERT(lookahead != 0);
+        return tokens[(cursor + 1) & ntokensMask].pos;
+    }
+
     // This is like peekToken(), with one exception:  if there is an EOL
     // between the end of the current token and the start of the next token, it
     // returns TOK_EOL.  In that case, no token with TOK_EOL is actually
@@ -596,8 +620,16 @@ class MOZ_STACK_CLASS TokenStream
         return pos.buf - userbuf.base();
     }
 
+    const jschar *rawBase() const {
+        return userbuf.base();
+    }
+
+    const jschar *rawLimit() const {
+        return userbuf.limit();
+    }
+
     bool hasSourceURL() const {
-        return sourceURL_ != NULL;
+        return sourceURL_ != nullptr;
     }
 
     jschar *sourceURL() {
@@ -605,7 +637,7 @@ class MOZ_STACK_CLASS TokenStream
     }
 
     bool hasSourceMapURL() const {
-        return sourceMapURL_ != NULL;
+        return sourceMapURL_ != nullptr;
     }
 
     jschar *sourceMapURL() {
@@ -702,7 +734,7 @@ class MOZ_STACK_CLASS TokenStream
         return cx;
     }
 
-    const CompileOptions &options() const {
+    const ReadOnlyCompileOptions &options() const {
         return options_;
     }
 
@@ -736,15 +768,15 @@ class MOZ_STACK_CLASS TokenStream
         }
 
         jschar getRawChar() {
-            return *ptr++;      // this will NULL-crash if poisoned
+            return *ptr++;      // this will nullptr-crash if poisoned
         }
 
         jschar peekRawChar() const {
-            return *ptr;        // this will NULL-crash if poisoned
+            return *ptr;        // this will nullptr-crash if poisoned
         }
 
         bool matchRawChar(jschar c) {
-            if (*ptr == c) {    // this will NULL-crash if poisoned
+            if (*ptr == c) {    // this will nullptr-crash if poisoned
                 ptr++;
                 return true;
             }
@@ -779,7 +811,7 @@ class MOZ_STACK_CLASS TokenStream
 #ifdef DEBUG
         // Poison the TokenBuf so it cannot be accessed again.
         void poison() {
-            ptr = NULL;
+            ptr = nullptr;
         }
 #endif
 
@@ -846,7 +878,7 @@ class MOZ_STACK_CLASS TokenStream
     void updateFlagsForEOL();
 
     // Options used for parsing/tokenizing.
-    const CompileOptions &options_;
+    const ReadOnlyCompileOptions &options_;
 
     Token               tokens[ntokens];    // circular token buffer
     unsigned            cursor;             // index of last parsed token
@@ -854,7 +886,7 @@ class MOZ_STACK_CLASS TokenStream
     unsigned            lineno;             // current line number
     Flags               flags;              // flags -- see above
     const jschar        *linebase;          // start of current line;  points into userbuf
-    const jschar        *prevLinebase;      // start of previous line;  NULL if on the first line
+    const jschar        *prevLinebase;      // start of previous line;  nullptr if on the first line
     TokenBuf            userbuf;            // user input buffer
     const char          *filename;          // input filename or null
     jschar              *sourceURL_;        // the user's requested source URL or null

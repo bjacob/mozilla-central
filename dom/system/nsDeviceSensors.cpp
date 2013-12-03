@@ -175,7 +175,7 @@ WindowCannotReceiveSensorEvent (nsPIDOMWindow* aWindow)
   // Check to see if this window is in the background.  If
   // it is and it does not have the "background-sensors" permission,
   // don't send any device motion events to it.
-  if (!aWindow || !aWindow->GetOuterWindow()) {
+  if (!aWindow || !aWindow->IsCurrentInnerWindow()) {
     return true;
   }
 
@@ -239,7 +239,7 @@ void
 nsDeviceSensors::FireDOMLightEvent(mozilla::dom::EventTarget* aTarget,
                                    double aValue)
 {
-  DeviceLightEventInitInitializer init;
+  DeviceLightEventInit init;
   init.mBubbles = true;
   init.mCancelable = false;
   init.mValue = aValue;
@@ -258,7 +258,7 @@ nsDeviceSensors::FireDOMProximityEvent(mozilla::dom::EventTarget* aTarget,
                                        double aMin,
                                        double aMax)
 {
-  DeviceProximityEventInitInitializer init;
+  DeviceProximityEventInit init;
   init.mBubbles = true;
   init.mCancelable = false;
   init.mValue = aValue;
@@ -289,7 +289,7 @@ void
 nsDeviceSensors::FireDOMUserProximityEvent(mozilla::dom::EventTarget* aTarget,
                                            bool aNear)
 {
-  UserProximityEventInitInitializer init;
+  UserProximityEventInit init;
   init.mBubbles = true;
   init.mCancelable = false;
   init.mNear = aNear;

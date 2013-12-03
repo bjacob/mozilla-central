@@ -5,25 +5,25 @@
 #include "js/Class.h"
 #include "jsapi-tests/tests.h"
 
-int count = 0;
+static int iterCount = 0;
 
 static bool
 IterNext(JSContext *cx, unsigned argc, jsval *vp)
 {
-    if (count++ == 100)
+    if (iterCount++ == 100)
         return JS_ThrowStopIteration(cx);
-    JS_SET_RVAL(cx, vp, INT_TO_JSVAL(count));
+    JS_SET_RVAL(cx, vp, INT_TO_JSVAL(iterCount));
     return true;
 }
 
 static JSObject *
 IterHook(JSContext *cx, JS::HandleObject obj, bool keysonly)
 {
-    JS::RootedObject iterObj(cx, JS_NewObject(cx, NULL, NULL, NULL));
+    JS::RootedObject iterObj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
     if (!iterObj)
-        return NULL;
+        return nullptr;
     if (!JS_DefineFunction(cx, iterObj, "next", IterNext, 0, 0))
-        return NULL;
+        return nullptr;
     return iterObj;
 }
 
@@ -37,21 +37,21 @@ const js::Class HasCustomIterClass = {
     JS_EnumerateStub,
     JS_ResolveStub,
     JS_ConvertStub,
-    NULL,
-    NULL, /* checkAccess */
-    NULL, /* call */
-    NULL, /* hasInstance */
-    NULL, /* construct */
-    NULL, /* mark */
+    nullptr,
+    nullptr, /* checkAccess */
+    nullptr, /* call */
+    nullptr, /* hasInstance */
+    nullptr, /* construct */
+    nullptr, /* mark */
     {
-        NULL,       /* outerObject */
-        NULL,       /* innerObject */
+        nullptr,     /* outerObject */
+        nullptr,     /* innerObject */
         IterHook,
         false        /* isWrappedNative */
     }
 };
 
-bool
+static bool
 IterClassConstructor(JSContext *cx, unsigned argc, jsval *vp)
 {
     JSObject *obj = JS_NewObjectForConstructor(cx, Jsvalify(&HasCustomIterClass), vp);
@@ -63,8 +63,8 @@ IterClassConstructor(JSContext *cx, unsigned argc, jsval *vp)
 
 BEGIN_TEST(testCustomIterator_bug612523)
 {
-    CHECK(JS_InitClass(cx, global, NULL, Jsvalify(&HasCustomIterClass),
-                       IterClassConstructor, 0, NULL, NULL, NULL, NULL));
+    CHECK(JS_InitClass(cx, global, nullptr, Jsvalify(&HasCustomIterClass),
+                       IterClassConstructor, 0, nullptr, nullptr, nullptr, nullptr));
 
     JS::RootedValue result(cx);
     EVAL("var o = new HasCustomIter(); \n"
@@ -74,7 +74,7 @@ BEGIN_TEST(testCustomIterator_bug612523)
 
     CHECK(JSVAL_IS_INT(result));
     CHECK_EQUAL(JSVAL_TO_INT(result), 100);
-    CHECK_EQUAL(count, 101);
+    CHECK_EQUAL(iterCount, 101);
 
     return true;
 }

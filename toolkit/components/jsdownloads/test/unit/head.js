@@ -341,6 +341,7 @@ function promiseStartLegacyDownload(aSourceUrl, aOptions) {
     localHandlerApp.executable = new FileUtils.File(aOptions.launcherPath);
 
     mimeInfo.preferredApplicationHandler = localHandlerApp;
+    mimeInfo.preferredAction = Ci.nsIMIMEInfo.useHelperApp;
   }
 
   if (aOptions && aOptions.launchWhenSucceeded) {
@@ -463,6 +464,31 @@ function promiseStartExternalHelperAppServiceDownload(aSourceUrl) {
   }.bind(this)).then(null, do_report_unexpected_exception);
 
   return deferred.promise;
+}
+
+/**
+ * Waits for a download to finish, in case it has not finished already.
+ *
+ * @param aDownload
+ *        The Download object to wait upon.
+ *
+ * @return {Promise}
+ * @resolves When the download has finished successfully.
+ * @rejects JavaScript exception if the download failed.
+ */
+function promiseDownloadStopped(aDownload) {
+  if (!aDownload.stopped) {
+    // The download is in progress, wait for the current attempt to finish and
+    // report any errors that may occur.
+    return aDownload.start();
+  }
+
+  if (aDownload.succeeded) {
+    return Promise.resolve();
+  }
+
+  // The download failed or was canceled.
+  return Promise.reject(aDownload.error || new Error("Download canceled."));
 }
 
 /**
@@ -773,11 +799,20 @@ add_task(function test_common_initialize()
                          TEST_DATA_SHORT_GZIP_ENCODED_SECOND.length);
     });
 
+  // This URL will emulate being blocked by Windows Parental controls
+  gHttpServer.registerPathHandler("/parentalblocked.zip",
+    function (aRequest, aResponse) {
+      aResponse.setStatusLine(aRequest.httpVersion, 450,
+                              "Blocked by Windows Parental Controls");
+    });
+
   // Disable integration with the host application requiring profile access.
   DownloadIntegration.dontLoadList = true;
   DownloadIntegration.dontLoadObservers = true;
   // Disable the parental controls checking.
   DownloadIntegration.dontCheckParentalControls = true;
+  // Disable application reputation checks.
+  DownloadIntegration.dontCheckApplicationReputation = true;
   // Disable the calls to the OS to launch files and open containing folders
   DownloadIntegration.dontOpenFileAndFolder = true;
   DownloadIntegration._deferTestOpenFile = Promise.defer();
@@ -808,7 +843,9 @@ add_task(function test_common_initialize()
                                             aSuggestedFileExtension,
                                             aForcePrompt)
         {
+          // The dialog should create the empty placeholder file.
           let file = getTempFile(TEST_TARGET_FILE_NAME);
+          file.create(Ci.nsIFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
           aLauncher.saveDestinationAvailable(file);
         },
       }.QueryInterface(aIid);

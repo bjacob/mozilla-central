@@ -7,14 +7,13 @@
 #ifndef jit_Safepoints_h
 #define jit_Safepoints_h
 
-#include "jit/BitSet.h"
 #include "jit/CompactBuffer.h"
-#include "jit/Registers.h"
 #include "jit/shared/Assembler-shared.h"
 
 namespace js {
 namespace jit {
 
+class BitSet;
 struct SafepointNunboxEntry;
 class LAllocation;
 class LSafepoint;
@@ -27,7 +26,7 @@ class SafepointWriter
     BitSet *frameSlots_;
 
   public:
-    bool init(uint32_t slotCount);
+    bool init(TempAllocator &alloc, uint32_t slotCount);
 
   private:
     // A safepoint entry is written in the order these functions appear.

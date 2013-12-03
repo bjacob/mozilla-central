@@ -9,12 +9,7 @@
 
 #ifdef JS_ION
 
-#include "jit/BaselineIC.h"
-#include "jit/BaselineJIT.h"
-#include "jit/BytecodeAnalysis.h"
 #include "jit/FixedList.h"
-#include "jit/IonAllocPolicy.h"
-#include "jit/IonCode.h"
 #if defined(JS_CPU_X86)
 # include "jit/x86/BaselineCompiler-x86.h"
 #elif defined(JS_CPU_X64)
@@ -153,6 +148,7 @@ namespace jit {
     _(JSOP_ENTERBLOCK)         \
     _(JSOP_ENTERLET0)          \
     _(JSOP_ENTERLET1)          \
+    _(JSOP_ENTERLET2)          \
     _(JSOP_LEAVEBLOCK)         \
     _(JSOP_LEAVEBLOCKEXPR)     \
     _(JSOP_LEAVEFORLETIN)      \
@@ -168,11 +164,9 @@ namespace jit {
     _(JSOP_ITERNEXT)           \
     _(JSOP_ENDITER)            \
     _(JSOP_CALLEE)             \
-    _(JSOP_POPV)               \
     _(JSOP_SETRVAL)            \
-    _(JSOP_RETURN)             \
-    _(JSOP_STOP)               \
-    _(JSOP_RETRVAL)
+    _(JSOP_RETRVAL)            \
+    _(JSOP_RETURN)
 
 class BaselineCompiler : public BaselineCompilerSpecific
 {
@@ -189,11 +183,18 @@ class BaselineCompiler : public BaselineCompilerSpecific
     bool modifiesArguments_;
 
     Label *labelOf(jsbytecode *pc) {
-        return &labels_[pc - script->code];
+        return &labels_[script->pcToOffset(pc)];
+    }
+
+    // If a script has more |nslots| than this, then emit code to do an
+    // early stack check.
+    static const unsigned EARLY_STACK_CHECK_SLOT_COUNT = 128;
+    bool needsEarlyStackCheck() const {
+        return script->nslots > EARLY_STACK_CHECK_SLOT_COUNT;
     }
 
   public:
-    BaselineCompiler(JSContext *cx, HandleScript script);
+    BaselineCompiler(JSContext *cx, TempAllocator &alloc, HandleScript script);
     bool init();
 
     MethodStatus compile();
@@ -214,7 +215,7 @@ class BaselineCompiler : public BaselineCompilerSpecific
         return emitIC(stub, false);
     }
 
-    bool emitStackCheck();
+    bool emitStackCheck(bool earlyCheck=false);
     bool emitInterruptCheck();
     bool emitUseCountIncrement();
     bool emitArgumentTypeChecks();

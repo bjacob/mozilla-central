@@ -13,13 +13,11 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'dom_alarm'
 
-MODULE = 'dom'
-
 EXPORTS.mozilla.dom.alarm += [
     'AlarmHalService.h',
 ]
 
-CPP_SOURCES += [
+SOURCES += [
     'AlarmHalService.cpp',
 ]
 
@@ -35,7 +33,6 @@ EXTRA_JS_MODULES += [
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-LIBRARY_NAME = 'domalarm_s'
-
+FINAL_LIBRARY = 'gklayout'

@@ -175,7 +175,8 @@ RootActor.prototype = {
       /* This is not in the spec, but it's used by tests. */
       testConnectionPrefix: this.conn.prefix,
       traits: {
-        sources: true
+        sources: true,
+        editOuterHTML: true
       }
     };
   },
@@ -189,6 +190,22 @@ RootActor.prototype = {
    * The (chrome) window, for use by child actors
    */
   get window() Services.wm.getMostRecentWindow(DebuggerServer.chromeWindowType),
+
+  /**
+   * URL of the chrome window.
+   */
+  get url() { return this.window ? this.window.document.location.href : null; },
+
+  /**
+   * Getter for the best nsIWebProgress for to watching this window.
+   */
+  get webProgress() {
+    return this.window
+      .QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIDocShell)
+      .QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIWebProgress);
+  },
 
   /**
    * Disconnects the actor from the browser window.
@@ -241,7 +258,11 @@ RootActor.prototype = {
       }
 
       /* DebuggerServer.addGlobalActor support: create actors. */
-      this._createExtraActors(this._parameters.globalActorFactories, newActorPool);
+      if (!this._globalActorPool) {
+        this._globalActorPool = new ActorPool(this.conn);
+        this._createExtraActors(this._parameters.globalActorFactories, this._globalActorPool);
+        this.conn.addActorPool(this._globalActorPool);
+      }
 
       /*
        * Drop the old actorID -> actor map. Actors that still mattered were
@@ -258,6 +279,11 @@ RootActor.prototype = {
         "selected": selected || 0,
         "tabs": [actor.form() for (actor of tabActorList)],
       };
+
+      /* If a root window is accessible, include its URL. */
+      if (this.url) {
+        reply.url = this.url;
+      }
 
       /* DebuggerServer.addGlobalActor support: name actors in 'listTabs' reply. */
       this._appendExtraActors(reply);

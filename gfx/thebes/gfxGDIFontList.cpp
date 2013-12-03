@@ -26,9 +26,11 @@
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsISimpleEnumerator.h"
 #include "nsIWindowsRegKey.h"
+#include "gfxFontConstants.h"
 
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/WindowsVersion.h"
 
 #include <usp10.h>
 
@@ -217,8 +219,7 @@ GDIFontEntry::IsSymbolFont()
 gfxFont *
 GDIFontEntry::CreateFontInstance(const gfxFontStyle* aFontStyle, bool aNeedsBold)
 {
-    bool isXP = (gfxWindowsPlatform::WindowsOSVersion() 
-                       < gfxWindowsPlatform::kWindowsVista);
+    bool isXP = !IsVistaOrLater();
 
     bool useClearType = isXP && !aFontStyle->systemFont &&
         (gfxWindowsPlatform::GetPlatform()->UseClearTypeAlways() ||
@@ -413,11 +414,11 @@ GDIFontEntry::CreateFontEntry(const nsAString& aName,
 }
 
 void
-GDIFontEntry::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf,
-                                  FontListSizes*    aSizes) const
+GDIFontEntry::AddSizeOfIncludingThis(MallocSizeOf aMallocSizeOf,
+                                     FontListSizes* aSizes) const
 {
     aSizes->mFontListSize += aMallocSizeOf(this);
-    SizeOfExcludingThis(aMallocSizeOf, aSizes);
+    AddSizeOfExcludingThis(aMallocSizeOf, aSizes);
 }
 
 /***************************************************************
@@ -828,11 +829,10 @@ gfxGDIFontList::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
 
     // Uniscribe doesn't place CFF fonts loaded privately 
     // via AddFontMemResourceEx on XP/Vista
-    if (isCFF && gfxWindowsPlatform::WindowsOSVersion() 
-                 < gfxWindowsPlatform::kWindows7) {
+    if (isCFF && !IsWin7OrLater()) {
         fe->mForceGDI = true;
     }
- 
+
     return fe;
 }
 
@@ -887,10 +887,10 @@ gfxGDIFontList::ResolveFontName(const nsAString& aFontName, nsAString& aResolved
 }
 
 void
-gfxGDIFontList::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
-                                    FontListSizes*    aSizes) const
+gfxGDIFontList::AddSizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
+                                       FontListSizes* aSizes) const
 {
-    gfxPlatformFontList::SizeOfExcludingThis(aMallocSizeOf, aSizes);
+    gfxPlatformFontList::AddSizeOfExcludingThis(aMallocSizeOf, aSizes);
     aSizes->mFontListSize +=
         mFontSubstitutes.SizeOfExcludingThis(SizeOfFamilyNameEntryExcludingThis,
                                              aMallocSizeOf);
@@ -903,9 +903,9 @@ gfxGDIFontList::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
 }
 
 void
-gfxGDIFontList::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf,
-                                    FontListSizes*    aSizes) const
+gfxGDIFontList::AddSizeOfIncludingThis(MallocSizeOf aMallocSizeOf,
+                                       FontListSizes* aSizes) const
 {
     aSizes->mFontListSize += aMallocSizeOf(this);
-    SizeOfExcludingThis(aMallocSizeOf, aSizes);
+    AddSizeOfExcludingThis(aMallocSizeOf, aSizes);
 }

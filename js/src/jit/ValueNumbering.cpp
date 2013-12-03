@@ -6,10 +6,9 @@
 
 #include "jit/ValueNumbering.h"
 
-#include "jit/CompileInfo.h"
-#include "jit/Ion.h"
-#include "jit/IonBuilder.h"
 #include "jit/IonSpewer.h"
+#include "jit/MIRGenerator.h"
+#include "jit/MIRGraph.h"
 
 using namespace js;
 using namespace js::jit;
@@ -17,9 +16,16 @@ using namespace js::jit;
 ValueNumberer::ValueNumberer(MIRGenerator *mir, MIRGraph &graph, bool optimistic)
   : mir(mir),
     graph_(graph),
+    values(graph.alloc()),
     pessimisticPass_(!optimistic),
     count_(0)
 { }
+
+TempAllocator &
+ValueNumberer::alloc() const
+{
+    return graph_.alloc();
+}
 
 uint32_t
 ValueNumberer::lookupValue(MDefinition *ins)
@@ -45,14 +51,14 @@ ValueNumberer::simplify(MDefinition *def, bool useValueNumbers)
     if (def->isEffectful())
         return def;
 
-    MDefinition *ins = def->foldsTo(useValueNumbers);
-
-    if (ins == def || !ins->updateForFolding(def))
+    MDefinition *ins = def->foldsTo(alloc(), useValueNumbers);
+    if (ins == def)
         return def;
 
-    // ensure this instruction has a VN
+    // Ensure this instruction has a value number.
     if (!ins->valueNumberData())
-        ins->setValueNumberData(new ValueNumberData);
+        ins->setValueNumberData(new(alloc()) ValueNumberData);
+
     if (!ins->block()) {
         // In this case, we made a new def by constant folding, for
         // example, we replaced add(#3,#4) with a new const(#7) node.
@@ -78,13 +84,13 @@ ValueNumberer::simplifyControlInstruction(MControlInstruction *def)
     if (def->isEffectful())
         return def;
 
-    MDefinition *repl = def->foldsTo(false);
-    if (repl == def || !repl->updateForFolding(def))
+    MDefinition *repl = def->foldsTo(alloc(), false);
+    if (repl == def)
         return def;
 
     // Ensure this instruction has a value number.
     if (!repl->valueNumberData())
-        repl->setValueNumberData(new ValueNumberData);
+        repl->setValueNumberData(new(alloc()) ValueNumberData);
 
     MBasicBlock *block = def->block();
 
@@ -178,9 +184,9 @@ ValueNumberer::computeValueNumbers()
         if (mir->shouldCancel("Value Numbering (preparation loop"))
             return false;
         for (MDefinitionIterator iter(*block); iter; iter++)
-            iter->setValueNumberData(new ValueNumberData);
+            iter->setValueNumberData(new(alloc()) ValueNumberData);
         MControlInstruction *jump = block->lastIns();
-        jump->setValueNumberData(new ValueNumberData);
+        jump->setValueNumberData(new(alloc()) ValueNumberData);
     }
 
     // Assign unique value numbers if pessimistic.
@@ -240,6 +246,15 @@ ValueNumberer::computeValueNumbers()
                     continue;
                 }
 
+                // Don't bother storing this instruction in the HashMap if
+                // (a) eliminateRedundancies will never eliminate it (because
+                // it's non-movable or effectful) and (b) no other instruction's
+                // value number depends on it.
+                if (!ins->hasDefUses() && (!ins->isMovable() || ins->isEffectful())) {
+                    iter++;
+                    continue;
+                }
+
                 uint32_t value = lookupValue(ins);
 
                 if (!value)
@@ -280,7 +295,8 @@ ValueNumberer::computeValueNumbers()
     for (ReversePostorderIterator block(graph_.rpoBegin()); block != graph_.rpoEnd(); block++) {
         for (MDefinitionIterator iter(*block); iter; iter++) {
             JS_ASSERT(!iter->isInWorklist());
-            JS_ASSERT(iter->valueNumber() != 0);
+            JS_ASSERT_IF(iter->valueNumber() == 0,
+                         !iter->hasDefUses() && (!iter->isMovable() || iter->isEffectful()));
         }
     }
 #endif
@@ -306,7 +322,7 @@ ValueNumberer::findDominatingDef(InstructionMap &defs, MDefinition *ins, size_t 
         value.validUntil = index + ins->block()->numDominated();
 
         if(!defs.put(ins->valueNumber(), value))
-            return NULL;
+            return nullptr;
 
         dom = ins;
     } else {
@@ -335,7 +351,7 @@ ValueNumberer::eliminateRedundancies()
     // is not in dominated scope), then we insert the current instruction,
     // since it is the most dominant instruction with the given value number.
 
-    InstructionMap defs;
+    InstructionMap defs(alloc());
 
     if (!defs.init())
         return false;
@@ -343,7 +359,7 @@ ValueNumberer::eliminateRedundancies()
     IonSpew(IonSpew_GVN, "Eliminating redundant instructions");
 
     // Stack for pre-order CFG traversal.
-    Vector<MBasicBlock *, 1, IonAllocPolicy> worklist;
+    Vector<MBasicBlock *, 1, IonAllocPolicy> worklist(alloc());
 
     // The index of the current block in the CFG traversal.
     size_t index = 0;
@@ -445,7 +461,7 @@ uint32_t
 MDefinition::valueNumber() const
 {
     JS_ASSERT(block_);
-    if (valueNumber_ == NULL)
+    if (valueNumber_ == nullptr)
         return 0;
     return valueNumber_->valueNumber();
 }
@@ -465,7 +481,7 @@ MDefinition *
 ValueNumberer::findSplit(MDefinition *def)
 {
     for (MDefinition *vncheck = def->valueNumberData()->classNext;
-         vncheck != NULL;
+         vncheck != nullptr;
          vncheck = vncheck->valueNumberData()->classNext) {
         if (!def->congruentTo(vncheck)) {
             IonSpew(IonSpew_GVN, "Proceeding with split because %d is not congruent to %d",
@@ -473,7 +489,7 @@ ValueNumberer::findSplit(MDefinition *def)
             return vncheck;
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 void
@@ -482,9 +498,9 @@ ValueNumberer::breakClass(MDefinition *def)
     if (def->valueNumber() == def->id()) {
         IonSpew(IonSpew_GVN, "Breaking congruence with itself: %d", def->id());
         ValueNumberData *defdata = def->valueNumberData();
-        JS_ASSERT(defdata->classPrev == NULL);
+        JS_ASSERT(defdata->classPrev == nullptr);
         // If the def was the only member of the class, then there is nothing to do.
-        if (defdata->classNext == NULL)
+        if (defdata->classNext == nullptr)
             return;
         // If upon closer inspection, we are still equivalent to this class
         // then there isn't anything for us to do.
@@ -511,10 +527,10 @@ ValueNumberer::breakClass(MDefinition *def)
 
         //lastOld is now the last element of the old list (congruent to
         //|def|)
-        lastOld->valueNumberData()->classNext = NULL;
+        lastOld->valueNumberData()->classNext = nullptr;
 
 #ifdef DEBUG
-        for (MDefinition *tmp = def; tmp != NULL; tmp = tmp->valueNumberData()->classNext) {
+        for (MDefinition *tmp = def; tmp != nullptr; tmp = tmp->valueNumberData()->classNext) {
             JS_ASSERT(tmp->valueNumber() == def->valueNumber());
             JS_ASSERT(tmp->congruentTo(def));
             JS_ASSERT(tmp != newRep);
@@ -523,11 +539,11 @@ ValueNumberer::breakClass(MDefinition *def)
         //|newRep| is now the first element of a new list, therefore it is the
         //new canonical element. Mark the remaining elements in the list
         //(including |newRep|)
-        newdata->classPrev = NULL;
+        newdata->classPrev = nullptr;
         IonSpew(IonSpew_GVN, "Choosing a new representative: %d", newRep->id());
 
         // make the VN of every member in the class the VN of the new representative number.
-        for (MDefinition *tmp = newRep; tmp != NULL; tmp = tmp->valueNumberData()->classNext) {
+        for (MDefinition *tmp = newRep; tmp != nullptr; tmp = tmp->valueNumberData()->classNext) {
             // if this instruction is already scheduled to be processed, don't do anything.
             if (tmp->isInWorklist())
                 continue;
@@ -552,7 +568,7 @@ ValueNumberer::breakClass(MDefinition *def)
             defdata->classNext->valueNumberData()->classPrev = defdata->classPrev;
 
         // Make sure there is no nastinees accidentally linking elements into the old list later.
-        defdata->classPrev = NULL;
-        defdata->classNext = NULL;
+        defdata->classPrev = nullptr;
+        defdata->classNext = nullptr;
     }
 }

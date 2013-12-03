@@ -10,7 +10,7 @@
  *
  * Each entry consists of 4 pieces of information:
  * 1) The name of the event
- * 2) The event ID (see nsGUIEvent.h)
+ * 2) The event ID (see BasicEvents.h)
  * 3) The event type (see the EventNameType enum in nsContentUtils.h)
  * 4) The event struct type for this event.
  * Items 2-4 might be empty strings for events for which they don't make sense.
@@ -293,6 +293,48 @@ EVENT(mozpointerlockerror,
       NS_POINTERLOCKERROR,
       EventNameType_HTML,
       NS_EVENT)
+
+EVENT(pointerdown,
+      NS_POINTER_DOWN,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(pointermove,
+      NS_POINTER_MOVE,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(pointerup,
+      NS_POINTER_UP,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(pointercancel,
+      NS_POINTER_CANCEL,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(pointerover,
+      NS_POINTER_OVER,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(pointerout,
+      NS_POINTER_OUT,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(pointerenter,
+      NS_POINTER_ENTER,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(pointerleave,
+      NS_POINTER_LEAVE,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(gotpointercapture,
+      NS_POINTER_GOT_CAPTURE,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+EVENT(lostpointercapture,
+      NS_POINTER_LOST_CAPTURE,
+      EventNameType_All,
+      NS_POINTER_EVENT)
+
 // Not supported yet; probably never because "wheel" is a better idea.
 // EVENT(mousewheel)
 EVENT(pause,
@@ -609,6 +651,11 @@ NON_IDL_EVENT(stop,
 
 NON_IDL_EVENT(warning,
               NS_MEDIARECORDER_WARNING,
+              EventNameType_None,
+              NS_EVENT)
+
+NON_IDL_EVENT(speakerforcedchange,
+              NS_SPEAKERMANAGER_SPEAKERFORCEDCHANGE,
               EventNameType_None,
               NS_EVENT)
 

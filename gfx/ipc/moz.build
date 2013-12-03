@@ -4,8 +4,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'gfxipc'
-
 EXPORTS.mozilla += [
     'GfxMessageUtils.h'
 ]
@@ -19,16 +17,15 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
         'SharedDIBSurface.h',
         'SharedDIBWin.h',
     ]
-    CPP_SOURCES += [
-        'SharedDIBWin.cpp',
+    SOURCES += [
         'SharedDIBSurface.cpp',
+        'SharedDIBWin.cpp',
     ]
 
-CPP_SOURCES += [
+SOURCES += [
     'SharedDIB.cpp',
 ]
 
-LIBXUL_LIBRARY = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-LIBRARY_NAME = 'gfxipc_s'
-
+FINAL_LIBRARY = 'xul'

@@ -468,7 +468,7 @@ inline
 already_AddRefed<nsIDOMBlob>
 GetBlobFromParams(const SlicedBlobConstructorParams& aParams)
 {
-  static_assert(ActorFlavor == mozilla::dom::ipc::Parent,
+  static_assert(ActorFlavor == Parent,
                 "No other flavor is supported here!");
 
   BlobParent* actor =
@@ -1233,7 +1233,6 @@ Blob<ActorFlavor>::SetMysteryBlobInfo(const nsString& aName,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mBlob);
   MOZ_ASSERT(mRemoteBlob);
-  MOZ_ASSERT(aLength);
   MOZ_ASSERT(aLastModifiedDate != UINT64_MAX);
 
   ToConcreteBlob(mBlob)->SetLazyData(aName, aContentType,
@@ -1252,7 +1251,6 @@ Blob<ActorFlavor>::SetMysteryBlobInfo(const nsString& aContentType,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mBlob);
   MOZ_ASSERT(mRemoteBlob);
-  MOZ_ASSERT(aLength);
 
   nsString voidString;
   voidString.SetIsVoid(true);

@@ -13,7 +13,6 @@
 #include "jsscript.h"
 #include "jstypes.h"
 
-#include "builtin/Module.h"
 #include "frontend/ParseMaps.h"
 #include "frontend/ParseNode.h"
 #include "frontend/TokenStream.h"
@@ -178,8 +177,8 @@ class SharedContext
     bool strict;
     bool extraWarnings;
 
-    // If it's function code, funbox must be non-NULL and scopeChain must be NULL.
-    // If it's global code, funbox must be NULL.
+    // If it's function code, funbox must be non-nullptr and scopeChain must be
+    // nullptr. If it's global code, funbox must be nullptr.
     SharedContext(ExclusiveContext *cx, Directives directives, bool extraWarnings)
       : context(cx),
         anyCxFlags(),
@@ -188,11 +187,9 @@ class SharedContext
     {}
 
     virtual ObjectBox *toObjectBox() = 0;
-    inline bool isGlobalSharedContext() { return toObjectBox() == NULL; }
-    inline bool isModuleBox() { return toObjectBox() && toObjectBox()->isModuleBox(); }
+    inline bool isGlobalSharedContext() { return toObjectBox() == nullptr; }
     inline bool isFunctionBox() { return toObjectBox() && toObjectBox()->isFunctionBox(); }
     inline GlobalSharedContext *asGlobalSharedContext();
-    inline ModuleBox *asModuleBox();
     inline FunctionBox *asFunctionBox();
 
     bool hasExplicitUseStrict()        const { return anyCxFlags.hasExplicitUseStrict; }
@@ -221,7 +218,7 @@ class GlobalSharedContext : public SharedContext
         scopeChain_(cx, scopeChain)
     {}
 
-    ObjectBox *toObjectBox() { return NULL; }
+    ObjectBox *toObjectBox() { return nullptr; }
     JSObject *scopeChain() const { return scopeChain_; }
 };
 
@@ -230,24 +227,6 @@ SharedContext::asGlobalSharedContext()
 {
     JS_ASSERT(isGlobalSharedContext());
     return static_cast<GlobalSharedContext*>(this);
-}
-
-class ModuleBox : public ObjectBox, public SharedContext
-{
-  public:
-    Bindings bindings;
-
-    ModuleBox(ExclusiveContext *cx, ObjectBox *traceListHead, Module *module,
-              ParseContext<FullParseHandler> *pc, bool extraWarnings);
-    ObjectBox *toObjectBox() { return this; }
-    Module *module() const { return &object->as<Module>(); }
-};
-
-inline ModuleBox *
-SharedContext::asModuleBox()
-{
-    JS_ASSERT(isModuleBox());
-    return static_cast<ModuleBox*>(this);
 }
 
 class FunctionBox : public ObjectBox, public SharedContext
@@ -363,6 +342,7 @@ enum StmtType {
     STMT_DO_LOOP,               /* do/while loop statement */
     STMT_FOR_LOOP,              /* for loop statement */
     STMT_FOR_IN_LOOP,           /* for/in loop statement */
+    STMT_FOR_OF_LOOP,           /* for/of loop statement */
     STMT_WHILE_LOOP,            /* while loop statement */
     STMT_LIMIT
 };
@@ -437,15 +417,15 @@ PushStatement(ContextT *ct, typename ContextT::StmtInfo *stmt, StmtType type)
     stmt->type = type;
     stmt->isBlockScope = false;
     stmt->isForLetBlock = false;
-    stmt->label = NULL;
-    stmt->blockObj = NULL;
+    stmt->label = nullptr;
+    stmt->blockObj = nullptr;
     stmt->down = ct->topStmt;
     ct->topStmt = stmt;
     if (stmt->linksScope()) {
         stmt->downScope = ct->topScopeStmt;
         ct->topScopeStmt = stmt;
     } else {
-        stmt->downScope = NULL;
+        stmt->downScope = nullptr;
     }
 }
 

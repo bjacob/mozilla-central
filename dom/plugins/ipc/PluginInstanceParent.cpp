@@ -26,10 +26,15 @@
 #include "gfxContext.h"
 #include "gfxColor.h"
 #include "gfxUtils.h"
+#include "mozilla/gfx/2D.h"
 #include "Layers.h"
 #include "SharedTextureImage.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
+
+#ifdef XP_MACOSX
+#include "MacIOSurfaceImage.h"
+#endif
 
 #if defined(OS_WIN)
 #include <windowsx.h>
@@ -69,8 +74,8 @@ PluginInstanceParent::PluginInstanceParent(PluginModuleParent* parent,
     , mWindowType(NPWindowTypeWindow)
     , mDrawingModel(kDefaultDrawingModel)
 #if defined(OS_WIN)
-    , mPluginHWND(NULL)
-    , mPluginWndProc(NULL)
+    , mPluginHWND(nullptr)
+    , mPluginWndProc(nullptr)
     , mNestedEventState(false)
 #endif // defined(XP_WIN)
 #if defined(XP_MACOSX)
@@ -84,7 +89,7 @@ PluginInstanceParent::PluginInstanceParent(PluginModuleParent* parent,
 PluginInstanceParent::~PluginInstanceParent()
 {
     if (mNPP)
-        mNPP->pdata = NULL;
+        mNPP->pdata = nullptr;
 
 #if defined(OS_WIN)
     NS_ASSERTION(!(mPluginHWND || mPluginWndProc),
@@ -127,7 +132,7 @@ PluginInstanceParent::ActorDestroy(ActorDestroyReason why)
     // longer be valid. The X surface may be destroyed, or the shared
     // memory backing this surface may no longer be valid.
     if (mFrontSurface) {
-        mFrontSurface = NULL;
+        mFrontSurface = nullptr;
         if (mImageContainer) {
             mImageContainer->SetCurrentImage(nullptr);
         }
@@ -164,7 +169,7 @@ PluginInstanceParent::AllocPBrowserStreamParent(const nsCString& url,
                                                 uint16_t *stype)
 {
     NS_RUNTIMEABORT("Not reachable");
-    return NULL;
+    return nullptr;
 }
 
 bool
@@ -427,7 +432,7 @@ PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginDrawingModel(
                 mImageContainer->SetCompositionNotifySink(nullptr);
             }
             DeallocShmem(mRemoteImageDataShmem);
-            mRemoteImageDataMutex = NULL;
+            mRemoteImageDataMutex = nullptr;
         }
     } else {
         *result = NPERR_GENERIC_ERROR;
@@ -685,7 +690,7 @@ nsresult
 PluginInstanceParent::GetImageContainer(ImageContainer** aContainer)
 {
 #ifdef XP_MACOSX
-    MacIOSurface* ioSurface = NULL;
+    MacIOSurface* ioSurface = nullptr;
   
     if (mFrontIOSurface) {
       ioSurface = mFrontIOSurface;
@@ -713,26 +718,16 @@ PluginInstanceParent::GetImageContainer(ImageContainer** aContainer)
 
 #ifdef XP_MACOSX
     if (ioSurface) {
-        ImageFormat format = SHARED_TEXTURE;
+        ImageFormat format = MAC_IOSURFACE;
         nsRefPtr<Image> image = container->CreateImage(&format, 1);
         if (!image) {
             return NS_ERROR_FAILURE;
         }
 
-        NS_ASSERTION(image->GetFormat() == SHARED_TEXTURE, "Wrong format?");
+        NS_ASSERTION(image->GetFormat() == MAC_IOSURFACE, "Wrong format?");
 
-        SharedTextureImage::Data data;
-        data.mShareType = gl::SameProcess;
-        data.mHandle = GLContextProviderCGL::CreateSharedHandle(data.mShareType,
-                                                                ioSurface,
-                                                                gl::IOSurface);
-        data.mInverted = false;
-        // Use the device pixel size of the IOSurface, since layers handles resolution scaling
-        // already.
-        data.mSize = gfxIntSize(ioSurface->GetDevicePixelWidth(), ioSurface->GetDevicePixelHeight());
-
-        SharedTextureImage* pluginImage = static_cast<SharedTextureImage*>(image.get());
-        pluginImage->SetData(data);
+        MacIOSurfaceImage* pluginImage = static_cast<MacIOSurfaceImage*>(image.get());
+        pluginImage->SetSurface(ioSurface);
 
         container->SetCurrentImageInTransaction(pluginImage);
 
@@ -820,13 +815,15 @@ PluginInstanceParent::BeginUpdateBackground(const nsIntRect& aRect,
         }
     }
 
-#ifdef DEBUG
     gfxIntSize sz = mBackground->GetSize();
+#ifdef DEBUG
     NS_ABORT_IF_FALSE(nsIntRect(0, 0, sz.width, sz.height).Contains(aRect),
                       "Update outside of background area");
 #endif
 
-    nsRefPtr<gfxContext> ctx = new gfxContext(mBackground);
+    RefPtr<gfx::DrawTarget> dt = gfxPlatform::GetPlatform()->
+      CreateDrawTargetForSurface(mBackground, gfx::IntSize(sz.width, sz.height));
+    nsRefPtr<gfxContext> ctx = new gfxContext(dt);
     *aCtx = ctx.forget().get();
 
     return NS_OK;
@@ -1586,7 +1583,7 @@ PluginInstanceParent::AllocPPluginSurfaceParent(const WindowsSharedMemoryHandle&
     return new PluginSurfaceParent(handle, size, transparent);
 #else
     NS_ERROR("This shouldn't be called!");
-    return NULL;
+    return nullptr;
 #endif
 }
 
@@ -1725,7 +1722,7 @@ PluginInstanceParent::AnswerNPN_InitAsyncSurface(const gfxIntSize& size,
             CD3D10_TEXTURE2D_DESC desc(DXGI_FORMAT_B8G8R8A8_UNORM, size.width, size.height, 1, 1);
             desc.MiscFlags = D3D10_RESOURCE_MISC_SHARED_KEYEDMUTEX;
             desc.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE;
-            if (FAILED(device->CreateTexture2D(&desc, NULL, getter_AddRefs(texture)))) {
+            if (FAILED(device->CreateTexture2D(&desc, nullptr, getter_AddRefs(texture)))) {
                 *result = false;
                 return true;
             }
@@ -1872,8 +1869,8 @@ PluginInstanceParent::UnsubclassPluginWindow()
 
         ::RemovePropW(mPluginHWND, kPluginInstanceParentProperty);
 
-        mPluginWndProc = NULL;
-        mPluginHWND = NULL;
+        mPluginWndProc = nullptr;
+        mPluginHWND = nullptr;
     }
 }
 

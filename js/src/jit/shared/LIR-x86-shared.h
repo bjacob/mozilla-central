@@ -32,7 +32,7 @@ class LDivI : public LBinaryMath<1>
         }
         if (mir()->canBeNegativeZero())
             return mir()->canBeNegativeOverflow() ? "NegativeZero_NegativeOverflow" : "NegativeZero";
-        return mir()->canBeNegativeOverflow() ? "NegativeOverflow" : NULL;
+        return mir()->canBeNegativeOverflow() ? "NegativeOverflow" : nullptr;
     }
 
     const LDefinition *remainder() {
@@ -103,12 +103,31 @@ class LModI : public LBinaryMath<1>
     }
 
     const char *extraName() const {
-        return mir()->isTruncated() ? "Truncated" : NULL;
+        return mir()->isTruncated() ? "Truncated" : nullptr;
     }
 
     const LDefinition *remainder() {
         return getDef(0);
     }
+    MMod *mir() const {
+        return mir_->toMod();
+    }
+};
+
+// Modulo of a number by itself. Returns 0 unless the number is zero.
+class LModSelfI : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(ModSelfI)
+
+    LModSelfI(const LAllocation &op) {
+        setOperand(0, op);
+    }
+
+    const LAllocation *op() {
+        return getOperand(0);
+    }
+
     MMod *mir() const {
         return mir_->toMod();
     }
@@ -129,6 +148,21 @@ class LUDivOrMod : public LBinaryMath<1>
 
     const LDefinition *remainder() {
         return getTemp(0);
+    }
+
+    const char *extraName() const {
+        return mir()->isTruncated() ? "Truncated" : nullptr;
+    }
+
+    MBinaryArithInstruction *mir() const {
+        JS_ASSERT(mir_->isDiv() || mir_->isMod());
+        return static_cast<MBinaryArithInstruction *>(mir_);
+    }
+
+    bool canBeDivideByZero() const {
+        if (mir_->isMod())
+            return mir_->toMod()->canBeDivideByZero();
+        return mir_->toDiv()->canBeDivideByZero();
     }
 };
 
@@ -171,6 +205,9 @@ class LPowHalfD : public LInstructionHelper<1, 1, 0>
     const LDefinition *output() {
         return getDef(0);
     }
+    MPowHalf *mir() const {
+        return mir_->toPowHalf();
+    }
 };
 
 // Takes a tableswitch with an integer to decide
@@ -195,11 +232,11 @@ class LTableSwitch : public LInstructionHelper<0, 1, 2>
     const LAllocation *index() {
         return getOperand(0);
     }
-    const LAllocation *tempInt() {
-        return getTemp(0)->output();
+    const LDefinition *tempInt() {
+        return getTemp(0);
     }
-    const LAllocation *tempPointer() {
-        return getTemp(1)->output();
+    const LDefinition *tempPointer() {
+        return getTemp(1);
     }
 };
 
@@ -224,14 +261,14 @@ class LTableSwitchV : public LInstructionHelper<0, BOX_PIECES, 3>
 
     static const size_t InputValue = 0;
 
-    const LAllocation *tempInt() {
-        return getTemp(0)->output();
+    const LDefinition *tempInt() {
+        return getTemp(0);
     }
-    const LAllocation *tempFloat() {
-        return getTemp(1)->output();
+    const LDefinition *tempFloat() {
+        return getTemp(1);
     }
-    const LAllocation *tempPointer() {
-        return getTemp(2)->output();
+    const LDefinition *tempPointer() {
+        return getTemp(2);
     }
 };
 
@@ -281,7 +318,7 @@ class LMulI : public LBinaryMath<0, 1>
     const char *extraName() const {
         return (mir()->mode() == MMul::Integer)
                ? "Integer"
-               : (mir()->canBeNegativeZero() ? "CanBeNegativeZero" : NULL);
+               : (mir()->canBeNegativeZero() ? "CanBeNegativeZero" : nullptr);
     }
 
     MMul *mir() const {

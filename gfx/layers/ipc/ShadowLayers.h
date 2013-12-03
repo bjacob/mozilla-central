@@ -46,6 +46,7 @@ class OptionalThebesBuffer;
 class PLayerChild;
 class PLayerTransactionChild;
 class PLayerTransactionParent;
+class LayerTransactionChild;
 class RefLayerComposite;
 class ShadowableLayer;
 class Shmem;
@@ -137,6 +138,7 @@ class ShadowLayerForwarder : public CompositableForwarder
   friend class AutoOpenSurface;
   friend class DeprecatedTextureClientShmem;
   friend class ContentClientIncremental;
+  friend class ClientLayerManager;
 
 public:
   virtual ~ShadowLayerForwarder();
@@ -306,7 +308,7 @@ public:
   /**
    * See CompositableForwarder::AddTexture
    */
-  virtual void AddTexture(CompositableClient* aCompositable,
+  virtual bool AddTexture(CompositableClient* aCompositable,
                           TextureClient* aClient) MOZ_OVERRIDE;
 
   /**
@@ -334,21 +336,18 @@ public:
    * |aReplies| are directions from the LayerManagerComposite to the
    * caller of EndTransaction().
    */
-  bool EndTransaction(InfallibleTArray<EditReply>* aReplies);
+  bool EndTransaction(InfallibleTArray<EditReply>* aReplies, bool* aSent);
 
   /**
    * Set an actor through which layer updates will be pushed.
    */
-  void SetShadowManager(PLayerTransactionChild* aShadowManager)
-  {
-    mShadowManager = aShadowManager;
-  }
+  void SetShadowManager(PLayerTransactionChild* aShadowManager);
 
   /**
    * True if this is forwarding to a LayerManagerComposite.
    */
   bool HasShadowManager() const { return !!mShadowManager; }
-  PLayerTransactionChild* GetShadowManager() const { return mShadowManager; }
+  LayerTransactionChild* GetShadowManager() const { return mShadowManager.get(); }
 
   virtual void WindowOverlayChanged() { mWindowOverlayChanged = true; }
 
@@ -387,12 +386,14 @@ public:
 
   // ISurfaceAllocator
   virtual bool AllocUnsafeShmem(size_t aSize,
-                                ipc::SharedMemory::SharedMemoryType aType,
-                                ipc::Shmem* aShmem) MOZ_OVERRIDE;
+                                mozilla::ipc::SharedMemory::SharedMemoryType aType,
+                                mozilla::ipc::Shmem* aShmem) MOZ_OVERRIDE;
   virtual bool AllocShmem(size_t aSize,
-                          ipc::SharedMemory::SharedMemoryType aType,
-                          ipc::Shmem* aShmem) MOZ_OVERRIDE;
-  virtual void DeallocShmem(ipc::Shmem& aShmem) MOZ_OVERRIDE;
+                          mozilla::ipc::SharedMemory::SharedMemoryType aType,
+                          mozilla::ipc::Shmem* aShmem) MOZ_OVERRIDE;
+  virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem) MOZ_OVERRIDE;
+
+  virtual bool IPCOpen() const MOZ_OVERRIDE;
 
   /**
    * Construct a shadow of |aLayer| on the "other side", at the
@@ -413,7 +414,13 @@ public:
 protected:
   ShadowLayerForwarder();
 
-  PLayerTransactionChild* mShadowManager;
+#ifdef DEBUG
+  void CheckSurfaceDescriptor(const SurfaceDescriptor* aDescriptor) const;
+#else
+  void CheckSurfaceDescriptor(const SurfaceDescriptor* aDescriptor) const {}
+#endif
+
+  RefPtr<LayerTransactionChild> mShadowManager;
 
 #ifdef MOZ_HAVE_SURFACEDESCRIPTORGRALLOC
   // from ISurfaceAllocator

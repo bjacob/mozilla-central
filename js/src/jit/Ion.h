@@ -15,7 +15,7 @@
 #include "jscompartment.h"
 
 #include "jit/CompileInfo.h"
-#include "jit/IonCode.h"
+#include "jit/CompileWrappers.h"
 
 namespace js {
 namespace jit {
@@ -82,6 +82,19 @@ struct IonOptions
     //
     // Default: false
     bool checkRangeAnalysis;
+
+    // Whether to protect the GC heap during Ion compilation and ensure that
+    // only threadsafe operations are performed on it.
+    //
+    // Default: false
+    bool checkThreadSafety;
+
+    // Whether to perform expensive graph-consistency DEBUG-only assertions.
+    // It can be useful to disable this to reduce DEBUG-compile time of large
+    // asm.js programs.
+    //
+    // Default: true
+    bool assertGraphConsistency;
 
     // Toggles whether Unreachable Code Elimination is performed.
     //
@@ -181,12 +194,6 @@ struct IonOptions
     // Default: 1000
     uint32_t inlineMaxTotalBytecodeLength;
 
-    // Minimal ratio between the use counts of the caller and the callee to
-    // enable inlining of functions.
-    //
-    // Default: 128
-    uint32_t inlineUseCountRatio;
-
     // Whether functions are compiled immediately.
     //
     // Default: false
@@ -197,13 +204,19 @@ struct IonOptions
     // Default: 1
     uint32_t usesBeforeCompilePar;
 
+    // The maximum bytecode length the caller may have,
+    // before we stop inlining large functions in that caller.
+    //
+    // Default: 10000
+    uint32_t inliningMaxCallerBytecodeLength;
+
     void setEagerCompilation() {
         eagerCompilation = true;
         usesBeforeCompile = 0;
         baselineUsesBeforeCompile = 0;
     }
 
-    IonOptions()
+    MOZ_CONSTEXPR IonOptions()
       : gvn(true),
         gvnIsOptimistic(true),
         licm(true),
@@ -214,6 +227,8 @@ struct IonOptions
         edgeCaseAnalysis(true),
         rangeAnalysis(true),
         checkRangeAnalysis(false),
+        checkThreadSafety(false),
+        assertGraphConsistency(true),
         uce(true),
         eaa(true),
 #ifdef CHECK_OSIPOINT_REGISTERS
@@ -232,9 +247,9 @@ struct IonOptions
         smallFunctionMaxBytecodeLength(100),
         polyInlineMax(4),
         inlineMaxTotalBytecodeLength(1000),
-        inlineUseCountRatio(128),
         eagerCompilation(false),
-        usesBeforeCompilePar(1)
+        usesBeforeCompilePar(1),
+        inliningMaxCallerBytecodeLength(10000)
     {
     }
 
@@ -261,22 +276,30 @@ enum AbortReason {
 
 // An Ion context is needed to enter into either an Ion method or an instance
 // of the Ion compiler. It points to a temporary allocator and the active
-// JSContext, either of which may be NULL, and the active compartment, which
-// will not be NULL.
+// JSContext, either of which may be nullptr, and the active compartment, which
+// will not be nullptr.
 
 class IonContext
 {
   public:
     IonContext(JSContext *cx, TempAllocator *temp);
     IonContext(ExclusiveContext *cx, TempAllocator *temp);
-    IonContext(JSRuntime *rt, JSCompartment *comp, TempAllocator *temp);
-    IonContext(JSRuntime *rt);
+    IonContext(CompileRuntime *rt, CompileCompartment *comp, TempAllocator *temp);
+    IonContext(CompileRuntime *rt);
     ~IonContext();
 
-    JSRuntime *runtime;
+    // Running context when executing on the main thread. Not available during
+    // compilation.
     JSContext *cx;
-    JSCompartment *compartment;
+
+    // Allocator for temporary memory during compilation.
     TempAllocator *temp;
+
+    // Wrappers with information about the current runtime/compartment for use
+    // during compilation.
+    CompileRuntime *runtime;
+    CompileCompartment *compartment;
+
     int getNextAssemblerId() {
         return assemblerCount_++;
     }
@@ -331,7 +354,7 @@ struct EnterJitData;
 
 bool SetEnterJitData(JSContext *cx, EnterJitData &data, RunState &state, AutoValueVector &vals);
 
-IonExecStatus Cannon(JSContext *cx, RunState &state);
+IonExecStatus IonCannon(JSContext *cx, RunState &state);
 
 // Used to enter Ion from C++ natives like Array.map. Called from FastInvokeGuard.
 IonExecStatus FastInvoke(JSContext *cx, HandleFunction fun, CallArgs &args);
@@ -355,8 +378,8 @@ class CodeGenerator;
 
 bool OptimizeMIR(MIRGenerator *mir);
 LIRGraph *GenerateLIR(MIRGenerator *mir);
-CodeGenerator *GenerateCode(MIRGenerator *mir, LIRGraph *lir, MacroAssembler *maybeMasm = NULL);
-CodeGenerator *CompileBackEnd(MIRGenerator *mir, MacroAssembler *maybeMasm = NULL);
+CodeGenerator *GenerateCode(MIRGenerator *mir, LIRGraph *lir, MacroAssembler *maybeMasm = nullptr);
+CodeGenerator *CompileBackEnd(MIRGenerator *mir, MacroAssembler *maybeMasm = nullptr);
 
 void AttachFinishedCompilations(JSContext *cx);
 void FinishOffThreadBuilder(IonBuilder *builder);
@@ -364,8 +387,8 @@ void FinishOffThreadBuilder(IonBuilder *builder);
 static inline bool
 IsIonEnabled(JSContext *cx)
 {
-    return cx->hasOption(JSOPTION_ION) &&
-        cx->hasOption(JSOPTION_BASELINE) &&
+    return cx->compartment()->options().ion(cx) &&
+        cx->compartment()->options().baseline(cx) &&
         cx->typeInferenceEnabled();
 }
 
@@ -375,6 +398,12 @@ IsIonInlinablePC(jsbytecode *pc) {
     // GETPROP, CALLPROP, and LENGTH. (Inlined Getters)
     // SETPROP, SETNAME, SETGNAME (Inlined Setters)
     return IsCallPC(pc) || IsGetPropPC(pc) || IsSetPropPC(pc);
+}
+
+inline bool
+TooManyArguments(unsigned nargs)
+{
+    return (nargs >= SNAPSHOT_MAX_NARGS || nargs > js_IonOptions.maxStackArgs);
 }
 
 void ForbidCompilation(JSContext *cx, JSScript *script);

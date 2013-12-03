@@ -16,7 +16,6 @@
 #include "nsIDOMElement.h"
 #include "nsINativeKeyBindings.h"
 #include "nsIController.h"
-#include "nsIControllers.h"
 #include "nsFocusManager.h"
 #include "nsPIWindowRoot.h"
 #include "nsIURI.h"
@@ -27,8 +26,8 @@
 #include "nsIDocShell.h"
 #include "nsIPresShell.h"
 #include "nsISelectionController.h"
-#include "nsGUIEvent.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/TextEvents.h"
 #include "mozilla/dom/Element.h"
 #include "nsEventStateManager.h"
 
@@ -287,13 +286,13 @@ GetEditorKeyBindings()
 static void
 DoCommandCallback(const char *aCommand, void *aData)
 {
-  nsIControllers *controllers = static_cast<nsIControllers*>(aData);
-  if (!controllers) {
+  nsCOMPtr<nsPIWindowRoot> root = do_QueryInterface(static_cast<EventTarget*>(aData));
+  if (!root) {
     return;
   }
 
   nsCOMPtr<nsIController> controller;
-  controllers->GetControllerForCommand(aCommand, getter_AddRefs(controller));
+  root->GetControllerForCommand(aCommand, getter_AddRefs(controller));
   if (!controller) {
     return;
   }
@@ -353,34 +352,26 @@ nsXBLWindowKeyHandler::WalkHandlers(nsIDOMKeyEvent* aKeyEvent, nsIAtom* aEventTy
   //     bindings?  I.e., should we call WalkHandlersInternal() after this
   //     block?
   if (isEditor && GetEditorKeyBindings()) {
-    // get the DOM window we're attached to
-    nsCOMPtr<nsIControllers> controllers;
-    nsCOMPtr<nsPIWindowRoot> root = do_QueryInterface(mTarget);
-    if (root) {
-      root->GetControllers(getter_AddRefs(controllers));
-    }
-
-    nsKeyEvent* keyEvent =
-      static_cast<nsKeyEvent*>(aKeyEvent->GetInternalNSEvent());
-    MOZ_ASSERT(keyEvent->eventStructType == NS_KEY_EVENT,
-               "DOM key event's internal event must be nsKeyEvent");
-
+    WidgetKeyboardEvent* keyEvent =
+      aKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
+    MOZ_ASSERT(keyEvent,
+               "DOM key event's internal event must be WidgetKeyboardEvent");
     bool handled = false;
     switch (keyEvent->message) {
       case NS_KEY_PRESS:
         handled = sNativeEditorBindings->KeyPress(*keyEvent,
                                                   DoCommandCallback,
-                                                  controllers);
+                                                  mTarget);
         break;
       case NS_KEY_UP:
         handled = sNativeEditorBindings->KeyUp(*keyEvent,
                                                DoCommandCallback,
-                                               controllers);
+                                               mTarget);
         break;
       case NS_KEY_DOWN:
         handled = sNativeEditorBindings->KeyDown(*keyEvent,
                                                  DoCommandCallback,
-                                                 controllers);
+                                                 mTarget);
         break;
       default:
         MOZ_CRASH("Unknown key message");

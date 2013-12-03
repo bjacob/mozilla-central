@@ -10,6 +10,8 @@
 #include "nsStyleConsts.h"
 #include "nsCocoaFeatures.h"
 #include "gfxFont.h"
+#include "gfxFontConstants.h"
+#include "mozilla/gfx/2D.h"
 
 #import <Cocoa/Cocoa.h>
 
@@ -444,6 +446,9 @@ nsLookAndFeel::GetIntImpl(IntID aID, int32_t &aResult)
         aResult = [NSEvent isSwipeTrackingFromScrollEventsEnabled] ? 1 : 0;
       }
       break;
+    case eIntID_ColorPickerAvailable:
+      aResult = 1;
+      break;
     default:
       aResult = 0;
       res = NS_ERROR_FAILURE;
@@ -497,7 +502,7 @@ bool nsLookAndFeel::AllowOverlayScrollbarsOverlap()
 static void GetStringForNSString(const NSString *aSrc, nsAString& aDest)
 {
     aDest.SetLength([aSrc length]);
-    [aSrc getCharacters:aDest.BeginWriting()];
+    [aSrc getCharacters:reinterpret_cast<unichar*>(aDest.BeginWriting())];
 }
 
 bool

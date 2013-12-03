@@ -87,6 +87,15 @@
 // exclude internal properties that are not represented in the DOM (only
 // the DOM style code defines this).
 
+// Callers may also define CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND
+// to exclude properties that are not considered to be components of the 'all'
+// shorthand property.  Currently this excludes 'direction' and 'unicode-bidi',
+// as required by the CSS Cascading and Inheritance specification, and any
+// internal properties that cannot be changed by using CSS syntax.  For example,
+// the internal '-moz-system-font' property is not excluded, as it is set by the
+// 'font' shorthand, while '-x-lang' is excluded as there is no way to set this
+// internal property from a style sheet.
+
 // A caller who wants all the properties can define the |CSS_PROP|
 // macro.
 #ifdef CSS_PROP
@@ -356,7 +365,13 @@ CSS_PROP_FONT(
     kFontKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
-#endif
+#endif // !defined(CSS_PROP_LIST_EXCLUDE_INTERNAL)
+CSS_PROP_SHORTHAND(
+    all,
+    all,
+    All,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "layout.css.all-shorthand.enabled")
 CSS_PROP_SHORTHAND(
     animation,
     animation,
@@ -527,6 +542,19 @@ CSS_PROP_BACKGROUND(
     "",
     VARIANT_HK,
     kBackgroundInlinePolicyKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+CSS_PROP_BACKGROUND(
+    background-blend-mode,
+    background_blend_mode,
+    BackgroundBlendMode,
+    CSS_PROPERTY_PARSE_VALUE_LIST |
+        CSS_PROPERTY_APPLIES_TO_FIRST_LETTER_AND_FIRST_LINE |
+        CSS_PROPERTY_APPLIES_TO_PLACEHOLDER |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS,
+    "layout.css.background-blend-mode.enabled",
+    VARIANT_KEYWORD, // used by list parsing
+    kBlendModeKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 CSS_PROP_BACKGROUND(
@@ -1534,6 +1562,7 @@ CSS_PROP_USERINTERFACE(
     kCursorKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+#ifndef CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND
 CSS_PROP_VISIBILITY(
     direction,
     direction,
@@ -1544,6 +1573,7 @@ CSS_PROP_VISIBILITY(
     kDirectionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+#endif // !defined(CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND)
 CSS_PROP_DISPLAY(
     display,
     display,
@@ -1573,7 +1603,7 @@ CSS_PROP_POSITION(
     align_items,
     AlignItems,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kAlignItemsKTable,
     offsetof(nsStylePosition, mAlignItems),
@@ -1583,7 +1613,7 @@ CSS_PROP_POSITION(
     align_self,
     AlignSelf,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kAlignSelfKTable,
     offsetof(nsStylePosition, mAlignSelf),
@@ -1593,7 +1623,7 @@ CSS_PROP_SHORTHAND(
     flex,
     Flex,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.flexbox.enabled")
+    "")
 CSS_PROP_POSITION(
     flex-basis,
     flex_basis,
@@ -1601,7 +1631,7 @@ CSS_PROP_POSITION(
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_VALUE_NONNEGATIVE |
         CSS_PROPERTY_STORES_CALC,
-    "layout.css.flexbox.enabled",
+    "",
     // NOTE: The parsing implementation for the 'flex' shorthand property has
     // its own code to parse each subproperty. It does not depend on the
     // longhand parsing defined here.
@@ -1614,7 +1644,7 @@ CSS_PROP_POSITION(
     flex_direction,
     FlexDirection,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kFlexDirectionKTable,
     offsetof(nsStylePosition, mFlexDirection),
@@ -1625,7 +1655,7 @@ CSS_PROP_POSITION(
     FlexGrow,
     CSS_PROPERTY_PARSE_VALUE |
       CSS_PROPERTY_VALUE_NONNEGATIVE,
-    "layout.css.flexbox.enabled",
+    "",
     // NOTE: The parsing implementation for the 'flex' shorthand property has
     // its own code to parse each subproperty. It does not depend on the
     // longhand parsing defined here.
@@ -1639,7 +1669,7 @@ CSS_PROP_POSITION(
     FlexShrink,
     CSS_PROPERTY_PARSE_VALUE |
       CSS_PROPERTY_VALUE_NONNEGATIVE,
-    "layout.css.flexbox.enabled",
+    "",
     // NOTE: The parsing implementation for the 'flex' shorthand property has
     // its own code to parse each subproperty. It does not depend on the
     // longhand parsing defined here.
@@ -1652,7 +1682,7 @@ CSS_PROP_POSITION(
     order,
     Order,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HI,
     nullptr,
     offsetof(nsStylePosition, mOrder),
@@ -1662,7 +1692,7 @@ CSS_PROP_POSITION(
     justify_content,
     JustifyContent,
     CSS_PROPERTY_PARSE_VALUE,
-    "layout.css.flexbox.enabled",
+    "",
     VARIANT_HK,
     kJustifyContentKTable,
     offsetof(nsStylePosition, mJustifyContent),
@@ -1809,7 +1839,7 @@ CSS_PROP_FONT(
     kFontStyleKTable,
     offsetof(nsStyleFont, mFont.style),
     eStyleAnimType_EnumU8)
- CSS_PROP_FONT(
+CSS_PROP_FONT(
     font-synthesis,
     font_synthesis,
     FontSynthesis,
@@ -2751,7 +2781,8 @@ CSS_PROP_TEXT(
     text-align,
     text_align,
     TextAlign,
-    CSS_PROPERTY_PARSE_VALUE | CSS_PROPERTY_APPLIES_TO_PLACEHOLDER,
+    CSS_PROPERTY_PARSE_VALUE | CSS_PROPERTY_VALUE_PARSER_FUNCTION |
+      CSS_PROPERTY_APPLIES_TO_PLACEHOLDER,
     "",
     // When we support aligning on a string, we can parse text-align
     // as a string....
@@ -2763,7 +2794,7 @@ CSS_PROP_TEXT(
     -moz-text-align-last,
     text_align_last,
     CSS_PROP_DOMPROP_PREFIXED(TextAlignLast),
-    CSS_PROPERTY_PARSE_VALUE,
+    CSS_PROPERTY_PARSE_VALUE | CSS_PROPERTY_VALUE_PARSER_FUNCTION,
     "",
     VARIANT_HK,
     kTextAlignLastKTable,
@@ -3023,6 +3054,7 @@ CSS_PROP_DISPLAY(
     kTransitionTimingFunctionKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+#ifndef CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND
 CSS_PROP_TEXTRESET(
     unicode-bidi,
     unicode_bidi,
@@ -3033,6 +3065,7 @@ CSS_PROP_TEXTRESET(
     kUnicodeBidiKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+#endif // !defined(CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND)
 CSS_PROP_USERINTERFACE(
     -moz-user-focus,
     user_focus,
@@ -3281,6 +3314,7 @@ CSS_PROP_XUL(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 
+#ifndef CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND
 #ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_FONT(
     -moz-script-level,
@@ -3319,7 +3353,18 @@ CSS_PROP_FONT(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
-#endif
+CSS_PROP_FONT(
+    -moz-math-variant,
+    math_variant,
+    MathVariant,
+    CSS_PROPERTY_PARSE_INACCESSIBLE,
+    "",
+    VARIANT_HK,
+    kMathVariantKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+#endif // !defined(CSS_PROP_LIST_EXCLUDE_INTERNAL)
+#endif // !defined(CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND)
 
 CSS_PROP_SVGRESET(
     clip-path,
@@ -3662,6 +3707,7 @@ CSS_PROP_SHORTHAND(
         CSS_PROPERTY_IS_ALIAS,
     "layout.css.prefixes.transforms")
 
+#ifndef CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND
 #ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 // We have a few properties that are in style structs but are not stored
 // in style sheets (or nsCSS* structs).  Some fields in these property
@@ -3704,7 +3750,8 @@ CSS_PROP_FONT(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
 #endif /* !defined(CSS_PROP_STUB_NOT_CSS) */
-#endif /* !defined(CSS_PROP_EXCLUDE_INTERNAL) */
+#endif /* !defined(CSS_PROP_LIST_EXCLUDE_INTERNAL) */
+#endif /* !defined(CSS_PROP_LIST_ONLY_COMPONENTS_OF_ALL_SHORTHAND) */
 
 #ifdef USED_CSS_PROP
 

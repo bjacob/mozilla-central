@@ -9,12 +9,14 @@
 #include "nsCOMPtr.h"
 #include "nsIDocument.h"
 #include "nsINodeInfo.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLButtonElement.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "nsNodeInfoManager.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsContentUtils.h"
 #include "nsEventStates.h"
+#include "nsIDOMDataTransfer.h"
 #include "nsIDOMDOMStringList.h"
 #include "nsIDOMDragEvent.h"
 #include "nsIDOMFileList.h"
@@ -74,14 +76,9 @@ nsresult
 nsFileControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 {
   nsCOMPtr<nsIDocument> doc = mContent->GetDocument();
-  nsCOMPtr<nsINodeInfo> nodeInfo;
 
   // Create and setup the file picking button.
-  nodeInfo = doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::button, nullptr,
-                                                 kNameSpaceID_XHTML,
-                                                 nsIDOMNode::ELEMENT_NODE);
-  NS_NewHTMLElement(getter_AddRefs(mBrowse), nodeInfo.forget(),
-                    dom::NOT_FROM_PARSER);
+  mBrowse = doc->CreateHTMLElement(nsGkAtoms::button);
   // NOTE: SetIsNativeAnonymousRoot() has to be called before setting any
   // attribute.
   mBrowse->SetIsNativeAnonymousRoot();
@@ -121,6 +118,7 @@ nsFileControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
   }
 
   // Create and setup the text showing the selected files.
+  nsCOMPtr<nsINodeInfo> nodeInfo;
   nodeInfo = doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::label, nullptr,
                                                  kNameSpaceID_XUL,
                                                  nsIDOMNode::ELEMENT_NODE);

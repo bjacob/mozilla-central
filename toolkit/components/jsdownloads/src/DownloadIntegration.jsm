@@ -25,6 +25,8 @@ const Cr = Components.results;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
+                                  "resource://gre/modules/DeferredTask.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
                                   "resource://gre/modules/Downloads.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "DownloadStore",
@@ -39,8 +41,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
+#ifdef MOZ_PLACES
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
+#endif
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
                                   "resource://gre/modules/commonjs/sdk/core/promise.js");
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
@@ -71,6 +75,10 @@ XPCOMUtils.defineLazyGetter(this, "gParentalControlsService", function() {
   return null;
 });
 
+XPCOMUtils.defineLazyServiceGetter(this, "gApplicationReputationService",
+           "@mozilla.org/downloads/application-reputation-service;1",
+           Ci.nsIApplicationReputationService);
+
 /**
  * ArrayBufferView representing the bytes to be written to the "Zone.Identifier"
  * Alternate Data Stream to mark a file as coming from the Internet zone.
@@ -78,6 +86,10 @@ XPCOMUtils.defineLazyGetter(this, "gParentalControlsService", function() {
 XPCOMUtils.defineLazyGetter(this, "gInternetZoneIdentifier", function() {
   return new TextEncoder().encode("[ZoneTransfer]\r\nZoneId=3\r\n");
 });
+
+XPCOMUtils.defineLazyServiceGetter(this, "volumeService",
+                                   "@mozilla.org/telephony/volume-service;1",
+                                   "nsIVolumeService");
 
 const Timer = Components.Constructor("@mozilla.org/timer;1", "nsITimer",
                                      "initWithCallback");
@@ -125,6 +137,12 @@ this.DownloadIntegration = {
   dontLoadObservers: false,
   dontCheckParentalControls: false,
   shouldBlockInTest: false,
+#ifdef MOZ_URL_CLASSIFIER
+  dontCheckApplicationReputation: false,
+#else
+  dontCheckApplicationReputation: true,
+#endif
+  shouldBlockInTestForApplicationReputation: false,
   dontOpenFileAndFolder: false,
   downloadDoneCalled: false,
   _deferTestOpenFile: null,
@@ -225,6 +243,48 @@ this.DownloadIntegration = {
     }.bind(this));
   },
 
+#ifdef MOZ_WIDGET_GONK
+  /**
+    * Finds the default download directory which can be either in the
+    * internal storage or on the sdcard.
+    *
+    * @return {Promise}
+    * @resolves The downloads directory string path.
+    */
+  _getDefaultDownloadDirectory: function() {
+    return Task.spawn(function() {
+      let directoryPath;
+      let win = Services.wm.getMostRecentWindow("navigator:browser");
+      let storages = win.navigator.getDeviceStorages("sdcard");
+      let preferredStorageName;
+      // Use the first one or the default storage.
+      storages.forEach((aStorage) => {
+        if (aStorage.default || !preferredStorageName) {
+          preferredStorageName = aStorage.storageName;
+        }
+      });
+
+      // Now get the path for this storage area.
+      if (preferredStorageName) {
+        let volume = volumeService.getVolumeByName(preferredStorageName);
+        if (volume &&
+            volume.isMediaPresent &&
+            !volume.isMountLocked &&
+            !volume.isSharing) {
+          directoryPath = OS.Path.join(volume.mountPoint, "downloads");
+          yield OS.File.makeDir(directoryPath, { ignoreExisting: true });
+        }
+      }
+      if (directoryPath) {
+        throw new Task.Result(directoryPath);
+      } else {
+        throw new Components.Exception("No suitable storage for downloads.",
+                                       Cr.NS_ERROR_FILE_UNRECOGNIZED_PATH);
+      }
+    });
+  },
+#endif
+
   /**
    * Determines if a Download object from the list of persistent downloads
    * should be saved into a file, so that it can be restored across sessions.
@@ -248,14 +308,23 @@ this.DownloadIntegration = {
     // progress, as well as stopped downloads for which we retained partially
     // downloaded data.  Stopped downloads for which we don't need to track the
     // presence of a ".part" file are only retained in the browser history.
+    // On b2g, we keep a few days of history.
+#ifdef MOZ_B2G
+    let maxTime = Date.now() -
+      Services.prefs.getIntPref("dom.downloads.max_retention_days") * 24 * 60 * 60 * 1000;
+    return (aDownload.startTime > maxTime) ||
+           aDownload.hasPartialData ||
+           !aDownload.stopped;
+#else
     return aDownload.hasPartialData || !aDownload.stopped;
+#endif
   },
 
   /**
    * Returns the system downloads directory asynchronously.
    *
    * @return {Promise}
-   * @resolves The nsIFile of downloads directory.
+   * @resolves The downloads directory string path.
    */
   getSystemDownloadsDirectory: function DI_getSystemDownloadsDirectory() {
     return Task.spawn(function() {
@@ -267,41 +336,42 @@ this.DownloadIntegration = {
         throw new Task.Result(this._downloadsDirectory);
       }
 
-      let directory = null;
+      let directoryPath = null;
 #ifdef XP_MACOSX
-      directory = this._getDirectory("DfltDwnld");
+      directoryPath = this._getDirectory("DfltDwnld");
 #elifdef XP_WIN
       // For XP/2K, use My Documents/Downloads. Other version uses
       // the default Downloads directory.
       let version = parseFloat(Services.sysinfo.getProperty("version"));
       if (version < 6) {
-        directory = yield this._createDownloadsDirectory("Pers");
+        directoryPath = yield this._createDownloadsDirectory("Pers");
       } else {
-        directory = this._getDirectory("DfltDwnld");
+        directoryPath = this._getDirectory("DfltDwnld");
       }
 #elifdef XP_UNIX
-#ifdef ANDROID
+#ifdef MOZ_WIDGET_ANDROID
       // Android doesn't have a $HOME directory, and by default we only have
       // write access to /data/data/org.mozilla.{$APP} and /sdcard
-      let directoryPath = gEnvironment.get("DOWNLOADS_DIRECTORY");
+      directoryPath = gEnvironment.get("DOWNLOADS_DIRECTORY");
       if (!directoryPath) {
         throw new Components.Exception("DOWNLOADS_DIRECTORY is not set.",
                                        Cr.NS_ERROR_FILE_UNRECOGNIZED_PATH);
       }
-      directory = new FileUtils.File(directoryPath);
+#elifdef MOZ_WIDGET_GONK
+      directoryPath = this._getDefaultDownloadDirectory();
 #else
       // For Linux, use XDG download dir, with a fallback to Home/Downloads
       // if the XDG user dirs are disabled.
       try {
-        directory = this._getDirectory("DfltDwnld");
+        directoryPath = this._getDirectory("DfltDwnld");
       } catch(e) {
-        directory = yield this._createDownloadsDirectory("Home");
+        directoryPath = yield this._createDownloadsDirectory("Home");
       }
 #endif
 #else
-      directory = yield this._createDownloadsDirectory("Home");
+      directoryPath = yield this._createDownloadsDirectory("Home");
 #endif
-      this._downloadsDirectory = directory;
+      this._downloadsDirectory = directoryPath;
       throw new Task.Result(this._downloadsDirectory);
     }.bind(this));
   },
@@ -311,11 +381,14 @@ this.DownloadIntegration = {
    * Returns the user downloads directory asynchronously.
    *
    * @return {Promise}
-   * @resolves The nsIFile of downloads directory.
+   * @resolves The downloads directory string path.
    */
   getPreferredDownloadsDirectory: function DI_getPreferredDownloadsDirectory() {
     return Task.spawn(function() {
-      let directory = null;
+      let directoryPath = null;
+#ifdef MOZ_WIDGET_GONK
+      directoryPath = this._getDefaultDownloadDirectory();
+#else
       let prefValue = 1;
 
       try {
@@ -324,25 +397,27 @@ this.DownloadIntegration = {
 
       switch(prefValue) {
         case 0: // Desktop
-          directory = this._getDirectory("Desk");
+          directoryPath = this._getDirectory("Desk");
           break;
         case 1: // Downloads
-          directory = yield this.getSystemDownloadsDirectory();
+          directoryPath = yield this.getSystemDownloadsDirectory();
           break;
         case 2: // Custom
           try {
-            directory = Services.prefs.getComplexValue("browser.download.dir",
-                                                       Ci.nsIFile);
-            yield OS.File.makeDir(directory.path, { ignoreExisting: true });
+            let directory = Services.prefs.getComplexValue("browser.download.dir",
+                                                           Ci.nsIFile);
+            directoryPath = directory.path;
+            yield OS.File.makeDir(directoryPath, { ignoreExisting: true });
           } catch(ex) {
             // Either the preference isn't set or the directory cannot be created.
-            directory = yield this.getSystemDownloadsDirectory();
+            directoryPath = yield this.getSystemDownloadsDirectory();
           }
           break;
         default:
-          directory = yield this.getSystemDownloadsDirectory();
+          directoryPath = yield this.getSystemDownloadsDirectory();
       }
-      throw new Task.Result(directory);
+#endif
+      throw new Task.Result(directoryPath);
     }.bind(this));
   },
 
@@ -350,25 +425,27 @@ this.DownloadIntegration = {
    * Returns the temporary downloads directory asynchronously.
    *
    * @return {Promise}
-   * @resolves The nsIFile of downloads directory.
+   * @resolves The downloads directory string path.
    */
   getTemporaryDownloadsDirectory: function DI_getTemporaryDownloadsDirectory() {
     return Task.spawn(function() {
-      let directory = null;
+      let directoryPath = null;
 #ifdef XP_MACOSX
-      directory = yield this.getPreferredDownloadsDirectory();
-#elifdef ANDROID
-      directory = yield this.getSystemDownloadsDirectory();
+      directoryPath = yield this.getPreferredDownloadsDirectory();
+#elifdef MOZ_WIDGET_ANDROID
+      directoryPath = yield this.getSystemDownloadsDirectory();
+#elifdef MOZ_WIDGET_GONK
+      directoryPath = yield this.getSystemDownloadsDirectory();
 #else
       // For Metro mode on Windows 8,  we want searchability for documents
       // that the user chose to open with an external application.
-      if (this._isImmersiveProcess()) {
-        directory = yield this.getSystemDownloadsDirectory();
+      if (Services.metro && Services.metro.immersive) {
+        directoryPath = yield this.getSystemDownloadsDirectory();
       } else {
-        directory = this._getDirectory("TmpD");
+        directoryPath = this._getDirectory("TmpD");
       }
 #endif
-      throw new Task.Result(directory);
+      throw new Task.Result(directoryPath);
     }.bind(this));
   },
 
@@ -399,6 +476,41 @@ this.DownloadIntegration = {
     }
 
     return Promise.resolve(shouldBlock);
+  },
+
+  /**
+   * Checks to determine whether to block downloads because they might be
+   * malware, based on application reputation checks.
+   *
+   * aParam aDownload
+   *        The download object.
+   *
+   * @return {Promise}
+   * @resolves The boolean indicates to block downloads or not.
+   */
+  shouldBlockForReputationCheck: function (aDownload) {
+    if (this.dontCheckApplicationReputation) {
+      return Promise.resolve(this.shouldBlockInTestForApplicationReputation);
+    }
+    let hash;
+    try {
+      hash = aDownload.saver.getSha256Hash();
+    } catch (ex) {
+      // Bail if DownloadSaver doesn't have a hash.
+      return Promise.resolve(false);
+    }
+    if (!hash) {
+      return Promise.resolve(false);
+    }
+    let deferred = Promise.defer();
+    gApplicationReputationService.queryReputation({
+      sourceURI: NetUtil.newURI(aDownload.source.url),
+      fileSize: aDownload.currentBytes,
+      sha256Hash: hash },
+      function onComplete(aShouldBlock, aRv) {
+        deferred.resolve(aShouldBlock);
+      });
+    return deferred.promise;
   },
 
   /**
@@ -452,14 +564,6 @@ this.DownloadIntegration = {
                                      aDownload.source.isPrivate);
       this.downloadDoneCalled = true;
     }.bind(this));
-  },
-
-  /**
-   * Determines whether it's a Windows Metro app.
-   */
-  _isImmersiveProcess: function() {
-    // TODO: to be implemented
-    return false;
   },
 
   /*
@@ -649,20 +753,19 @@ this.DownloadIntegration = {
    * nsIFile for the downloads directory.
    *
    * @return {Promise}
-   * @resolves The nsIFile directory.
+   * @resolves The directory string path.
    */
   _createDownloadsDirectory: function DI_createDownloadsDirectory(aName) {
-    let directory = this._getDirectory(aName);
-
     // We read the name of the directory from the list of translated strings
     // that is kept by the UI helper module, even if this string is not strictly
     // displayed in the user interface.
-    directory.append(DownloadUIHelper.strings.downloadsFolder);
+    let directoryPath = OS.Path.join(this._getDirectory(aName),
+                                     DownloadUIHelper.strings.downloadsFolder);
 
     // Create the Downloads folder and ignore if it already exists.
-    return OS.File.makeDir(directory.path, { ignoreExisting: true }).
+    return OS.File.makeDir(directoryPath, { ignoreExisting: true }).
              then(function() {
-               return directory;
+               return directoryPath;
              });
   },
 
@@ -670,10 +773,10 @@ this.DownloadIntegration = {
    * Calls the directory service and returns an nsIFile for the requested
    * location name.
    *
-   * @return The nsIFile directory.
+   * @return The directory string path.
    */
   _getDirectory: function DI_getDirectory(aName) {
-    return Services.dirsvc.get(this.testMode ? "TmpD" : aName, Ci.nsIFile);
+    return Services.dirsvc.get(this.testMode ? "TmpD" : aName, Ci.nsIFile).path;
   },
 
   /**
@@ -921,6 +1024,7 @@ this.DownloadObserver = {
 ////////////////////////////////////////////////////////////////////////////////
 //// DownloadHistoryObserver
 
+#ifdef MOZ_PLACES
 /**
  * Registers a Places observer so that operations on download history are
  * reflected on the provided list of downloads.
@@ -931,13 +1035,13 @@ this.DownloadObserver = {
  * @param aList
  *        DownloadList object linked to this observer.
  */
-function DownloadHistoryObserver(aList)
+this.DownloadHistoryObserver = function (aList)
 {
   this._list = aList;
   PlacesUtils.history.addObserver(this, false);
 }
 
-DownloadHistoryObserver.prototype = {
+this.DownloadHistoryObserver.prototype = {
   /**
    * DownloadList object linked to this observer.
    */
@@ -967,6 +1071,12 @@ DownloadHistoryObserver.prototype = {
   onPageChanged: function () {},
   onDeleteVisits: function () {},
 };
+#else
+/**
+ * Empty implementation when we have no Places support, for example on B2G.
+ */
+this.DownloadHistoryObserver = function (aList) {}
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 //// DownloadAutoSaveView
@@ -985,13 +1095,15 @@ DownloadHistoryObserver.prototype = {
  * @param aStore
  *        The DownloadStore object used for saving.
  */
-function DownloadAutoSaveView(aList, aStore) {
+this.DownloadAutoSaveView = function (aList, aStore)
+{
   this._list = aList;
   this._store = aStore;
   this._downloadsMap = new Map();
+  this._writer = new DeferredTask(() => this._store.save(), kSaveDelayMs);
 }
 
-DownloadAutoSaveView.prototype = {
+this.DownloadAutoSaveView.prototype = {
   /**
    * DownloadList object linked to this view.
    */
@@ -1029,45 +1141,9 @@ DownloadAutoSaveView.prototype = {
   _downloadsMap: null,
 
   /**
-   * This is set to true when the save operation should be triggered.  This is
-   * required so that a new operation can be scheduled while the current one is
-   * in progress, without re-entering the save method.
+   * DeferredTask for the save operation.
    */
-  _shouldSave: false,
-
-  /**
-   * nsITimer used for triggering the save operation after a delay, or null if
-   * saving has finished and there is no operation scheduled for execution.
-   *
-   * The logic here is different from the DeferredTask module in that multiple
-   * requests will never delay the operation for longer than the expected time
-   * (no grace delay), and the operation is never re-entered during execution.
-   */
-  _timer: null,
-
-  /**
-   * Timer callback used to serialize the list of downloads.
-   */
-  _save: function ()
-  {
-    Task.spawn(function () {
-      // Any save request received during execution will be handled later.
-      this._shouldSave = false;
-
-      // Execute the asynchronous save operation.
-      try {
-        yield this._store.save();
-      } catch (ex) {
-        Cu.reportError(ex);
-      }
-
-      // Handle requests received during the operation.
-      this._timer = null;
-      if (this._shouldSave) {
-        this.saveSoon();
-      }
-    }.bind(this)).then(null, Cu.reportError);
-  },
+  _writer: null,
 
   /**
    * Called when the list of downloads changed, this triggers the asynchronous
@@ -1075,11 +1151,7 @@ DownloadAutoSaveView.prototype = {
    */
   saveSoon: function ()
   {
-    this._shouldSave = true;
-    if (!this._timer) {
-      this._timer = new Timer(this._save.bind(this), kSaveDelayMs,
-                              Ci.nsITimer.TYPE_ONE_SHOT);
-    }
+    this._writer.arm();
   },
 
   //////////////////////////////////////////////////////////////////////////////

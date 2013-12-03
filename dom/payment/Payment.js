@@ -30,7 +30,8 @@ PaymentContentHelper.prototype = {
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsINavigatorPayment,
                                          Ci.nsIDOMGlobalPropertyInitializer,
-                                         Ci.nsISupportsWeakReference]),
+                                         Ci.nsISupportsWeakReference,
+                                         Ci.nsIObserver]),
   classID:        PAYMENTCONTENTHELPER_CID,
   classInfo:      XPCOMUtils.generateCI({
     classID: PAYMENTCONTENTHELPER_CID,
@@ -78,6 +79,14 @@ PaymentContentHelper.prototype = {
   // nsIDOMGlobalPropertyInitializer
 
   init: function(aWindow) {
+    try {
+      if (!Services.prefs.getBoolPref("dom.mozPay.enabled")) {
+        return null;
+      }
+    } catch (e) {
+      return null;
+    }
+
     this._window = aWindow;
     this.initDOMRequestHelper(aWindow, PAYMENT_IPC_MSG_NAMES);
 

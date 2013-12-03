@@ -70,9 +70,6 @@
 
 #ifdef XP_MACOSX
 #include "nsILocalFileMac.h"
-#ifndef __LP64__
-#include "nsIAppleFileDecoder.h"
-#endif
 #elif defined(XP_OS2)
 #include "nsILocalFileOS2.h"
 #endif
@@ -118,6 +115,14 @@
 
 #include "mozilla/Preferences.h"
 #include "mozilla/ipc/URIUtils.h"
+
+#ifdef MOZ_WIDGET_GONK
+#include "nsDeviceStorage.h"
+#endif
+
+#ifdef NECKO_PROTOCOL_rtsp
+#include "nsISystemMessagesInternal.h"
+#endif
 
 using namespace mozilla;
 using namespace mozilla::ipc;
@@ -331,6 +336,32 @@ static nsresult GetDownloadDirectory(nsIFile **_directory)
                                          getter_AddRefs(dir));
     NS_ENSURE_SUCCESS(rv, rv);
   }
+#elif defined(MOZ_WIDGET_GONK)
+  // On Gonk, store the files on the sdcard in the downloads directory.
+  // We need to check with the volume manager which storage point is
+  // available.
+
+  // Pick the default storage in case multiple (internal and external) ones
+  // are available.
+  nsString storageName;
+  nsDOMDeviceStorage::GetDefaultStorageName(NS_LITERAL_STRING("sdcard"),
+                                            storageName);
+  NS_ENSURE_TRUE(!storageName.IsEmpty(), NS_ERROR_FAILURE);
+
+  DeviceStorageFile dsf(NS_LITERAL_STRING("sdcard"),
+                        storageName,
+                        NS_LITERAL_STRING("downloads"));
+  NS_ENSURE_TRUE(dsf.mFile, NS_ERROR_FAILURE);
+  NS_ENSURE_TRUE(dsf.IsAvailable(), NS_ERROR_FAILURE);
+
+  bool alreadyThere;
+  nsresult rv = dsf.mFile->Exists(&alreadyThere);
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (!alreadyThere) {
+    rv = dsf.mFile->Create(nsIFile::DIRECTORY_TYPE, 0770);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  dir = dsf.mFile;
 #elif defined(ANDROID)
   // On mobile devices, we are avoiding exposing users to the file
   // system, and don't save downloads to temp directories
@@ -415,9 +446,6 @@ static nsDefaultMimeTypeEntry defaultMimeEntries [] =
   { VIDEO_WEBM, "webm" },
   { AUDIO_WEBM, "webm" },
 #endif
-#ifdef MOZ_DASH
-  { APPLICATION_DASH, "mpd" },
-#endif
 #if defined(MOZ_GSTREAMER) || defined(MOZ_WMF)
   { VIDEO_MP4, "mp4" },
   { AUDIO_MP4, "m4a" },
@@ -489,6 +517,7 @@ static nsExtraMimeTypeEntry extraMimeEntries [] =
   { TEXT_XUL, "xul", "XML-Based User Interface Language" },
   { TEXT_XML, "xml,xsl,xbl", "Extensible Markup Language" },
   { TEXT_CSS, "css", "Style Sheet" },
+  { TEXT_VCARD, "vcf,vcard", "Contact Information" },
   { VIDEO_OGG, "ogv", "Ogg Video" },
   { VIDEO_OGG, "ogg", "Ogg Video" },
   { APPLICATION_OGG, "ogg", "Ogg Video"},
@@ -499,9 +528,6 @@ static nsExtraMimeTypeEntry extraMimeEntries [] =
 #endif
   { VIDEO_WEBM, "webm", "Web Media Video" },
   { AUDIO_WEBM, "webm", "Web Media Audio" },
-#ifdef MOZ_DASH
-  { APPLICATION_DASH, "mpd", "DASH Media Presentation Description" },
-#endif
   { AUDIO_MP3, "mp3", "MPEG Audio" },
   { VIDEO_MP4, "mp4", "MPEG-4 Video" },
   { AUDIO_MP4, "m4a", "MPEG-4 Audio" },
@@ -559,6 +585,82 @@ nsresult nsExternalHelperAppService::Init()
 nsExternalHelperAppService::~nsExternalHelperAppService()
 {
 }
+
+#ifdef NECKO_PROTOCOL_rtsp
+namespace {
+/**
+ * A stack helper to clear the currently pending exception in a JS context.
+ */
+class AutoClearPendingException {
+public:
+  AutoClearPendingException(JSContext* aCx) :
+    mCx(aCx) {
+  }
+  ~AutoClearPendingException() {
+    JS_ClearPendingException(mCx);
+  }
+private:
+  JSContext *mCx;
+};
+} // anonymous namespace
+
+/**
+ * This function broadcasts a system message in order to launch video app for
+ * rtsp scheme. This is Gonk-specific behavior.
+ */
+void nsExternalHelperAppService::LaunchVideoAppForRtsp(nsIURI* aURI)
+{
+  NS_NAMED_LITERAL_STRING(msgType, "rtsp-open-video");
+
+  // Make the url is rtsp.
+  bool isRTSP = false;
+  aURI->SchemeIs("rtsp", &isRTSP);
+  NS_ASSERTION(isRTSP, "Not rtsp protocol! Something goes wrong here");
+
+  // Construct jsval for system message.
+  AutoSafeJSContext cx;
+  AutoClearPendingException helper(cx);
+  JS::Rooted<JSObject*> msgObj(cx, JS_NewObject(cx, nullptr, nullptr, nullptr));
+  NS_ENSURE_TRUE_VOID(msgObj);
+  JS::Rooted<JS::Value> jsVal(cx);
+  bool rv;
+
+  // Set the "url" and "title" properties of the message.
+  // In the case of RTSP streaming, the title is the same as the url.
+  {
+    nsAutoCString spec;
+    aURI->GetAsciiSpec(spec);
+    JSString *urlStr = JS_NewStringCopyN(cx, spec.get(), spec.Length());
+    NS_ENSURE_TRUE_VOID(urlStr);
+    jsVal.setString(urlStr);
+
+    rv = JS_SetProperty(cx, msgObj, "url", jsVal);
+    NS_ENSURE_TRUE_VOID(rv);
+
+    rv = JS_SetProperty(cx, msgObj, "title", jsVal);
+    NS_ENSURE_TRUE_VOID(rv);
+  }
+
+  // Set the "type" property of the message. This is a fake MIME type.
+  {
+    NS_NAMED_LITERAL_CSTRING(mimeType, "video/rtsp");
+    JSString *typeStr = JS_NewStringCopyN(cx, mimeType.get(), mimeType.Length());
+    NS_ENSURE_TRUE_VOID(typeStr);
+    jsVal.setString(typeStr);
+  }
+  rv = JS_SetProperty(cx, msgObj, "type", jsVal);
+  NS_ENSURE_TRUE_VOID(rv);
+
+  // Broadcast system message.
+  nsCOMPtr<nsISystemMessagesInternal> systemMessenger =
+    do_GetService("@mozilla.org/system-message-internal;1");
+  NS_ENSURE_TRUE_VOID(systemMessenger);
+  jsVal.setObject(*msgObj);
+  systemMessenger->BroadcastMessage(msgType, jsVal, JS::UndefinedValue());
+
+  return;
+}
+#endif
 
 NS_IMETHODIMP nsExternalHelperAppService::DoContent(const nsACString& aMimeContentType,
                                                     nsIRequest *aRequest,
@@ -900,7 +1002,18 @@ nsExternalHelperAppService::LoadURI(nsIURI *aURI,
     return NS_OK; // explicitly denied
   }
 
- 
+#ifdef NECKO_PROTOCOL_rtsp
+  // Handle rtsp protocol.
+  {
+    bool isRTSP = false;
+    rv = aURI->SchemeIs("rtsp", &isRTSP);
+    if (NS_SUCCEEDED(rv) && isRTSP) {
+      LaunchVideoAppForRtsp(aURI);
+      return NS_OK;
+    }
+  }
+#endif
+
   nsCOMPtr<nsIHandlerInfo> handler;
   rv = GetProtocolHandlerInfo(scheme, getter_AddRefs(handler));
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1129,11 +1242,18 @@ nsExternalAppHandler::nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo,
 
   // Remove unsafe bidi characters which might have spoofing implications (bug 511521).
   const PRUnichar unsafeBidiCharacters[] = {
+    PRUnichar(0x061c), // Arabic Letter Mark
+    PRUnichar(0x200e), // Left-to-Right Mark
+    PRUnichar(0x200f), // Right-to-Left Mark
     PRUnichar(0x202a), // Left-to-Right Embedding
     PRUnichar(0x202b), // Right-to-Left Embedding
     PRUnichar(0x202c), // Pop Directional Formatting
     PRUnichar(0x202d), // Left-to-Right Override
-    PRUnichar(0x202e)  // Right-to-Left Override
+    PRUnichar(0x202e), // Right-to-Left Override
+    PRUnichar(0x2066), // Left-to-Right Isolate
+    PRUnichar(0x2067), // Right-to-Left Isolate
+    PRUnichar(0x2068), // First Strong Isolate
+    PRUnichar(0x2069)  // Pop Directional Isolate
   };
   for (uint32_t i = 0; i < ArrayLength(unsafeBidiCharacters); ++i) {
     mSuggestedFileName.ReplaceChar(unsafeBidiCharacters[i], '_');

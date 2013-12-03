@@ -24,6 +24,11 @@
 #include "nsAutoPtr.h"
 #include "nsSelectsAreaFrame.h"
 
+// X.h defines KeyPress
+#ifdef KeyPress
+#undef KeyPress
+#endif
+
 class nsIDOMHTMLSelectElement;
 class nsIDOMHTMLOptionsCollection;
 class nsIComboboxControlFrame;
@@ -54,7 +59,7 @@ public:
 
     // nsIFrame
   NS_IMETHOD HandleEvent(nsPresContext* aPresContext,
-                         nsGUIEvent* aEvent,
+                         mozilla::WidgetGUIEvent* aEvent,
                          nsEventStatus* aEventStatus) MOZ_OVERRIDE;
   
   NS_IMETHOD SetInitialChildList(ChildListID     aListID,

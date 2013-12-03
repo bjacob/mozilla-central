@@ -17,7 +17,6 @@
 #include "nsStyleLinkElement.h"
 #include "nsIDocShell.h"
 #include "nsIScriptGlobalObject.h"
-#include "nsIScriptGlobalObjectOwner.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIWebShellServices.h"
 #include "nsContentUtils.h"
@@ -220,39 +219,6 @@ nsHtml5TreeOpExecutor::SetDocumentCharsetAndSource(nsACString& aCharset, int32_t
   if (mDocument) {
     mDocument->SetDocumentCharacterSetSource(aCharsetSource);
     mDocument->SetDocumentCharacterSet(aCharset);
-  }
-  if (mDocShell) {
-    // the following logic to get muCV is copied from
-    // nsHTMLDocument::StartDocumentLoad
-    // We need to call muCV->SetPrevDocCharacterSet here in case
-    // the charset is detected by parser DetectMetaTag
-    nsCOMPtr<nsIMarkupDocumentViewer> mucv;
-    nsCOMPtr<nsIContentViewer> cv;
-    mDocShell->GetContentViewer(getter_AddRefs(cv));
-    if (cv) {
-      mucv = do_QueryInterface(cv);
-    } else {
-      // in this block of code, if we get an error result, we return
-      // it but if we get a null pointer, that's perfectly legal for
-      // parent and parentContentViewer
-      if (!mDocShell) {
-    	  return;
-      }
-      nsCOMPtr<nsIDocShellTreeItem> parentAsItem;
-      mDocShell->GetSameTypeParent(getter_AddRefs(parentAsItem));
-      nsCOMPtr<nsIDocShell> parent(do_QueryInterface(parentAsItem));
-      if (parent) {
-        nsCOMPtr<nsIContentViewer> parentContentViewer;
-        nsresult rv =
-          parent->GetContentViewer(getter_AddRefs(parentContentViewer));
-        if (NS_SUCCEEDED(rv) && parentContentViewer) {
-          mucv = do_QueryInterface(parentContentViewer);
-        }
-      }
-    }
-    if (mucv) {
-      mucv->SetPrevDocCharacterSet(aCharset);
-    }
   }
 }
 
@@ -682,23 +648,16 @@ nsHtml5TreeOpExecutor::IsScriptEnabled()
 {
   if (!mDocument || !mDocShell)
     return true;
-  nsCOMPtr<nsIScriptGlobalObject> globalObject = do_QueryInterface(mDocument->GetWindow());
+  nsCOMPtr<nsIScriptGlobalObject> globalObject = do_QueryInterface(mDocument->GetInnerWindow());
   // Getting context is tricky if the document hasn't had its
   // GlobalObject set yet
   if (!globalObject) {
-    nsCOMPtr<nsIScriptGlobalObjectOwner> owner = do_GetInterface(mDocShell);
-    NS_ENSURE_TRUE(owner, true);
-    globalObject = do_QueryInterface(mDocument->GetWindow());
+    globalObject = mDocShell->GetScriptGlobalObject();
     NS_ENSURE_TRUE(globalObject, true);
   }
-  nsIScriptContext *scriptContext = globalObject->GetContext();
-  NS_ENSURE_TRUE(scriptContext, true);
-  JSContext* cx = scriptContext->GetNativeContext();
-  NS_ENSURE_TRUE(cx, true);
-  bool enabled = true;
-  nsContentUtils::GetSecurityManager()->
-    CanExecuteScripts(cx, mDocument->NodePrincipal(), &enabled);
-  return enabled;
+  NS_ENSURE_TRUE(globalObject && globalObject->GetGlobalJSObject(), true);
+  return nsContentUtils::GetSecurityManager()->
+           ScriptAllowed(globalObject->GetGlobalJSObject());
 }
 
 void

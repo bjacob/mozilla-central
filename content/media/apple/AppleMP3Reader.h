@@ -30,16 +30,13 @@ public:
   virtual bool HasAudio() MOZ_OVERRIDE;
   virtual bool HasVideo() MOZ_OVERRIDE;
 
-  virtual nsresult ReadMetadata(VideoInfo* aInfo,
+  virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) MOZ_OVERRIDE;
 
   virtual nsresult Seek(int64_t aTime,
                         int64_t aStartTime,
                         int64_t aEndTime,
                         int64_t aCurrentTime) MOZ_OVERRIDE;
-
-  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered,
-                               int64_t aStartTime) MOZ_OVERRIDE;
 
   void AudioSampleCallback(UInt32 aNumBytes,
                            UInt32 aNumPackets,
@@ -50,9 +47,13 @@ public:
                              AudioFileStreamPropertyID aPropertyID,
                              UInt32 *aFlags);
 
+  virtual void NotifyDataArrived(const char* aBuffer,
+                                 uint32_t aLength,
+                                 int64_t aOffset) MOZ_OVERRIDE;
+
 private:
   void SetupDecoder();
-  nsresult ReadAndNotify(uint32_t *aNumBytes, char *aData);
+  nsresult Read(uint32_t *aNumBytes, char *aData);
 
   static OSStatus PassthroughInputDataCallback(AudioConverterRef aAudioConverter,
                                                UInt32 *aNumDataPackets,

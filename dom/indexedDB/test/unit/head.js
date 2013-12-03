@@ -3,7 +3,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-const { 'classes': Cc, 'interfaces': Ci } = Components;
+const { 'classes': Cc, 'interfaces': Ci, 'utils': Cu } = Components;
 
 const DOMException = Ci.nsIDOMDOMException;
 
@@ -38,19 +38,19 @@ function run_test() {
   runTest();
 };
 
-function runTest()
-{
-  // XPCShell does not get a profile by default.
-  do_get_profile();
+if (!this.runTest) {
+  this.runTest = function()
+  {
+    // XPCShell does not get a profile by default.
+    do_get_profile();
 
-  var idbManager = Cc["@mozilla.org/dom/indexeddb/manager;1"].
-                   getService(Ci.nsIIndexedDatabaseManager);
-  idbManager.initWindowless(this);
+    enableExperimental();
 
-  enableExperimental();
+    Cu.importGlobalProperties(["indexedDB"]);
 
-  do_test_pending();
-  testGenerator.next();
+    do_test_pending();
+    testGenerator.next();
+  }
 }
 
 function finishTest()

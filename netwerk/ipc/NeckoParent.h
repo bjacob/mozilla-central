@@ -57,6 +57,16 @@ public:
                            const SerializedLoadContext& aSerialized,
                            nsCOMPtr<nsILoadContext> &aResult);
 
+  virtual void
+  CloneManagees(ProtocolBase* aSource,
+              mozilla::ipc::ProtocolCloneContext* aCtx) MOZ_OVERRIDE;
+  virtual PCookieServiceParent* AllocPCookieServiceParent() MOZ_OVERRIDE;
+  virtual bool
+  RecvPCookieServiceConstructor(PCookieServiceParent* aActor) MOZ_OVERRIDE
+  {
+    return PNeckoParent::RecvPCookieServiceConstructor(aActor);
+  }
+
 protected:
   virtual PHttpChannelParent*
     AllocPHttpChannelParent(PBrowserParent*, const SerializedLoadContext&,
@@ -68,7 +78,6 @@ protected:
                       const SerializedLoadContext& aSerialized,
                       const HttpChannelCreationArgs& aOpenArgs);
   virtual bool DeallocPHttpChannelParent(PHttpChannelParent*);
-  virtual PCookieServiceParent* AllocPCookieServiceParent();
   virtual bool DeallocPCookieServiceParent(PCookieServiceParent*);
   virtual PWyciwygChannelParent* AllocPWyciwygChannelParent();
   virtual bool DeallocPWyciwygChannelParent(PWyciwygChannelParent*);
@@ -107,11 +116,26 @@ protected:
                                                const uint16_t& aBacklog,
                                                const nsString& aBinaryType);
   virtual bool DeallocPTCPServerSocketParent(PTCPServerSocketParent*);
+  virtual PUDPSocketParent* AllocPUDPSocketParent(const nsCString& aHost,
+                                                  const uint16_t& aPort,
+                                                  const nsCString& aFilter);
+  virtual bool RecvPUDPSocketConstructor(PUDPSocketParent*,
+                                         const nsCString& aHost,
+                                         const uint16_t& aPort,
+                                         const nsCString& aFilter);
+  virtual bool DeallocPUDPSocketParent(PUDPSocketParent*);
   virtual bool RecvHTMLDNSPrefetch(const nsString& hostname,
                                    const uint16_t& flags);
   virtual bool RecvCancelHTMLDNSPrefetch(const nsString& hostname,
                                          const uint16_t& flags,
                                          const nsresult& reason);
+
+  virtual mozilla::ipc::IProtocol*
+  CloneProtocol(Channel* aChannel,
+                mozilla::ipc::ProtocolCloneContext* aCtx) MOZ_OVERRIDE;
+  virtual PRtspControllerParent* AllocPRtspControllerParent();
+  virtual bool DeallocPRtspControllerParent(PRtspControllerParent*);
+
 private:
   nsCString mCoreAppsBasePath;
   nsCString mWebAppsBasePath;

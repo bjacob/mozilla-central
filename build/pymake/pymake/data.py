@@ -504,13 +504,13 @@ class Variables(object):
 
         return (None, None, None)
 
-    def set(self, name, flavor, source, value):
+    def set(self, name, flavor, source, value, force=False):
         assert flavor in (self.FLAVOR_RECURSIVE, self.FLAVOR_SIMPLE)
         assert source in (self.SOURCE_OVERRIDE, self.SOURCE_COMMANDLINE, self.SOURCE_MAKEFILE, self.SOURCE_ENVIRONMENT, self.SOURCE_AUTOMATIC, self.SOURCE_IMPLICIT)
         assert isinstance(value, str_type), "expected str, got %s" % type(value)
 
         prevflavor, prevsource, prevvalue = self.get(name)
-        if prevsource is not None and source > prevsource:
+        if prevsource is not None and source > prevsource and not force:
             # TODO: give a location for this warning
             _log.info("not setting variable '%s', set by higher-priority source to value '%s'" % (name, prevvalue))
             return
@@ -780,7 +780,8 @@ class RemakeTargetParallel(object):
             return
 
         self.currunning = True
-        self.rlist.pop(0).runcommands(self.indent, self.commandscb)
+        rule = self.rlist.pop(0)
+        self.makefile.context.defer(rule.runcommands, self.indent, self.commandscb)
 
     def commandscb(self, error):
         assert error in (True, False)
@@ -844,11 +845,15 @@ class RemakeRuleContext(object):
         self._depfinishedserial(False, False)
 
     def _startdepparallel(self, d):
+        dep, weak = d
+        if weak:
+            depfinished = self._weakdepfinishedparallel
+        else:
+            depfinished = self._depfinishedparallel
         if self.makefile.error:
             depfinished(True, False)
         else:
-            dep, weak = d
-            dep.make(self.makefile, self.targetstack, weak and self._weakdepfinishedparallel or self._depfinishedparallel)
+            dep.make(self.makefile, self.targetstack, depfinished)
 
     def _weakdepfinishedparallel(self, error, didanything):
         if error:

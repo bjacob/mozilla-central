@@ -1,3 +1,4 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,6 +37,8 @@
 #include "transportlayerdtls.h"
 #include "transportlayerice.h"
 #include "runnable_utils.h"
+#include "gfxImageSurface.h"
+#include "libyuv/convert.h"
 
 using namespace mozilla;
 
@@ -119,8 +122,8 @@ void MediaPipeline::ShutdownTransport_s() {
 
   disconnect_all();
   transport_->Detach();
-  rtp_transport_ = NULL;
-  rtcp_transport_ = NULL;
+  rtp_transport_ = nullptr;
+  rtcp_transport_ = nullptr;
 }
 
 void MediaPipeline::StateChange(TransportFlow *flow, TransportLayer::State state) {
@@ -148,15 +151,15 @@ nsresult MediaPipeline::TransportReady_s(TransportFlow *flow) {
   // failure. bug 852665.
   if (*state != MP_CONNECTING) {
     MOZ_MTLOG(ML_ERROR, "Transport ready for flow in wrong state:" <<
-	      description_ << ": " << (rtcp ? "rtcp" : "rtp"));
+              description_ << ": " << (rtcp ? "rtcp" : "rtp"));
     return NS_ERROR_FAILURE;
   }
 
   nsresult res;
 
   MOZ_MTLOG(ML_DEBUG, "Transport ready for pipeline " <<
-	    static_cast<void *>(this) << " flow " << description_ << ": " <<
-	    (rtcp ? "rtcp" : "rtp"));
+            static_cast<void *>(this) << " flow " << description_ << ": " <<
+            (rtcp ? "rtcp" : "rtp"));
 
   // Now instantiate the SRTP objects
   TransportLayerDtls *dtls = static_cast<TransportLayerDtls *>(
@@ -330,7 +333,7 @@ void MediaPipeline::increment_rtp_packets_sent() {
   ++rtp_packets_sent_;
 
   if (!(rtp_packets_sent_ % 100)) {
-    MOZ_MTLOG(ML_DEBUG, "RTP sent packet count for " << description_
+    MOZ_MTLOG(ML_INFO, "RTP sent packet count for " << description_
               << " Pipeline " << static_cast<void *>(this)
               << " Flow : " << static_cast<void *>(rtp_transport_)
               << ": " << rtp_packets_sent_);
@@ -340,7 +343,7 @@ void MediaPipeline::increment_rtp_packets_sent() {
 void MediaPipeline::increment_rtcp_packets_sent() {
   ++rtcp_packets_sent_;
   if (!(rtcp_packets_sent_ % 100)) {
-    MOZ_MTLOG(ML_DEBUG, "RTCP sent packet count for " << description_
+    MOZ_MTLOG(ML_INFO, "RTCP sent packet count for " << description_
               << " Pipeline " << static_cast<void *>(this)
               << " Flow : " << static_cast<void *>(rtcp_transport_)
               << ": " << rtcp_packets_sent_);
@@ -350,7 +353,7 @@ void MediaPipeline::increment_rtcp_packets_sent() {
 void MediaPipeline::increment_rtp_packets_received() {
   ++rtp_packets_received_;
   if (!(rtp_packets_received_ % 100)) {
-    MOZ_MTLOG(ML_DEBUG, "RTP received packet count for " << description_
+    MOZ_MTLOG(ML_INFO, "RTP received packet count for " << description_
               << " Pipeline " << static_cast<void *>(this)
               << " Flow : " << static_cast<void *>(rtp_transport_)
               << ": " << rtp_packets_received_);
@@ -360,7 +363,7 @@ void MediaPipeline::increment_rtp_packets_received() {
 void MediaPipeline::increment_rtcp_packets_received() {
   ++rtcp_packets_received_;
   if (!(rtcp_packets_received_ % 100)) {
-    MOZ_MTLOG(ML_DEBUG, "RTCP received packet count for " << description_
+    MOZ_MTLOG(ML_INFO, "RTCP received packet count for " << description_
               << " Pipeline " << static_cast<void *>(this)
               << " Flow : " << static_cast<void *>(rtcp_transport_)
               << ": " << rtcp_packets_received_);
@@ -895,7 +898,7 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
           static_cast<const layers::PlanarYCbCrImage *>(img));
     // Big-time assumption here that this is all contiguous data coming
     // from getUserMedia or other sources.
-    const layers::PlanarYCbCrImage::Data *data = yuv->GetData();
+    const layers::PlanarYCbCrData *data = yuv->GetData();
 
     uint8_t *y = data->mYChannel;
 #ifdef DEBUG
@@ -921,6 +924,48 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
     MOZ_MTLOG(ML_DEBUG, "Sending a video frame");
     // Not much for us to do with an error
     conduit->SendVideoFrame(y, length, width, height, mozilla::kVideoI420, 0);
+  } else if(format == CAIRO_SURFACE) {
+    layers::CairoImage* rgb =
+    const_cast<layers::CairoImage *>(
+          static_cast<const layers::CairoImage *>(img));
+
+    gfxIntSize size = rgb->GetSize();
+    int half_width = (size.width + 1) >> 1;
+    int half_height = (size.height + 1) >> 1;
+    int c_size = half_width * half_height;
+    int buffer_size = size.width * size.height + 2 * c_size;
+    uint8* yuv = (uint8*) malloc(buffer_size);
+    if (!yuv)
+      return;
+
+    int cb_offset = size.width * size.height;
+    int cr_offset = cb_offset + c_size;
+    nsRefPtr<gfxImageSurface> surf = rgb->mSurface->GetAsImageSurface();
+
+    switch (surf->Format()) {
+      case gfxImageFormatARGB32:
+      case gfxImageFormatRGB24:
+        libyuv::ARGBToI420(static_cast<uint8*>(surf->Data()), surf->Stride(),
+                           yuv, size.width,
+                           yuv + cb_offset, half_width,
+                           yuv + cr_offset, half_width,
+                           size.width, size.height);
+        break;
+      case gfxImageFormatRGB16_565:
+        libyuv::RGB565ToI420(static_cast<uint8*>(surf->Data()), surf->Stride(),
+                             yuv, size.width,
+                             yuv + cb_offset, half_width,
+                             yuv + cr_offset, half_width,
+                             size.width, size.height);
+        break;
+      case gfxImageFormatA1:
+      case gfxImageFormatA8:
+      case gfxImageFormatUnknown:
+      default:
+        MOZ_MTLOG(ML_ERROR, "Unsupported RGB video format");
+        MOZ_ASSERT(PR_FALSE);
+    }
+    conduit->SendVideoFrame(yuv, buffer_size, size.width, size.height, mozilla::kVideoI420, 0);
   } else {
     MOZ_MTLOG(ML_ERROR, "Unsupported video format");
     MOZ_ASSERT(PR_FALSE);
@@ -1145,7 +1190,7 @@ void MediaPipelineReceiveVideo::PipelineListener::RenderVideoFrame(
   const uint8_t lumaBpp = 8;
   const uint8_t chromaBpp = 4;
 
-  layers::PlanarYCbCrImage::Data data;
+  layers::PlanarYCbCrData data;
   data.mYChannel = frame;
   data.mYSize = gfxIntSize(width_, height_);
   data.mYStride = width_ * lumaBpp/ 8;

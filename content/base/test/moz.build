@@ -10,8 +10,6 @@ TEST_TOOL_DIRS += [
     'websocket_hybi',
 ]
 
-MODULE = 'content'
-
 XPCSHELL_TESTS_MANIFESTS += ['unit/xpcshell.ini']
 
 # FIXME/bug 575918: out-of-process xpcshell is broken on OS X
@@ -23,4 +21,10 @@ CPP_UNIT_TESTS += [
     'TestNativeXMLHttpRequest.cpp',
     'TestPlainTextSerializer.cpp',
 ]
+
+MOCHITEST_MANIFESTS += ['mochitest.ini']
+
+MOCHITEST_CHROME_MANIFESTS += ['chrome.ini']
+
+BROWSER_CHROME_MANIFESTS += ['browser.ini']
 

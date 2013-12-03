@@ -31,6 +31,12 @@ class nsFrameLoader;
 class nsXULElement;
 class nsPluginInstanceOwner;
 
+namespace mozilla {
+namespace dom {
+template<typename T> class Sequence;
+}
+}
+
 class nsObjectLoadingContent : public nsImageLoadingContent
                              , public nsIStreamListener
                              , public nsIFrameLoaderOwner
@@ -172,6 +178,10 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     void PlayPlugin(mozilla::ErrorResult& aRv)
     {
       aRv = PlayPlugin();
+    }
+    void Reload(bool aClearActivation, mozilla::ErrorResult& aRv)
+    {
+      aRv = Reload(aClearActivation);
     }
     bool Activated() const
     {

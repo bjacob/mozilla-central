@@ -81,19 +81,21 @@ IsImmersiveProcessDynamic(HANDLE process)
 }
 
 bool
-IsImmersiveProcessRunning(const wchar_t *processName)
+IsProcessRunning(const wchar_t *processName, bool bCheckIfMetro)
 {
   bool exists = false;
   PROCESSENTRY32W entry;
   entry.dwSize = sizeof(PROCESSENTRY32W);
 
-  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
   if (Process32First(snapshot, &entry)) {
     while (!exists && Process32Next(snapshot, &entry)) {
       if (!_wcsicmp(entry.szExeFile, processName)) {
         HANDLE process = OpenProcess(GENERIC_READ, FALSE, entry.th32ProcessID);
-        if (IsImmersiveProcessDynamic(process)) {
+        bool isImmersiveProcess = IsImmersiveProcessDynamic(process);
+        if ((bCheckIfMetro && isImmersiveProcess) ||
+            (!bCheckIfMetro && !isImmersiveProcess)) {
           exists = true;
         }
         CloseHandle(process);

@@ -58,10 +58,8 @@ LayerManagerD3D9::Initialize(bool force)
   }
 
   if (!mDefaultDeviceManager) {
-    mDeviceManager = new DeviceManagerD3D9;
-
-    if (!mDeviceManager->Init()) {
-      mDeviceManager = nullptr;
+    mDeviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
+    if (!mDeviceManager) {
       return false;
     }
 
@@ -219,11 +217,6 @@ LayerManagerD3D9::CreateReadbackLayer()
   return layer.forget();
 }
 
-void ReleaseTexture(void *texture)
-{
-  static_cast<IDirect3DTexture9*>(texture)->Release();
-}
-
 void
 LayerManagerD3D9::ReportFailure(const nsACString &aMsg, HRESULT aCode)
 {
@@ -240,7 +233,8 @@ LayerManagerD3D9::ReportFailure(const nsACString &aMsg, HRESULT aCode)
 void
 LayerManagerD3D9::Render()
 {
-  if (!mSwapChain->PrepareForRendering()) {
+  DeviceManagerState state = mSwapChain->PrepareForRendering();
+  if (state != DeviceOK) {
     return;
   }
   deviceManager()->SetupRenderState();
@@ -283,7 +277,8 @@ LayerManagerD3D9::Render()
          (r = iter.Next()) != nullptr;) {
       mSwapChain->Present(*r);
     }
-    LayerManager::PostPresent();
+    RecordFrame();
+    PostPresent();
   } else {
     PaintToTarget();
   }

@@ -154,7 +154,7 @@ nsDOMEventTargetHelper::RemoveEventListener(const nsAString& aType,
                                             nsIDOMEventListener* aListener,
                                             bool aUseCapture)
 {
-  nsEventListenerManager* elm = GetListenerManager(false);
+  nsEventListenerManager* elm = GetExistingListenerManager();
   if (elm) {
     elm->RemoveEventListener(aType, aListener, aUseCapture);
   }
@@ -181,7 +181,7 @@ nsDOMEventTargetHelper::AddEventListener(const nsAString& aType,
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  nsEventListenerManager* elm = GetListenerManager(true);
+  nsEventListenerManager* elm = GetOrCreateListenerManager();
   NS_ENSURE_STATE(elm);
   elm->AddEventListener(aType, aListener, aUseCapture, aWantsUntrusted);
   return NS_OK;
@@ -205,7 +205,7 @@ nsDOMEventTargetHelper::AddEventListener(const nsAString& aType,
     wantsUntrusted = aWantsUntrusted.Value();
   }
 
-  nsEventListenerManager* elm = GetListenerManager(true);
+  nsEventListenerManager* elm = GetOrCreateListenerManager();
   if (!elm) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return;
@@ -308,7 +308,7 @@ nsDOMEventTargetHelper::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
 }
 
 nsresult
-nsDOMEventTargetHelper::DispatchDOMEvent(nsEvent* aEvent,
+nsDOMEventTargetHelper::DispatchDOMEvent(WidgetEvent* aEvent,
                                          nsIDOMEvent* aDOMEvent,
                                          nsPresContext* aPresContext,
                                          nsEventStatus* aEventStatus)
@@ -319,12 +319,18 @@ nsDOMEventTargetHelper::DispatchDOMEvent(nsEvent* aEvent,
 }
 
 nsEventListenerManager*
-nsDOMEventTargetHelper::GetListenerManager(bool aCreateIfNotFound)
+nsDOMEventTargetHelper::GetOrCreateListenerManager()
 {
-  if (!mListenerManager && aCreateIfNotFound) {
+  if (!mListenerManager) {
     mListenerManager = new nsEventListenerManager(this);
   }
 
+  return mListenerManager;
+}
+
+nsEventListenerManager*
+nsDOMEventTargetHelper::GetExistingListenerManager() const
+{
   return mListenerManager;
 }
 
@@ -351,4 +357,18 @@ nsDOMEventTargetHelper::WantsUntrusted(bool* aRetVal)
   // We can let listeners on workers to always handle all the events.
   *aRetVal = (doc && !nsContentUtils::IsChromeDoc(doc)) || !NS_IsMainThread();
   return rv;
+}
+
+void
+nsDOMEventTargetHelper::EventListenerAdded(nsIAtom* aType)
+{
+  mozilla::ErrorResult rv;
+  EventListenerWasAdded(Substring(nsDependentAtomString(aType), 2), rv);
+}
+
+void
+nsDOMEventTargetHelper::EventListenerRemoved(nsIAtom* aType)
+{
+  mozilla::ErrorResult rv;
+  EventListenerWasRemoved(Substring(nsDependentAtomString(aType), 2), rv);
 }

@@ -12,6 +12,7 @@
 #include "nsIIndexedDatabaseManager.h"
 #include "nsIObserver.h"
 
+#include "js/TypeDecls.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/dom/quota/PersistenceType.h"
 #include "mozilla/Mutex.h"
@@ -20,7 +21,6 @@
 
 #define INDEXEDDB_MANAGER_CONTRACTID "@mozilla.org/dom/indexeddb/manager;1"
 
-class nsIAtom;
 class nsPIDOMWindow;
 class nsEventChainPostVisitor;
 
@@ -137,6 +137,9 @@ public:
   static bool
   TabContextMayAccessOrigin(const mozilla::dom::TabContext& aContext,
                             const nsACString& aOrigin);
+
+  static bool
+  DefineIndexedDB(JSContext* aCx, JS::Handle<JSObject*> aGlobal);
 
 private:
   IndexedDatabaseManager();

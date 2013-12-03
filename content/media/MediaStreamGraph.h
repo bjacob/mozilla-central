@@ -138,9 +138,11 @@ public:
   virtual void NotifyHasCurrentData(MediaStreamGraph* aGraph) {}
 
   /**
-   * Notify that the stream output is advancing.
+   * Notify that the stream output is advancing. aCurrentTime is the graph's
+   * current time. MediaStream::GraphTimeToStreamTime can be used to get the
+   * stream time.
    */
-  virtual void NotifyOutput(MediaStreamGraph* aGraph) {}
+  virtual void NotifyOutput(MediaStreamGraph* aGraph, GraphTime aCurrentTime) {}
 
   /**
    * Notify that the stream finished.
@@ -346,6 +348,20 @@ public:
     NS_ASSERTION(NS_IsMainThread(), "Call only on main thread");
     mMainThreadListeners.RemoveElement(aListener);
   }
+  /**
+   * Ensure a runnable will run on the main thread after running all pending
+   * updates that were sent from the graph thread or will be sent before the
+   * graph thread receives the next graph update.
+   *
+   * If the graph has been shutdown or destroyed, or if it is non-realtime
+   * and has not started, then the runnable will be run
+   * synchronously/immediately.  (There are no pending updates in these
+   * situations.)
+   *
+   * Main thread only.
+   */
+  void RunAfterPendingUpdates(nsRefPtr<nsIRunnable> aRunnable);
+
   // Signal that the client is done with this MediaStream. It will be deleted later.
   virtual void Destroy();
   // Returns the main-thread's view of how much data has been processed by
@@ -960,7 +976,7 @@ protected:
 };
 
 // Returns ideal audio rate for processing
-inline TrackRate IdealAudioRate() { return 48000; }
+inline TrackRate IdealAudioRate() { return AudioStream::PreferredSampleRate(); }
 
 /**
  * Initially, at least, we will have a singleton MediaStreamGraph per
@@ -1019,13 +1035,6 @@ public:
   CreateAudioNodeExternalInputStream(AudioNodeEngine* aEngine,
                                      TrackRate aSampleRate = 0);
 
-  /**
-   * Returns the number of graph updates sent. This can be used to track
-   * whether a given update has been processed by the graph thread and reflected
-   * in main-thread stream state.
-   */
-  int64_t GetCurrentGraphUpdateIndex() { return mGraphUpdatesSent; }
-
   bool IsNonRealtime() const;
   /**
    * Start processing non-realtime for a specific number of ticks.
@@ -1036,7 +1045,8 @@ public:
    * Media graph thread only.
    * Dispatches a runnable that will run on the main thread after all
    * main-thread stream state has been next updated.
-   * Should only be called during MediaStreamListener callbacks.
+   * Should only be called during MediaStreamListener callbacks or during
+   * ProcessedMediaStream::ProduceOutput().
    */
   void DispatchToMainThreadAfterStreamStateUpdate(already_AddRefed<nsIRunnable> aRunnable)
   {
@@ -1045,11 +1055,11 @@ public:
 
 protected:
   MediaStreamGraph()
-    : mGraphUpdatesSent(1)
+    : mNextGraphUpdateIndex(1)
   {
     MOZ_COUNT_CTOR(MediaStreamGraph);
   }
-  ~MediaStreamGraph()
+  virtual ~MediaStreamGraph()
   {
     MOZ_COUNT_DTOR(MediaStreamGraph);
   }
@@ -1058,9 +1068,9 @@ protected:
   nsTArray<nsCOMPtr<nsIRunnable> > mPendingUpdateRunnables;
 
   // Main thread only
-  // The number of updates we have sent to the media graph thread. We start
-  // this at 1 just to ensure that 0 is usable as a special value.
-  int64_t mGraphUpdatesSent;
+  // The number of updates we have sent to the media graph thread + 1.
+  // We start this at 1 just to ensure that 0 is usable as a special value.
+  int64_t mNextGraphUpdateIndex;
 };
 
 }

@@ -15,7 +15,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "jsapi.h"
 #include "jsatom.h"
 #include "jscntxt.h"
 #include "jsexn.h"
@@ -49,14 +48,14 @@ static const KeywordInfo keywords[] = {
 #undef KEYWORD_INFO
 };
 
-// Returns a KeywordInfo for the specified characters, or NULL if the string is
-// not a keyword.
+// Returns a KeywordInfo for the specified characters, or nullptr if the string
+// is not a keyword.
 static const KeywordInfo *
 FindKeyword(const jschar *s, size_t length)
 {
     JS_ASSERT(length != 0);
 
-    register size_t i;
+    size_t i;
     const KeywordInfo *kw;
     const char *chars;
 
@@ -85,7 +84,7 @@ FindKeyword(const jschar *s, size_t length)
     return kw;
 
   no_match:
-    return NULL;
+    return nullptr;
 }
 
 bool
@@ -111,7 +110,7 @@ frontend::IsIdentifier(JSLinearString *str)
 bool
 frontend::IsKeyword(JSLinearString *str)
 {
-    return FindKeyword(str->chars(), str->length()) != NULL;
+    return FindKeyword(str->chars(), str->length()) != nullptr;
 }
 
 TokenStream::SourceCoords::SourceCoords(ExclusiveContext *cx, uint32_t ln)
@@ -216,7 +215,7 @@ TokenStream::SourceCoords::lineIndexOf(uint32_t offset) const
     // want one before that.
     iMax = lineStartOffsets_.length() - 2;
     while (iMax > iMin) {
-        iMid = (iMin + iMax) / 2;
+        iMid = iMin + (iMax - iMin) / 2;
         if (offset >= lineStartOffsets_[iMid + 1])
             iMin = iMid + 1;    // offset is above lineStartOffsets_[iMid]
         else
@@ -261,7 +260,7 @@ TokenStream::SourceCoords::lineNumAndColumnIndex(uint32_t offset, uint32_t *line
 #endif
 
 // Initialize members that aren't initialized in |init|.
-TokenStream::TokenStream(ExclusiveContext *cx, const CompileOptions &options,
+TokenStream::TokenStream(ExclusiveContext *cx, const ReadOnlyCompileOptions &options,
                          const jschar *base, size_t length, StrictModeGetter *smg)
   : srcCoords(cx, options.lineno),
     options_(options),
@@ -271,11 +270,11 @@ TokenStream::TokenStream(ExclusiveContext *cx, const CompileOptions &options,
     lineno(options.lineno),
     flags(),
     linebase(base - options.column),
-    prevLinebase(NULL),
+    prevLinebase(nullptr),
     userbuf(cx, base - options.column, length + options.column), // See comment below
-    filename(options.filename),
-    sourceURL_(NULL),
-    sourceMapURL_(NULL),
+    filename(options.filename()),
+    sourceURL_(nullptr),
+    sourceMapURL_(nullptr),
     tokenbuf(cx),
     cx(cx),
     originPrincipals(options.originPrincipals()),
@@ -288,7 +287,7 @@ TokenStream::TokenStream(ExclusiveContext *cx, const CompileOptions &options,
 
     // The caller must ensure that a reference is held on the supplied principals
     // throughout compilation.
-    JS_ASSERT_IF(originPrincipals, originPrincipals->refcount);
+    JS_ASSERT_IF(originPrincipals, originPrincipals->refcount > 0);
 
     // Column numbers are computed as offsets from the current line's base, so the
     // initial line's base must be included in the buffer. linebase and userbuf
@@ -442,7 +441,7 @@ TokenStream::ungetChar(int32_t c)
 
         JS_ASSERT(prevLinebase);    // we should never get more than one EOL char
         linebase = prevLinebase;
-        prevLinebase = NULL;
+        prevLinebase = nullptr;
         lineno--;
     } else {
         JS_ASSERT(userbuf.peekRawChar() == c);
@@ -580,7 +579,7 @@ CompileError::throwError(JSContext *cx)
     // as the non-top-level "load", "eval", or "compile" native function
     // returns false, the top-level reporter will eventually receive the
     // uncaught exception report.
-    if (!js_ErrorToException(cx, message, &report, NULL, NULL)) {
+    if (!js_ErrorToException(cx, message, &report, nullptr, nullptr)) {
         // If debugErrorHook is present then we give it a chance to veto
         // sending the error on to the regular error reporter.
         bool reportError = true;
@@ -600,7 +599,7 @@ CompileError::~CompileError()
     js_free((void*)report.linebuf);
     js_free((void*)report.ucmessage);
     js_free(message);
-    message = NULL;
+    message = nullptr;
 
     if (report.messageArgs) {
         if (argumentsType == ArgumentsAreASCII) {
@@ -644,7 +643,7 @@ TokenStream::reportCompileErrorNumberVA(uint32_t offset, unsigned flags, unsigne
 
     err.argumentsType = (flags & JSREPORT_UC) ? ArgumentsAreUnicode : ArgumentsAreASCII;
 
-    if (!js_ExpandErrorArguments(cx, js_GetErrorMessage, NULL, errorNumber, &err.message,
+    if (!js_ExpandErrorArguments(cx, js_GetErrorMessage, nullptr, errorNumber, &err.message,
                                  &err.report, err.argumentsType, args))
     {
         return false;
@@ -910,11 +909,11 @@ TokenStream::newToken(ptrdiff_t adjust)
 JS_ALWAYS_INLINE JSAtom *
 TokenStream::atomize(ExclusiveContext *cx, CharBuffer &cb)
 {
-    return AtomizeChars<CanGC>(cx, cb.begin(), cb.length());
+    return AtomizeChars(cx, cb.begin(), cb.length());
 }
 
 #ifdef DEBUG
-bool
+static bool
 IsTokenSane(Token *tp)
 {
     // Nb: TOK_EOL should never be used in an actual Token;  it should only be
@@ -1123,7 +1122,7 @@ TokenStream::getTokenInternal(Modifier modifier)
 
     // Look for an unambiguous single-char token.
     //
-    if (c1kind < OneChar_Max) {
+    if (c1kind <= OneChar_Max) {
         tp = newToken(-1);
         tp->type = TokenKind(c1kind);
         goto out;
@@ -1179,7 +1178,7 @@ TokenStream::getTokenInternal(Modifier modifier)
                 goto out;
         }
 
-        JSAtom *atom = AtomizeChars<CanGC>(cx, chars, length);
+        JSAtom *atom = AtomizeChars(cx, chars, length);
         if (!atom)
             goto error;
         tp->type = TOK_NAME;

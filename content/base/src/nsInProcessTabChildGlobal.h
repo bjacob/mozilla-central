@@ -43,12 +43,27 @@ public:
   NS_IMETHOD SendSyncMessage(const nsAString& aMessageName,
                              const JS::Value& aObject,
                              const JS::Value& aRemote,
+                             nsIPrincipal* aPrincipal,
                              JSContext* aCx,
                              uint8_t aArgc,
                              JS::Value* aRetval)
   {
     return mMessageManager
-      ? mMessageManager->SendSyncMessage(aMessageName, aObject, aRemote, aCx, aArgc, aRetval)
+      ? mMessageManager->SendSyncMessage(aMessageName, aObject, aRemote,
+                                         aPrincipal, aCx, aArgc, aRetval)
+      : NS_ERROR_NULL_POINTER;
+  }
+  NS_IMETHOD SendRpcMessage(const nsAString& aMessageName,
+                            const JS::Value& aObject,
+                            const JS::Value& aRemote,
+                            nsIPrincipal* aPrincipal,
+                            JSContext* aCx,
+                            uint8_t aArgc,
+                            JS::Value* aRetval)
+  {
+    return mMessageManager
+      ? mMessageManager->SendRpcMessage(aMessageName, aObject, aRemote,
+                                        aPrincipal, aCx, aArgc, aRetval)
       : NS_ERROR_NULL_POINTER;
   }
   NS_IMETHOD GetContent(nsIDOMWindow** aContent) MOZ_OVERRIDE;
@@ -68,15 +83,18 @@ public:
   /**
    * MessageManagerCallback methods that we override.
    */
-  virtual bool DoSendSyncMessage(JSContext* aCx,
-                                 const nsAString& aMessage,
-                                 const mozilla::dom::StructuredCloneData& aData,
-                                 JS::Handle<JSObject *> aCpows,
-                                 InfallibleTArray<nsString>* aJSONRetVal) MOZ_OVERRIDE;
+  virtual bool DoSendBlockingMessage(JSContext* aCx,
+                                      const nsAString& aMessage,
+                                      const mozilla::dom::StructuredCloneData& aData,
+                                      JS::Handle<JSObject *> aCpows,
+                                      nsIPrincipal* aPrincipal,
+                                      InfallibleTArray<nsString>* aJSONRetVal,
+                                      bool aIsSync) MOZ_OVERRIDE;
   virtual bool DoSendAsyncMessage(JSContext* aCx,
                                   const nsAString& aMessage,
                                   const mozilla::dom::StructuredCloneData& aData,
-                                  JS::Handle<JSObject *> aCpows);
+                                  JS::Handle<JSObject *> aCpows,
+                                  nsIPrincipal* aPrincipal) MOZ_OVERRIDE;
 
   virtual nsresult PreHandleEvent(nsEventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
   NS_IMETHOD AddEventListener(const nsAString& aType,

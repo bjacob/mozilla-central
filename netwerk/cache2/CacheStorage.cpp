@@ -2,10 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "CacheLog.h"
 #include "CacheStorage.h"
 #include "CacheStorageService.h"
 #include "CacheEntry.h"
-#include "CacheLog.h"
 
 #include "OldWrappers.h"
 
@@ -67,8 +67,12 @@ NS_IMETHODIMP CacheStorage::AsyncOpenURI(nsIURI *aURI,
     rv = noRefURI->GetAsciiSpec(cacheKey);
     NS_ENSURE_SUCCESS(rv, rv);
 
+    nsAutoCString scheme;
+    rv = noRefURI->GetScheme(scheme);
+    NS_ENSURE_SUCCESS(rv, rv);
+
     nsRefPtr<_OldCacheLoad> appCacheLoad =
-      new _OldCacheLoad(cacheKey, aCallback, appCache,
+      new _OldCacheLoad(scheme, cacheKey, aCallback, appCache,
                         LoadInfo(), WriteToDisk(), aFlags);
     rv = appCacheLoad->Start();
     NS_ENSURE_SUCCESS(rv, rv);

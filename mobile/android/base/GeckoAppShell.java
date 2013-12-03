@@ -5,14 +5,16 @@
 
 package org.mozilla.gecko;
 
+import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
 import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.gfx.GeckoLayerClient;
-import org.mozilla.gecko.gfx.GfxInfoThread;
 import org.mozilla.gecko.gfx.LayerView;
 import org.mozilla.gecko.gfx.PanZoomController;
+import org.mozilla.gecko.mozglue.JNITarget;
+import org.mozilla.gecko.mozglue.generatorannotations.OptionalGeneratedParameter;
+import org.mozilla.gecko.mozglue.generatorannotations.WrapElementForJNI;
+import org.mozilla.gecko.prompts.PromptService;
 import org.mozilla.gecko.mozglue.GeckoLoader;
-import org.mozilla.gecko.mozglue.GeneratableAndroidBridgeTarget;
-import org.mozilla.gecko.mozglue.OptionalGeneratedParameter;
 import org.mozilla.gecko.util.EventDispatcher;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.HardwareUtils;
@@ -65,6 +67,7 @@ import android.os.MessageQueue;
 import android.os.SystemClock;
 import android.os.Vibrator;
 import android.provider.Settings;
+import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.util.DisplayMetrics;
@@ -124,6 +127,9 @@ public class GeckoAppShell
     static private final HashMap<String, String>
         mAlertCookies = new HashMap<String, String>();
 
+    // See also HardwareUtils.LOW_MEMORY_THRESHOLD_MB.
+    static private final int HIGH_MEMORY_DEVICE_THRESHOLD_MB = 768;
+
     /* Keep in sync with constants found here:
       http://mxr.mozilla.org/mozilla-central/source/uriloader/base/nsIWebProgressListener.idl
     */
@@ -131,6 +137,18 @@ public class GeckoAppShell
     static public final int WPL_STATE_STOP = 0x00000010;
     static public final int WPL_STATE_IS_DOCUMENT = 0x00020000;
     static public final int WPL_STATE_IS_NETWORK = 0x00040000;
+
+    /* Keep in sync with constants found here:
+      http://mxr.mozilla.org/mozilla-central/source/netwerk/base/public/nsINetworkLinkService.idl
+    */
+    static public final int LINK_TYPE_UNKNOWN = 0;
+    static public final int LINK_TYPE_ETHERNET = 1;
+    static public final int LINK_TYPE_USB = 2;
+    static public final int LINK_TYPE_WIFI = 3;
+    static public final int LINK_TYPE_WIMAX = 4;
+    static public final int LINK_TYPE_2G = 5;
+    static public final int LINK_TYPE_3G = 6;
+    static public final int LINK_TYPE_4G = 7;
 
     public static final String SHORTCUT_TYPE_WEBAPP = "webapp";
     public static final String SHORTCUT_TYPE_BOOKMARK = "bookmark";
@@ -185,6 +203,7 @@ public class GeckoAppShell
     }
     public static native Message getNextMessageFromQueue(MessageQueue queue);
     public static native void onSurfaceTextureFrameAvailable(Object surfaceTexture, int id);
+    public static native void dispatchMemoryPressure();
 
     public static void registerGlobalExceptionHandler() {
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
@@ -254,6 +273,21 @@ public class GeckoAppShell
     public static native SurfaceBits getSurfaceBits(Surface surface);
 
     public static native void onFullScreenPluginHidden(View view);
+
+    public static class CreateShortcutFaviconLoadedListener implements OnFaviconLoadedListener {
+        private final String title;
+        private final String url;
+
+        public CreateShortcutFaviconLoadedListener(final String url, final String title) {
+            this.url = url;
+            this.title = title;
+        }
+
+        @Override
+        public void onFaviconLoaded(String pageUrl, String faviconURL, Bitmap favicon) {
+            GeckoAppShell.createShortcut(title, url, url, favicon, "");
+        }
+    }
 
     private static final class GeckoMediaScannerClient implements MediaScannerConnectionClient {
         private final String mFile;
@@ -358,7 +392,6 @@ public class GeckoAppShell
         } catch (NoSuchElementException e) {}
     }
 
-    /* This method is referenced by Robocop via reflection. */
     public static void sendEventToGecko(GeckoEvent e) {
         if (GeckoThread.checkLaunchState(GeckoThread.LaunchState.GeckoRunning)) {
             notifyGeckoOfEvent(e);
@@ -373,14 +406,14 @@ public class GeckoAppShell
     /*
      *  The Gecko-side API: API methods that Gecko calls
      */
-    @GeneratableAndroidBridgeTarget(generateStatic = true)
+    @WrapElementForJNI(generateStatic = true)
     public static void notifyIME(int type) {
         if (mEditableListener != null) {
             mEditableListener.notifyIME(type);
         }
     }
 
-    @GeneratableAndroidBridgeTarget(generateStatic = true)
+    @WrapElementForJNI(generateStatic = true)
     public static void notifyIMEContext(int state, String typeHint,
                                         String modeHint, String actionHint) {
         if (mEditableListener != null) {
@@ -389,7 +422,7 @@ public class GeckoAppShell
         }
     }
 
-    @GeneratableAndroidBridgeTarget(generateStatic = true)
+    @WrapElementForJNI(generateStatic = true)
     public static void notifyIMEChange(String text, int start, int end, int newEnd) {
         if (newEnd < 0) { // Selection change
             mEditableListener.onSelectionChange(start, end);
@@ -433,7 +466,7 @@ public class GeckoAppShell
     }
 
     // Signal the Java thread that it's time to wake up
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void acknowledgeEvent() {
         synchronized (sEventAckLock) {
             sWaitingForEventAck = false;
@@ -472,7 +505,7 @@ public class GeckoAppShell
         return lastKnownLocation;
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void enableLocation(final boolean enable) {
         ThreadUtils.postToUiThread(new Runnable() {
                 @Override
@@ -528,12 +561,12 @@ public class GeckoAppShell
         }
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void enableLocationHighAccuracy(final boolean enable) {
         mLocationHighAccuracy = enable;
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void enableSensor(int aSensortype) {
         GeckoInterface gi = getGeckoInterface();
         if (gi == null)
@@ -588,7 +621,7 @@ public class GeckoAppShell
         }
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void disableSensor(int aSensortype) {
         GeckoInterface gi = getGeckoInterface();
         if (gi == null)
@@ -632,7 +665,7 @@ public class GeckoAppShell
         }
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void moveTaskToBack() {
         if (getGeckoInterface() != null)
             getGeckoInterface().getActivity().moveTaskToBack(true);
@@ -643,7 +676,7 @@ public class GeckoAppShell
         // Native Fennec doesn't care because the Java code already knows the selection indexes.
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "NotifyXreExit")
+    @WrapElementForJNI(stubName = "NotifyXreExit")
     static void onXreExit() {
         // The launch state can only be Launched or GeckoRunning at this point
         GeckoThread.setLaunchState(GeckoThread.LaunchState.GeckoExiting);
@@ -659,7 +692,7 @@ public class GeckoAppShell
         System.exit(0);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     static void scheduleRestart() {
         gRestartScheduled = true;
     }
@@ -702,7 +735,7 @@ public class GeckoAppShell
 
     // "Installs" an application by creating a shortcut
     // This is the entry point from AndroidBridge.h
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     static void createShortcut(String aTitle, String aURI, String aIconData, String aType) {
         if ("webapp".equals(aType)) {
             Log.w(LOGTAG, "createShortcut with no unique URI should not be used for aType = webapp!");
@@ -826,6 +859,7 @@ public class GeckoAppShell
         });
     }
 
+    @JNITarget
     static public int getPreferredIconSize() {
         if (android.os.Build.VERSION.SDK_INT >= 11) {
             ActivityManager am = (ActivityManager)getContext().getSystemService(Context.ACTIVITY_SERVICE);
@@ -897,7 +931,7 @@ public class GeckoAppShell
         return bitmap;
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetHandlersForMimeTypeWrapper")
+    @WrapElementForJNI(stubName = "GetHandlersForMimeTypeWrapper")
     static String[] getHandlersForMimeType(String aMimeType, String aAction) {
         Intent intent = getIntentForActionString(aAction);
         if (aMimeType != null && aMimeType.length() > 0)
@@ -905,7 +939,7 @@ public class GeckoAppShell
         return getHandlersForIntent(intent);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetHandlersForURLWrapper")
+    @WrapElementForJNI(stubName = "GetHandlersForURLWrapper")
     static String[] getHandlersForURL(String aURL, String aAction) {
         // aURL may contain the whole URL or just the protocol
         Uri uri = aURL.indexOf(':') >= 0 ? Uri.parse(aURL) : new Uri.Builder().scheme(aURL).build();
@@ -948,12 +982,12 @@ public class GeckoAppShell
         return new Intent(aAction);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetExtensionFromMimeTypeWrapper")
+    @WrapElementForJNI(stubName = "GetExtensionFromMimeTypeWrapper")
     static String getExtensionFromMimeType(String aMimeType) {
         return MimeTypeMap.getSingleton().getExtensionFromMimeType(aMimeType);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetMimeTypeFromExtensionsWrapper")
+    @WrapElementForJNI(stubName = "GetMimeTypeFromExtensionsWrapper")
     static String getMimeTypeFromExtensions(String aFileExt) {
         StringTokenizer st = new StringTokenizer(aFileExt, ".,; ");
         String type = null;
@@ -1086,7 +1120,7 @@ public class GeckoAppShell
      * @param title the title to use in <code>ACTION_SEND</code> intents.
      * @return true if the activity started successfully; false otherwise.
      */
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static boolean openUriExternal(String targetURI,
                                           String mimeType,
               @OptionalGeneratedParameter String packageName,
@@ -1191,7 +1225,7 @@ public class GeckoAppShell
                                         context.getResources().getString(R.string.share_title)); 
         }
 
-        final Uri uri = normalizeUriScheme(Uri.parse(targetURI));
+        final Uri uri = normalizeUriScheme(targetURI.indexOf(':') >= 0 ? Uri.parse(targetURI) : new Uri.Builder().scheme(targetURI).build());
         if (mimeType.length() > 0) {
             Intent intent = getIntentForActionString(action);
             intent.setDataAndType(uri, mimeType);
@@ -1272,7 +1306,7 @@ public class GeckoAppShell
         }
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "ShowAlertNotificationWrapper")
+    @WrapElementForJNI(stubName = "ShowAlertNotificationWrapper")
     public static void showAlertNotification(String aImageUrl, String aAlertTitle, String aAlertText,
                                              String aAlertCookie, String aAlertName) {
         // The intent to launch when the user clicks the expanded notification
@@ -1299,13 +1333,13 @@ public class GeckoAppShell
         sNotificationClient.add(notificationID, aImageUrl, aAlertTitle, aAlertText, contentIntent);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void alertsProgressListener_OnProgress(String aAlertName, long aProgress, long aProgressMax, String aAlertText) {
         int notificationID = aAlertName.hashCode();
         sNotificationClient.update(notificationID, aProgress, aProgressMax, aAlertText);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void closeNotification(String aAlertName) {
         String alertCookie = mAlertCookies.get(aAlertName);
         if (alertCookie != null) {
@@ -1333,7 +1367,7 @@ public class GeckoAppShell
         closeNotification(aAlertName);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetDpiWrapper")
+    @WrapElementForJNI(stubName = "GetDpiWrapper")
     public static int getDpi() {
         if (sDensityDpi == 0) {
             sDensityDpi = getContext().getResources().getDisplayMetrics().densityDpi;
@@ -1342,42 +1376,20 @@ public class GeckoAppShell
         return sDensityDpi;
     }
 
-    @GeneratableAndroidBridgeTarget()
+    @WrapElementForJNI
     public static float getDensity() {
         return getContext().getResources().getDisplayMetrics().density;
     }
 
     private static boolean isHighMemoryDevice() {
-        BufferedReader br = null;
-        FileReader fr = null;
-        try {
-            fr = new FileReader("/proc/meminfo");
-            if (fr == null)
-                return false;
-            br = new BufferedReader(fr);
-            String line = br.readLine();
-            while (line != null && !line.startsWith("MemTotal")) {
-                line = br.readLine();
-            }
-            String[] tokens = line.split("\\s+");
-            if (tokens.length >= 2 && Long.parseLong(tokens[1]) >= 786432 /* 768MB in kb*/) {
-                return true;
-            }
-        } catch (Exception ex) {
-        } finally {
-            try {
-                if (fr != null)
-                    fr.close();
-            } catch (IOException ioe) {}
-        }
-        return false;
+        return HardwareUtils.getMemSize() > HIGH_MEMORY_DEVICE_THRESHOLD_MB;
     }
 
     /**
      * Returns the colour depth of the default screen. This will either be
      * 24 or 16.
      */
-    @GeneratableAndroidBridgeTarget(stubName = "GetScreenDepthWrapper")
+    @WrapElementForJNI(stubName = "GetScreenDepthWrapper")
     public static synchronized int getScreenDepth() {
         if (sScreenDepth == 0) {
             sScreenDepth = 16;
@@ -1400,27 +1412,27 @@ public class GeckoAppShell
         sScreenDepth = aScreenDepth;
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void setFullScreen(boolean fullscreen) {
         if (getGeckoInterface() != null)
             getGeckoInterface().setFullScreen(fullscreen);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "ShowFilePickerForExtensionsWrapper")
+    @WrapElementForJNI(stubName = "ShowFilePickerForExtensionsWrapper")
     public static String showFilePickerForExtensions(String aExtensions) {
         if (getGeckoInterface() != null)
             return sActivityHelper.showFilePicker(getGeckoInterface().getActivity(), getMimeTypeFromExtensions(aExtensions));
         return "";
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "ShowFilePickerForMimeTypeWrapper")
+    @WrapElementForJNI(stubName = "ShowFilePickerForMimeTypeWrapper")
     public static String showFilePickerForMimeType(String aMimeType) {
         if (getGeckoInterface() != null)
             return sActivityHelper.showFilePicker(getGeckoInterface().getActivity(), aMimeType);
         return "";
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void performHapticFeedback(boolean aIsLongPress) {
         // Don't perform haptic feedback if a vibration is currently playing,
         // because the haptic feedback will nuke the vibration.
@@ -1437,14 +1449,14 @@ public class GeckoAppShell
         return (Vibrator) layerView.getContext().getSystemService(Context.VIBRATOR_SERVICE);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "Vibrate1")
+    @WrapElementForJNI(stubName = "Vibrate1")
     public static void vibrate(long milliseconds) {
         sVibrationEndTime = System.nanoTime() + milliseconds * 1000000;
         sVibrationMaybePlaying = true;
         vibrator().vibrate(milliseconds);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "VibrateA")
+    @WrapElementForJNI(stubName = "VibrateA")
     public static void vibrate(long[] pattern, int repeat) {
         // If pattern.length is even, the last element in the pattern is a
         // meaningless delay, so don't include it in vibrationDuration.
@@ -1459,21 +1471,21 @@ public class GeckoAppShell
         vibrator().vibrate(pattern, repeat);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void cancelVibrate() {
         sVibrationMaybePlaying = false;
         sVibrationEndTime = 0;
         vibrator().cancel();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void showInputMethodPicker() {
         InputMethodManager imm = (InputMethodManager)
             getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
         imm.showInputMethodPicker();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void setKeepScreenOn(final boolean on) {
         ThreadUtils.postToUiThread(new Runnable() {
             @Override
@@ -1483,7 +1495,7 @@ public class GeckoAppShell
         });
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void notifyDefaultPrevented(final boolean defaultPrevented) {
         ThreadUtils.postToUiThread(new Runnable() {
             @Override
@@ -1497,7 +1509,7 @@ public class GeckoAppShell
         });
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static boolean isNetworkLinkUp() {
         ConnectivityManager cm = (ConnectivityManager)
            getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -1507,7 +1519,7 @@ public class GeckoAppShell
         return true;
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static boolean isNetworkLinkKnown() {
         ConnectivityManager cm = (ConnectivityManager)
             getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -1516,13 +1528,78 @@ public class GeckoAppShell
         return true;
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
+    public static int networkLinkType() {
+        ConnectivityManager cm = (ConnectivityManager)
+            getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+        NetworkInfo info = cm.getActiveNetworkInfo();
+        if (info == null) {
+            return LINK_TYPE_UNKNOWN;
+        }
+
+        switch (info.getType()) {
+            case ConnectivityManager.TYPE_ETHERNET:
+                return LINK_TYPE_ETHERNET;
+            case ConnectivityManager.TYPE_WIFI:
+                return LINK_TYPE_WIFI;
+            case ConnectivityManager.TYPE_WIMAX:
+                return LINK_TYPE_WIMAX;
+            case ConnectivityManager.TYPE_MOBILE:
+                break; // We will handle sub-types after the switch.
+            default:
+                Log.w(LOGTAG, "Ignoring the current network type.");
+                return LINK_TYPE_UNKNOWN;
+        }
+
+        TelephonyManager tm = (TelephonyManager)
+            getContext().getSystemService(Context.TELEPHONY_SERVICE);
+        if (tm == null) {
+            Log.e(LOGTAG, "Telephony service does not exist");
+            return LINK_TYPE_UNKNOWN;
+        }
+
+        switch (tm.getNetworkType()) {
+            case TelephonyManager.NETWORK_TYPE_IDEN:
+            case TelephonyManager.NETWORK_TYPE_CDMA:
+            case TelephonyManager.NETWORK_TYPE_GPRS:
+                return LINK_TYPE_2G;
+            case TelephonyManager.NETWORK_TYPE_1xRTT:
+            case TelephonyManager.NETWORK_TYPE_EDGE:
+                return LINK_TYPE_2G; // 2.5G
+            case TelephonyManager.NETWORK_TYPE_UMTS:
+            case TelephonyManager.NETWORK_TYPE_EVDO_0:
+                return LINK_TYPE_3G;
+            case TelephonyManager.NETWORK_TYPE_HSPA:
+            case TelephonyManager.NETWORK_TYPE_HSDPA:
+            case TelephonyManager.NETWORK_TYPE_HSUPA:
+            case TelephonyManager.NETWORK_TYPE_EVDO_A:
+            case TelephonyManager.NETWORK_TYPE_EVDO_B:
+            case TelephonyManager.NETWORK_TYPE_EHRPD:
+                return LINK_TYPE_3G; // 3.5G
+            case TelephonyManager.NETWORK_TYPE_HSPAP:
+                return LINK_TYPE_3G; // 3.75G
+            case TelephonyManager.NETWORK_TYPE_LTE:
+                return LINK_TYPE_4G; // 3.9G
+            case TelephonyManager.NETWORK_TYPE_UNKNOWN:
+            default:
+                Log.w(LOGTAG, "Connected to an unknown mobile network!");
+                return LINK_TYPE_UNKNOWN;
+        }
+    }
+
+    @WrapElementForJNI
     public static void setSelectedLocale(String localeCode) {
         /* Bug 713464: This method is still called from Gecko side.
            Earlier we had an option to run Firefox in a language other than system's language.
            However, this is not supported as of now.
            Gecko resets the locale to en-US by calling this function with an empty string.
            This affects GeckoPreferences activity in multi-locale builds.
+
+        N.B., if this code ever becomes live again, you need to hook it up to locale
+        recording in BrowserHealthRecorder: we track the current app and OS locales
+        as part of the recorded environment.
+
+        See similar note in GeckoApp.java for the startup path.
 
         //We're not using this, not need to save it (see bug 635342)
         SharedPreferences settings =
@@ -1549,7 +1626,7 @@ public class GeckoAppShell
     }
 
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetSystemColoursWrapper")
+    @WrapElementForJNI(stubName = "GetSystemColoursWrapper")
     public static int[] getSystemColors() {
         // attrsAppearance[] must correspond to AndroidSystemColors structure in android/AndroidBridge.h
         final int[] attrsAppearance = {
@@ -1586,7 +1663,7 @@ public class GeckoAppShell
         return result;
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void killAnyZombies() {
         GeckoProcessesVisitor visitor = new GeckoProcessesVisitor() {
             @Override
@@ -1742,7 +1819,7 @@ public class GeckoAppShell
         } catch (Exception e) { }
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void scanMedia(String aFile, String aMimeType) {
         // If the platform didn't give us a mimetype, try to guess one from the filename
         if (TextUtils.isEmpty(aMimeType)) {
@@ -1756,7 +1833,7 @@ public class GeckoAppShell
         GeckoMediaScannerClient.startScan(context, aFile, aMimeType);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetIconForExtensionWrapper")
+    @WrapElementForJNI(stubName = "GetIconForExtensionWrapper")
     public static byte[] getIconForExtension(String aExt, int iconSize) {
         try {
             if (iconSize <= 0)
@@ -1814,7 +1891,7 @@ public class GeckoAppShell
         return activityInfo.loadIcon(pm);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static boolean getShowPasswordSetting() {
         try {
             int showPassword =
@@ -1827,7 +1904,7 @@ public class GeckoAppShell
         }
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "AddPluginViewWrapper")
+    @WrapElementForJNI(stubName = "AddPluginViewWrapper")
     public static void addPluginView(View view,
                                      float x, float y,
                                      float w, float h,
@@ -1836,7 +1913,7 @@ public class GeckoAppShell
              getGeckoInterface().addPluginView(view, new RectF(x, y, x + w, y + h), isFullScreen);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void removePluginView(View view, boolean isFullScreen) {
         if (getGeckoInterface() != null)
             getGeckoInterface().removePluginView(view, isFullScreen);
@@ -2060,7 +2137,7 @@ public class GeckoAppShell
 
     private static ContextGetter sContextGetter;
 
-    @GeneratableAndroidBridgeTarget(allowMultithread = true)
+    @WrapElementForJNI(allowMultithread = true)
     public static Context getContext() {
         return sContextGetter.getContext();
     }
@@ -2118,7 +2195,7 @@ public class GeckoAppShell
     static byte[] sCameraBuffer = null;
 
 
-    @GeneratableAndroidBridgeTarget(stubName = "InitCameraWrapper")
+    @WrapElementForJNI(stubName = "InitCameraWrapper")
     static int[] initCamera(String aContentType, int aCamera, int aWidth, int aHeight) {
         ThreadUtils.postToUiThread(new Runnable() {
                 @Override
@@ -2219,7 +2296,7 @@ public class GeckoAppShell
         return result;
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     static synchronized void closeCamera() {
         ThreadUtils.postToUiThread(new Runnable() {
                 @Override
@@ -2244,8 +2321,6 @@ public class GeckoAppShell
      * with an event that is currently being processed has the properly-defined behaviour that
      * any added listeners will not be invoked on the event currently being processed, but
      * will be invoked on future events of that type.
-     *
-     * This method is referenced by Robocop via reflection.
      */
     public static void registerEventListener(String event, GeckoEventListener listener) {
         sEventDispatcher.registerEventListener(event, listener);
@@ -2261,8 +2336,6 @@ public class GeckoAppShell
      * with an event that is currently being processed has the properly-defined behaviour that
      * any removed listeners will still be invoked on the event currently being processed, but
      * will not be invoked on future events of that type.
-     *
-     * This method is referenced by Robocop via reflection.
      */
     public static void unregisterEventListener(String event, GeckoEventListener listener) {
         sEventDispatcher.unregisterEventListener(event, listener);
@@ -2271,32 +2344,32 @@ public class GeckoAppShell
     /*
      * Battery API related methods.
      */
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void enableBatteryNotifications() {
         GeckoBatteryManager.enableNotifications();
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "HandleGeckoMessageWrapper")
+    @WrapElementForJNI(stubName = "HandleGeckoMessageWrapper")
     public static String handleGeckoMessage(String message) {
         return sEventDispatcher.dispatchEvent(message);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void disableBatteryNotifications() {
         GeckoBatteryManager.disableNotifications();
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetCurrentBatteryInformationWrapper")
+    @WrapElementForJNI(stubName = "GetCurrentBatteryInformationWrapper")
     public static double[] getCurrentBatteryInformation() {
         return GeckoBatteryManager.getCurrentInformation();
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "CheckURIVisited")
+    @WrapElementForJNI(stubName = "CheckURIVisited")
     static void checkUriVisited(String uri) {
         GlobalHistory.getInstance().checkUriVisited(uri);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "MarkURIVisited")
+    @WrapElementForJNI(stubName = "MarkURIVisited")
     static void markUriVisited(final String uri) {
         ThreadUtils.postToBackgroundThread(new Runnable() {
             @Override
@@ -2306,7 +2379,7 @@ public class GeckoAppShell
         });
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "SetURITitle")
+    @WrapElementForJNI(stubName = "SetURITitle")
     static void setUriTitle(final String uri, final String title) {
         ThreadUtils.postToBackgroundThread(new Runnable() {
             @Override
@@ -2316,7 +2389,7 @@ public class GeckoAppShell
         });
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     static void hideProgressDialog() {
         // unused stub
     }
@@ -2324,7 +2397,7 @@ public class GeckoAppShell
     /*
      * WebSMS related methods.
      */
-    @GeneratableAndroidBridgeTarget(stubName = "SendMessageWrapper")
+    @WrapElementForJNI(stubName = "SendMessageWrapper")
     public static void sendMessage(String aNumber, String aMessage, int aRequestId) {
         if (SmsManager.getInstance() == null) {
             return;
@@ -2333,7 +2406,7 @@ public class GeckoAppShell
         SmsManager.getInstance().send(aNumber, aMessage, aRequestId);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetMessageWrapper")
+    @WrapElementForJNI(stubName = "GetMessageWrapper")
     public static void getMessage(int aMessageId, int aRequestId) {
         if (SmsManager.getInstance() == null) {
             return;
@@ -2342,7 +2415,7 @@ public class GeckoAppShell
         SmsManager.getInstance().getMessage(aMessageId, aRequestId);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "DeleteMessageWrapper")
+    @WrapElementForJNI(stubName = "DeleteMessageWrapper")
     public static void deleteMessage(int aMessageId, int aRequestId) {
         if (SmsManager.getInstance() == null) {
             return;
@@ -2351,7 +2424,7 @@ public class GeckoAppShell
         SmsManager.getInstance().deleteMessage(aMessageId, aRequestId);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "CreateMessageListWrapper")
+    @WrapElementForJNI(stubName = "CreateMessageListWrapper")
     public static void createMessageList(long aStartDate, long aEndDate, String[] aNumbers, int aNumbersCount, int aDeliveryState, boolean aReverse, int aRequestId) {
         if (SmsManager.getInstance() == null) {
             return;
@@ -2360,7 +2433,7 @@ public class GeckoAppShell
         SmsManager.getInstance().createMessageList(aStartDate, aEndDate, aNumbers, aNumbersCount, aDeliveryState, aReverse, aRequestId);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetNextMessageInListWrapper")
+    @WrapElementForJNI(stubName = "GetNextMessageInListWrapper")
     public static void getNextMessageInList(int aListId, int aRequestId) {
         if (SmsManager.getInstance() == null) {
             return;
@@ -2369,7 +2442,7 @@ public class GeckoAppShell
         SmsManager.getInstance().getNextMessageInList(aListId, aRequestId);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void clearMessageList(int aListId) {
         if (SmsManager.getInstance() == null) {
             return;
@@ -2379,7 +2452,7 @@ public class GeckoAppShell
     }
 
     /* Called by JNI from AndroidBridge, and by reflection from tests/BaseTest.java.in */
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static boolean isTablet() {
         return HardwareUtils.isTablet();
     }
@@ -2392,17 +2465,17 @@ public class GeckoAppShell
         }
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetCurrentNetworkInformationWrapper")
+    @WrapElementForJNI(stubName = "GetCurrentNetworkInformationWrapper")
     public static double[] getCurrentNetworkInformation() {
         return GeckoNetworkManager.getInstance().getCurrentInformation();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void enableNetworkNotifications() {
         GeckoNetworkManager.getInstance().enableNotifications();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void disableNetworkNotifications() {
         GeckoNetworkManager.getInstance().disableNotifications();
     }
@@ -2516,32 +2589,32 @@ public class GeckoAppShell
         return decodeBase64(s.getBytes(), flags);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetScreenOrientationWrapper")
+    @WrapElementForJNI(stubName = "GetScreenOrientationWrapper")
     public static short getScreenOrientation() {
         return GeckoScreenOrientationListener.getInstance().getScreenOrientation();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void enableScreenOrientationNotifications() {
         GeckoScreenOrientationListener.getInstance().enableNotifications();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void disableScreenOrientationNotifications() {
         GeckoScreenOrientationListener.getInstance().disableNotifications();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void lockScreenOrientation(int aOrientation) {
         GeckoScreenOrientationListener.getInstance().lockScreenOrientation(aOrientation);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void unlockScreenOrientation() {
         GeckoScreenOrientationListener.getInstance().unlockScreenOrientation();
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static boolean pumpMessageLoop() {
         Handler geckoHandler = ThreadUtils.sGeckoHandler;
         Message msg = getNextMessageFromQueue(ThreadUtils.sGeckoQueue);
@@ -2563,7 +2636,7 @@ public class GeckoAppShell
 
     static native void notifyFilePickerResult(String filePath, long id);
 
-    @GeneratableAndroidBridgeTarget(stubName = "ShowFilePickerAsyncWrapper")
+    @WrapElementForJNI(stubName = "ShowFilePickerAsyncWrapper")
     public static void showFilePickerAsync(String aMimeType, final long id) {
         sActivityHelper.showFilePickerAsync(getGeckoInterface().getActivity(), aMimeType, new ActivityHandlerHelper.FileResultHandler() {
             public void gotFile(String filename) {
@@ -2572,18 +2645,13 @@ public class GeckoAppShell
         });
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void notifyWakeLockChanged(String topic, String state) {
         if (getGeckoInterface() != null)
             getGeckoInterface().notifyWakeLockChanged(topic, state);
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetGfxInfoDataWrapper")
-    public static String getGfxInfoData() {
-        return GfxInfoThread.getData();
-    }
-
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static void registerSurfaceTextureFrameListener(Object surfaceTexture, final int id) {
         ((SurfaceTexture)surfaceTexture).setOnFrameAvailableListener(new SurfaceTexture.OnFrameAvailableListener() {
             @Override
@@ -2593,12 +2661,12 @@ public class GeckoAppShell
         });
     }
 
-    @GeneratableAndroidBridgeTarget(allowMultithread = true)
+    @WrapElementForJNI(allowMultithread = true)
     public static void unregisterSurfaceTextureFrameListener(Object surfaceTexture) {
         ((SurfaceTexture)surfaceTexture).setOnFrameAvailableListener(null);
     }
 
-    @GeneratableAndroidBridgeTarget
+    @WrapElementForJNI
     public static boolean unlockProfile() {
         // Try to kill any zombie Fennec's that might be running
         GeckoAppShell.killAnyZombies();
@@ -2612,7 +2680,7 @@ public class GeckoAppShell
         return false;
     }
 
-    @GeneratableAndroidBridgeTarget(stubName = "GetProxyForURIWrapper")
+    @WrapElementForJNI(stubName = "GetProxyForURIWrapper")
     public static String getProxyForURI(String spec, String scheme, String host, int port) {
         URI uri = null;
         try {

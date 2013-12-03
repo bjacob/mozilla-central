@@ -42,18 +42,17 @@
 #include "nsNetUtil.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
 
 #include "plbase64.h"
 #include "prmem.h"
 #include "prnetdb.h"
-#include "prbit.h"
 #include "zlib.h"
 #include <algorithm>
 
 #ifdef MOZ_WIDGET_GONK
-#include "nsINetworkManager.h"
 #include "nsINetworkStatsServiceProxy.h"
 #endif
 
@@ -966,9 +965,7 @@ WebSocketChannel::WebSocketChannel() :
   mConnectionLogService(nullptr),
   mCountRecv(0),
   mCountSent(0),
-  mAppId(0),
-  mConnectionType(NETWORK_NO_TYPE),
-  mIsInBrowser(false)
+  mAppId(NECKO_NO_APP_ID)
 {
   NS_ABORT_IF_FALSE(NS_IsMainThread(), "not main thread");
 
@@ -1077,15 +1074,16 @@ WebSocketChannel::BeginOpen()
     return;
   }
 
-  // obtain app info
   if (localChannel) {
-    NS_GetAppInfo(localChannel, &mAppId, &mIsInBrowser);
+    bool isInBrowser;
+    NS_GetAppInfo(localChannel, &mAppId, &isInBrowser);
   }
 
-  // obtain active connection type
+#ifdef MOZ_WIDGET_GONK
   if (mAppId != NECKO_NO_APP_ID) {
-    GetConnectionType(&mConnectionType);
+    NS_GetActiveNetworkInterface(mActiveNetwork);
   }
+#endif
 
   rv = localChannel->AsyncOpen(this, mHttpChannel);
   if (NS_FAILED(rv)) {
@@ -1517,7 +1515,7 @@ WebSocketChannel::ApplyMask(uint32_t mask, uint8_t *data, uint64_t len)
 
   while (len && (reinterpret_cast<uintptr_t>(data) & 3)) {
     *data ^= mask >> 24;
-    mask = PR_ROTATE_LEFT32(mask, 8);
+    mask = RotateLeft(mask, 8);
     data++;
     len--;
   }
@@ -1538,7 +1536,7 @@ WebSocketChannel::ApplyMask(uint32_t mask, uint8_t *data, uint64_t len)
 
   while (len) {
     *data ^= mask >> 24;
-    mask = PR_ROTATE_LEFT32(mask, 8);
+    mask = RotateLeft(mask, 8);
     data++;
     len--;
   }
@@ -1781,7 +1779,7 @@ WebSocketChannel::PrimeNewOutgoingMessage()
 
   while (payload < (mOutHeader + mHdrOutToSend)) {
     *payload ^= mask >> 24;
-    mask = PR_ROTATE_LEFT32(mask, 8);
+    mask = RotateLeft(mask, 8);
     payload++;
   }
 
@@ -3274,38 +3272,11 @@ WebSocketChannel::OnDataAvailable(nsIRequest *aRequest,
 }
 
 nsresult
-WebSocketChannel::GetConnectionType(int32_t *type)
-{
-#ifdef MOZ_WIDGET_GONK
-  MOZ_ASSERT(NS_IsMainThread());
-
-  nsresult result;
-  nsCOMPtr<nsINetworkManager> networkManager = do_GetService("@mozilla.org/network/manager;1", &result);
-
-  if (NS_FAILED(result) || !networkManager) {
-    *type = NETWORK_NO_TYPE;
-  }
-
-  nsCOMPtr<nsINetworkInterface> networkInterface;
-  result = networkManager->GetActive(getter_AddRefs(networkInterface));
-
-  if (networkInterface) {
-    result = networkInterface->GetType(type);
-  }
-
-  return NS_OK;
-#else
-  return NS_ERROR_NOT_IMPLEMENTED;
-#endif
-}
-
-nsresult
 WebSocketChannel::SaveNetworkStats(bool enforce)
 {
 #ifdef MOZ_WIDGET_GONK
-  // Check if the connection type and app id are valid.
-  if(mConnectionType == NETWORK_NO_TYPE ||
-     mAppId == NECKO_NO_APP_ID) {
+  // Check if the active network and app id are valid.
+  if(!mActiveNetwork || mAppId == NECKO_NO_APP_ID) {
     return NS_OK;
   }
 
@@ -3329,7 +3300,7 @@ WebSocketChannel::SaveNetworkStats(bool enforce)
     return rv;
   }
 
-  mNetworkStatsServiceProxy->SaveAppStats(mAppId, mConnectionType, PR_Now() / 1000,
+  mNetworkStatsServiceProxy->SaveAppStats(mAppId, mActiveNetwork, PR_Now() / 1000,
                                           mCountRecv, mCountSent, nullptr);
 
   // Reset the counters after saving.

@@ -12,6 +12,7 @@
 #include "mozwrlbase.h"
 #include "nsDeque.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/layers/APZCTreeManager.h"
 
 // System headers (alphabetical)
 #include <EventToken.h>     // EventRegistrationToken
@@ -100,6 +101,8 @@ private:
   typedef ABI::Windows::UI::Input::ITappedEventArgs ITappedEventArgs;
   typedef ABI::Windows::UI::Input::ManipulationDelta ManipulationDelta;
 
+  typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
+
 public:
   MetroInput(MetroWidget* aWidget,
              ICoreWindow* aWindow);
@@ -130,22 +133,16 @@ public:
   HRESULT OnEdgeGestureCompleted(IEdgeGesture* aSender,
                                  IEdgeGestureEventArgs* aArgs);
 
-  // These events are raised by our GestureRecognizer in response to input
-  // events that we forward to it.  The ManipulationStarted,
-  // ManipulationUpdated, and ManipulationEnded events are sent during
-  // complex input gestures including pinch, swipe, and rotate.  Note that
-  // all three gestures can occur simultaneously.
-  HRESULT OnManipulationStarted(IGestureRecognizer* aSender,
-                                IManipulationStartedEventArgs* aArgs);
-  HRESULT OnManipulationUpdated(IGestureRecognizer* aSender,
-                                IManipulationUpdatedEventArgs* aArgs);
+  // Swipe gesture callback from the GestureRecognizer.
   HRESULT OnManipulationCompleted(IGestureRecognizer* aSender,
                                   IManipulationCompletedEventArgs* aArgs);
+
+  // Tap gesture callback from the GestureRecognizer.
   HRESULT OnTapped(IGestureRecognizer* aSender, ITappedEventArgs* aArgs);
   HRESULT OnRightTapped(IGestureRecognizer* aSender,
                         IRightTappedEventArgs* aArgs);
 
-  void HandleSingleTap(const Point& aPoint);
+  void HandleTap(const Point& aPoint, unsigned int aTapCount);
   void HandleLongTap(const Point& aPoint);
 
 private:
@@ -154,6 +151,14 @@ private:
   Microsoft::WRL::ComPtr<IGestureRecognizer> mGestureRecognizer;
 
   ModifierKeyState mModifierKeyState;
+
+  // Tracking input level
+  enum InputPrecisionLevel {
+    LEVEL_PRECISE,
+    LEVEL_IMPRECISE
+  };
+  InputPrecisionLevel mCurrentInputLevel;
+  void UpdateInputLevel(InputPrecisionLevel aInputLevel);
 
   // Initialization/Uninitialization helpers
   void RegisterInputEvents();
@@ -164,16 +169,19 @@ private:
   bool HitTestChrome(const LayoutDeviceIntPoint& pt);
 
   // Event processing helpers.  See function definitions for more info.
-  void TransformRefPoint(const Point& aPosition,
+  bool TransformRefPoint(const Point& aPosition,
                          LayoutDeviceIntPoint& aRefPointOut);
+  void TransformTouchEvent(WidgetTouchEvent* aEvent);
   void OnPointerNonTouch(IPointerPoint* aPoint);
   void AddPointerMoveDataToRecognizer(IPointerEventArgs* aArgs);
-  void InitGeckoMouseEventFromPointerPoint(nsMouseEvent* aEvent,
+  void InitGeckoMouseEventFromPointerPoint(WidgetMouseEvent* aEvent,
                                            IPointerPoint* aPoint);
   void ProcessManipulationDelta(ManipulationDelta const& aDelta,
                                 Point const& aPosition,
                                 uint32_t aMagEventType,
                                 uint32_t aRotEventType);
+  uint16_t ProcessInputTypeForGesture(IEdgeGestureEventArgs* aArgs);
+  bool ShouldDeliverInputToRecognizer();
 
   // The W3C spec states that "whether preventDefault has been called" should
   // be tracked on a per-touchpoint basis, but it also states that touchstart
@@ -198,11 +206,11 @@ private:
   //   events will be generated based on the touchstart and touchend events.
   //   For example, a set of mousemove, mousedown, and mouseup events might
   //   be sent if a tap is detected.
-  bool mTouchStartDefaultPrevented;
-  bool mTouchMoveDefaultPrevented;
-  bool mIsFirstTouchMove;
+  bool mContentConsumingTouch;
+  bool mApzConsumingTouch;
   bool mCancelable;
-  bool mTouchCancelSent;
+  bool mRecognizerWantsEvents;
+  nsTArray<uint32_t> mCanceledIds;
 
   // In the old Win32 way of doing things, we would receive a WM_TOUCH event
   // that told us the state of every touchpoint on the touch surface.  If
@@ -223,7 +231,7 @@ private:
   // the updated touchpoint info and record the fact that the touchpoint
   // has changed.  If ever we try to update a touchpoint has already
   // changed, we dispatch a touch event containing all the changed touches.
-  void InitTouchEventTouchList(nsTouchEvent* aEvent);
+  void InitTouchEventTouchList(WidgetTouchEvent* aEvent);
   nsBaseHashtable<nsUint32HashKey,
                   nsRefPtr<mozilla::dom::Touch>,
                   nsRefPtr<mozilla::dom::Touch> > mTouches;
@@ -248,8 +256,6 @@ private:
   // events from our GestureRecognizer.  It's probably not a huge deal if we
   // don't unregister ourselves with our GestureRecognizer before destroying
   // the GestureRecognizer, but it can't hurt.
-  EventRegistrationToken mTokenManipulationStarted;
-  EventRegistrationToken mTokenManipulationUpdated;
   EventRegistrationToken mTokenManipulationCompleted;
   EventRegistrationToken mTokenTapped;
   EventRegistrationToken mTokenRightTapped;
@@ -263,23 +269,19 @@ private:
   // that originates from another thread is safe to send sync.
 
   // Async event dispatching
-  void DispatchAsyncEventIgnoreStatus(nsInputEvent* aEvent);
-  void DispatchAsyncTouchEventIgnoreStatus(nsTouchEvent* aEvent);
-  void DispatchAsyncTouchEventWithCallback(nsTouchEvent* aEvent, void (MetroInput::*Callback)());
+  void DispatchAsyncEventIgnoreStatus(WidgetInputEvent* aEvent);
+  void DispatchAsyncTouchEvent(WidgetTouchEvent* aEvent);
 
   // Async event callbacks
   void DeliverNextQueuedEventIgnoreStatus();
-  nsEventStatus DeliverNextQueuedTouchEvent();
-
-  // Misc. specialty async callbacks
-  void OnPointerPressedCallback();
-  void OnFirstPointerMoveCallback();
+  void DeliverNextQueuedTouchEvent();
 
   // Sync event dispatching
-  void DispatchEventIgnoreStatus(nsGUIEvent *aEvent);
-  void DispatchTouchCancel();
+  void DispatchEventIgnoreStatus(WidgetGUIEvent* aEvent);
+  void DispatchTouchCancel(WidgetTouchEvent* aEvent);
 
   nsDeque mInputEventQueue;
+  mozilla::layers::ScrollableLayerGuid mTargetAPZCGuid;
   static nsEventStatus sThrowawayStatus;
 };
 

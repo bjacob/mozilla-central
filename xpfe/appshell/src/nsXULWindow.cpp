@@ -1845,7 +1845,7 @@ bool nsXULWindow::ConstrainToZLevel(bool        aImmediate,
   altered = false;
   mediator->GetZLevel(this, &zLevel);
 
-  // translate from nsGUIEvent to nsIWindowMediator constants
+  // translate from WidgetGUIEvent to nsIWindowMediator constants
   position = nsIWindowMediator::zLevelTop;
   if (*aPlacement == nsWindowZBottom || zLevel == nsIXULWindow::lowestZ)
     position = nsIWindowMediator::zLevelBottom;
@@ -1962,10 +1962,10 @@ void nsXULWindow::SetContentScrollbarVisibility(bool aVisible)
 {
   nsCOMPtr<nsPIDOMWindow> contentWin(do_GetInterface(mPrimaryContentShell));
   if (contentWin) {
+    mozilla::ErrorResult rv;
     nsRefPtr<nsGlobalWindow> window = static_cast<nsGlobalWindow*>(contentWin.get());
-    nsRefPtr<mozilla::dom::BarProp> scrollbars = window->Scrollbars();
+    nsRefPtr<mozilla::dom::BarProp> scrollbars = window->GetScrollbars(rv);
     if (scrollbars) {
-      mozilla::ErrorResult rv;
       scrollbars->SetVisible(aVisible, rv);
     }
   }

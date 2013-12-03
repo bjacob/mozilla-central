@@ -85,18 +85,12 @@ endif
 # Windows checks.
 ifneq (,$(findstring mingw,$(CONFIG_GUESS)))
 
-# Require pymake (as opposed to GNU make).
-ifndef .PYMAKE
-$(error Pymake is required to build on Windows. Run |./mach build| to \
-automatically use pymake. Or, invoke pymake directly via \
-|python build/pymake/make.py|.)
-endif
-
 # check for CRLF line endings
 ifneq (0,$(shell $(PERL) -e 'binmode(STDIN); while (<STDIN>) { if (/\r/) { print "1"; exit } } print "0"' < $(TOPSRCDIR)/client.mk))
 $(error This source tree appears to have Windows-style line endings. To \
-convert it to Unix-style line endings, run \
-"python mozilla/build/win32/mozilla-dos2unix.py")
+convert it to Unix-style line endings, check \
+"https://developer.mozilla.org/en-US/docs/Developer_Guide/Mozilla_build_FAQ\#Win32-specific_questions" \
+for a workaround of this issue.)
 endif
 endif
 
@@ -117,7 +111,7 @@ endef
 # before evaluation. $(shell) replacing newlines with spaces, || is always
 # followed by a space (since sed doesn't remove newlines), except on the
 # last line, so replace both '|| ' and '||'.
-MOZCONFIG_CONTENT := $(subst ||,$(CR),$(subst || ,$(CR),$(shell _PYMAKE=$(.PYMAKE) $(TOPSRCDIR)/$(MOZCONFIG_LOADER) $(TOPSRCDIR) | sed 's/$$/||/')))
+MOZCONFIG_CONTENT := $(subst ||,$(CR),$(subst || ,$(CR),$(shell $(TOPSRCDIR)/$(MOZCONFIG_LOADER) $(TOPSRCDIR) | sed 's/$$/||/')))
 $(eval $(MOZCONFIG_CONTENT))
 
 export FOUND_MOZCONFIG
@@ -133,6 +127,11 @@ MOZCONFIG_OUT_FILTERED := $(filter-out $(START_COMMENT)%,$(MOZCONFIG_OUT_LINES))
 
 ifdef AUTOCLOBBER
 export AUTOCLOBBER=1
+endif
+
+ifdef MOZ_PARALLEL_BUILD
+  MOZ_MAKE_FLAGS := $(filter-out -j%,$(MOZ_MAKE_FLAGS))
+  MOZ_MAKE_FLAGS += -j$(MOZ_PARALLEL_BUILD)
 endif
 
 # Automatically add -jN to make flags if not defined. N defaults to number of cores.
@@ -205,7 +204,7 @@ ifdef WANT_MOZCONFIG_MK
 # For now, only output "export" lines from mozconfig2client-mk output.
 MOZCONFIG_MK_LINES := $(filter export||%,$(MOZCONFIG_OUT_LINES))
 $(OBJDIR)/.mozconfig.mk: $(FOUND_MOZCONFIG) $(call mkdir_deps,$(OBJDIR))
-	$(if $(MOZCONFIG_MK_LINES),( $(foreach line,$(MOZCONFIG_MK_LINES), echo "$(subst ||, ,$(line))";) )) > $@
+	$(if $(MOZCONFIG_MK_LINES),( $(foreach line,$(MOZCONFIG_MK_LINES), echo '$(subst ||, ,$(line))';) )) > $@
 
 # Include that makefile so that it is created. This should not actually change
 # the environment since MOZCONFIG_CONTENT, which MOZCONFIG_OUT_LINES derives
@@ -279,7 +278,7 @@ else
 # this point when building multiple projects.  Only MOZ_OBJDIR is available.
 	set -e; \
 	for mkfile in $(MOZ_PREFLIGHT_ALL); do \
-	  $(MAKE) -f $(TOPSRCDIR)/$$mkfile preflight_all TOPSRCDIR=$(TOPSRCDIR) MOZ_OBJDIR=$(MOZ_OBJDIR) MOZ_BUILD_PROJECTS="$(MOZ_BUILD_PROJECTS)"; \
+	  $(MAKE) -f $(TOPSRCDIR)/$$mkfile preflight_all TOPSRCDIR=$(TOPSRCDIR) MOZ_OBJDIR=$(MOZ_OBJDIR) MOZ_BUILD_PROJECTS='$(MOZ_BUILD_PROJECTS)'; \
 	done
 endif
 endif
@@ -331,7 +330,7 @@ CONFIG_STATUS_DEPS := \
   $(NULL)
 
 CONFIGURE_ENV_ARGS += \
-  MAKE="$(MAKE)" \
+  MAKE='$(MAKE)' \
   $(NULL)
 
 # configure uses the program name to determine @srcdir@. Calling it without
@@ -364,8 +363,8 @@ configure:: $(configure-preqs)
 	@echo cd $(OBJDIR);
 	@echo $(CONFIGURE) $(CONFIGURE_ARGS)
 	@cd $(OBJDIR) && $(BUILD_PROJECT_ARG) $(CONFIGURE_ENV_ARGS) $(CONFIGURE) $(CONFIGURE_ARGS) \
-	  || ( echo "*** Fix above errors and then restart with\
-               \"$(MAKE) -f client.mk build\"" && exit 1 )
+	  || ( echo '*** Fix above errors and then restart with\
+               "$(MAKE) -f client.mk build"' && exit 1 )
 	@touch $(OBJDIR)/Makefile
 
 ifneq (,$(MAKEFILE))
@@ -438,7 +437,7 @@ else
 # this point when building multiple projects.  Only MOZ_OBJDIR is available.
 	set -e; \
 	for mkfile in $(MOZ_POSTFLIGHT_ALL); do \
-	  $(MAKE) -f $(TOPSRCDIR)/$$mkfile postflight_all TOPSRCDIR=$(TOPSRCDIR) MOZ_OBJDIR=$(MOZ_OBJDIR) MOZ_BUILD_PROJECTS="$(MOZ_BUILD_PROJECTS)"; \
+	  $(MAKE) -f $(TOPSRCDIR)/$$mkfile postflight_all TOPSRCDIR=$(TOPSRCDIR) MOZ_OBJDIR=$(MOZ_OBJDIR) MOZ_BUILD_PROJECTS='$(MOZ_BUILD_PROJECTS)'; \
 	done
 endif
 endif
@@ -448,7 +447,7 @@ cleansrcdir:
 	if [ -f Makefile ]; then \
 	  $(MAKE) distclean ; \
 	else \
-	  echo "Removing object files from srcdir..."; \
+	  echo 'Removing object files from srcdir...'; \
 	  rm -fr `find . -type d \( -name .deps -print -o -name CVS \
 	          -o -exec test ! -d {}/CVS \; \) -prune \
 	          -o \( -name '*.[ao]' -o -name '*.so' \) -type f -print`; \

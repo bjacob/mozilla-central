@@ -16,14 +16,13 @@ function Finder(docShell) {
   this._fastFind.init(docShell);
 
   this._docShell = docShell;
-  this._document = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                           .getInterface(Ci.nsIDOMWindow).document;
   this._listeners = [];
-
   this._previousLink = null;
-  this._drewOutline = false;
-
   this._searchString = null;
+
+  docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+          .getInterface(Ci.nsIWebProgress)
+          .addProgressListener(this, Ci.nsIWebProgress.NOTIFY_LOCATION);
 }
 
 Finder.prototype = {
@@ -36,12 +35,13 @@ Finder.prototype = {
     this._listeners = this._listeners.filter(l => l != aListener);
   },
 
-  _notify: function (aResult, aFindBackwards, aLinksOnly) {
-    this._outlineLink(aLinksOnly);
+  _notify: function (aSearchString, aResult, aFindBackwards, aDrawOutline) {
+    this._searchString = aSearchString;
+    this._outlineLink(aDrawOutline);
 
     let foundLink = this._fastFind.foundLink;
     let linkURL = null;
-    if (aLinksOnly && foundLink) {
+    if (foundLink) {
       let docCharset = null;
       let ownerDoc = foundLink.ownerDocument;
       if (ownerDoc)
@@ -61,54 +61,80 @@ Finder.prototype = {
   },
 
   get searchString() {
-    return this._fastFind.searchString;
+    return this._searchString;
   },
 
   set caseSensitive(aSensitive) {
     this._fastFind.caseSensitive = aSensitive;
   },
 
-  fastFind: function (aSearchString, aLinksOnly) {
+  /**
+   * Used for normal search operations, highlights the first match.
+   *
+   * @param aSearchString String to search for.
+   * @param aLinksOnly Only consider nodes that are links for the search.
+   * @param aDrawOutline Puts an outline around matched links.
+   */
+  fastFind: function (aSearchString, aLinksOnly, aDrawOutline) {
     let result = this._fastFind.find(aSearchString, aLinksOnly);
-    this._notify(result, false, aLinksOnly);
+    let searchString = this._fastFind.searchString;
+    this._notify(searchString, result, false, aDrawOutline);
   },
 
-  findAgain: function (aFindBackwards, aLinksOnly) {
+  /**
+   * Repeat the previous search. Should only be called after a previous
+   * call to Finder.fastFind.
+   *
+   * @param aFindBackwards Controls the search direction:
+   *    true: before current match, false: after current match.
+   * @param aLinksOnly Only consider nodes that are links for the search.
+   * @param aDrawOutline Puts an outline around matched links.
+   */
+  findAgain: function (aFindBackwards, aLinksOnly, aDrawOutline) {
     let result = this._fastFind.findAgain(aFindBackwards, aLinksOnly);
-    this._notify(result, aFindBackwards, aLinksOnly);
+    let searchString = this._fastFind.searchString;
+    this._notify(searchString, result, aFindBackwards, aDrawOutline);
   },
 
   highlight: function (aHighlight, aWord) {
-    this._searchString = aWord;
     let found = this._highlight(aHighlight, aWord, null);
-    if (found)
-      this._notify(Ci.nsITypeAheadFind.FIND_FOUND, false, false);
-    else
-      this._notify(Ci.nsITypeAheadFind.FIND_NOTFOUND, false, false);
+    if (aHighlight) {
+      let result = found ? Ci.nsITypeAheadFind.FIND_FOUND
+                         : Ci.nsITypeAheadFind.FIND_NOTFOUND;
+      this._notify(aWord, result, false, false);
+    }
+  },
+
+  enableSelection: function() {
+    this._fastFind.setSelectionModeAndRepaint(Ci.nsISelectionController.SELECTION_ON);
   },
 
   removeSelection: function() {
     let fastFind = this._fastFind;
 
     fastFind.collapseSelection();
-    fastFind.setSelectionModeAndRepaint(Ci.nsISelectionController.SELECTION_ON);
+    this.enableSelection();
 
-    // We also drew our own outline, remove that as well.
-    if (this._previousLink && this._drewOutline) {
-      this._previousLink.style.outline = this._tmpOutline;
-      this._previousLink.style.outlineOffset = this._tmpOutlineOffset;
-    }
+    this._restoreOriginalOutline();
   },
 
   focusContent: function() {
-    let fastFind = this._fastFind;
+    // Allow Finder listeners to cancel focusing the content.
+    for (let l of this._listeners) {
+      if (!l.shouldFocusContent())
+        return;
+    }
 
+    let fastFind = this._fastFind;
+    const fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
     try {
-      // Try to find the best possible match that should receive focus.
+      // Try to find the best possible match that should receive focus and
+      // block scrolling on focus since find already scrolls. Further
+      // scrolling is due to user action, so don't override this.
       if (fastFind.foundLink) {
-        fastFind.foundLink.focus();
+        fm.setFocus(fastFind.foundLink, fm.FLAG_NOSCROLL);
       } else if (fastFind.foundEditable) {
-        fastFind.foundEditable.focus();
+        fm.setFocus(fastFind.foundEditable, fm.FLAG_NOSCROLL);
         fastFind.collapseSelection();
       } else {
         this._getWindow().focus()
@@ -121,14 +147,25 @@ Finder.prototype = {
 
     switch (aEvent.keyCode) {
       case Ci.nsIDOMKeyEvent.DOM_VK_RETURN:
-        if (this._fastFind.foundLink) // Todo: Handle ctrl click.
-          this._fastFind.foundLink.click();
+        if (this._fastFind.foundLink) {
+          let view = this._fastFind.foundLink.ownerDocument.defaultView;
+          this._fastFind.foundLink.dispatchEvent(new view.MouseEvent("click", {
+            view: view,
+            cancelable: true,
+            bubbles: true,
+            ctrlKey: aEvent.ctrlKey,
+            altKey: aEvent.altKey,
+            shiftKey: aEvent.shiftKey,
+            metaKey: aEvent.metaKey
+          }));
+        }
         break;
       case Ci.nsIDOMKeyEvent.DOM_VK_TAB:
-        if (aEvent.shiftKey)
-          this._document.commandDispatcher.rewindFocus();
-        else
-          this._document.commandDispatcher.advanceFocus();
+        let direction = Services.focus.MOVEFOCUS_FORWARD;
+        if (aEvent.shiftKey) {
+          direction = Services.focus.MOVEFOCUS_BACKWARD;
+        }
+        Services.focus.moveFocus(this._getWindow(), null, direction, 0);
         break;
       case Ci.nsIDOMKeyEvent.DOM_VK_PAGE_UP:
         controller.scrollPage(false);
@@ -149,20 +186,17 @@ Finder.prototype = {
     return this._docShell.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);
   },
 
-  _outlineLink: function (aLinksOnly) {
+  _outlineLink: function (aDrawOutline) {
     let foundLink = this._fastFind.foundLink;
 
-    if (foundLink == this._previousLink)
+    // Optimization: We are drawing outlines and we matched
+    // the same link before, so don't duplicate work.
+    if (foundLink == this._previousLink && aDrawOutline)
       return;
 
-    if (this._previousLink && this._drewOutline) {
-      // restore original outline
-      this._previousLink.style.outline = this._tmpOutline;
-      this._previousLink.style.outlineOffset = this._tmpOutlineOffset;
-    }
+    this._restoreOriginalOutline();
 
-    this._drewOutline = (foundLink && aLinksOnly);
-    if (this._drewOutline) {
+    if (foundLink && aDrawOutline) {
       // Backup original outline
       this._tmpOutline = foundLink.style.outline;
       this._tmpOutlineOffset = foundLink.style.outlineOffset;
@@ -174,9 +208,18 @@ Finder.prototype = {
       // Don't set the outline-color, we should always use initial value.
       foundLink.style.outline = "1px dotted";
       foundLink.style.outlineOffset = "0";
-    }
 
-    this._previousLink = foundLink;
+      this._previousLink = foundLink;
+    }
+  },
+
+  _restoreOriginalOutline: function () {
+    // Removes the outline around the last found link.
+    if (this._previousLink) {
+      this._previousLink.style.outline = this._tmpOutline;
+      this._previousLink.style.outlineOffset = this._tmpOutlineOffset;
+      this._previousLink = null;
+    }
   },
 
   _highlight: function (aHighlight, aWord, aWindow) {
@@ -243,7 +286,7 @@ Finder.prototype = {
         }
       }
 
-      //Removing the highlighting always succeeds, so return true.
+      // Removing the highlighting always succeeds, so return true.
       found = true;
     }
 
@@ -420,6 +463,16 @@ Finder.prototype = {
     return null;
   },
 
+  // Start of nsIWebProgressListener implementation.
+
+  onLocationChange: function(aWebProgress, aRequest, aLocation, aFlags) {
+    if (!aWebProgress.isTopLevel)
+      return;
+
+    // Avoid leaking if we change the page.
+    this._previousLink = null;
+  },
+
   // Start of nsIEditActionListener implementations
 
   WillDeleteText: function (aTextNode, aOffset, aLength) {
@@ -588,5 +641,8 @@ Finder.prototype = {
       notifyDocumentCreated: function() {},
       notifyDocumentStateChanged: function(aDirty) {}
     };
-  }
+  },
+
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
+                                         Ci.nsISupportsWeakReference])
 };

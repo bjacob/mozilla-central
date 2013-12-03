@@ -95,11 +95,11 @@ struct JSSettings
   // Settings that change based on chrome/content context.
   struct JSContentChromeSettings
   {
-    uint32_t options;
+    JS::ContextOptions options;
     int32_t maxScriptRuntime;
 
     JSContentChromeSettings()
-    : options(0), maxScriptRuntime(0)
+    : options(), maxScriptRuntime(0)
     { }
   };
 
@@ -162,19 +162,26 @@ struct JSSettings
   }
 };
 
+enum WorkerPreference
+{
+  WORKERPREF_DUMP = 0, // browser.dom.window.dump.enabled
+  WORKERPREF_PROMISE,  // dom.promise.enabled
+  WORKERPREF_COUNT
+};
+
 // All of these are implemented in RuntimeService.cpp
 bool
 ResolveWorkerClasses(JSContext* aCx, JS::Handle<JSObject*> aObj, JS::Handle<jsid> aId,
                      unsigned aFlags, JS::MutableHandle<JSObject*> aObjp);
 
 void
-CancelWorkersForWindow(JSContext* aCx, nsPIDOMWindow* aWindow);
+CancelWorkersForWindow(nsPIDOMWindow* aWindow);
 
 void
-SuspendWorkersForWindow(JSContext* aCx, nsPIDOMWindow* aWindow);
+SuspendWorkersForWindow(nsPIDOMWindow* aWindow);
 
 void
-ResumeWorkersForWindow(nsIScriptContext* aCx, nsPIDOMWindow* aWindow);
+ResumeWorkersForWindow(nsPIDOMWindow* aWindow);
 
 class WorkerTask {
 public:

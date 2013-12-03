@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SaveProfileTask.h"
-#include "GeckoProfilerImpl.h"
+#include "GeckoProfiler.h"
 
 static bool
 WriteCallback(const jschar *buf, uint32_t len, void *data)
@@ -63,7 +63,7 @@ SaveProfileTask::Run() {
       JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
       JS_EnumerateStub, JS_ResolveStub, JS_ConvertStub
     };
-    JSObject *obj = JS_NewGlobalObject(cx, &c, NULL, JS::FireOnNewGlobalHook);
+    JSObject *obj = JS_NewGlobalObject(cx, &c, nullptr, JS::FireOnNewGlobalHook);
 
     std::ofstream stream;
     stream.open(tmpPath.get());

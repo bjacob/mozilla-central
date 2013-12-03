@@ -19,7 +19,6 @@ DOMCI_CLASS(CSSImportRule)
 DOMCI_CLASS(CSSMediaRule)
 DOMCI_CLASS(CSSNameSpaceRule)
 DOMCI_CLASS(CSSRuleList)
-DOMCI_CLASS(MediaList)
 DOMCI_CLASS(StyleSheetList)
 DOMCI_CLASS(CSSStyleSheet)
 
@@ -108,8 +107,6 @@ DOMCI_CLASS(EventListenerInfo)
 DOMCI_CLASS(ContentFrameMessageManager)
 DOMCI_CLASS(ChromeMessageBroadcaster)
 DOMCI_CLASS(ChromeMessageSender)
-
-DOMCI_CLASS(IDBKeyRange)
 
 DOMCI_CLASS(MozCSSKeyframeRule)
 DOMCI_CLASS(MozCSSKeyframesRule)

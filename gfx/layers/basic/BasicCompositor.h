@@ -19,9 +19,10 @@ namespace layers {
 class BasicCompositingRenderTarget : public CompositingRenderTarget
 {
 public:
-  BasicCompositingRenderTarget(gfx::DrawTarget* aDrawTarget, const gfx::IntSize& aSize)
-    : mDrawTarget(aDrawTarget)
-    , mSize(aSize)
+  BasicCompositingRenderTarget(gfx::DrawTarget* aDrawTarget, const gfx::IntRect& aRect)
+    : CompositingRenderTarget(aRect.TopLeft())
+    , mDrawTarget(aDrawTarget)
+    , mSize(aRect.Size())
   { }
 
   virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
@@ -60,7 +61,8 @@ public:
 
   virtual TemporaryRef<CompositingRenderTarget>
   CreateRenderTargetFromSource(const gfx::IntRect &aRect,
-                               const CompositingRenderTarget *aSource) MOZ_OVERRIDE;
+                               const CompositingRenderTarget *aSource,
+                               const gfx::IntPoint &aSourcePoint) MOZ_OVERRIDE;
 
   virtual TemporaryRef<DataTextureSource>
   CreateDataTextureSource(TextureFlags aFlags = 0) MOZ_OVERRIDE;
@@ -76,12 +78,14 @@ public:
     return mRenderTarget;
   }
 
-  virtual void DrawQuad(const gfx::Rect& aRect, const gfx::Rect& aClipRect,
+  virtual void DrawQuad(const gfx::Rect& aRect,
+                        const gfx::Rect& aClipRect,
                         const EffectChain &aEffectChain,
-                        gfx::Float aOpacity, const gfx::Matrix4x4 &aTransform,
-                        const gfx::Point& aOffset) MOZ_OVERRIDE;
+                        gfx::Float aOpacity,
+                        const gfx::Matrix4x4 &aTransform) MOZ_OVERRIDE;
 
-  virtual void BeginFrame(const gfx::Rect *aClipRectIn,
+  virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
+                          const gfx::Rect *aClipRectIn,
                           const gfxMatrix& aTransform,
                           const gfx::Rect& aRenderBounds,
                           gfx::Rect *aClipRectOut = nullptr,
@@ -94,10 +98,10 @@ public:
   virtual void AbortFrame() MOZ_OVERRIDE;
 
   virtual bool SupportsPartialTextureUpdate() { return true; }
-  virtual bool CanUseCanvasLayerForSize(const gfxIntSize &aSize) MOZ_OVERRIDE { return true; }
+  virtual bool CanUseCanvasLayerForSize(const gfx::IntSize &aSize) MOZ_OVERRIDE { return true; }
   virtual int32_t GetMaxTextureSize() const MOZ_OVERRIDE { return INT32_MAX; }
   virtual void SetDestinationSurfaceSize(const gfx::IntSize& aSize) MOZ_OVERRIDE { }
-  virtual void SetTargetContext(gfxContext* aTarget) MOZ_OVERRIDE
+  virtual void SetTargetContext(gfx::DrawTarget* aTarget) MOZ_OVERRIDE
   {
     mCopyTarget = aTarget;
   }
@@ -133,7 +137,10 @@ private:
   RefPtr<BasicCompositingRenderTarget> mRenderTarget;
   // An optional destination target to copy the results
   // to after drawing is completed.
-  nsRefPtr<gfxContext> mCopyTarget;
+  RefPtr<gfx::DrawTarget> mCopyTarget;
+
+  gfx::IntRect mInvalidRect;
+  nsIntRegion mInvalidRegion;
 };
 
 } // namespace layers

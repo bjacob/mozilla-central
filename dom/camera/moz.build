@@ -13,8 +13,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
 
 XPIDL_MODULE = 'dom_camera'
 
-MODULE = 'dom'
-
 EXPORTS += [
     'CameraCommon.h',
     'CameraPreviewMediaStream.h',
@@ -22,7 +20,7 @@ EXPORTS += [
     'GonkCameraControl.h',
 ]
 
-CPP_SOURCES += [
+SOURCES += [
     'CameraControlImpl.cpp',
     'CameraPreviewMediaStream.cpp',
     'CameraRecorderProfiles.cpp',
@@ -33,23 +31,26 @@ CPP_SOURCES += [
 ]
 
 if CONFIG['MOZ_B2G_CAMERA']:
-    CPP_SOURCES += [
-        'GonkCameraManager.cpp',
+    SOURCES += [
         'GonkCameraControl.cpp',
         'GonkCameraHwMgr.cpp',
-        'GonkRecorder.cpp',
+        'GonkCameraManager.cpp',
         'GonkCameraSource.cpp',
+        'GonkRecorder.cpp',
         'GonkRecorderProfiles.cpp',
     ]
 else:
-    CPP_SOURCES += [
-        'FallbackCameraManager.cpp',
+    SOURCES += [
         'FallbackCameraControl.cpp',
+        'FallbackCameraManager.cpp',
     ]
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
+LOCAL_INCLUDES += [
+    '../base',
+]
 
-LIBRARY_NAME = 'domcamera_s'
+include('/ipc/chromium/chromium-config.mozbuild')
 
+FINAL_LIBRARY = 'gklayout'

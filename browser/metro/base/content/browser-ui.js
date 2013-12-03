@@ -4,8 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-Cu.import("resource://gre/modules/PageThumbs.jsm");
 Cu.import("resource://gre/modules/devtools/dbg-server.jsm")
+Cu.import("resource://gre/modules/WindowsPrefSync.jsm");
 
 /**
  * Constants
@@ -15,12 +15,12 @@ Cu.import("resource://gre/modules/devtools/dbg-server.jsm")
 const debugServerStateChanged = "devtools.debugger.remote-enabled";
 const debugServerPortChanged = "devtools.debugger.remote-port";
 
-// delay when showing the tab bar briefly after a new (empty) tab opens
-const kNewTabAnimationDelayMsec = 1000;
-// delay when showing the tab bar after opening a link on a new tab
-const kOpenInNewTabAnimationDelayMsec = 3000;
-// delay before closing tab bar after selecting another tab
-const kSelectTabAnimationDelayMsec = 500;
+// delay when showing the tab bar briefly after a new foreground tab opens
+const kForegroundTabAnimationDelay = 1000;
+// delay when showing the tab bar after opening a new background tab opens
+const kBackgroundTabAnimationDelay = 3000;
+// delay before closing tab bar after closing or selecting a tab
+const kChangeTabAnimationDelay = 500;
 
 /**
  * Cache of commonly used elements.
@@ -86,6 +86,8 @@ var BrowserUI = {
     Services.prefs.addObserver(debugServerStateChanged, this, false);
     Services.prefs.addObserver(debugServerPortChanged, this, false);
 
+    Services.obs.addObserver(this, "handle-xul-text-link", false);
+
     // listen content messages
     messageManager.addMessageListener("DOMTitleChanged", this);
     messageManager.addMessageListener("DOMWillOpenModalDialog", this);
@@ -108,8 +110,10 @@ var BrowserUI = {
     PanelUI.init();
     FlyoutPanelsUI.init();
     PageThumbs.init();
+    NewTabUtils.init();
     SettingsCharm.init();
     NavButtonSlider.init();
+    SelectionHelperUI.init();
 
     // We can delay some initialization until after startup.  We wait until
     // the first page is shown, then dispatch a UIReadyDelayed event.
@@ -142,16 +146,18 @@ var BrowserUI = {
       messageManager.addMessageListener("Browser:MozApplicationManifest", OfflineApps);
 
       try {
-        Downloads.init();
+        MetroDownloadsView.init();
         DialogUI.init();
         FormHelperUI.init();
         FindHelperUI.init();
-        PdfJs.init();
       } catch(ex) {
         Util.dumpLn("Exception in delay load module:", ex.message);
       }
 
-      BrowserUI._pullDesktopControlledPrefs();
+      if (WindowsPrefSync) {
+        // Pulls in Desktop controlled prefs and pushes out Metro controlled prefs
+        WindowsPrefSync.init();
+      }
 
       // check for left over crash reports and submit them if found.
       BrowserUI.startupCrashCheck();
@@ -171,14 +177,25 @@ var BrowserUI = {
   },
 
   uninit: function() {
+    messageManager.removeMessageListener("DOMTitleChanged", this);
+    messageManager.removeMessageListener("DOMWillOpenModalDialog", this);
+    messageManager.removeMessageListener("DOMWindowClose", this);
+
+    messageManager.removeMessageListener("Browser:OpenURI", this);
+    messageManager.removeMessageListener("Browser:SaveAs:Return", this);
+    messageManager.removeMessageListener("Content:StateChange", this);
+
     messageManager.removeMessageListener("Browser:MozApplicationManifest", OfflineApps);
+    Services.obs.removeObserver(this, "handle-xul-text-link");
 
     PanelUI.uninit();
     FlyoutPanelsUI.uninit();
-    Downloads.uninit();
+    MetroDownloadsView.uninit();
     SettingsCharm.uninit();
-    messageManager.removeMessageListener("Content:StateChange", this);
     PageThumbs.uninit();
+    if (WindowsPrefSync) {
+      WindowsPrefSync.uninit();
+    }
     this.stopDebugServer();
   },
 
@@ -191,6 +208,10 @@ var BrowserUI = {
       DebuggerServer.init();
       DebuggerServer.addBrowserActors();
       DebuggerServer.addActors('chrome://browser/content/dbg-metro-actors.js');
+
+      // Add these globally for chrome, until per-window chrome debugging is supported (bug 928018):
+      DebuggerServer.addGlobalActor(DebuggerServer.tabActorFactories.inspectorActor, "inspectorActor");
+      DebuggerServer.addGlobalActor(DebuggerServer.tabActorFactories.styleEditorActor, "styleEditorActor");
     }
     DebuggerServer.openListener(port);
   },
@@ -426,10 +447,30 @@ var BrowserUI = {
 
   /**
    * Open a new tab in the foreground in response to a user action.
+   * See Browser.addTab for more documentation.
    */
   addAndShowTab: function (aURI, aOwner) {
-    ContextUI.peekTabs(kNewTabAnimationDelayMsec);
+    ContextUI.peekTabs(kForegroundTabAnimationDelay);
     return Browser.addTab(aURI || kStartURI, true, aOwner);
+  },
+
+  /**
+   * Open a new tab in response to clicking a link in an existing tab.
+   * See Browser.addTab for more documentation.
+   */
+  openLinkInNewTab: function (aURI, aBringFront, aOwner) {
+    ContextUI.peekTabs(aBringFront ? kForegroundTabAnimationDelay
+                                   : kBackgroundTabAnimationDelay);
+    let params = null;
+    if (aOwner) {
+      params = {
+        referrerURI: aOwner.browser.documentURI,
+        charset: aOwner.browser.characterSet,
+      };
+    }
+    let tab = Browser.addTab(aURI, aBringFront, aOwner, params);
+    Elements.tabList.strip.ensureElementIsVisible(tab.chromeTab);
+    return tab;
   },
 
   setOnTabAnimationEnd: function setOnTabAnimationEnd(aCallback) {
@@ -456,7 +497,7 @@ var BrowserUI = {
     this.setOnTabAnimationEnd(function() {
       Browser.closeTab(tabToClose, { forceClose: true } );
       if (wasCollapsed)
-        ContextUI.dismissTabsWithDelay(kNewTabAnimationDelayMsec);
+        ContextUI.dismissTabsWithDelay(kChangeTabAnimationDelay);
     });
   },
 
@@ -498,7 +539,7 @@ var BrowserUI = {
 
   selectTabAndDismiss: function selectTabAndDismiss(aTab) {
     this.selectTab(aTab);
-    ContextUI.dismissTabsWithDelay(kSelectTabAnimationDelayMsec);
+    ContextUI.dismissTabsWithDelay(kChangeTabAnimationDelay);
   },
 
   selectTabAtIndex: function selectTabAtIndex(aIndex) {
@@ -573,6 +614,13 @@ var BrowserUI = {
 
   observe: function BrowserUI_observe(aSubject, aTopic, aData) {
     switch (aTopic) {
+      case "handle-xul-text-link":
+        let handled = aSubject.QueryInterface(Ci.nsISupportsPRBool);
+        if (!handled.data) {
+          this.addAndShowTab(aData, Browser.selectedTab);
+          handled.data = true;
+        }
+        break;
       case "nsPref:changed":
         switch (aData) {
           case "browser.cache.disk_cache_ssl":
@@ -596,37 +644,6 @@ var BrowserUI = {
   /*********************************
    * Internal utils
    */
-
-  /**
-  * Some prefs that have consequences in both Metro and Desktop such as
-  * app-update prefs, are automatically pulled from Desktop here.
-  */
-  _pullDesktopControlledPrefs: function() {
-    function pullDesktopControlledPrefType(prefType, prefFunc) {
-      try {
-        registry.create(Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
-                      "Software\\Mozilla\\Firefox\\Metro\\Prefs\\" + prefType,
-                      Ci.nsIWindowsRegKey.ACCESS_ALL);
-        for (let i = 0; i < registry.valueCount; i++) {
-          let prefName = registry.getValueName(i);
-          let prefValue = registry.readStringValue(prefName);
-          if (prefType == Ci.nsIPrefBranch.PREF_BOOL) {
-            prefValue = prefValue == "true";
-          }
-          Services.prefs[prefFunc](prefName, prefValue);
-        }
-      } catch (ex) {
-        Util.dumpLn("Could not pull for prefType " + prefType + ": " + ex);
-      } finally {
-        registry.close();
-      }
-    }
-    let registry = Cc["@mozilla.org/windows-registry-key;1"].
-                   createInstance(Ci.nsIWindowsRegKey);
-    pullDesktopControlledPrefType(Ci.nsIPrefBranch.PREF_INT, "setIntPref");
-    pullDesktopControlledPrefType(Ci.nsIPrefBranch.PREF_BOOL, "setBoolPref");
-    pullDesktopControlledPrefType(Ci.nsIPrefBranch.PREF_STRING, "setCharPref");
-  },
 
   _titleChanged: function(aBrowser) {
     let url = this.getDisplayURI(aBrowser);
@@ -948,6 +965,7 @@ var BrowserUI = {
       case "cmd_quit":
       case "cmd_close":
       case "cmd_newTab":
+      case "cmd_newTabKey":
       case "cmd_closeTab":
       case "cmd_undoCloseTab":
       case "cmd_actions":
@@ -1040,6 +1058,9 @@ var BrowserUI = {
         break;
       case "cmd_newTab":
         this.addAndShowTab();
+        break;
+      case "cmd_newTabKey":
+        this.addAndShowTab();
         // Make sure navbar is displayed before setting focus on url bar. Bug 907244
         ContextUI.displayNavbar();
         this._edit.beginEditing(false);
@@ -1051,7 +1072,7 @@ var BrowserUI = {
         this.undoCloseTab();
         break;
       case "cmd_sanitize":
-        SanitizeUI.onSanitize();
+        this.confirmSanitizeDialog();
         break;
       case "cmd_flyout_back":
         FlyoutPanelsUI.onBackButton();
@@ -1065,6 +1086,30 @@ var BrowserUI = {
       case "cmd_savePage":
         this.savePage();
         break;
+    }
+  },
+
+  confirmSanitizeDialog: function () {
+    let bundle = Services.strings.createBundle("chrome://browser/locale/browser.properties");
+    let title = bundle.GetStringFromName("clearPrivateData.title");
+    let message = bundle.GetStringFromName("clearPrivateData.message");
+    let clearbutton = bundle.GetStringFromName("clearPrivateData.clearButton");
+
+    let buttonPressed = Services.prompt.confirmEx(
+                          null,
+                          title,
+                          message,
+                          Ci.nsIPrompt.BUTTON_POS_0 * Ci.nsIPrompt.BUTTON_TITLE_IS_STRING +
+                          Ci.nsIPrompt.BUTTON_POS_1 * Ci.nsIPrompt.BUTTON_TITLE_CANCEL,
+                          clearbutton,
+                          null,
+                          null,
+                          null,
+                          { value: false });
+
+    // Clicking 'Clear' will call onSanitize().
+    if (buttonPressed === 0) {
+      SanitizeUI.onSanitize();
     }
   },
 
@@ -1262,11 +1307,15 @@ var SettingsCharm = {
         label: Strings.browser.GetStringFromName("optionsCharm"),
         onselected: function() FlyoutPanelsUI.show('PrefsFlyoutPanel')
     });
+/*
+ * Temporarily disabled until we can have sync prefs together with the
+ * Desktop browser's sync prefs.
     // Sync
     this.addEntry({
         label: Strings.brand.GetStringFromName("syncBrandShortName"),
         onselected: function() FlyoutPanelsUI.show('SyncFlyoutPanel')
     });
+*/
     // About
     this.addEntry({
         label: Strings.browser.GetStringFromName("aboutCharm1"),

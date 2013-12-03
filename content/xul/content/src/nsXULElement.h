@@ -35,6 +35,8 @@
 #include "nsStyledElement.h"
 #include "nsIFrameLoader.h"
 #include "nsFrameLoader.h"
+#include "mozilla/dom/DOMRect.h"
+#include "mozilla/dom/ElementInlines.h"
 
 class nsIDocument;
 class nsString;
@@ -394,7 +396,7 @@ public:
 
     virtual nsIContent *GetBindingParent() const MOZ_OVERRIDE;
     virtual bool IsNodeOfType(uint32_t aFlags) const MOZ_OVERRIDE;
-    virtual bool IsFocusable(int32_t *aTabIndex = nullptr, bool aWithMouse = false) MOZ_OVERRIDE;
+    virtual bool IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) MOZ_OVERRIDE;
 
     NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) MOZ_OVERRIDE;
     virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
@@ -613,7 +615,7 @@ protected:
     nsresult ExecuteOnBroadcastHandler(nsIDOMElement* anElement, const nsAString& attrName);
 
     static nsresult
-    ExecuteJSCode(nsIDOMElement* anElement, nsEvent* aEvent);
+    ExecuteJSCode(nsIDOMElement* anElement, mozilla::WidgetEvent* aEvent);
 
     // Helper routine that crawls a parent chain looking for a tree element.
     NS_IMETHOD GetParentTree(nsIDOMXULMultiSelectControlElement** aTreeElement);
@@ -693,7 +695,7 @@ protected:
     bool BoolAttrIsTrue(nsIAtom* aName) const;
 
     friend nsresult
-    NS_NewXULElement(nsIContent** aResult, nsINodeInfo *aNodeInfo);
+    NS_NewXULElement(mozilla::dom::Element** aResult, nsINodeInfo *aNodeInfo);
     friend void
     NS_TrustedNewXULElement(nsIContent** aResult, nsINodeInfo *aNodeInfo);
 

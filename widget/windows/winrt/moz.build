@@ -4,9 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'widget'
-
-CPP_SOURCES += [
+SOURCES += [
+    'APZController.cpp',
     'FrameworkView.cpp',
     'MetroApp.cpp',
     'MetroAppShell.cpp',
@@ -14,12 +13,11 @@ CPP_SOURCES += [
     'MetroInput.cpp',
     'MetroUtils.cpp',
     'MetroWidget.cpp',
+    'nsMetroFilePicker.cpp',
+    'nsWinMetroUtils.cpp',
     'ToastNotificationHandler.cpp',
     'UIAAccessibilityBridge.cpp',
     'UIABridge.cpp',
-    'nsMetroFilePicker.cpp',
-    'nsWinMetroUtils.cpp',
-    'APZController.cpp',
 ]
 
 EXTRA_COMPONENTS += [
@@ -27,7 +25,22 @@ EXTRA_COMPONENTS += [
     'MetroUIUtils.manifest',
 ]
 
-LIBXUL_LIBRARY = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-LIBRARY_NAME = 'widget_winrt'
+FINAL_LIBRARY = 'xul'
 
+LOCAL_INCLUDES += [
+    '../',
+    '../../shared',
+    '../../xpwidgets',
+    '/layout/generic',
+    '/layout/xul/base/src',
+    '/toolkit/xre',
+    '/xpcom/base',
+]
+
+DEFINES['MOZ_UNICODE'] = True
+
+for var in ('MOZ_ENABLE_D3D9_LAYER', 'MOZ_ENABLE_D3D10_LAYER'):
+    if CONFIG[var]:
+        DEFINES[var] = True

@@ -17,6 +17,7 @@ Cu.import("resource://gre/modules/LightweightThemeManager.jsm");
 Cu.import("resource://gre/modules/ctypes.jsm");
 Cu.import("resource://gre/modules/ThirdPartyCookieProbe.jsm");
 Cu.import("resource://gre/modules/TelemetryFile.jsm");
+Cu.import("resource://gre/modules/UITelemetry.jsm");
 
 // When modifying the payload in incompatible ways, please bump this version number
 const PAYLOAD_VERSION = 1;
@@ -38,39 +39,6 @@ const PREF_PREVIOUS_BUILDID = PREF_BRANCH + "previousBuildID";
 const TELEMETRY_INTERVAL = 60000;
 // Delay before intializing telemetry (ms)
 const TELEMETRY_DELAY = 60000;
-
-// MEM_HISTOGRAMS lists the memory reporters we turn into histograms.
-//
-// Note that we currently handle only vanilla memory reporters, not memory
-// multi-reporters.
-//
-// test_TelemetryPing.js relies on some of these memory reporters
-// being here.  If you remove any of the following histograms from
-// MEM_HISTOGRAMS, you'll have to modify test_TelemetryPing.js:
-//
-//   * MEMORY_JS_GC_HEAP, and
-//   * MEMORY_JS_COMPARTMENTS_SYSTEM.
-//
-// We used to measure "explicit" too, but it could cause hangs, and the data
-// was always really noisy anyway.  See bug 859657.
-const MEM_HISTOGRAMS = {
-  "js-main-runtime-gc-heap": "MEMORY_JS_GC_HEAP",
-  "redundant/js-main-runtime-compartments/system": "MEMORY_JS_COMPARTMENTS_SYSTEM",
-  "redundant/js-main-runtime-compartments/user": "MEMORY_JS_COMPARTMENTS_USER",
-  "js-main-runtime-temporary-peak": "MEMORY_JS_MAIN_RUNTIME_TEMPORARY_PEAK",
-  "redundant/resident-fast": "MEMORY_RESIDENT",
-  "vsize": "MEMORY_VSIZE",
-  "storage-sqlite": "MEMORY_STORAGE_SQLITE",
-  "images-content-used-uncompressed":
-    "MEMORY_IMAGES_CONTENT_USED_UNCOMPRESSED",
-  "heap-allocated": "MEMORY_HEAP_ALLOCATED",
-  "heap-overhead": "MEMORY_HEAP_COMMITTED_UNUSED",
-  "heap-overhead-ratio": "MEMORY_HEAP_COMMITTED_UNUSED_RATIO",
-  "page-faults-hard": "PAGE_FAULTS_HARD",
-  "low-memory-events/virtual": "LOW_MEMORY_EVENTS_VIRTUAL",
-  "low-memory-events/physical": "LOW_MEMORY_EVENTS_PHYSICAL",
-  "ghost-windows": "GHOST_WINDOWS"
-};
 
 // Seconds of idle time before pinging.
 // On idle-daily a gather-telemetry notification is fired, during it probes can
@@ -95,6 +63,10 @@ XPCOMUtils.defineLazyServiceGetter(this, "idleService",
                                    "nsIIdleService");
 XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
                                   "resource://gre/modules/UpdateChannel.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
+                                  "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UITelemetry",
+                                  "resource://gre/modules/UITelemetry.jsm");
 
 function generateUUID() {
   let str = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID().toString();
@@ -191,9 +163,10 @@ TelemetryPing.prototype = {
       appTimestamps = o.TelemetryTimestamps.get();
     } catch (ex) {}
     try {
-      let o = {};
-      Cu.import("resource://gre/modules/AddonManager.jsm", o);
-      ret.addonManager = o.AddonManagerPrivate.getSimpleMeasures();
+      ret.addonManager = AddonManagerPrivate.getSimpleMeasures();
+    } catch (ex) {}
+    try {
+      ret.UITelemetry = UITelemetry.getSimpleMeasures();
     } catch (ex) {}
 
     if (si.process) {
@@ -344,6 +317,16 @@ TelemetryPing.prototype = {
     return ret;
   },
 
+  getThreadHangStats: function getThreadHangStats(stats) {
+    stats.forEach((thread) => {
+      thread.activity = this.packHistogram(thread.activity);
+      thread.hangs.forEach((hang) => {
+        hang.histogram = this.packHistogram(hang.histogram);
+      });
+    });
+    return stats;
+  },
+
   /**
    * Descriptive metadata
    *
@@ -376,7 +359,9 @@ TelemetryPing.prototype = {
                   "device", "manufacturer", "hardware",
                   "hasMMX", "hasSSE", "hasSSE2", "hasSSE3",
                   "hasSSSE3", "hasSSE4A", "hasSSE4_1", "hasSSE4_2",
-                  "hasEDSP", "hasARMv6", "hasARMv7", "hasNEON", "isWow64"];
+                  "hasEDSP", "hasARMv6", "hasARMv7", "hasNEON", "isWow64",
+                  "profileHDDModel", "profileHDDRevision", "binHDDModel",
+                  "binHDDRevision", "winHDDModel", "winHDDRevision"];
     for each (let field in fields) {
       let value;
       try {
@@ -406,10 +391,13 @@ TelemetryPing.prototype = {
     if (gfxInfo) {
       for each (let field in gfxfields) {
         try {
-          let value = "";
-          value = gfxInfo[field];
-          if (value != "")
+          let value = gfxInfo[field];
+          // bug 940806: We need to do a strict equality comparison here,
+          // otherwise a type conversion will occur and boolean false values
+          // will get filtered out
+          if (value !== "") {
             ret[field] = value;
+          }
         } catch (e) {
           continue
         }
@@ -447,39 +435,58 @@ TelemetryPing.prototype = {
 
     let histogram = Telemetry.getHistogramById("TELEMETRY_MEMORY_REPORTER_MS");
     let startTime = new Date();
-    let e = mgr.enumerateReporters();
-    while (e.hasMoreElements()) {
-      let mr = e.getNext().QueryInterface(Ci.nsIMemoryReporter);
-      let id = MEM_HISTOGRAMS[mr.name];
-      if (!id) {
-        continue;
-      }
 
-      // collectReports might throw an exception.  If so, just ignore that
-      // memory reporter; we're not getting useful data out of it.
+    // Get memory measurements from distinguished amount attributes.  We used
+    // to measure "explicit" too, but it could cause hangs, and the data was
+    // always really noisy anyway.  See bug 859657.
+    //
+    // test_TelemetryPing.js relies on some of these histograms being
+    // here.  If you remove any of the following histograms from here, you'll
+    // have to modify test_TelemetryPing.js:
+    //
+    //   * MEMORY_JS_GC_HEAP, and
+    //   * MEMORY_JS_COMPARTMENTS_SYSTEM.
+    //
+    // The distinguished amount attribute names don't match the telemetry id
+    // names in some cases due to a combination of (a) historical reasons, and
+    // (b) the fact that we can't change telemetry id names without breaking
+    // data continuity.
+    //
+    let boundHandleMemoryReport = this.handleMemoryReport.bind(this);
+    function h(id, units, amountName) {
       try {
-        // Bind handleMemoryReport() so it can be called inside the closure
-        // used as the callback.
-        let boundHandleMemoryReport = this.handleMemoryReport.bind(this);
-
-        // Reporters used for telemetry should be uni-reporters!  we assert if
-        // they make more than one report.
-        let hasReported = false;
-
-        function h(process, path, kind, units, amount, desc) {
-          if (!hasReported) {
-            boundHandleMemoryReport(id, units, amount);
-            hasReported = true;
-          } else {
-            NS_ASSERT(false,
-                      "reporter " + mr.name + " has made more than one report");
-          }
-        }
-        mr.collectReports(h, null);
-      }
-      catch (e) {
-      }
+        // If mgr[amountName] throws an exception, just move on -- some amounts
+        // aren't available on all platforms.  But if the attribute simply
+        // isn't present, that indicates the distinguished amounts have changed
+        // and this file hasn't been updated appropriately.
+        let amount = mgr[amountName];
+        NS_ASSERT(amount !== undefined,
+                  "telemetry accessed an unknown distinguished amount");
+        boundHandleMemoryReport(id, units, amount);
+      } catch (e) {
+      };
     }
+    let b = (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_BYTES, n);
+    let c = (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_COUNT, n);
+    let cc= (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_COUNT_CUMULATIVE, n);
+    let p = (id, n) => h(id, Ci.nsIMemoryReporter.UNITS_PERCENTAGE, n);
+
+    b("MEMORY_VSIZE", "vsize");
+    b("MEMORY_VSIZE_MAX_CONTIGUOUS", "vsizeMaxContiguous");
+    b("MEMORY_RESIDENT", "residentFast");
+    b("MEMORY_HEAP_ALLOCATED", "heapAllocated");
+    p("MEMORY_HEAP_COMMITTED_UNUSED_RATIO", "heapOverheadRatio");
+    b("MEMORY_JS_GC_HEAP", "JSMainRuntimeGCHeap");
+    b("MEMORY_JS_MAIN_RUNTIME_TEMPORARY_PEAK", "JSMainRuntimeTemporaryPeak");
+    c("MEMORY_JS_COMPARTMENTS_SYSTEM", "JSMainRuntimeCompartmentsSystem");
+    c("MEMORY_JS_COMPARTMENTS_USER", "JSMainRuntimeCompartmentsUser");
+    b("MEMORY_IMAGES_CONTENT_USED_UNCOMPRESSED", "imagesContentUsedUncompressed");
+    b("MEMORY_STORAGE_SQLITE", "storageSQLite");
+    cc("MEMORY_EVENTS_VIRTUAL", "lowMemoryEventsVirtual");
+    cc("MEMORY_EVENTS_PHYSICAL", "lowMemoryEventsPhysical");
+    c("GHOST_WINDOWS", "ghostWindows");
+    cc("PAGE_FAULTS_HARD", "pageFaultsHard");
+
     histogram.add(new Date() - startTime);
   },
 
@@ -558,13 +565,17 @@ TelemetryPing.prototype = {
       histograms: this.getHistograms(Telemetry.histogramSnapshots),
       slowSQL: Telemetry.slowSQL,
       chromeHangs: Telemetry.chromeHangs,
+      threadHangStats: this.getThreadHangStats(Telemetry.threadHangStats),
       lateWrites: Telemetry.lateWrites,
       addonHistograms: this.getAddonHistograms(),
+      addonDetails: AddonManagerPrivate.getTelemetryDetails(),
+      UIMeasurements: UITelemetry.getUIMeasurements(),
       info: info
     };
 
-    if (Object.keys(this._slowSQLStartup.mainThread).length
-      || Object.keys(this._slowSQLStartup.otherThreads).length) {
+    if (Object.keys(this._slowSQLStartup).length != 0 &&
+        (Object.keys(this._slowSQLStartup.mainThread).length ||
+         Object.keys(this._slowSQLStartup.otherThreads).length)) {
       payloadObj.slowSQLStartup = this._slowSQLStartup;
     }
 
@@ -694,9 +705,14 @@ TelemetryPing.prototype = {
     request.addEventListener("load", handler(true, onSuccess).bind(this), false);
 
     request.setRequestHeader("Content-Encoding", "gzip");
+    let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
+                    .createInstance(Ci.nsIScriptableUnicodeConverter);
+    converter.charset = "UTF-8";
+    let utf8Payload = converter.ConvertFromUnicode(JSON.stringify(ping.payload));
+    utf8Payload += converter.Finish();
     let payloadStream = Cc["@mozilla.org/io/string-input-stream;1"]
                         .createInstance(Ci.nsIStringInputStream);
-    payloadStream.data = this.gzipCompressString(JSON.stringify(ping.payload));
+    payloadStream.data = this.gzipCompressString(utf8Payload);
     request.send(payloadStream);
   },
 
@@ -704,7 +720,7 @@ TelemetryPing.prototype = {
     let observer = {
       buffer: "",
       onStreamComplete: function(loader, context, status, length, result) {
-	this.buffer = String.fromCharCode.apply(this, result);
+        this.buffer = String.fromCharCode.apply(this, result);
       }
     };
 

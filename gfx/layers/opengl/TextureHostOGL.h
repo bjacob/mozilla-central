@@ -22,7 +22,6 @@
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat, etc
 #include "mozilla/layers/CompositorTypes.h"  // for TextureFlags
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
-#include "mozilla/layers/LayersTypes.h"  // for MOZ_LAYERS_HAVE_LOG
 #include "mozilla/layers/TextureHost.h"  // for DeprecatedTextureHost, etc
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "nsAutoPtr.h"                  // for nsRefPtr
@@ -30,7 +29,7 @@
 #include "nsDebug.h"                    // for NS_WARNING
 #include "nsISupportsImpl.h"            // for TextureImage::Release, etc
 #include "nsTraceRefcnt.h"              // for MOZ_COUNT_CTOR, etc
-#include "LayerManagerOGLProgram.h"     // for ShaderProgramType, etc
+#include "OGLShaderProgram.h"           // for ShaderProgramType, etc
 #ifdef MOZ_WIDGET_GONK
 #include <ui/GraphicBuffer.h>
 #endif
@@ -55,21 +54,22 @@ class CompositorOGL;
 class TextureImageDeprecatedTextureHostOGL;
 
 /**
- * CompositableQuirks implementation for the Gonk OpenGL backend.
+ * CompositableBackendSpecificData implementation for the Gonk OpenGL backend.
  * Share a same texture between TextureHosts in the same CompositableHost.
  * By shareing the texture among the TextureHosts, number of texture allocations
  * can be reduced than texture allocation in every TextureHosts.
  * From Bug 912134, use only one texture among all TextureHosts degrade
  * the rendering performance.
- * CompositableQuirksGonkOGL chooses in a middile of them.
+ * CompositableDataGonkOGL chooses in a middile of them.
  */
-class CompositableQuirksGonkOGL : public CompositableQuirks
+class CompositableDataGonkOGL : public CompositableBackendSpecificData
 {
 public:
-  CompositableQuirksGonkOGL();
-  virtual ~CompositableQuirksGonkOGL();
+  CompositableDataGonkOGL();
+  virtual ~CompositableDataGonkOGL();
 
   virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
+  virtual void ClearData() MOZ_OVERRIDE;
   GLuint GetTexture();
   void DeleteTextureIfPresent();
   gl::GLContext* gl() const;
@@ -251,8 +251,7 @@ public:
                          GLenum aTarget,
                          GLenum aWrapMode,
                          SharedTextureShareType aShareType,
-                         gfx::IntSize aSize,
-                         const gfx3DMatrix& aTexTransform);
+                         gfx::IntSize aSize);
 
   virtual TextureSourceOGL* AsSourceOGL() { return this; }
 
@@ -264,7 +263,7 @@ public:
 
   virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE { return mFormat; }
 
-  virtual gfx3DMatrix GetTextureTransform() MOZ_OVERRIDE { return mTextureTransform; }
+  virtual gfx3DMatrix GetTextureTransform() MOZ_OVERRIDE;
 
   virtual GLenum GetTextureTarget() const { return mTextureTarget; }
 
@@ -282,7 +281,6 @@ public:
   gl::GLContext* gl() const;
 
 protected:
-  gfx3DMatrix mTextureTransform;
   gfx::IntSize mSize;
   CompositorOGL* mCompositor;
   gl::SharedTextureHandle mSharedHandle;
@@ -325,7 +323,7 @@ public:
     return mTextureSource;
   }
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE
   {
     return nullptr; // XXX - implement this (for MOZ_DUMP_PAINTING)
   }
@@ -334,9 +332,7 @@ public:
 
   virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "SharedTextureHostOGL"; }
-#endif
 
 protected:
   gfx::IntSize mSize;
@@ -403,7 +399,7 @@ public:
 
   virtual bool Lock() MOZ_OVERRIDE;
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
   // textureSource
   void BindTexture(GLenum aTextureUnit) MOZ_OVERRIDE
@@ -468,9 +464,7 @@ public:
     return DeprecatedTextureHost::GetFormat();
   }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "TextureImageDeprecatedTextureHostOGL"; }
-#endif
 
 protected:
   nsRefPtr<gl::TextureImage> mTexture;
@@ -578,11 +572,9 @@ public:
     return mYTexture->GetSize();
   }
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "YCbCrDeprecatedTextureHostOGL"; }
-#endif
 
 private:
   RefPtr<Channel> mYTexture;
@@ -670,11 +662,9 @@ public:
 
   virtual gfx3DMatrix GetTextureTransform() MOZ_OVERRIDE;
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "SharedDeprecatedTextureHostOGL"; }
-#endif
 
 protected:
   void DeleteTextures();
@@ -751,11 +741,9 @@ public:
              GFX_CONTENT_COLOR;
   }
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "SurfaceStreamHostOGL"; }
-#endif
 
   SurfaceStreamHostOGL()
     : mGL(nullptr)
@@ -815,11 +803,9 @@ public:
                                 nsIntRegion* aRegion = nullptr)
   { MOZ_ASSERT(false, "Tiles should not use this path"); }
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "TiledDeprecatedTextureHostOGL"; }
-#endif
 
 protected:
   void DeleteTextures();
@@ -885,11 +871,9 @@ public:
 
   bool IsValid() const MOZ_OVERRIDE;
 
-  virtual already_AddRefed<gfxImageSurface> GetAsSurface() MOZ_OVERRIDE;
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE;
 
-#ifdef MOZ_LAYERS_HAVE_LOG
   virtual const char* Name() { return "GrallocDeprecatedTextureHostOGL"; }
-#endif
 
   void BindTexture(GLenum aTextureUnit) MOZ_OVERRIDE;
   void UnbindTexture() MOZ_OVERRIDE {}

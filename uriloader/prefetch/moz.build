@@ -9,7 +9,7 @@ XPIDL_SOURCES += [
     'nsIPrefetchService.idl',
 ]
 
-MODULE = 'prefetch'
+XPIDL_MODULE = 'prefetch'
 
 EXPORTS += [
     'nsCPrefetchService.h',
@@ -20,13 +20,17 @@ EXPORTS.mozilla.docshell += [
     'OfflineCacheUpdateParent.h',
 ]
 
-CPP_SOURCES += [
+UNIFIED_SOURCES += [
+    'nsPrefetchService.cpp',
     'OfflineCacheUpdateChild.cpp',
     'OfflineCacheUpdateGlue.cpp',
     'OfflineCacheUpdateParent.cpp',
+]
+
+# These files can't be built in unified mode because they force NSPR logging.
+SOURCES += [
     'nsOfflineCacheUpdate.cpp',
     'nsOfflineCacheUpdateService.cpp',
-    'nsPrefetchService.cpp',
 ]
 
 IPDL_SOURCES += [
@@ -35,7 +39,6 @@ IPDL_SOURCES += [
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-LIBRARY_NAME = 'prefetch_s'
-
+FINAL_LIBRARY = 'xul'

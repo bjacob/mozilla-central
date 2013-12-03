@@ -9,11 +9,12 @@
  * boxes, also used for various anonymous boxes
  */
 
+#include "nsBlockFrame.h"
+
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Util.h"
 
 #include "nsCOMPtr.h"
-#include "nsBlockFrame.h"
 #include "nsAbsoluteContainingBlock.h"
 #include "nsBlockReflowContext.h"
 #include "nsBlockReflowState.h"
@@ -47,6 +48,7 @@
 #include "nsCSSFrameConstructor.h"
 #include "nsRenderingContext.h"
 #include "TextOverflow.h"
+#include "nsIFrameInlines.h"
 
 #ifdef IBMBIDI
 #include "nsBidiPresUtils.h"
@@ -570,7 +572,7 @@ RemoveFirstLine(nsLineList& aFromLines, nsFrameList& aFromFrames,
 /* virtual */ void
 nsBlockFrame::MarkIntrinsicWidthsDirty()
 {
-  nsBlockFrame* dirtyBlock = static_cast<nsBlockFrame*>(GetFirstContinuation());
+  nsBlockFrame* dirtyBlock = static_cast<nsBlockFrame*>(FirstContinuation());
   dirtyBlock->mMinWidth = NS_INTRINSIC_WIDTH_UNKNOWN;
   dirtyBlock->mPrefWidth = NS_INTRINSIC_WIDTH_UNKNOWN;
   if (!(GetStateBits() & NS_BLOCK_NEEDS_BIDI_RESOLUTION)) {
@@ -607,7 +609,7 @@ nsBlockFrame::CheckIntrinsicCacheAgainstShrinkWrapState()
 /* virtual */ nscoord
 nsBlockFrame::GetMinWidth(nsRenderingContext *aRenderingContext)
 {
-  nsIFrame* firstInFlow = GetFirstContinuation();
+  nsIFrame* firstInFlow = FirstContinuation();
   if (firstInFlow != this)
     return firstInFlow->GetMinWidth(aRenderingContext);
 
@@ -692,7 +694,7 @@ nsBlockFrame::GetMinWidth(nsRenderingContext *aRenderingContext)
 /* virtual */ nscoord
 nsBlockFrame::GetPrefWidth(nsRenderingContext *aRenderingContext)
 {
-  nsIFrame* firstInFlow = GetFirstContinuation();
+  nsIFrame* firstInFlow = FirstContinuation();
   if (firstInFlow != this)
     return firstInFlow->GetPrefWidth(aRenderingContext);
 
@@ -782,6 +784,67 @@ nsBlockFrame::ComputeTightBounds(gfxContext* aContext) const
     return GetVisualOverflowRect();
   }
   return ComputeSimpleTightBounds(aContext);
+}
+
+/* virtual */ nsresult
+nsBlockFrame::GetPrefWidthTightBounds(nsRenderingContext* aRenderingContext,
+                                      nscoord* aX,
+                                      nscoord* aXMost)
+{
+  nsIFrame* firstInFlow = FirstContinuation();
+  if (firstInFlow != this) {
+    return firstInFlow->GetPrefWidthTightBounds(aRenderingContext, aX, aXMost);
+  }
+
+  *aX = 0;
+  *aXMost = 0;
+
+  nsresult rv;
+  InlinePrefWidthData data;
+  for (nsBlockFrame* curFrame = this; curFrame;
+       curFrame = static_cast<nsBlockFrame*>(curFrame->GetNextContinuation())) {
+    for (line_iterator line = curFrame->begin_lines(), line_end = curFrame->end_lines();
+         line != line_end; ++line)
+    {
+      nscoord childX, childXMost;
+      if (line->IsBlock()) {
+        data.ForceBreak(aRenderingContext);
+        rv = line->mFirstChild->GetPrefWidthTightBounds(aRenderingContext,
+                                                        &childX, &childXMost);
+        NS_ENSURE_SUCCESS(rv, rv);
+        *aX = std::min(*aX, childX);
+        *aXMost = std::max(*aXMost, childXMost);
+      } else {
+        if (!curFrame->GetPrevContinuation() &&
+            line == curFrame->begin_lines()) {
+          // Only add text-indent if it has no percentages; using a
+          // percentage basis of 0 unconditionally would give strange
+          // behavior for calc(10%-3px).
+          const nsStyleCoord &indent = StyleText()->mTextIndent;
+          if (indent.ConvertsToLength()) {
+            data.currentLine += nsRuleNode::ComputeCoordPercentCalc(indent, 0);
+          }
+        }
+        // XXX Bug NNNNNN Should probably handle percentage text-indent.
+
+        data.line = &line;
+        data.lineContainer = curFrame;
+        nsIFrame *kid = line->mFirstChild;
+        for (int32_t i = 0, i_end = line->GetChildCount(); i != i_end;
+             ++i, kid = kid->GetNextSibling()) {
+          rv = kid->GetPrefWidthTightBounds(aRenderingContext, &childX,
+                                            &childXMost);
+          NS_ENSURE_SUCCESS(rv, rv);
+          *aX = std::min(*aX, data.currentLine + childX);
+          *aXMost = std::max(*aXMost, data.currentLine + childXMost);
+          kid->AddInlinePrefWidth(aRenderingContext, &data);
+        }
+      }
+    }
+  }
+  data.ForceBreak(aRenderingContext);
+
+  return NS_OK;
 }
 
 static bool
@@ -955,7 +1018,7 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
 
 #ifdef IBMBIDI
   if (GetStateBits() & NS_BLOCK_NEEDS_BIDI_RESOLUTION)
-    static_cast<nsBlockFrame*>(GetFirstContinuation())->ResolveBidi();
+    static_cast<nsBlockFrame*>(FirstContinuation())->ResolveBidi();
 #endif // IBMBIDI
 
   if (RenumberLists(aPresContext)) {
@@ -1725,8 +1788,6 @@ nsBlockFrame::PropagateFloatDamage(nsBlockReflowState& aState,
   }
 }
 
-static void PlaceFrameView(nsIFrame* aFrame);
-
 static bool LineHasClear(nsLineBox* aLine) {
   return aLine->IsBlock()
     ? (aLine->GetBreakTypeBefore() ||
@@ -2141,7 +2202,7 @@ nsBlockFrame::ReflowDirtyLines(nsBlockReflowState& aState)
 
   // Should we really have to do this?
   if (repositionViews)
-    ::PlaceFrameView(this);
+    nsContainerFrame::PlaceFrameView(this);
 
   // We can skip trying to pull up the next line if our height is constrained
   // (so we can report being incomplete) and there is no next in flow or we
@@ -2556,15 +2617,6 @@ nsBlockFrame::PullFrameFrom(nsLineBox*           aLine,
   return frame;
 }
 
-static void
-PlaceFrameView(nsIFrame* aFrame)
-{
-  if (aFrame->HasView())
-    nsContainerFrame::PositionFrameView(aFrame);
-  else
-    nsContainerFrame::PositionChildViews(aFrame);
-}
-
 void
 nsBlockFrame::SlideLine(nsBlockReflowState& aState,
                         nsLineBox* aLine, nscoord aDY)
@@ -2586,7 +2638,7 @@ nsBlockFrame::SlideLine(nsBlockReflowState& aState,
     }
 
     // Make sure the frame's view and any child views are updated
-    ::PlaceFrameView(kid);
+    nsContainerFrame::PlaceFrameView(kid);
   }
   else {
     // Adjust the Y coordinate of the frames in the line.
@@ -2599,7 +2651,7 @@ nsBlockFrame::SlideLine(nsBlockReflowState& aState,
         kid->MovePositionBy(nsPoint(0, aDY));
       }
       // Make sure the frame's view and any child views are updated
-      ::PlaceFrameView(kid);
+      nsContainerFrame::PlaceFrameView(kid);
       kid = kid->GetNextSibling();
     }
   }
@@ -3853,7 +3905,7 @@ CheckPlaceholderInLine(nsIFrame* aBlock, nsLineBox* aLine, nsFloatCache* aFC)
   NS_ASSERTION(!(aFC->mFloat->GetStateBits() & NS_FRAME_IS_PUSHED_FLOAT),
                "float in a line should never be a pushed float");
   nsIFrame* ph = aBlock->PresContext()->FrameManager()->
-                   GetPlaceholderFrameFor(aFC->mFloat->GetFirstInFlow());
+                   GetPlaceholderFrameFor(aFC->mFloat->FirstInFlow());
   for (nsIFrame* f = ph; f; f = f->GetParent()) {
     if (f->GetParent() == aBlock)
       return aLine->Contains(f);
@@ -5824,7 +5876,7 @@ nsBlockFrame::ReflowFloat(nsBlockReflowState& aState,
   // XXXldb This seems like the wrong place to be doing this -- shouldn't
   // we be doing this in nsBlockReflowState::FlowAndPlaceFloat after
   // we've positioned the float, and shouldn't we be doing the equivalent
-  // of |::PlaceFrameView| here?
+  // of |PlaceFrameView| here?
   aFloat->SetSize(nsSize(metrics.width, metrics.height));
   if (aFloat->HasView()) {
     nsContainerFrame::SyncFrameViewAfterReflow(aState.mPresContext, aFloat,
@@ -6363,7 +6415,7 @@ nsBlockFrame::ChildIsDirty(nsIFrame* aChild)
       AddStateBits(NS_BLOCK_LOOK_FOR_DIRTY_FRAMES);
     } else {
       NS_ASSERTION(aChild->IsFloating(), "should be a float");
-      nsIFrame *thisFC = GetFirstContinuation();
+      nsIFrame *thisFC = FirstContinuation();
       nsIFrame *placeholderPath =
         PresContext()->FrameManager()->GetPlaceholderFrameFor(aChild);
       // SVG code sometimes sends FrameNeedsReflow notifications during
@@ -6373,7 +6425,7 @@ nsBlockFrame::ChildIsDirty(nsIFrame* aChild)
         for (;;) {
           nsIFrame *parent = placeholderPath->GetParent();
           if (parent->GetContent() == mContent &&
-              parent->GetFirstContinuation() == thisFC) {
+              parent->FirstContinuation() == thisFC) {
             parent->AddStateBits(NS_BLOCK_LOOK_FOR_DIRTY_FRAMES);
             break;
           }
@@ -6498,7 +6550,7 @@ nsBlockFrame::SetInitialChildList(ChildListID     aListID,
           nsCSSPseudoElements::GetPseudoAtom(pseudoType))->StyleContext();
       nsRefPtr<nsStyleContext> kidSC = shell->StyleSet()->
         ResolvePseudoElementStyle(mContent->AsElement(), pseudoType,
-                                  parentStyle);
+                                  parentStyle, nullptr);
 
       // Create bullet frame
       nsBulletFrame* bullet = new (shell) nsBulletFrame(kidSC);
@@ -6621,7 +6673,7 @@ nsBlockFrame::RenumberLists(nsPresContext* aPresContext)
   }
 
   // Get to first-in-flow
-  nsBlockFrame* block = (nsBlockFrame*) GetFirstInFlow();
+  nsBlockFrame* block = static_cast<nsBlockFrame*>(FirstInFlow());
   return RenumberListsInBlock(aPresContext, block, &ordinal, 0, increment);
 }
 
@@ -7160,7 +7212,7 @@ nsBlockFrame::VerifyLines(bool aFinalCheckOK)
 void
 nsBlockFrame::VerifyOverflowSituation()
 {
-  nsBlockFrame* flow = static_cast<nsBlockFrame*>(GetFirstInFlow());
+  nsBlockFrame* flow = static_cast<nsBlockFrame*>(FirstInFlow());
   while (flow) {
     FrameLines* overflowLines = flow->GetOverflowLines();
     if (overflowLines) {

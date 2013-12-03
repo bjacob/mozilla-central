@@ -6,12 +6,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <limits>
-#include <math.h>
 
 #include "jsstr.h"
 
 #include "jsapi-tests/tests.h"
-#include "vm/String.h"
 
 using namespace js;
 
@@ -21,7 +19,7 @@ class AutoInflatedString {
     size_t length_;
 
   public:
-    AutoInflatedString(JSContext *cx) : cx(cx), chars_(NULL), length_(0) { }
+    AutoInflatedString(JSContext *cx) : cx(cx), chars_(nullptr), length_(0) { }
     ~AutoInflatedString() {
         JS_free(cx, chars_);
     }
@@ -36,12 +34,6 @@ class AutoInflatedString {
     const jschar *chars() const { return chars_; }
     size_t length() const { return length_; }
 };
-
-template<size_t N> JSFlatString *
-NewString(JSContext *cx, const jschar (&chars)[N])
-{
-    return js_NewStringCopyN<CanGC>(cx, chars, N);
-}
 
 BEGIN_TEST(testParseJSON_success)
 {
@@ -143,6 +135,12 @@ BEGIN_TEST(testParseJSON_success)
     return true;
 }
 
+template<size_t N> static JSFlatString *
+NewString(JSContext *cx, const jschar (&chars)[N])
+{
+    return js_NewStringCopyN<CanGC>(cx, chars, N);
+}
+
 template<size_t N> inline bool
 Parse(JSContext *cx, const char (&input)[N], JS::MutableHandleValue vp)
 {
@@ -192,7 +190,7 @@ Error(JSContext *cx, const char (&input)[N])
     JSErrorReporter old = JS_SetErrorReporter(cx, reportJSONEror);
     bool ok = JS_ParseJSON(cx, str.chars(), str.length(), &dummy);
     JS_SetErrorReporter(cx, old);
-    JS_SetContextPrivate(cx, NULL);
+    JS_SetContextPrivate(cx, nullptr);
 
     CHECK(!ok);
     CHECK(!p.unexpectedErrorCount);

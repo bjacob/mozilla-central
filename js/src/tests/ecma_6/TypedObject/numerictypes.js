@@ -1,8 +1,20 @@
-// |reftest| skip-if(!this.hasOwnProperty("Type"))
+// |reftest| skip-if(!this.hasOwnProperty("TypedObject"))
 var BUGNUMBER = 578700;
 var summary = 'TypedObjects numeric types';
 var actual = '';
 var expect = '';
+
+var ArrayType = TypedObject.ArrayType;
+var StructType = TypedObject.StructType;
+var uint8 = TypedObject.uint8;
+var uint16 = TypedObject.uint16;
+var uint32 = TypedObject.uint32;
+var uint8Clamped = TypedObject.uint8Clamped;
+var int8 = TypedObject.int8;
+var int16 = TypedObject.int16;
+var int32 = TypedObject.int32;
+var float32 = TypedObject.float32;
+var float64 = TypedObject.float64;
 
 function runTests()
 {
@@ -77,7 +89,7 @@ function runTests()
         check(function() type(+Infinity) === 0);
         check(function() type(-Infinity) === 0);
         check(function() type(NaN) === 0);
-        check(function() type.toString() === strings[i]);
+        check(function() type.toSource() === strings[i]);
         check(function() type(null) == 0);
         check(function() type(undefined) == 0);
         check(function() type([]) == 0);
@@ -98,10 +110,10 @@ function runTests()
         check(function() type(+Infinity) === Infinity);
         check(function() type(-Infinity) === -Infinity);
         check(function() Number.isNaN(type(NaN)));
-        check(function() type.toString() === floatStrings[i]);
+        check(function() type.toSource() === floatStrings[i]);
         check(function() type(null) == 0);
         check(function() Number.isNaN(type(undefined)));
-        check(function() Number.isNaN(type([])));
+        check(function() type([]) == 0);
         check(function() Number.isNaN(type({})));
         check(function() Number.isNaN(type(/abcd/)));
 

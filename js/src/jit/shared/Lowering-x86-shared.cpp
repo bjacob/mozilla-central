@@ -8,7 +8,6 @@
 
 #include "mozilla/MathAlgorithms.h"
 
-#include "jit/Lowering.h"
 #include "jit/MIR.h"
 
 #include "jit/shared/Lowering-shared-inl.h"
@@ -111,8 +110,8 @@ bool
 LIRGeneratorX86Shared::lowerForBitAndAndBranch(LBitAndAndBranch *baab, MInstruction *mir,
                                                MDefinition *lhs, MDefinition *rhs)
 {
-    baab->setOperand(0, useRegister(lhs));
-    baab->setOperand(1, useRegisterOrConstant(rhs));
+    baab->setOperand(0, useRegisterAtStart(lhs));
+    baab->setOperand(1, useRegisterOrConstantAtStart(rhs));
     return add(baab, mir);
 }
 
@@ -122,7 +121,7 @@ LIRGeneratorX86Shared::lowerMulI(MMul *mul, MDefinition *lhs, MDefinition *rhs)
     // Note: lhs is used twice, so that we can restore the original value for the
     // negative zero check.
     LMulI *lir = new LMulI(useRegisterAtStart(lhs), useOrConstant(rhs), use(lhs));
-    if (mul->fallible() && !assignSnapshot(lir))
+    if (mul->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
         return false;
     return defineReuseInput(lir, mul, 0);
 }
@@ -146,7 +145,7 @@ LIRGeneratorX86Shared::lowerDivI(MDiv *div)
         int32_t shift = FloorLog2(rhs);
         if (rhs > 0 && 1 << shift == rhs) {
             LDivPowTwoI *lir = new LDivPowTwoI(useRegisterAtStart(div->lhs()), useRegister(div->lhs()), shift);
-            if (div->fallible() && !assignSnapshot(lir))
+            if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
                 return false;
             return defineReuseInput(lir, div, 0);
         }
@@ -164,13 +163,13 @@ LIRGeneratorX86Shared::lowerDivI(MDiv *div)
             return define(new LInteger(1), div);
 
         LDivSelfI *lir = new LDivSelfI(useRegisterAtStart(div->lhs()));
-        if (div->fallible() && !assignSnapshot(lir))
+        if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
             return false;
         return define(lir, div);
     }
 
     LDivI *lir = new LDivI(useFixed(div->lhs(), eax), useRegister(div->rhs()), tempFixed(edx));
-    if (div->fallible() && !assignSnapshot(lir))
+    if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
         return false;
     return defineFixed(lir, div, LAllocation(AnyRegister(eax)));
 }
@@ -186,13 +185,29 @@ LIRGeneratorX86Shared::lowerModI(MMod *mod)
         int32_t shift = FloorLog2(rhs);
         if (rhs > 0 && 1 << shift == rhs) {
             LModPowTwoI *lir = new LModPowTwoI(useRegisterAtStart(mod->lhs()), shift);
-            if (mod->fallible() && !assignSnapshot(lir))
+            if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
                 return false;
             return defineReuseInput(lir, mod, 0);
         }
     }
-    LModI *lir = new LModI(useRegister(mod->lhs()), useRegister(mod->rhs()), tempFixed(eax));
-    if (mod->fallible() && !assignSnapshot(lir))
+
+    // Optimize x%x. The comments in lowerDivI apply here as well, except
+    // that we return 0 for all cases except when x is 0 and we're not
+    // truncated.
+    if (mod->rhs() == mod->lhs()) {
+        if (mod->isTruncated())
+            return define(new LInteger(0), mod);
+
+        LModSelfI *lir = new LModSelfI(useRegisterAtStart(mod->lhs()));
+        if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+            return false;
+        return define(lir, mod);
+    }
+
+    LModI *lir = new LModI(useFixedAtStart(mod->lhs(), eax),
+                           useRegister(mod->rhs()),
+                           tempFixed(eax));
+    if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
         return false;
     return defineFixed(lir, mod, LAllocation(AnyRegister(edx)));
 }
@@ -208,33 +223,47 @@ LIRGeneratorX86Shared::visitAsmJSNeg(MAsmJSNeg *ins)
 }
 
 bool
-LIRGeneratorX86Shared::lowerUDiv(MInstruction *div)
+LIRGeneratorX86Shared::lowerUDiv(MDiv *div)
 {
-    LUDivOrMod *lir = new LUDivOrMod(useFixed(div->getOperand(0), eax),
-                                     useRegister(div->getOperand(1)),
+    // Optimize x/x. The comments in lowerDivI apply here as well.
+    if (div->lhs() == div->rhs()) {
+        if (!div->canBeDivideByZero())
+            return define(new LInteger(1), div);
+
+        LDivSelfI *lir = new LDivSelfI(useRegisterAtStart(div->lhs()));
+        if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+            return false;
+        return define(lir, div);
+    }
+
+    LUDivOrMod *lir = new LUDivOrMod(useFixedAtStart(div->lhs(), eax),
+                                     useRegister(div->rhs()),
                                      tempFixed(edx));
+    if (div->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+        return false;
     return defineFixed(lir, div, LAllocation(AnyRegister(eax)));
 }
 
 bool
-LIRGeneratorX86Shared::visitAsmJSUDiv(MAsmJSUDiv *div)
+LIRGeneratorX86Shared::lowerUMod(MMod *mod)
 {
-    return lowerUDiv(div);
-}
+    // Optimize x%x. The comments in lowerModI apply here as well.
+    if (mod->lhs() == mod->rhs()) {
+        if (mod->isTruncated())
+            return define(new LInteger(0), mod);
 
-bool
-LIRGeneratorX86Shared::lowerUMod(MInstruction *mod)
-{
-    LUDivOrMod *lir = new LUDivOrMod(useFixed(mod->getOperand(0), eax),
-                                     useRegister(mod->getOperand(1)),
-                                     LDefinition::BogusTemp());
+        LModSelfI *lir = new LModSelfI(useRegisterAtStart(mod->lhs()));
+        if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+            return false;
+        return define(lir, mod);
+    }
+
+    LUDivOrMod *lir = new LUDivOrMod(useFixedAtStart(mod->lhs(), eax),
+                                     useRegister(mod->rhs()),
+                                     tempFixed(eax));
+    if (mod->fallible() && !assignSnapshot(lir, Bailout_BaselineInfo))
+        return false;
     return defineFixed(lir, mod, LAllocation(AnyRegister(edx)));
-}
-
-bool
-LIRGeneratorX86Shared::visitAsmJSUMod(MAsmJSUMod *mod)
-{
-    return lowerUMod(mod);
 }
 
 bool
@@ -294,4 +323,14 @@ LIRGeneratorX86Shared::lowerTruncateDToInt32(MTruncateToInt32 *ins)
 
     LDefinition maybeTemp = Assembler::HasSSE3() ? LDefinition::BogusTemp() : tempFloat();
     return define(new LTruncateDToInt32(useRegister(opd), maybeTemp), ins);
+}
+
+bool
+LIRGeneratorX86Shared::lowerTruncateFToInt32(MTruncateToInt32 *ins)
+{
+    MDefinition *opd = ins->input();
+    JS_ASSERT(opd->type() == MIRType_Float32);
+
+    LDefinition maybeTemp = Assembler::HasSSE3() ? LDefinition::BogusTemp() : tempFloat();
+    return define(new LTruncateFToInt32(useRegister(opd), maybeTemp), ins);
 }

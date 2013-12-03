@@ -27,7 +27,6 @@
 #include <string.h>
 
 #include "double-conversion.h"
-#include "jsapi.h"
 #include "jsatom.h"
 #include "jscntxt.h"
 #include "jsdtoa.h"
@@ -47,6 +46,7 @@
 using namespace js;
 using namespace js::types;
 
+using mozilla::Abs;
 using mozilla::MinDoubleValue;
 using mozilla::NegativeInfinity;
 using mozilla::PodCopy;
@@ -494,7 +494,7 @@ IsNumber(HandleValue v)
     return v.isNumber() || (v.isObject() && v.toObject().is<NumberObject>());
 }
 
-inline double
+static inline double
 Extract(const Value &v)
 {
     if (v.isNumber())
@@ -531,7 +531,7 @@ num_toSource(JSContext *cx, unsigned argc, Value *vp)
 }
 #endif
 
-ToCStringBuf::ToCStringBuf() :dbuf(NULL)
+ToCStringBuf::ToCStringBuf() :dbuf(nullptr)
 {
     JS_STATIC_ASSERT(sbufSize >= DTOSTR_STANDARD_BUFFER_SIZE);
 }
@@ -546,14 +546,14 @@ static JSFlatString *
 LookupDtoaCache(ThreadSafeContext *cx, double d)
 {
     if (!cx->isExclusiveContext())
-        return NULL;
+        return nullptr;
 
     if (JSCompartment *comp = cx->asExclusiveContext()->compartment()) {
         if (JSFlatString *str = comp->dtoaCache.lookup(10, d))
             return str;
     }
 
-    return NULL;
+    return nullptr;
 }
 
 JS_ALWAYS_INLINE
@@ -582,7 +582,7 @@ JS_ALWAYS_INLINE
 static T *
 BackfillInt32InBuffer(int32_t si, T *buffer, size_t size, size_t *length)
 {
-    uint32_t ui = mozilla::Abs(si);
+    uint32_t ui = Abs(si);
     JS_ASSERT_IF(si == INT32_MIN, ui == uint32_t(INT32_MAX) + 1);
 
     RangedPtr<T> end(buffer + size - 1, buffer, size);
@@ -604,7 +604,7 @@ js::Int32ToString(ThreadSafeContext *cx, int32_t si)
 
     JSShortString *str = js_NewGCShortString<allowGC>(cx);
     if (!str)
-        return NULL;
+        return nullptr;
 
     jschar buffer[JSShortString::MAX_SHORT_LENGTH + 1];
     size_t length;
@@ -623,36 +623,29 @@ js::Int32ToString<CanGC>(ThreadSafeContext *cx, int32_t si);
 template JSFlatString *
 js::Int32ToString<NoGC>(ThreadSafeContext *cx, int32_t si);
 
-template <AllowGC allowGC>
 JSAtom *
 js::Int32ToAtom(ExclusiveContext *cx, int32_t si)
 {
     if (JSFlatString *str = LookupInt32ToString(cx, si))
-        return js::AtomizeString<allowGC>(cx, str);
+        return js::AtomizeString(cx, str);
 
     char buffer[JSShortString::MAX_SHORT_LENGTH + 1];
     size_t length;
     char *start = BackfillInt32InBuffer(si, buffer, JSShortString::MAX_SHORT_LENGTH + 1, &length);
 
-    JSAtom *atom = AtomizeMaybeGC<allowGC>(cx, start, length);
+    JSAtom *atom = Atomize(cx, start, length);
     if (!atom)
-        return NULL;
+        return nullptr;
 
     CacheNumber(cx, si, atom);
     return atom;
 }
 
-template JSAtom *
-js::Int32ToAtom<CanGC>(ExclusiveContext *cx, int32_t si);
-
-template JSAtom *
-js::Int32ToAtom<NoGC>(ExclusiveContext *cx, int32_t si);
-
-/* Returns a non-NULL pointer to inside cbuf.  */
+/* Returns a non-nullptr pointer to inside cbuf.  */
 static char *
-IntToCString(ToCStringBuf *cbuf, int i, size_t *len, int base = 10)
+Int32ToCString(ToCStringBuf *cbuf, int32_t i, size_t *len, int base = 10)
 {
-    unsigned u = (i < 0) ? -i : i;
+    uint32_t u = Abs(i);
 
     RangedPtr<char> cp(cbuf->sbuf + ToCStringBuf::sbufSize - 1, cbuf->sbuf, ToCStringBuf::sbufSize);
     char *end = cp.get();
@@ -704,7 +697,7 @@ num_toString_impl(JSContext *cx, CallArgs args)
             return false;
 
         if (d2 < 2 || d2 > 36) {
-            JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_BAD_RADIX);
+            JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_BAD_RADIX);
             return false;
         }
 
@@ -853,7 +846,7 @@ num_toLocaleString_impl(JSContext *cx, CallArgs args)
     return true;
 }
 
-bool
+static bool
 num_toLocaleString(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -876,7 +869,7 @@ js_num_valueOf(JSContext *cx, unsigned argc, Value *vp)
     return CallNonGenericMethod<IsNumber, num_valueOf_impl>(cx, args);
 }
 
-const unsigned MAX_PRECISION = 100;
+static const unsigned MAX_PRECISION = 100;
 
 static bool
 ComputePrecisionInRange(JSContext *cx, int minPrecision, int maxPrecision, HandleValue v,
@@ -892,7 +885,7 @@ ComputePrecisionInRange(JSContext *cx, int minPrecision, int maxPrecision, Handl
 
     ToCStringBuf cbuf;
     if (char *numStr = NumberToCString(cx, &cbuf, prec, 10))
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_PRECISION_RANGE, numStr);
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_PRECISION_RANGE, numStr);
     return false;
 }
 
@@ -932,7 +925,7 @@ num_toFixed_impl(JSContext *cx, CallArgs args)
     return DToStrResult(cx, Extract(args.thisv()), DTOSTR_FIXED, precision, args);
 }
 
-bool
+static bool
 num_toFixed(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -958,7 +951,7 @@ num_toExponential_impl(JSContext *cx, CallArgs args)
     return DToStrResult(cx, Extract(args.thisv()), mode, precision + 1, args);
 }
 
-bool
+static bool
 num_toExponential(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -996,7 +989,7 @@ num_toPrecision_impl(JSContext *cx, CallArgs args)
     return DToStrResult(cx, d, mode, precision, args);
 }
 
-bool
+static bool
 num_toPrecision(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1009,7 +1002,7 @@ static const JSFunctionSpec number_methods[] = {
 #endif
     JS_FN(js_toString_str,       js_num_toString,       1, 0),
 #if EXPOSE_INTL_API
-         {js_toLocaleString_str, {NULL, NULL},           0,0, "Number_toLocaleString"},
+    JS_SELF_HOSTED_FN(js_toLocaleString_str, "Number_toLocaleString", 0,0),
 #else
     JS_FN(js_toLocaleString_str, num_toLocaleString,     0,0),
 #endif
@@ -1127,7 +1120,7 @@ static JSConstDoubleSpec number_constants[] = {
  * Set the exception mask to mask all exceptions and set the FPU precision
  * to 53 bit mantissa (64 bit doubles).
  */
-inline void FIX_FPU() {
+static inline void FIX_FPU() {
     short control;
     asm("fstcw %0" : "=m" (control) : );
     control &= ~0x300; // Lower bits 8 and 9 (precision control).
@@ -1233,29 +1226,29 @@ js_InitNumberClass(JSContext *cx, HandleObject obj)
 
     RootedObject numberProto(cx, global->createBlankPrototype(cx, &NumberObject::class_));
     if (!numberProto)
-        return NULL;
+        return nullptr;
     numberProto->as<NumberObject>().setPrimitiveValue(0);
 
     RootedFunction ctor(cx);
     ctor = global->createConstructor(cx, Number, cx->names().Number, 1);
     if (!ctor)
-        return NULL;
+        return nullptr;
 
     if (!LinkConstructorAndPrototype(cx, ctor, numberProto))
-        return NULL;
+        return nullptr;
 
     /* Add numeric constants (MAX_VALUE, NaN, &c.) to the Number constructor. */
     if (!JS_DefineConstDoubles(cx, ctor, number_constants))
-        return NULL;
+        return nullptr;
 
-    if (!DefinePropertiesAndBrand(cx, ctor, NULL, number_static_methods))
-        return NULL;
+    if (!DefinePropertiesAndBrand(cx, ctor, nullptr, number_static_methods))
+        return nullptr;
 
-    if (!DefinePropertiesAndBrand(cx, numberProto, NULL, number_methods))
-        return NULL;
+    if (!DefinePropertiesAndBrand(cx, numberProto, nullptr, number_methods))
+        return nullptr;
 
     if (!JS_DefineFunctions(cx, global, number_functions))
-        return NULL;
+        return nullptr;
 
     RootedValue valueNaN(cx, cx->runtime()->NaNValue);
     RootedValue valueInfinity(cx, cx->runtime()->positiveInfinityValue);
@@ -1268,11 +1261,11 @@ js_InitNumberClass(JSContext *cx, HandleObject obj)
                               JS_PropertyStub, JS_StrictPropertyStub,
                               JSPROP_PERMANENT | JSPROP_READONLY, 0, 0))
     {
-        return NULL;
+        return nullptr;
     }
 
     if (!DefineConstructorAndPrototype(cx, global, JSProto_Number, ctor, numberProto))
-        return NULL;
+        return nullptr;
 
     return numberProto;
 }
@@ -1313,7 +1306,7 @@ js::NumberToCString(JSContext *cx, ToCStringBuf *cbuf, double d, int base/* = 10
     int32_t i;
     size_t len;
     return mozilla::DoubleIsInt32(d, &i)
-           ? IntToCString(cbuf, i, &len, base)
+           ? Int32ToCString(cbuf, i, &len, base)
            : FracNumberToCString(cx, cbuf, d, base);
 }
 
@@ -1326,15 +1319,15 @@ js_NumberToStringWithBase(ThreadSafeContext *cx, double d, int base)
 
     /*
      * Caller is responsible for error reporting. When called from trace,
-     * returning NULL here will cause us to fall of trace and then retry
+     * returning nullptr here will cause us to fall of trace and then retry
      * from the interpreter (which will report the error).
      */
     if (base < 2 || base > 36)
-        return NULL;
+        return nullptr;
 
     JSCompartment *comp = cx->isExclusiveContext()
                           ? cx->asExclusiveContext()->compartment()
-                          : NULL;
+                          : nullptr;
 
     int32_t i;
     if (mozilla::DoubleIsInt32(d, &i)) {
@@ -1354,7 +1347,7 @@ js_NumberToStringWithBase(ThreadSafeContext *cx, double d, int base)
         }
 
         size_t len;
-        numStr = IntToCString(&cbuf, i, &len, base);
+        numStr = Int32ToCString(&cbuf, i, &len, base);
         JS_ASSERT(!cbuf.dbuf && numStr >= cbuf.sbuf && numStr < cbuf.sbuf + cbuf.sbufSize);
     } else {
         if (comp) {
@@ -1365,7 +1358,7 @@ js_NumberToStringWithBase(ThreadSafeContext *cx, double d, int base)
         numStr = FracNumberToCString(cx, &cbuf, d, base);
         if (!numStr) {
             js_ReportOutOfMemory(cx);
-            return NULL;
+            return nullptr;
         }
         JS_ASSERT_IF(base == 10,
                      !cbuf.dbuf && numStr >= cbuf.sbuf && numStr < cbuf.sbuf + cbuf.sbufSize);
@@ -1394,47 +1387,40 @@ js::NumberToString<CanGC>(ThreadSafeContext *cx, double d);
 template JSString *
 js::NumberToString<NoGC>(ThreadSafeContext *cx, double d);
 
-template <AllowGC allowGC>
 JSAtom *
 js::NumberToAtom(ExclusiveContext *cx, double d)
 {
     int32_t si;
     if (mozilla::DoubleIsInt32(d, &si))
-        return Int32ToAtom<allowGC>(cx, si);
+        return Int32ToAtom(cx, si);
 
     if (JSFlatString *str = LookupDtoaCache(cx, d))
-        return AtomizeString<allowGC>(cx, str);
+        return AtomizeString(cx, str);
 
     ToCStringBuf cbuf;
     char *numStr = FracNumberToCString(cx, &cbuf, d);
     if (!numStr) {
         js_ReportOutOfMemory(cx);
-        return NULL;
+        return nullptr;
     }
     JS_ASSERT(!cbuf.dbuf && numStr >= cbuf.sbuf && numStr < cbuf.sbuf + cbuf.sbufSize);
 
     size_t length = strlen(numStr);
-    JSAtom *atom = AtomizeMaybeGC<allowGC>(cx, numStr, length);
+    JSAtom *atom = Atomize(cx, numStr, length);
     if (!atom)
-        return NULL;
+        return nullptr;
 
     CacheNumber(cx, d, atom);
 
     return atom;
 }
 
-template JSAtom *
-js::NumberToAtom<CanGC>(ExclusiveContext *cx, double d);
-
-template JSAtom *
-js::NumberToAtom<NoGC>(ExclusiveContext *cx, double d);
-
 JSFlatString *
 js::NumberToString(JSContext *cx, double d)
 {
     if (JSString *str = js_NumberToStringWithBase<CanGC>(cx, d, 10))
         return &str->asFlat();
-    return NULL;
+    return nullptr;
 }
 
 JSFlatString *
@@ -1449,7 +1435,7 @@ js::IndexToString(JSContext *cx, uint32_t index)
 
     JSShortString *str = js_NewGCShortString<CanGC>(cx);
     if (!str)
-        return NULL;
+        return nullptr;
 
     jschar buffer[JSShortString::MAX_SHORT_LENGTH + 1];
     RangedPtr<jschar> end(buffer + JSShortString::MAX_SHORT_LENGTH,
@@ -1472,7 +1458,7 @@ js::NumberValueToStringBuffer(JSContext *cx, const Value &v, StringBuffer &sb)
     const char *cstr;
     size_t cstrlen;
     if (v.isInt32()) {
-        cstr = IntToCString(&cbuf, v.toInt32(), &cstrlen);
+        cstr = Int32ToCString(&cbuf, v.toInt32(), &cstrlen);
         JS_ASSERT(cstrlen == strlen(cstr));
     } else {
         cstr = NumberToCString(cx, &cbuf, v.toDouble());

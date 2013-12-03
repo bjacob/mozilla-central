@@ -7,9 +7,10 @@
 #include <stdio.h>
 #include <fstream>
 #include <sstream>
-#include "GeckoProfilerImpl.h"
+#include "GeckoProfiler.h"
 #include "SaveProfileTask.h"
 #include "ProfileEntry.h"
+#include "SyncProfile.h"
 #include "platform.h"
 #include "nsThreadUtils.h"
 #include "prenv.h"
@@ -48,6 +49,18 @@
 #endif
 #ifdef USE_NS_STACKWALK
  #include "nsStackWalk.h"
+#endif
+
+#if defined(XP_WIN)
+typedef CONTEXT tickcontext_t;
+#elif defined(LINUX)
+#include <ucontext.h>
+typedef ucontext_t tickcontext_t;
+#endif
+
+#if defined(LINUX) || defined(XP_MACOSX)
+#include <sys/types.h>
+pid_t gettid();
 #endif
 
 #if defined(SPS_ARCH_arm) && defined(MOZ_WIDGET_GONK)
@@ -104,7 +117,7 @@ typename Builder::Object TableTicker::GetMetaJSCustomObject(Builder& b)
   b.DefineProperty(meta, "processType", XRE_GetProcessType());
 
   TimeDuration delta = TimeStamp::Now() - sStartTime;
-  b.DefineProperty(meta, "startTime", PR_Now()/1000.0f - delta.ToMilliseconds());
+  b.DefineProperty(meta, "startTime", PR_Now()/1000.0 - delta.ToMilliseconds());
 
   nsresult res;
   nsCOMPtr<nsIHttpProtocolHandler> http = do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http", &res);
@@ -217,7 +230,7 @@ typename Builder::Object BuildJavaThreadJSObject(Builder& b)
         b.DefineProperty(sample, "frames", frames);
         b.ArrayPush(samples, sample);
 
-        double sampleTime = AndroidBridge::Bridge()->GetSampleTimeJavaProfiling(0, sampleId);
+        double sampleTime = GeckoJavaSampler::GetSampleTimeJavaProfiling(0, sampleId);
         b.DefineProperty(sample, "time", sampleTime);
       }
       typename Builder::RootedObject frame(b.context(), b.CreateObject());
@@ -269,12 +282,12 @@ void TableTicker::BuildJSObject(Builder& b, typename Builder::ObjectHandle profi
 
 #if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
   if (ProfileJava()) {
-    AndroidBridge::Bridge()->PauseJavaProfiling();
+    GeckoJavaSampler::PauseJavaProfiling();
 
     typename Builder::RootedObject javaThread(b.context(), BuildJavaThreadJSObject(b));
     b.ArrayPush(threads, javaThread);
 
-    AndroidBridge::Bridge()->UnpauseJavaProfiling();
+    GeckoJavaSampler::UnpauseJavaProfiling();
   }
 #endif
 
@@ -329,18 +342,18 @@ void addProfileEntry(volatile StackEntry &entry, ThreadProfile &aProfile,
     addDynamicTag(aProfile, 'c', sampleLabel);
     if (entry.js()) {
       if (!entry.pc()) {
-        // The JIT only allows the top-most entry to have a NULL pc
+        // The JIT only allows the top-most entry to have a nullptr pc
         MOZ_ASSERT(&entry == &stack->mStack[stack->stackSize() - 1]);
         // If stack-walking was disabled, then that's just unfortunate
         if (lastpc) {
           jsbytecode *jspc = js::ProfilingGetPC(stack->mRuntime, entry.script(),
                                                 lastpc);
           if (jspc) {
-            lineno = JS_PCToLineNumber(NULL, entry.script(), jspc);
+            lineno = JS_PCToLineNumber(nullptr, entry.script(), jspc);
           }
         }
       } else {
-        lineno = JS_PCToLineNumber(NULL, entry.script(), entry.pc());
+        lineno = JS_PCToLineNumber(nullptr, entry.script(), entry.pc());
       }
     } else {
       lineno = entry.line();
@@ -372,13 +385,13 @@ static void mergeNativeBacktrace(ThreadProfile &aProfile, const PCArray &array) 
    * and the pseudostack we managed during execution. We want to consolidate
    * the two in order. We do so by merging using the approximate stack address
    * when each entry was push. When pushing JS entry we may not now the stack
-   * address in which case we have a NULL stack address in which case we assume
+   * address in which case we have a nullptr stack address in which case we assume
    * that it follows immediatly the previous element.
    *
    *  C Stack | Address    --  Pseudo Stack | Address
    *  main()  | 0x100          run_js()     | 0x40
-   *  start() | 0x80           jsCanvas()   | NULL
-   *  timer() | 0x50           drawLine()   | NULL
+   *  start() | 0x80           jsCanvas()   | nullptr
+   *  timer() | 0x50           drawLine()   | nullptr
    *  azure() | 0x10
    *
    * Merged: main(), start(), timer(), run_js(), jsCanvas(), drawLine(), azure()
@@ -446,6 +459,11 @@ void TableTicker::doNativeBacktrace(ThreadProfile &aProfile, TickSample* aSample
 #else
   void *platformData = nullptr;
 #ifdef XP_WIN
+  if (aSample->isSamplingCurrentThread) {
+    // In this case we want NS_StackWalk to know that it's walking the
+    // current thread's stack, so we pass 0 as the thread handle.
+    thread = 0;
+  }
   platformData = aSample->context;
 #endif // XP_WIN
 
@@ -510,34 +528,49 @@ void TableTicker::InplaceTick(TickSample* sample)
 {
   ThreadProfile& currThreadProfile = *sample->threadProfile;
 
-  // Marker(s) come before the sample
   PseudoStack* stack = currThreadProfile.GetPseudoStack();
-  ProfilerMarkerLinkedList* pendingMarkersList = stack->getPendingMarkers();
-  while (pendingMarkersList && pendingMarkersList->peek()) {
-    ProfilerMarker* marker = pendingMarkersList->popHead();
-    stack->addStoredMarker(marker);
-    currThreadProfile.addTag(ProfileEntry('m', marker));
-  }
-  stack->updateGeneration(currThreadProfile.GetGenerationID());
-
   bool recordSample = true;
-  if (mJankOnly) {
-    // if we are on a different event we can discard any temporary samples
-    // we've kept around
-    if (sLastSampledEventGeneration != sCurrentEventGeneration) {
-      // XXX: we also probably want to add an entry to the profile to help
-      // distinguish which samples are part of the same event. That, or record
-      // the event generation in each sample
-      currThreadProfile.erase();
-    }
-    sLastSampledEventGeneration = sCurrentEventGeneration;
+#if defined(XP_WIN)
+  bool powerSample = false;
+#endif
 
-    recordSample = false;
-    // only record the events when we have a we haven't seen a tracer event for 100ms
-    if (!sLastTracerEvent.IsNull()) {
-      TimeDuration delta = sample->timestamp - sLastTracerEvent;
-      if (delta.ToMilliseconds() > 100.0) {
-          recordSample = true;
+  /* Don't process the PeudoStack's markers or honour jankOnly if we're
+     immediately sampling the current thread. */
+  if (!sample->isSamplingCurrentThread) {
+    // Marker(s) come before the sample
+    ProfilerMarkerLinkedList* pendingMarkersList = stack->getPendingMarkers();
+    while (pendingMarkersList && pendingMarkersList->peek()) {
+      ProfilerMarker* marker = pendingMarkersList->popHead();
+      stack->addStoredMarker(marker);
+      currThreadProfile.addTag(ProfileEntry('m', marker));
+    }
+    stack->updateGeneration(currThreadProfile.GetGenerationID());
+
+#if defined(XP_WIN)
+    if (mProfilePower) {
+      mIntelPowerGadget->TakeSample();
+      powerSample = true;
+    }
+#endif
+
+    if (mJankOnly) {
+      // if we are on a different event we can discard any temporary samples
+      // we've kept around
+      if (sLastSampledEventGeneration != sCurrentEventGeneration) {
+        // XXX: we also probably want to add an entry to the profile to help
+        // distinguish which samples are part of the same event. That, or record
+        // the event generation in each sample
+        currThreadProfile.erase();
+      }
+      sLastSampledEventGeneration = sCurrentEventGeneration;
+
+      recordSample = false;
+      // only record the events when we have a we haven't seen a tracer event for 100ms
+      if (!sLastTracerEvent.IsNull()) {
+        TimeDuration delta = sample->timestamp - sLastTracerEvent;
+        if (delta.ToMilliseconds() > 100.0) {
+            recordSample = true;
+        }
       }
     }
   }
@@ -565,13 +598,71 @@ void TableTicker::InplaceTick(TickSample* sample)
     currThreadProfile.addTag(ProfileEntry('t', delta.ToMilliseconds()));
   }
 
+#if defined(XP_WIN)
+  if (powerSample) {
+    currThreadProfile.addTag(ProfileEntry('p', mIntelPowerGadget->GetTotalPackagePowerInWatts()));
+  }
+#endif
+
   if (sLastFrameNumber != sFrameNumber) {
     currThreadProfile.addTag(ProfileEntry('f', sFrameNumber));
     sLastFrameNumber = sFrameNumber;
   }
 }
 
-static void print_callback(const ProfileEntry& entry, const char* tagStringData) {
+namespace {
+
+SyncProfile* NewSyncProfile()
+{
+  PseudoStack* stack = tlsPseudoStack.get();
+  if (!stack) {
+    MOZ_ASSERT(stack);
+    return nullptr;
+  }
+  Thread::tid_t tid = Thread::GetCurrentId();
+
+  SyncProfile* profile = new SyncProfile("SyncProfile",
+                                         GET_BACKTRACE_DEFAULT_ENTRY,
+                                         stack, tid, NS_IsMainThread());
+  return profile;
+}
+
+} // anonymous namespace
+
+SyncProfile* TableTicker::GetBacktrace()
+{
+  SyncProfile* profile = NewSyncProfile();
+
+  TickSample sample;
+  sample.threadProfile = profile;
+
+#if defined(HAVE_NATIVE_UNWIND)
+#if defined(XP_WIN) || defined(LINUX)
+  tickcontext_t context;
+  sample.PopulateContext(&context);
+#elif defined(XP_MACOSX)
+  sample.PopulateContext(nullptr);
+#endif
+#endif
+
+  sample.isSamplingCurrentThread = true;
+  sample.timestamp = mozilla::TimeStamp::Now();
+
+  if (!HasUnwinderThread()) {
+    profile->BeginUnwind();
+  }
+
+  Tick(&sample);
+
+  if (!HasUnwinderThread()) {
+    profile->EndUnwind();
+  }
+
+  return profile;
+}
+
+static void print_callback(const ProfileEntry& entry, const char* tagStringData)
+{
   switch (entry.getTagName()) {
     case 's':
     case 'c':
@@ -582,27 +673,20 @@ static void print_callback(const ProfileEntry& entry, const char* tagStringData)
 void mozilla_sampler_print_location1()
 {
   if (!stack_key_initialized)
-    profiler_init(NULL);
+    profiler_init(nullptr);
 
-  PseudoStack *stack = tlsPseudoStack.get();
-  if (!stack) {
-    MOZ_ASSERT(false);
+  SyncProfile* syncProfile = NewSyncProfile();
+  if (!syncProfile) {
     return;
   }
 
-  // This won't allow unwinding past this function, but it will be safe.
-  void *stackTop = &stack;
-
-  ThreadProfile threadProfile("Temp", PROFILE_DEFAULT_ENTRY, stack,
-                              0, Sampler::AllocPlatformData(0), false,
-                              stackTop);
-
-  doSampleStackTrace(stack, threadProfile, NULL);
-
-  threadProfile.flush();
+  syncProfile->BeginUnwind();
+  doSampleStackTrace(syncProfile->GetPseudoStack(), *syncProfile, nullptr);
+  syncProfile->EndUnwind();
 
   printf_stderr("Backtrace:\n");
-  threadProfile.IterateTags(print_callback);
+  syncProfile->IterateTags(print_callback);
+  delete syncProfile;
 }
 
 

@@ -8,6 +8,7 @@
 
 let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
 XPCOMUtils.defineLazyModuleGetter(this, "Services", "resource://gre/modules/Services.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
 
 /**
  * Browser-specific actors.
@@ -480,6 +481,9 @@ function BrowserTabActor(aConnection, aBrowser, aTabBrowser)
   this._extraActors = {};
 
   this._onWindowCreated = this.onWindowCreated.bind(this);
+
+  // Number of event loops nested.
+  this._nestedEventLoopDepth = 0;
 }
 
 // XXX (bug 710213): BrowserTabActor attach/detach/exit/disconnect is a
@@ -547,7 +551,12 @@ BrowserTabActor.prototype = {
    *         Tab URL.
    */
   get url() {
-    return this.browser.currentURI.spec;
+    if (this.browser.currentURI) {
+      return this.browser.currentURI.spec;
+    }
+    // Abrupt closing of the browser window may leave callbacks without a
+    // currentURI.
+    return null;
   },
 
   /**
@@ -583,10 +592,15 @@ BrowserTabActor.prototype = {
     dbg_assert(this.actorID,
                "tab should have an actorID.");
 
+    let windowUtils = this.window
+      .QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIDOMWindowUtils);
+
     let response = {
       actor: this.actorID,
       title: this.title,
-      url: this.url
+      url: this.url,
+      outerWindowID: windowUtils.outerWindowID
     };
 
     // Walk over tab actors added by extensions and add them to a new ActorPool.
@@ -623,6 +637,9 @@ BrowserTabActor.prototype = {
                        type: "tabDetached" });
     }
 
+    // Pop all nested event loops if we haven't already.
+    while (this._nestedEventLoopDepth > 0)
+      this.postNest();
     this._browser = null;
     this._tabbrowser = null;
   },
@@ -762,7 +779,7 @@ BrowserTabActor.prototype = {
    * Prepare to enter a nested event loop by disabling debuggee events.
    */
   preNest: function BTA_preNest() {
-    if (!this.browser) {
+    if (!this.window) {
       // The tab is already closed.
       return;
     }
@@ -771,14 +788,17 @@ BrowserTabActor.prototype = {
                           .getInterface(Ci.nsIDOMWindowUtils);
     windowUtils.suppressEventHandling(true);
     windowUtils.suspendTimeouts();
+    this._nestedEventLoopDepth++;
   },
 
   /**
    * Prepare to exit a nested event loop by enabling debuggee events.
    */
   postNest: function BTA_postNest(aNestData) {
-    if (!this.browser) {
+    if (!this.window) {
       // The tab is already closed.
+      dbg_assert(this._nestedEventLoopDepth === 0,
+                 "window shouldn't be closed before all nested event loops have been popped");
       return;
     }
     let windowUtils = this.window
@@ -790,6 +810,7 @@ BrowserTabActor.prototype = {
       this._pendingNavigation.resume();
       this._pendingNavigation = null;
     }
+    this._nestedEventLoopDepth--;
   },
 
   /**
@@ -851,8 +872,6 @@ BrowserTabActor.prototype.requestTypes = {
   "reload": BrowserTabActor.prototype.onReload,
   "navigateTo": BrowserTabActor.prototype.onNavigateTo
 };
-
-Components.utils.import("resource://gre/modules/AddonManager.jsm");
 
 function BrowserAddonList(aConnection)
 {

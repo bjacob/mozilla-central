@@ -2,23 +2,19 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import json
 import os
 import posixpath
 import shutil
 import sys
 import tempfile
 import threading
+import time
 import traceback
-
-try:
-    import json
-except ImportError:
-    import simplejson as json
 
 here = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, here)
 
-from b2gautomation import B2GDesktopAutomation
 from runtests import Mochitest
 from runtests import MochitestUtilsMixin
 from runtests import MochitestOptions
@@ -118,12 +114,15 @@ class B2GMochitest(MochitestUtilsMixin):
         self.startWebSocketServer(options, None)
         self.buildURLOptions(options, {'MOZ_HIDE_RESULTS_TABLE': '1'})
 
-        if options.timeout:
-            timeout = options.timeout + 30
-        elif options.debugger or not options.autorun:
+        if options.debugger or not options.autorun:
             timeout = None
         else:
-            timeout = 330.0 # default JS harness timeout is 300 seconds
+            if not options.timeout:
+                if mozinfo.info['debug']:
+                    options.timeout = 420
+                else:
+                    options.timeout = 300
+            timeout = options.timeout + 30.0
 
         log.info("runtestsb2g.py | Running tests: start.")
         status = 0
@@ -132,18 +131,28 @@ class B2GMochitest(MochitestUtilsMixin):
                             'devicemanager': self._dm,
                             'marionette': self.marionette,
                             'remote_test_root': self.remote_test_root,
+                            'symbols_path': options.symbolsPath,
                             'test_script': self.test_script,
                             'test_script_args': self.test_script_args }
             self.runner = B2GRunner(**runner_args)
             self.runner.start(outputTimeout=timeout)
-            self.runner.wait()
+            status = self.runner.wait()
+            if status is None:
+                # the runner has timed out
+                status = 124
         except KeyboardInterrupt:
             log.info("runtests.py | Received keyboard interrupt.\n");
             status = -1
         except:
+            # XXX Bug 937684
+            time.sleep(5)
             traceback.print_exc()
             log.error("Automation Error: Received unexpected exception while running application\n")
+            self.runner.check_for_crashes()
             status = 1
+
+        # XXX Bug 937684
+        time.sleep(5)
 
         self.stopWebServer(options)
         self.stopWebSocketServer(options)
@@ -225,9 +234,9 @@ class B2GDeviceMochitest(B2GMochitest):
 
 class B2GDesktopMochitest(B2GMochitest, Mochitest):
 
-    def __init__(self, automation, marionette, profile_data_dir):
+    def __init__(self, marionette, profile_data_dir):
         B2GMochitest.__init__(self, marionette, out_of_process=False, profile_data_dir=profile_data_dir)
-        Mochitest.__init__(self, automation)
+        Mochitest.__init__(self)
 
     def runMarionetteScript(self, marionette, test_script, test_script_args):
         assert(marionette.wait_for_port())
@@ -337,8 +346,6 @@ def run_remote_mochitests(parser, options):
     sys.exit(retVal)
 
 def run_desktop_mochitests(parser, options):
-    automation = B2GDesktopAutomation()
-
     # create our Marionette instance
     kwargs = {}
     if options.marionette:
@@ -346,13 +353,12 @@ def run_desktop_mochitests(parser, options):
         kwargs['host'] = host
         kwargs['port'] = int(port)
     marionette = Marionette.getMarionetteOrExit(**kwargs)
-    automation.marionette = marionette
+    mochitest = B2GDesktopMochitest(marionette, options.profile_data_dir)
 
-    mochitest = B2GDesktopMochitest(automation, marionette, options.profile_data_dir)
-
-    # b2g desktop builds don't always have a b2g-bin file
-    if options.app[-4:] == '-bin':
-        options.app = options.app[:-4]
+    # add a -bin suffix if b2g-bin exists, but just b2g was specified
+    if options.app[-4:] != '-bin':
+        if os.path.isfile("%s-bin" % options.app):
+            options.app = "%s-bin" % options.app
 
     options = MochitestOptions.verifyOptions(parser, options, mochitest)
     if options == None:
@@ -361,10 +367,6 @@ def run_desktop_mochitests(parser, options):
     if options.desktop and not options.profile:
         raise Exception("must specify --profile when specifying --desktop")
 
-    automation.setServerInfo(options.webServer,
-                             options.httpPort,
-                             options.sslPort,
-                             options.webSocketPort)
     sys.exit(mochitest.runTests(options, onLaunch=mochitest.startTests))
 
 def main():

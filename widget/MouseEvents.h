@@ -46,7 +46,7 @@ private:
   friend class dom::PBrowserParent;
   friend class dom::PBrowserChild;
 
-public:
+protected:
   WidgetMouseEventBase()
   {
   }
@@ -58,6 +58,9 @@ public:
     inputSource(nsIDOMMouseEvent::MOZ_SOURCE_MOUSE)
  {
  }
+
+public:
+  virtual WidgetMouseEventBase* AsMouseEventBase() MOZ_OVERRIDE { return this; }
 
   /// The possible related target
   nsCOMPtr<nsISupports> relatedTarget;
@@ -105,6 +108,14 @@ public:
     pressure = aEvent.pressure;
     inputSource = aEvent.inputSource;
   }
+
+  /**
+   * Returns true if left click event.
+   */
+  bool IsLeftClickEvent() const
+  {
+    return message == NS_MOUSE_CLICK && button == eLeftButton;
+  }
 };
 
 /******************************************************************************
@@ -136,11 +147,11 @@ public:
     eTopLevel
   };
 
+protected:
   WidgetMouseEvent()
   {
   }
 
-protected:
   WidgetMouseEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget,
                    nsEventStructType aStructType, reasonType aReason) :
     WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, aStructType),
@@ -162,6 +173,7 @@ protected:
   }
 
 public:
+  virtual WidgetMouseEvent* AsMouseEvent() MOZ_OVERRIDE { return this; }
 
   WidgetMouseEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget,
                    reasonType aReason, contextType aContext = eNormal) :
@@ -187,7 +199,8 @@ public:
   }
 
 #ifdef DEBUG
-  ~WidgetMouseEvent() {
+  virtual ~WidgetMouseEvent()
+  {
     NS_WARN_IF_FALSE(message != NS_CONTEXTMENU ||
                      button ==
                        ((context == eNormal) ? eRightButton : eLeftButton),
@@ -216,6 +229,14 @@ public:
     ignoreRootScrollFrame = aEvent.ignoreRootScrollFrame;
     clickCount = aEvent.clickCount;
   }
+
+  /**
+   * Returns true if the event is a context menu event caused by key.
+   */
+  bool IsContextMenuKeyEvent() const
+  {
+    return message == NS_CONTEXTMENU && context == eContextMenuKey;
+  }
 };
 
 /******************************************************************************
@@ -225,6 +246,8 @@ public:
 class WidgetDragEvent : public WidgetMouseEvent
 {
 public:
+  virtual WidgetDragEvent* AsDragEvent() MOZ_OVERRIDE { return this; }
+
   WidgetDragEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget) :
     WidgetMouseEvent(aIsTrusted, aMessage, aWidget, NS_DRAG_EVENT, eReal),
     userCancelled(false)
@@ -268,6 +291,11 @@ private:
   }
 
 public:
+  virtual WidgetMouseScrollEvent* AsMouseScrollEvent() MOZ_OVERRIDE
+  {
+    return this;
+  }
+
   WidgetMouseScrollEvent(bool aIsTrusted, uint32_t aMessage,
                          nsIWidget* aWidget) :
     WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, NS_MOUSE_SCROLL_EVENT),
@@ -312,13 +340,16 @@ private:
   }
 
 public:
+  virtual WidgetWheelEvent* AsWheelEvent() MOZ_OVERRIDE { return this; }
+
   WidgetWheelEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget) :
     WidgetMouseEventBase(aIsTrusted, aMessage, aWidget, NS_WHEEL_EVENT),
     deltaX(0.0), deltaY(0.0), deltaZ(0.0),
     deltaMode(nsIDOMWheelEvent::DOM_DELTA_PIXEL),
     customizedByUserPrefs(false), isMomentum(false), isPixelOnlyDevice(false),
     lineOrPageDeltaX(0), lineOrPageDeltaY(0), scrollType(SCROLL_DEFAULT),
-    overflowDeltaX(0.0), overflowDeltaY(0.0)
+    overflowDeltaX(0.0), overflowDeltaY(0.0),
+    mViewPortIsOverscrolled(false)
   {
   }
 
@@ -399,6 +430,12 @@ public:
   double overflowDeltaX;
   double overflowDeltaY;
 
+  // Whether or not the parent of the currently overscrolled frame is the
+  // ViewPort. This is false in situations when an element on the page is being
+  // overscrolled (such as a text field), but true when the 'page' is being
+  // overscrolled.
+  bool mViewPortIsOverscrolled;
+
   void AssignWheelEventData(const WidgetWheelEvent& aEvent, bool aCopyTargets)
   {
     AssignMouseEventBaseData(aEvent, aCopyTargets);
@@ -415,18 +452,71 @@ public:
     scrollType = aEvent.scrollType;
     overflowDeltaX = aEvent.overflowDeltaX;
     overflowDeltaY = aEvent.overflowDeltaY;
+    mViewPortIsOverscrolled = aEvent.mViewPortIsOverscrolled;
   }
 };
 
-// TODO: Remove following typedef
-typedef WidgetWheelEvent                WheelEvent;
+/******************************************************************************
+ * mozilla::WidgetPointerEvent
+ ******************************************************************************/
+
+class WidgetPointerEvent : public WidgetMouseEvent
+{
+  friend class mozilla::dom::PBrowserParent;
+  friend class mozilla::dom::PBrowserChild;
+
+  WidgetPointerEvent()
+  {
+  }
+
+public:
+  virtual WidgetPointerEvent* AsPointerEvent() MOZ_OVERRIDE { return this; }
+
+  WidgetPointerEvent(bool aIsTrusted, uint32_t aMsg, nsIWidget* w)
+    : WidgetMouseEvent(aIsTrusted, aMsg, w, NS_POINTER_EVENT, eReal)
+    , pointerId(0)
+    , width(0)
+    , height(0)
+    , tiltX(0)
+    , tiltY(0)
+    , isPrimary(true)
+  {
+  }
+
+  WidgetPointerEvent(const WidgetMouseEvent& aEvent)
+    : WidgetMouseEvent(aEvent)
+    , pointerId(0)
+    , width(0)
+    , height(0)
+    , tiltX(0)
+    , tiltY(0)
+    , isPrimary(true)
+  {
+    eventStructType = NS_POINTER_EVENT;
+  }
+
+  WidgetPointerEvent(bool aIsTrusted, uint32_t aMsg, nsIWidget* w,
+                     uint32_t aPointerId,
+                     uint32_t aWidth, uint32_t aHeight,
+                     uint32_t aTiltX, uint32_t aTiltY, bool aIsPrimary)
+    : WidgetMouseEvent(aIsTrusted, aMsg, w, NS_POINTER_EVENT, eReal)
+    , pointerId(aPointerId)
+    , width(aWidth)
+    , height(aHeight)
+    , tiltX(aTiltX)
+    , tiltY(aTiltY)
+    , isPrimary(aIsPrimary)
+  {
+  }
+
+  uint32_t pointerId;
+  uint32_t width;
+  uint32_t height;
+  uint32_t tiltX;
+  uint32_t tiltY;
+  bool isPrimary;
+};
 
 } // namespace mozilla
-
-// TODO: Remove following typedefs
-typedef mozilla::WidgetMouseEventBase   nsMouseEvent_base;
-typedef mozilla::WidgetMouseEvent       nsMouseEvent;
-typedef mozilla::WidgetDragEvent        nsDragEvent;
-typedef mozilla::WidgetMouseScrollEvent nsMouseScrollEvent;
 
 #endif // mozilla_MouseEvents_h__

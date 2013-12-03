@@ -71,12 +71,12 @@ class Operand
         disp_(JSC::X86Assembler::addressImmediate(address.addr))
     { }
 
-    Address toAddress() {
+    Address toAddress() const {
         JS_ASSERT(kind() == MEM_REG_DISP);
         return Address(Register::FromCode(base()), disp());
     }
 
-    BaseIndex toBaseIndex() {
+    BaseIndex toBaseIndex() const {
         JS_ASSERT(kind() == MEM_SCALE);
         return BaseIndex(Register::FromCode(base()), Register::FromCode(index()), scale(), disp());
     }
@@ -403,84 +403,43 @@ class AssemblerX86Shared
         masm.xchgl_rr(src.code(), dest.code());
     }
 
-    void movsd(const FloatRegister &src, const FloatRegister &dest) {
+    // Eventually movapd and movaps should be overloaded to support loads and
+    // stores too.
+    void movapd(const FloatRegister &src, const FloatRegister &dest) {
         JS_ASSERT(HasSSE2());
-        // Use movapd instead of movsd so that we define the entire output
-        // register and avoid false dependencies.
         masm.movapd_rr(src.code(), dest.code());
     }
-    void movsd(const Operand &src, const FloatRegister &dest) {
+    void movaps(const FloatRegister &src, const FloatRegister &dest) {
         JS_ASSERT(HasSSE2());
-        switch (src.kind()) {
-          case Operand::FPREG:
-            // As above; use movapd instead of movsd to avoid dependencies.
-            masm.movapd_rr(src.fpu(), dest.code());
-            break;
-          case Operand::MEM_REG_DISP:
-            masm.movsd_mr(src.disp(), src.base(), dest.code());
-            break;
-          case Operand::MEM_SCALE:
-            masm.movsd_mr(src.disp(), src.base(), src.index(), src.scale(), dest.code());
-            break;
-          default:
-            MOZ_ASSUME_UNREACHABLE("unexpected operand kind");
-        }
-    }
-    void movsd(const FloatRegister &src, const Operand &dest) {
-        JS_ASSERT(HasSSE2());
-        switch (dest.kind()) {
-          case Operand::FPREG:
-            // As above; use movapd instead of movsd to avoid dependencies.
-            masm.movapd_rr(src.code(), dest.fpu());
-            break;
-          case Operand::MEM_REG_DISP:
-            masm.movsd_rm(src.code(), dest.disp(), dest.base());
-            break;
-          case Operand::MEM_SCALE:
-            masm.movsd_rm(src.code(), dest.disp(), dest.base(), dest.index(), dest.scale());
-            break;
-          default:
-            MOZ_ASSUME_UNREACHABLE("unexpected operand kind");
-        }
-    }
-    void movss(const FloatRegister &src, const FloatRegister &dest) {
-        JS_ASSERT(HasSSE2());
-        // As with movsd; use movaps instead of movss to avoid dependencies.
         masm.movaps_rr(src.code(), dest.code());
     }
-    void movss(const Operand &src, const FloatRegister &dest) {
-        JS_ASSERT(HasSSE2());
-        switch (src.kind()) {
-          case Operand::FPREG:
-            // As above; use movaps instead of movss to avoid dependencies.
-            masm.movaps_rr(src.fpu(), dest.code());
-            break;
-          case Operand::MEM_REG_DISP:
-            masm.movss_mr(src.disp(), src.base(), dest.code());
-            break;
-          case Operand::MEM_SCALE:
-            masm.movss_mr(src.disp(), src.base(), src.index(), src.scale(), dest.code());
-            break;
-          default:
-            MOZ_ASSUME_UNREACHABLE("unexpected operand kind");
-        }
+
+    // movsd and movss are only provided in load/store form since the
+    // register-to-register form has different semantics (it doesn't clobber
+    // the whole output register) and isn't needed currently.
+    void movsd(const Address &src, const FloatRegister &dest) {
+        masm.movsd_mr(src.offset, src.base.code(), dest.code());
     }
-    void movss(const FloatRegister &src, const Operand &dest) {
-        JS_ASSERT(HasSSE2());
-        switch (dest.kind()) {
-          case Operand::FPREG:
-            // As above; use movaps instead of movss to avoid dependencies.
-            masm.movaps_rr(src.code(), dest.fpu());
-            break;
-          case Operand::MEM_REG_DISP:
-            masm.movss_rm(src.code(), dest.disp(), dest.base());
-            break;
-          case Operand::MEM_SCALE:
-            masm.movss_rm(src.code(), dest.disp(), dest.base(), dest.index(), dest.scale());
-            break;
-          default:
-            MOZ_ASSUME_UNREACHABLE("unexpected operand kind");
-        }
+    void movsd(const BaseIndex &src, const FloatRegister &dest) {
+        masm.movsd_mr(src.offset, src.base.code(), src.index.code(), src.scale, dest.code());
+    }
+    void movsd(const FloatRegister &src, const Address &dest) {
+        masm.movsd_rm(src.code(), dest.offset, dest.base.code());
+    }
+    void movsd(const FloatRegister &src, const BaseIndex &dest) {
+        masm.movsd_rm(src.code(), dest.offset, dest.base.code(), dest.index.code(), dest.scale);
+    }
+    void movss(const Address &src, const FloatRegister &dest) {
+        masm.movss_mr(src.offset, src.base.code(), dest.code());
+    }
+    void movss(const BaseIndex &src, const FloatRegister &dest) {
+        masm.movss_mr(src.offset, src.base.code(), src.index.code(), src.scale, dest.code());
+    }
+    void movss(const FloatRegister &src, const Address &dest) {
+        masm.movss_rm(src.code(), dest.offset, dest.base.code());
+    }
+    void movss(const FloatRegister &src, const BaseIndex &dest) {
+        masm.movss_rm(src.code(), dest.offset, dest.base.code(), dest.index.code(), dest.scale);
     }
     void movdqa(const Operand &src, const FloatRegister &dest) {
         JS_ASSERT(HasSSE2());
@@ -1203,7 +1162,7 @@ class AssemblerX86Shared
 #endif
 
     // Zero-extend byte to 32-bit integer.
-    void movzxbl(const Register &src, const Register &dest) {
+    void movzbl(const Register &src, const Register &dest) {
         masm.movzbl_rr(src.code(), dest.code());
     }
 
@@ -1302,6 +1261,10 @@ class AssemblerX86Shared
     void movmskpd(const FloatRegister &src, const Register &dest) {
         JS_ASSERT(HasSSE2());
         masm.movmskpd_rr(src.code(), dest.code());
+    }
+    void movmskps(const FloatRegister &src, const Register &dest) {
+        JS_ASSERT(HasSSE2());
+        masm.movmskps_rr(src.code(), dest.code());
     }
     void ptest(const FloatRegister &lhs, const FloatRegister &rhs) {
         JS_ASSERT(HasSSE41());
@@ -1485,15 +1448,29 @@ class AssemblerX86Shared
         JS_ASSERT(HasSSE2());
         masm.andpd_rr(src.code(), dest.code());
     }
+    void andps(const FloatRegister &src, const FloatRegister &dest) {
+        JS_ASSERT(HasSSE2());
+        masm.andps_rr(src.code(), dest.code());
+    }
     void sqrtsd(const FloatRegister &src, const FloatRegister &dest) {
         JS_ASSERT(HasSSE2());
         masm.sqrtsd_rr(src.code(), dest.code());
+    }
+    void sqrtss(const FloatRegister &src, const FloatRegister &dest) {
+        JS_ASSERT(HasSSE2());
+        masm.sqrtss_rr(src.code(), dest.code());
     }
     void roundsd(const FloatRegister &src, const FloatRegister &dest,
                  JSC::X86Assembler::RoundingMode mode)
     {
         JS_ASSERT(HasSSE41());
         masm.roundsd_rr(src.code(), dest.code(), mode);
+    }
+    void roundss(const FloatRegister &src, const FloatRegister &dest,
+                 JSC::X86Assembler::RoundingMode mode)
+    {
+        JS_ASSERT(HasSSE41());
+        masm.roundss_rr(src.code(), dest.code(), mode);
     }
     void minsd(const FloatRegister &src, const FloatRegister &dest) {
         JS_ASSERT(HasSSE2());
@@ -1552,6 +1529,15 @@ class AssemblerX86Shared
         switch (src.kind()) {
           case Operand::MEM_REG_DISP:
             masm.fstp_m(src.disp(), src.base());
+            break;
+          default:
+            MOZ_ASSUME_UNREACHABLE("unexpected operand kind");
+        }
+    }
+    void fstp32(const Operand &src) {
+        switch (src.kind()) {
+          case Operand::MEM_REG_DISP:
+            masm.fstp32_m(src.disp(), src.base());
             break;
           default:
             MOZ_ASSUME_UNREACHABLE("unexpected operand kind");

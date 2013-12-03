@@ -8,6 +8,7 @@
 
 #include "mozilla/DebugOnly.h"
 
+#include "jit/IonCaches.h"
 #include "jit/IonMacroAssembler.h"
 #include "jit/IonSpewer.h"
 #include "jit/MIR.h"
@@ -34,18 +35,18 @@ CodeGeneratorShared::ensureMasm(MacroAssembler *masmArg)
 }
 
 CodeGeneratorShared::CodeGeneratorShared(MIRGenerator *gen, LIRGraph *graph, MacroAssembler *masmArg)
-  : oolIns(NULL),
+  : oolIns(nullptr),
     maybeMasm_(),
     masm(ensureMasm(masmArg)),
     gen(gen),
     graph(*graph),
-    current(NULL),
-    deoptTable_(NULL),
+    current(nullptr),
+    deoptTable_(nullptr),
 #ifdef DEBUG
     pushedArgs_(0),
 #endif
     lastOsiPointOffset_(0),
-    sps_(&GetIonContext()->runtime->spsProfiler, &lastPC_),
+    sps_(&GetIonContext()->runtime->spsProfiler(), &lastPC_),
     osrEntryOffset_(0),
     skipArgCheckEntryOffset_(0),
     frameDepth_(graph->localSlotCount() * sizeof(STACK_SLOT_SIZE) +
@@ -87,7 +88,7 @@ bool
 CodeGeneratorShared::generateOutOfLineCode()
 {
     for (size_t i = 0; i < outOfLineCode_.length(); i++) {
-        if (!gen->temp().ensureBallast())
+        if (!gen->alloc().ensureBallast())
             return false;
         masm.setFramePushed(outOfLineCode_[i]->framePushed());
         lastPC_ = outOfLineCode_[i]->pc();
@@ -98,7 +99,7 @@ CodeGeneratorShared::generateOutOfLineCode()
         if (!outOfLineCode_[i]->generate(this))
             return false;
     }
-    oolIns = NULL;
+    oolIns = nullptr;
 
     return true;
 }
@@ -113,7 +114,7 @@ CodeGeneratorShared::addOutOfLineCode(OutOfLineCode *code)
     if (oolIns)
         code->setSource(oolIns->script(), oolIns->pc());
     else
-        code->setSource(current ? current->mir()->info().script() : NULL, lastPC_);
+        code->setSource(current ? current->mir()->info().script() : nullptr, lastPC_);
     return outOfLineCode_.append(code);
 }
 
@@ -126,7 +127,7 @@ ToStackIndex(LAllocation *a)
         return a->toStackSlot()->slot();
     }
     JS_ASSERT(-int32_t(sizeof(IonJSFrameLayout)) <= a->toArgument()->index());
-    return -(sizeof(IonJSFrameLayout) + a->toArgument()->index());
+    return -int32_t(sizeof(IonJSFrameLayout) + a->toArgument()->index());
 }
 
 bool
@@ -278,25 +279,28 @@ CodeGeneratorShared::encode(LSnapshot *snapshot)
 
 #ifdef DEBUG
         if (GetIonContext()->cx) {
-            uint32_t stackDepth = js_ReconstructStackDepth(GetIonContext()->cx, script, bailPC);
-            if (JSOp(*bailPC) == JSOP_FUNCALL) {
-                // For fun.call(this, ...); the reconstructStackDepth will
-                // include the this. When inlining that is not included.
-                // So the exprStackSlots will be one less.
-                JS_ASSERT(stackDepth - exprStack <= 1);
-            } else if (JSOp(*bailPC) != JSOP_FUNAPPLY &&
-                       !IsGetPropPC(bailPC) && !IsSetPropPC(bailPC))
-            {
-                // For fun.apply({}, arguments) the reconstructStackDepth will
-                // have stackdepth 4, but it could be that we inlined the
-                // funapply. In that case exprStackSlots, will have the real
-                // arguments in the slots and not be 4.
+            uint32_t stackDepth;
+            if (ReconstructStackDepth(GetIonContext()->cx, script, bailPC, &stackDepth)) {
+                if (JSOp(*bailPC) == JSOP_FUNCALL) {
+                    // For fun.call(this, ...); the reconstructStackDepth will
+                    // include the this. When inlining that is not included.
+                    // So the exprStackSlots will be one less.
+                    JS_ASSERT(stackDepth - exprStack <= 1);
+                } else if (JSOp(*bailPC) != JSOP_FUNAPPLY &&
+                           !IsGetPropPC(bailPC) && !IsSetPropPC(bailPC))
+                {
+                    // For fun.apply({}, arguments) the reconstructStackDepth will
+                    // have stackdepth 4, but it could be that we inlined the
+                    // funapply. In that case exprStackSlots, will have the real
+                    // arguments in the slots and not be 4.
 
-                // With accessors, we have different stack depths depending on whether or not we
-                // inlined the accessor, as the inlined stack contains a callee function that should
-                // never have been there and we might just be capturing an uneventful property site,
-                // in which case there won't have been any violence.
-                JS_ASSERT(exprStack == stackDepth);
+                    // With accessors, we have different stack depths depending on
+                    // whether or not we inlined the accessor, as the inlined stack
+                    // contains a callee function that should never have been there
+                    // and we might just be capturing an uneventful property site, in
+                    // which case there won't have been any violence.
+                    JS_ASSERT(exprStack == stackDepth);
+                }
             }
         }
 #endif
@@ -567,9 +571,24 @@ CodeGeneratorShared::verifyOsiPointRegs(LSafepoint *safepoint)
 
     masm.jump(&done);
 
+    // Do not profile the callWithABI that occurs below.  This is to avoid a
+    // rare corner case that occurs when profiling interacts with itself:
+    //
+    // When slow profiling assertions are turned on, FunctionBoundary ops
+    // (which update the profiler pseudo-stack) may emit a callVM, which
+    // forces them to have an osi point associated with them.  The
+    // FunctionBoundary for inline function entry is added to the caller's
+    // graph with a PC from the caller's code, but during codegen it modifies
+    // SPS instrumentation to add the callee as the current top-most script.
+    // When codegen gets to the OSIPoint, and the callWithABI below is
+    // emitted, the codegen thinks that the current frame is the callee, but
+    // the PC it's using from the OSIPoint refers to the caller.  This causes
+    // the profiler instrumentation of the callWithABI below to ASSERT, since
+    // the script and pc are mismatched.  To avoid this, we simply omit
+    // instrumentation for these callWithABIs.
     masm.bind(&failure);
     masm.setupUnalignedABICall(0, scratch);
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, OsiPointRegisterCheckFailed));
+    masm.callWithABINoProfiling(JS_FUNC_TO_DATA_PTR(void *, OsiPointRegisterCheckFailed));
     masm.breakpoint();
 
     masm.bind(&done);
@@ -590,6 +609,23 @@ CodeGeneratorShared::shouldVerifyOsiPointRegs(LSafepoint *safepoint)
 
     return true;
 }
+
+void
+CodeGeneratorShared::resetOsiPointRegs(LSafepoint *safepoint)
+{
+    if (!shouldVerifyOsiPointRegs(safepoint))
+        return;
+
+    // Set checkRegs to 0. If we perform a VM call, the instruction
+    // will set it to 1.
+    GeneralRegisterSet allRegs(GeneralRegisterSet::All());
+    Register scratch = allRegs.takeAny();
+    masm.push(scratch);
+    masm.loadJitActivation(scratch);
+    Address checkRegs(scratch, JitActivation::offsetOfCheckRegs());
+    masm.store32(Imm32(0), checkRegs);
+    masm.pop(scratch);
+}
 #endif
 
 // Before doing any call to Cpp, you should ensure that volatile
@@ -602,7 +638,7 @@ CodeGeneratorShared::callVM(const VMFunction &fun, LInstruction *ins, const Regi
 
     // If we're calling a function with an out parameter type of double, make
     // sure we have an FPU.
-    JS_ASSERT_IF(fun.outParam == Type_Double, GetIonContext()->runtime->jitSupportsFloatingPoint);
+    JS_ASSERT_IF(fun.outParam == Type_Double, GetIonContext()->runtime->jitSupportsFloatingPoint());
 
 #ifdef DEBUG
     if (ins->mirRaw()) {
@@ -621,7 +657,7 @@ CodeGeneratorShared::callVM(const VMFunction &fun, LInstruction *ins, const Regi
 #endif
 
     // Get the wrapper of the VM function.
-    IonCode *wrapper = gen->ionRuntime()->getVMWrapper(fun);
+    IonCode *wrapper = gen->jitRuntime()->getVMWrapper(fun);
     if (!wrapper)
         return false;
 
@@ -658,10 +694,11 @@ class OutOfLineTruncateSlow : public OutOfLineCodeBase<CodeGeneratorShared>
 {
     FloatRegister src_;
     Register dest_;
+    bool needFloat32Conversion_;
 
   public:
-    OutOfLineTruncateSlow(FloatRegister src, Register dest)
-      : src_(src), dest_(dest)
+    OutOfLineTruncateSlow(FloatRegister src, Register dest, bool needFloat32Conversion = false)
+      : src_(src), dest_(dest), needFloat32Conversion_(needFloat32Conversion)
     { }
 
     bool accept(CodeGeneratorShared *codegen) {
@@ -673,6 +710,10 @@ class OutOfLineTruncateSlow : public OutOfLineCodeBase<CodeGeneratorShared>
     Register dest() const {
         return dest_;
     }
+    bool needFloat32Conversion() const {
+        return needFloat32Conversion_;
+    }
+
 };
 
 OutOfLineCode *
@@ -680,7 +721,7 @@ CodeGeneratorShared::oolTruncateDouble(const FloatRegister &src, const Register 
 {
     OutOfLineTruncateSlow *ool = new OutOfLineTruncateSlow(src, dest);
     if (!addOutOfLineCode(ool))
-        return NULL;
+        return nullptr;
     return ool;
 }
 
@@ -697,12 +738,29 @@ CodeGeneratorShared::emitTruncateDouble(const FloatRegister &src, const Register
 }
 
 bool
+CodeGeneratorShared::emitTruncateFloat32(const FloatRegister &src, const Register &dest)
+{
+    OutOfLineTruncateSlow *ool = new OutOfLineTruncateSlow(src, dest, true);
+    if (!addOutOfLineCode(ool))
+        return false;
+
+    masm.branchTruncateFloat32(src, dest, ool->entry());
+    masm.bind(ool->rejoin());
+    return true;
+}
+
+bool
 CodeGeneratorShared::visitOutOfLineTruncateSlow(OutOfLineTruncateSlow *ool)
 {
     FloatRegister src = ool->src();
     Register dest = ool->dest();
 
     saveVolatile(dest);
+
+    if (ool->needFloat32Conversion()) {
+        masm.push(src);
+        masm.convertFloatToDouble(src, src);
+    }
 
     masm.setupUnalignedABICall(1, dest);
     masm.passABIArg(src);
@@ -711,6 +769,9 @@ CodeGeneratorShared::visitOutOfLineTruncateSlow(OutOfLineTruncateSlow *ool)
     else
         masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, js::ToInt32));
     masm.storeCallResult(dest);
+
+    if (ool->needFloat32Conversion())
+        masm.pop(src);
 
     restoreVolatile(dest);
 
@@ -759,7 +820,7 @@ CodeGeneratorShared::oolAbortPar(ParallelBailoutCause cause, MBasicBlock *basicB
 {
     OutOfLineAbortPar *ool = new OutOfLineAbortPar(cause, basicBlock, bytecode);
     if (!ool || !addOutOfLineCode(ool))
-        return NULL;
+        return nullptr;
     return ool;
 }
 
@@ -783,21 +844,21 @@ CodeGeneratorShared::oolPropagateAbortPar(LInstruction *lir)
 {
     OutOfLinePropagateAbortPar *ool = new OutOfLinePropagateAbortPar(lir);
     if (!ool || !addOutOfLineCode(ool))
-        return NULL;
+        return nullptr;
     return ool;
 }
 
 bool
 OutOfLineAbortPar::generate(CodeGeneratorShared *codegen)
 {
-    codegen->callTraceLIR(0xDEADBEEF, NULL, "AbortPar");
+    codegen->callTraceLIR(0xDEADBEEF, nullptr, "AbortPar");
     return codegen->visitOutOfLineAbortPar(this);
 }
 
 bool
 OutOfLinePropagateAbortPar::generate(CodeGeneratorShared *codegen)
 {
-    codegen->callTraceLIR(0xDEADBEEF, NULL, "AbortPar");
+    codegen->callTraceLIR(0xDEADBEEF, nullptr, "AbortPar");
     return codegen->visitOutOfLinePropagateAbortPar(this);
 }
 
@@ -833,15 +894,15 @@ CodeGeneratorShared::callTraceLIR(uint32_t blockIndex, LInstruction *lir,
             script = mir->block()->info().script();
             pc = mir->trackedPc();
         } else {
-            mirOpName = NULL;
-            script = NULL;
-            pc = NULL;
+            mirOpName = nullptr;
+            script = nullptr;
+            pc = nullptr;
         }
     } else {
         blockIndex = lirIndex = 0xDEADBEEF;
         lirOpName = mirOpName = bailoutName;
-        script = NULL;
-        pc = NULL;
+        script = nullptr;
+        pc = nullptr;
     }
 
     masm.store32(Imm32(blockIndex),
@@ -891,12 +952,12 @@ CodeGeneratorShared::labelForBackedgeWithImplicitCheck(MBasicBlock *mir)
                 // The interrupt check should be the first instruction in the
                 // loop header other than the initial label and move groups.
                 JS_ASSERT(iter->isInterruptCheck() || iter->isCheckInterruptPar());
-                return NULL;
+                return nullptr;
             }
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 void

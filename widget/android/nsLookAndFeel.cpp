@@ -8,6 +8,8 @@
 #include "nsXULAppAPI.h"
 #include "nsLookAndFeel.h"
 #include "gfxFont.h"
+#include "gfxFontConstants.h"
+#include "mozilla/gfx/2D.h"
 
 using namespace mozilla;
 using mozilla::dom::ContentChild;
@@ -464,10 +466,7 @@ nsLookAndFeel::GetEchoPasswordImpl()
 {
     if (!mInitializedShowPassword) {
         if (XRE_GetProcessType() == GeckoProcessType_Default) {
-            if (AndroidBridge::Bridge())
-                mShowPassword = AndroidBridge::Bridge()->GetShowPasswordSetting();
-            else
-                NS_ASSERTION(AndroidBridge::Bridge() != nullptr, "AndroidBridge is not available!");
+            mShowPassword = GeckoAppShell::GetShowPasswordSetting();
         } else {
             ContentChild::GetSingleton()->SendGetShowPasswordSetting(&mShowPassword);
         }

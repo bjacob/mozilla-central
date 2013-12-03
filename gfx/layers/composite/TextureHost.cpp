@@ -57,7 +57,7 @@ DeprecatedTextureHost::CreateDeprecatedTextureHost(SurfaceDescriptorType aDescri
                                         aDeprecatedTextureHostFlags,
                                         aTextureFlags);
       if (aCompositableHost) {
-        result->SetCompositableQuirks(aCompositableHost->GetCompositableQuirks());
+        result->SetCompositableBackendSpecificData(aCompositableHost->GetCompositableBackendSpecificData());
       }
       return result;
       }
@@ -144,9 +144,10 @@ CreateBackendIndependentTextureHost(uint64_t aID,
   return result;
 }
 
-void TextureHost::SetCompositableQuirks(CompositableQuirks* aQuirks)
+void
+TextureHost::SetCompositableBackendSpecificData(CompositableBackendSpecificData* aBackendData)
 {
-    mQuirks = aQuirks;
+    mCompositableBackendData = aBackendData;
 }
 
 
@@ -161,8 +162,6 @@ TextureHost::~TextureHost()
 {
 }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
-
 void
 TextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
 {
@@ -173,11 +172,10 @@ TextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
   AppendToString(aTo, mFlags, " [flags=", "]");
 }
 
-#endif
-
-void TextureSource::SetCompositableQuirks(CompositableQuirks* aQuirks)
+void
+TextureSource::SetCompositableBackendSpecificData(CompositableBackendSpecificData* aBackendData)
 {
-    mQuirks = aQuirks;
+    mCompositableBackendData = aBackendData;
 }
 
 TextureSource::TextureSource()
@@ -244,7 +242,14 @@ DeprecatedTextureHost::SwapTextures(const SurfaceDescriptor& aImage,
   SetBuffer(mBuffer, mDeAllocator);
 }
 
-#ifdef MOZ_LAYERS_HAVE_LOG
+void
+DeprecatedTextureHost::OnActorDestroy()
+{
+  if (ISurfaceAllocator::IsShmem(mBuffer)) {
+    *mBuffer = SurfaceDescriptor();
+    mBuffer = nullptr;
+  }
+}
 
 void
 DeprecatedTextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
@@ -255,7 +260,6 @@ DeprecatedTextureHost::PrintInfo(nsACString& aTo, const char* aPrefix)
   AppendToString(aTo, GetFormat(), " [format=", "]");
   AppendToString(aTo, mFlags, " [flags=", "]");
 }
-#endif // MOZ_LAYERS_HAVE_LOG
 
 
 
@@ -455,10 +459,10 @@ BufferTextureHost::Upload(nsIntRegion *aRegion)
   return true;
 }
 
-already_AddRefed<gfxImageSurface>
+TemporaryRef<gfx::DataSourceSurface>
 BufferTextureHost::GetAsSurface()
 {
-  nsRefPtr<gfxImageSurface> result;
+  RefPtr<gfx::DataSourceSurface> result;
   if (mFormat == gfx::FORMAT_UNKNOWN) {
     NS_WARNING("BufferTextureHost: unsupported format!");
     return nullptr;
@@ -467,17 +471,13 @@ BufferTextureHost::GetAsSurface()
     if (!yuvDeserializer.IsValid()) {
       return nullptr;
     }
-    result = new gfxImageSurface(yuvDeserializer.GetYData(),
-                                 yuvDeserializer.GetYSize(),
-                                 yuvDeserializer.GetYStride(),
-                                 gfxImageFormatA8);
+    result = yuvDeserializer.ToDataSourceSurface();
   } else {
     ImageDataDeserializer deserializer(GetBuffer());
     if (!deserializer.IsValid()) {
       return nullptr;
     }
-    RefPtr<gfxImageSurface> surf = deserializer.GetAsThebesSurface();
-    result = surf.get();
+    result = deserializer.GetAsSurface();
   }
   return result.forget();
 }
@@ -508,7 +508,15 @@ ShmemTextureHost::DeallocateSharedData()
     MOZ_ASSERT(mDeallocator,
                "Shared memory would leak without a ISurfaceAllocator");
     mDeallocator->DeallocShmem(*mShmem);
+    mShmem = nullptr;
   }
+}
+
+void
+ShmemTextureHost::OnActorDestroy()
+{
+  delete mShmem;
+  mShmem = nullptr;
 }
 
 uint8_t* ShmemTextureHost::GetBuffer()
@@ -535,7 +543,11 @@ MemoryTextureHost::~MemoryTextureHost()
 void
 MemoryTextureHost::DeallocateSharedData()
 {
+  if (mBuffer) {
+    GfxMemoryImageReporter::WillFree(mBuffer);
+  }
   delete[] mBuffer;
+  mBuffer = nullptr;
 }
 
 uint8_t* MemoryTextureHost::GetBuffer()

@@ -38,10 +38,10 @@ ToolbarView.prototype = {
     this._stepOutButton = document.getElementById("step-out");
     this._chromeGlobals = document.getElementById("chrome-globals");
 
-    let resumeKey = DevtoolsHelpers.prettyKey(document.getElementById("resumeKey"), true);
-    let stepOverKey = DevtoolsHelpers.prettyKey(document.getElementById("stepOverKey"), true);
-    let stepInKey = DevtoolsHelpers.prettyKey(document.getElementById("stepInKey"), true);
-    let stepOutKey = DevtoolsHelpers.prettyKey(document.getElementById("stepOutKey"), true);
+    let resumeKey = ShortcutUtils.prettifyShortcut(document.getElementById("resumeKey"));
+    let stepOverKey = ShortcutUtils.prettifyShortcut(document.getElementById("stepOverKey"));
+    let stepInKey = ShortcutUtils.prettifyShortcut(document.getElementById("stepInKey"));
+    let stepOutKey = ShortcutUtils.prettifyShortcut(document.getElementById("stepOutKey"));
     this._resumeTooltip = L10N.getFormatStr("resumeButtonTooltip", resumeKey);
     this._pauseTooltip = L10N.getFormatStr("pauseButtonTooltip", resumeKey);
     this._stepOverTooltip = L10N.getFormatStr("stepOverTooltip", stepOverKey);
@@ -136,6 +136,7 @@ ToolbarView.prototype = {
   _onResumePressed: function() {
     if (DebuggerController.activeThread.paused) {
       let warn = DebuggerController._ensureResumptionOrder;
+      DebuggerController.StackFrames.currentFrameDepth = -1;
       DebuggerController.activeThread.resume(warn);
     } else {
       DebuggerController.activeThread.interrupt();
@@ -147,6 +148,7 @@ ToolbarView.prototype = {
    */
   _onStepOverPressed: function() {
     if (DebuggerController.activeThread.paused) {
+      DebuggerController.StackFrames.currentFrameDepth = -1;
       DebuggerController.activeThread.stepOver();
     }
   },
@@ -156,6 +158,7 @@ ToolbarView.prototype = {
    */
   _onStepInPressed: function() {
     if (DebuggerController.activeThread.paused) {
+      DebuggerController.StackFrames.currentFrameDepth = -1;
       DebuggerController.activeThread.stepIn();
     }
   },
@@ -165,6 +168,7 @@ ToolbarView.prototype = {
    */
   _onStepOutPressed: function() {
     if (DebuggerController.activeThread.paused) {
+      DebuggerController.StackFrames.currentFrameDepth = -1;
       DebuggerController.activeThread.stepOut();
     }
   },
@@ -478,6 +482,17 @@ StackFramesView.prototype = Heritage.extend(WidgetMethods, {
   },
 
   /**
+   * Gets the currently selected stack frame's depth in this container.
+   * This will essentially be the opposite of |selectedIndex|, which deals
+   * with the position in the view, where the last item added is actually
+   * the bottommost, not topmost.
+   * @return number
+   */
+  get selectedDepth() {
+    return this.selectedItem.attachment.depth;
+  },
+
+  /**
    * Specifies if the active thread has more frames that need to be loaded.
    */
   dirty: false,
@@ -615,7 +630,7 @@ StackFramesView.prototype = Heritage.extend(WidgetMethods, {
 
       // Update the context menu to show the currently selected stackframe item
       // as a checked entry.
-      for (let otherItem in this) {
+      for (let otherItem of this) {
         if (otherItem != stackframeItem) {
           otherItem.attachment.popup.menuitem.removeAttribute("checked");
         } else {
@@ -664,62 +679,6 @@ StackFramesView.prototype = Heritage.extend(WidgetMethods, {
 });
 
 /**
- * Utility functions for handling stackframes.
- */
-let StackFrameUtils = {
-  /**
-   * Create a textual representation for the specified stack frame
-   * to display in the stackframes container.
-   *
-   * @param object aFrame
-   *        The stack frame to label.
-   */
-  getFrameTitle: function(aFrame) {
-    if (aFrame.type == "call") {
-      let c = aFrame.callee;
-      return (c.userDisplayName || c.displayName || c.name || "(anonymous)");
-    }
-    return "(" + aFrame.type + ")";
-  },
-
-  /**
-   * Constructs a scope label based on its environment.
-   *
-   * @param object aEnv
-   *        The scope's environment.
-   * @return string
-   *         The scope's label.
-   */
-  getScopeLabel: function(aEnv) {
-    let name = "";
-
-    // Name the outermost scope Global.
-    if (!aEnv.parent) {
-      name = L10N.getStr("globalScopeLabel");
-    }
-    // Otherwise construct the scope name.
-    else {
-      name = aEnv.type.charAt(0).toUpperCase() + aEnv.type.slice(1);
-    }
-
-    let label = L10N.getFormatStr("scopeLabel", name);
-    switch (aEnv.type) {
-      case "with":
-      case "object":
-        label += " [" + aEnv.object.class + "]";
-        break;
-      case "function":
-        let f = aEnv.function;
-        label += " [" +
-          (f.userDisplayName || f.displayName || f.name || "(anonymous)") +
-        "]";
-        break;
-    }
-    return label;
-  }
-};
-
-/**
  * Functions handling the filtering UI.
  */
 function FilterView() {
@@ -752,12 +711,12 @@ FilterView.prototype = {
     this._variableOperatorButton = document.getElementById("variable-operator-button");
     this._variableOperatorLabel = document.getElementById("variable-operator-label");
 
-    this._fileSearchKey = DevtoolsHelpers.prettyKey(document.getElementById("fileSearchKey"), true);
-    this._globalSearchKey = DevtoolsHelpers.prettyKey(document.getElementById("globalSearchKey"), true);
-    this._filteredFunctionsKey = DevtoolsHelpers.prettyKey(document.getElementById("functionSearchKey"), true);
-    this._tokenSearchKey = DevtoolsHelpers.prettyKey(document.getElementById("tokenSearchKey"), true);
-    this._lineSearchKey = DevtoolsHelpers.prettyKey(document.getElementById("lineSearchKey"), true);
-    this._variableSearchKey = DevtoolsHelpers.prettyKey(document.getElementById("variableSearchKey"), true);
+    this._fileSearchKey = ShortcutUtils.prettifyShortcut(document.getElementById("fileSearchKey"));
+    this._globalSearchKey = ShortcutUtils.prettifyShortcut(document.getElementById("globalSearchKey"));
+    this._filteredFunctionsKey = ShortcutUtils.prettifyShortcut(document.getElementById("functionSearchKey"));
+    this._tokenSearchKey = ShortcutUtils.prettifyShortcut(document.getElementById("tokenSearchKey"));
+    this._lineSearchKey = ShortcutUtils.prettifyShortcut(document.getElementById("lineSearchKey"));
+    this._variableSearchKey = ShortcutUtils.prettifyShortcut(document.getElementById("variableSearchKey"));
 
     this._searchbox.addEventListener("click", this._onClick, false);
     this._searchbox.addEventListener("select", this._onInput, false);
@@ -917,10 +876,9 @@ FilterView.prototype = {
    */
   _performLineSearch: function(aLine) {
     // Make sure we're actually searching for a valid line.
-    if (!aLine) {
-      return;
+    if (aLine) {
+      DebuggerView.editor.setCursor({ line: aLine - 1, ch: 0 }, "center");
     }
-    DebuggerView.editor.setCaretPosition(aLine - 1);
   },
 
   /**
@@ -935,10 +893,8 @@ FilterView.prototype = {
     if (!aToken) {
       return;
     }
-    let offset = DebuggerView.editor.find(aToken, { ignoreCase: true });
-    if (offset > -1) {
-      DebuggerView.editor.setSelection(offset, offset + aToken.length)
-    }
+
+    DebuggerView.editor.find(aToken);
   },
 
   /**
@@ -1026,7 +982,10 @@ FilterView.prototype = {
     else switch (e.keyCode) {
       case e.DOM_VK_RETURN:
       case e.DOM_VK_ENTER:
-        var isReturnKey = true; // Fall through.
+        var isReturnKey = true;
+        // If the shift key is pressed, focus on the previous result
+        actionToPerform = e.shiftKey ? "selectPrev" : "selectNext";
+        break;
       case e.DOM_VK_DOWN:
         actionToPerform = "selectNext";
         break;
@@ -1096,14 +1055,8 @@ FilterView.prototype = {
 
     // Jump to the next/previous instance of the currently searched token.
     if (isTokenSearch) {
-      let [, token] = args;
-      let methods = { selectNext: "findNext", selectPrev: "findPrevious" };
-
-      // Search for the token and select it.
-      let offset = DebuggerView.editor[methods[actionToPerform]](true);
-      if (offset > -1) {
-        DebuggerView.editor.setSelection(offset, offset + token.length)
-      }
+      let methods = { selectNext: "findNext", selectPrev: "findPrev" };
+      DebuggerView.editor[methods[actionToPerform]]();
       return;
     }
 
@@ -1114,7 +1067,7 @@ FilterView.prototype = {
 
       // Modify the line number and jump to it.
       line += !isReturnKey ? amounts[actionToPerform] : 0;
-      let lineCount = DebuggerView.editor.getLineCount();
+      let lineCount = DebuggerView.editor.lineCount();
       let lineTarget = line < 1 ? 1 : line > lineCount ? lineCount : line;
       this._doSearch(SEARCH_LINE_FLAG, lineTarget);
       return;
@@ -1137,7 +1090,7 @@ FilterView.prototype = {
   _doSearch: function(aOperator = "", aText = "") {
     this._searchbox.focus();
     this._searchbox.value = ""; // Need to clear value beforehand. Bug 779738.
-    this._searchbox.value = aOperator + (aText || DebuggerView.editor.getSelectedText());
+    this._searchbox.value = aOperator + (aText || DebuggerView.editor.getSelection());
   },
 
   /**
@@ -1446,8 +1399,8 @@ FilteredFunctionsView.prototype = Heritage.extend(ResultsPanelContainer.prototyp
     }
 
     for (let [location, contents] of aSources) {
-      let parserMethods = DebuggerController.Parser.get(location, contents);
-      let sourceResults = parserMethods.getNamedFunctionDefinitions(aToken);
+      let parsedSource = DebuggerController.Parser.get(contents, location);
+      let sourceResults = parsedSource.getNamedFunctionDefinitions(aToken);
 
       for (let scriptResult of sourceResults) {
         for (let parseResult of scriptResult.parseResults) {
@@ -1559,6 +1512,7 @@ FilteredFunctionsView.prototype = Heritage.extend(ResultsPanelContainer.prototyp
       DebuggerView.setEditorLocation(sourceUrl, actualLocation.start.line, {
         charOffset: scriptOffset,
         columnOffset: actualLocation.start.column,
+        align: "center",
         noDebug: true
       });
     }

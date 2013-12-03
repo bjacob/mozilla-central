@@ -107,6 +107,7 @@ OptionsPanel.prototype = {
         atleastOneToolNotSupported = true;
         checkbox.setAttribute("label",
                               l10n("options.toolNotSupportedMarker", tool.label));
+        checkbox.setAttribute("unsupported", "");
       }
       checkbox.setAttribute("checked", pref(tool.visibilityswitch));
       checkbox.addEventListener("command", onCheckboxClick.bind(checkbox, tool.id));
@@ -114,10 +115,10 @@ OptionsPanel.prototype = {
     };
 
     // Populating the default tools lists
-    for (let tool of gDevTools.getDefaultTools()) {
-      if (tool.id == "options") {
-        continue;
-      }
+    let toggleableTools = gDevTools.getDefaultTools().filter(tool => {
+      return tool.visibilityswitch
+    });
+    for (let tool of toggleableTools) {
       defaultToolsBox.appendChild(createToolCheckbox(tool));
     }
 

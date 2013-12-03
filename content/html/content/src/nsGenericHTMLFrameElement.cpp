@@ -14,7 +14,7 @@
 #include "mozilla/ErrorResult.h"
 #include "nsIAppsService.h"
 #include "nsServiceManagerUtils.h"
-#include "nsIDOMApplicationRegistry.h"
+#include "mozIApplication.h"
 #include "nsIPermissionManager.h"
 #include "GeckoProfiler.h"
 
@@ -323,6 +323,21 @@ nsGenericHTMLFrameElement::IsHTMLFocusable(bool aWithMouse,
   return false;
 }
 
+bool
+nsGenericHTMLFrameElement::BrowserFramesEnabled()
+{
+  static bool sMozBrowserFramesEnabled = false;
+  static bool sBoolVarCacheInitialized = false;
+
+  if (!sBoolVarCacheInitialized) {
+    sBoolVarCacheInitialized = true;
+    Preferences::AddBoolVarCache(&sMozBrowserFramesEnabled,
+                                 "dom.mozBrowserFramesEnabled");
+  }
+
+  return sMozBrowserFramesEnabled;
+}
+
 /**
  * Return true if this frame element really is a mozbrowser or mozapp.  (It
  * needs to have the right attributes, and its creator must have the right
@@ -334,7 +349,7 @@ nsGenericHTMLFrameElement::GetReallyIsBrowserOrApp(bool *aOut)
   *aOut = false;
 
   // Fail if browser frames are globally disabled.
-  if (!Preferences::GetBool("dom.mozBrowserFramesEnabled")) {
+  if (!nsGenericHTMLFrameElement::BrowserFramesEnabled()) {
     return NS_OK;
   }
 
@@ -415,7 +430,7 @@ nsGenericHTMLFrameElement::GetAppManifestURL(nsAString& aOut)
   nsCOMPtr<nsIAppsService> appsService = do_GetService(APPS_SERVICE_CONTRACTID);
   NS_ENSURE_TRUE(appsService, NS_OK);
 
-  nsCOMPtr<mozIDOMApplication> app;
+  nsCOMPtr<mozIApplication> app;
   appsService->GetAppByManifestURL(manifestURL, getter_AddRefs(app));
   if (app) {
     aOut.Assign(manifestURL);

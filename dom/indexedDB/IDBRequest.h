@@ -10,6 +10,7 @@
 #include "mozilla/dom/indexedDB/IndexedDatabase.h"
 
 #include "mozilla/Attributes.h"
+#include "mozilla/EventForwards.h"
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/IDBRequestBinding.h"
 #include "mozilla/ErrorResult.h"
@@ -45,21 +46,17 @@ public:
                                                          IDBWrapperCache)
 
   static
-  already_AddRefed<IDBRequest> Create(IDBWrapperCache* aOwnerCache,
+  already_AddRefed<IDBRequest> Create(IDBDatabase* aDatabase,
                                       IDBTransaction* aTransaction);
 
   static
   already_AddRefed<IDBRequest> Create(IDBObjectStore* aSource,
-                                      IDBWrapperCache* aOwnerCache,
+                                      IDBDatabase* aDatabase,
                                       IDBTransaction* aTransaction);
 
   static
   already_AddRefed<IDBRequest> Create(IDBIndex* aSource,
-                                      IDBWrapperCache* aOwnerCache,
-                                      IDBTransaction* aTransaction);
-  static
-  already_AddRefed<IDBRequest> Create(IDBCursor* aSource,
-                                      IDBWrapperCache* aOwnerCache,
+                                      IDBDatabase* aDatabase,
                                       IDBTransaction* aTransaction);
 
   // nsIDOMEventTarget
@@ -104,7 +101,7 @@ public:
 
   void CaptureCaller();
 
-  void FillScriptErrorEvent(nsScriptErrorEvent* aEvent) const;
+  void FillScriptErrorEvent(mozilla::InternalScriptErrorEvent* aEvent) const;
 
   bool
   IsPending() const

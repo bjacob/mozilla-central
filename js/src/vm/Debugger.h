@@ -64,21 +64,32 @@ class DebuggerWeakMap : private WeakMap<Key, Value, DefaultHasher<Key> >
     typedef typename Base::Enum Enum;
     typedef typename Base::Lookup Lookup;
 
+    /* Expose WeakMap public interface */
+
+    using Base::clearWithoutCallingDestructors;
+    using Base::lookupForAdd;
+    using Base::all;
+    using Base::trace;
+
     bool init(uint32_t len = 16) {
         return Base::init(len) && zoneCounts.init();
     }
 
-    void clearWithoutCallingDestructors() {
-        Base::clearWithoutCallingDestructors();
-    }
-
-    AddPtr lookupForAdd(const Lookup &l) const {
-        return Base::lookupForAdd(l);
+    template<typename KeyInput, typename ValueInput>
+    bool putNew(const KeyInput &k, const ValueInput &v) {
+        JS_ASSERT(v->compartment() == Base::compartment);
+        if (!incZoneCount(k->zone()))
+            return false;
+        bool ok = Base::putNew(k, v);
+        if (!ok)
+            decZoneCount(k->zone());
+        return ok;
     }
 
     template<typename KeyInput, typename ValueInput>
     bool relookupOrAdd(AddPtr &p, const KeyInput &k, const ValueInput &v) {
         JS_ASSERT(v->compartment() == Base::compartment);
+        JS_ASSERT(!p.found());
         if (!incZoneCount(k->zone()))
             return false;
         bool ok = Base::relookupOrAdd(p, k, v);
@@ -87,19 +98,10 @@ class DebuggerWeakMap : private WeakMap<Key, Value, DefaultHasher<Key> >
         return ok;
     }
 
-    Range all() const {
-        return Base::all();
-    }
-
     void remove(const Lookup &l) {
+        JS_ASSERT(Base::has(l));
         Base::remove(l);
         decZoneCount(l->zone());
-    }
-
-  public:
-    /* Expose WeakMap public interface*/
-    void trace(JSTracer *tracer) {
-        Base::trace(tracer);
     }
 
   public:
@@ -109,7 +111,7 @@ class DebuggerWeakMap : private WeakMap<Key, Value, DefaultHasher<Key> >
             gc::Mark(tracer, &key, "Debugger WeakMap key");
             if (key != e.front().key)
                 e.rekeyFront(key);
-            key.unsafeSet(NULL);
+            key.unsafeSet(nullptr);
         }
     }
 
@@ -241,12 +243,12 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
 
     bool addDebuggeeGlobal(JSContext *cx, Handle<GlobalObject*> obj);
     bool addDebuggeeGlobal(JSContext *cx, Handle<GlobalObject*> obj,
-                           AutoDebugModeGC &dmgc);
+                           AutoDebugModeInvalidation &invalidate);
     void removeDebuggeeGlobal(FreeOp *fop, GlobalObject *global,
                               GlobalObjectSet::Enum *compartmentEnum,
                               GlobalObjectSet::Enum *debugEnum);
     void removeDebuggeeGlobal(FreeOp *fop, GlobalObject *global,
-                              AutoDebugModeGC &dmgc,
+                              AutoDebugModeInvalidation &invalidate,
                               GlobalObjectSet::Enum *compartmentEnum,
                               GlobalObjectSet::Enum *debugEnum);
 
@@ -352,7 +354,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
 
     JSTrapStatus fireDebuggerStatement(JSContext *cx, MutableHandleValue vp);
     JSTrapStatus fireExceptionUnwind(JSContext *cx, MutableHandleValue vp);
-    JSTrapStatus fireEnterFrame(JSContext *cx, MutableHandleValue vp);
+    JSTrapStatus fireEnterFrame(JSContext *cx, AbstractFramePtr frame, MutableHandleValue vp);
     JSTrapStatus fireNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global, MutableHandleValue vp);
 
     /*
@@ -434,8 +436,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     bool observesScript(JSScript *script) const;
 
     /*
-     * If env is NULL, call vp->setNull() and return true. Otherwise, find or
-     * create a Debugger.Environment object for the given Env. On success,
+     * If env is nullptr, call vp->setNull() and return true. Otherwise, find
+     * or create a Debugger.Environment object for the given Env. On success,
      * store the Environment object in *vp and return true.
      */
     bool wrapEnvironment(JSContext *cx, Handle<Env*> env, MutableHandleValue vp);
@@ -480,8 +482,29 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      */
     bool unwrapDebuggeeValue(JSContext *cx, MutableHandleValue vp);
 
-    /* Store the Debugger.Frame object for iter in *vp. */
-    bool getScriptFrame(JSContext *cx, const ScriptFrameIter &iter, MutableHandleValue vp);
+    /*
+     * Store the Debugger.Frame object for frame in *vp.
+     *
+     * Use this if you have already access to a frame pointer without having
+     * to incur the cost of walking the stack.
+     */
+    bool getScriptFrame(JSContext *cx, AbstractFramePtr frame, MutableHandleValue vp);
+
+    /*
+     * Store the Debugger.Frame object for iter in *vp. Eagerly copies a
+     * ScriptFrameIter::Data.
+     *
+     * Use this if you had to make a ScriptFrameIter to get the required
+     * frame, in which case the cost of walking the stack has already been
+     * paid.
+     */
+    bool getScriptFrame(JSContext *cx, const ScriptFrameIter &iter, MutableHandleValue vp) {
+        AbstractFramePtr data = iter.copyDataAsAbstractFramePtr();
+        if (!data || !getScriptFrame(cx, iter.abstractFramePtr(), vp))
+            return false;
+        vp.toObject().setPrivate(data.raw());
+        return true;
+    }
 
     /*
      * Set |*status| and |*value| to a (JSTrapStatus, Value) pair reflecting a
@@ -562,7 +585,7 @@ class BreakpointSite {
     void inc(FreeOp *fop);
     void dec(FreeOp *fop);
     void setTrap(FreeOp *fop, JSTrapHandler handler, const Value &closure);
-    void clearTrap(FreeOp *fop, JSTrapHandler *handlerp = NULL, Value *closurep = NULL);
+    void clearTrap(FreeOp *fop, JSTrapHandler *handlerp = nullptr, Value *closurep = nullptr);
     void destroyIfEmpty(FreeOp *fop);
 };
 
@@ -612,7 +635,7 @@ Breakpoint *
 Debugger::firstBreakpoint() const
 {
     if (JS_CLIST_IS_EMPTY(&breakpoints))
-        return NULL;
+        return nullptr;
     return Breakpoint::fromDebuggerLinks(JS_NEXT_LINK(&breakpoints));
 }
 
@@ -691,7 +714,7 @@ Debugger::onNewScript(JSContext *cx, HandleScript script, GlobalObject *compileA
     JS_ASSERT_IF(script->compileAndGo, compileAndGoGlobal == &script->uninlinedGlobal());
     // We early return in slowPathOnNewScript for self-hosted scripts, so we can
     // ignore those in our assertion here.
-    JS_ASSERT_IF(!script->compartment()->options().invisibleToDebugger &&
+    JS_ASSERT_IF(!script->compartment()->options().invisibleToDebugger() &&
                  !script->selfHosted,
                  script->compartment()->firedOnNewGlobalObject);
     JS_ASSERT_IF(!script->compileAndGo, !compileAndGoGlobal);

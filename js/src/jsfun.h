@@ -13,6 +13,7 @@
 
 #include "jsobj.h"
 #include "jsscript.h"
+#include "jstypes.h"
 
 namespace js {
 class FunctionExtended;
@@ -21,6 +22,8 @@ typedef JSNative           Native;
 typedef JSParallelNative   ParallelNative;
 typedef JSThreadSafeNative ThreadSafeNative;
 }
+
+struct JSAtomState;
 
 class JSFunction : public JSObject
 {
@@ -75,7 +78,7 @@ class JSFunction : public JSObject
             union {
                 JSScript *script_; /* interpreted bytecode descriptor or null;
                                       use the accessor! */
-                js::LazyScript *lazy_; /* lazily compiled script, or NULL */
+                js::LazyScript *lazy_; /* lazily compiled script, or nullptr */
             } s;
             JSObject    *env_;    /* environment for new activations;
                                      use the accessor! */
@@ -202,14 +205,14 @@ class JSFunction : public JSObject
         flags |= EXPR_CLOSURE;
     }
 
-    JSAtom *atom() const { return hasGuessedAtom() ? NULL : atom_.get(); }
-    js::PropertyName *name() const { return hasGuessedAtom() || !atom_ ? NULL : atom_->asPropertyName(); }
+    JSAtom *atom() const { return hasGuessedAtom() ? nullptr : atom_.get(); }
+    js::PropertyName *name() const { return hasGuessedAtom() || !atom_ ? nullptr : atom_->asPropertyName(); }
     void initAtom(JSAtom *atom) { atom_.init(atom); }
     JSAtom *displayAtom() const { return atom_; }
 
     void setGuessedAtom(JSAtom *atom) {
-        JS_ASSERT(atom_ == NULL);
-        JS_ASSERT(atom != NULL);
+        JS_ASSERT(atom_ == nullptr);
+        JS_ASSERT(atom != nullptr);
         JS_ASSERT(!hasGuessedAtom());
         atom_ = atom;
         flags |= HAS_GUESSED_ATOM;
@@ -249,7 +252,7 @@ class JSFunction : public JSObject
     // necessary (isInterpretedLazy()).
     //
     // A lazy function will have a LazyScript if the function came from parsed
-    // source, or NULL if the function is a clone of a self hosted function.
+    // source, or nullptr if the function is a clone of a self hosted function.
     //
     // There are several methods to get the script of an interpreted function:
     //
@@ -269,7 +272,7 @@ class JSFunction : public JSObject
         if (isInterpretedLazy()) {
             JS::RootedFunction self(cx, this);
             if (!createScriptForLazilyInterpretedFunction(cx, self))
-                return NULL;
+                return nullptr;
             JS_ASSERT(self->hasScript());
             return self->u.i.s.script_;
         }
@@ -355,7 +358,7 @@ class JSFunction : public JSObject
     }
 
     JSNative maybeNative() const {
-        return isInterpreted() ? NULL : native();
+        return isInterpreted() ? nullptr : native();
     }
 
     JSParallelNative parallelNative() const {
@@ -364,7 +367,7 @@ class JSFunction : public JSObject
     }
 
     JSParallelNative maybeParallelNative() const {
-        return hasParallelNative() ? parallelNative() : NULL;
+        return hasParallelNative() ? parallelNative() : nullptr;
     }
 
     void initNative(js::Native native, const JSJitInfo *jitinfo) {
@@ -475,7 +478,7 @@ NewFunction(ExclusiveContext *cx, HandleObject funobj, JSNative native, unsigned
             gc::AllocKind allocKind = JSFunction::FinalizeKind,
             NewObjectKind newKind = GenericObject);
 
-// If proto is NULL, Function.prototype is used instead.
+// If proto is nullptr, Function.prototype is used instead.
 extern JSFunction *
 NewFunctionWithProto(ExclusiveContext *cx, HandleObject funobj, JSNative native, unsigned nargs,
                      JSFunction::Flags flags, HandleObject parent, HandleAtom atom,
@@ -488,9 +491,12 @@ DefineFunction(JSContext *cx, HandleObject obj, HandleId id, JSNative native,
                gc::AllocKind allocKind = JSFunction::FinalizeKind,
                NewObjectKind newKind = GenericObject);
 
+bool
+FunctionHasResolveHook(const JSAtomState &atomState, PropertyName *name);
+
 extern bool
-fun_resolve(JSContext *cx, js::HandleObject obj, js::HandleId id,
-            unsigned flags, js::MutableHandleObject objp);
+fun_resolve(JSContext *cx, HandleObject obj, HandleId id,
+            unsigned flags, MutableHandleObject objp);
 
 // ES6 9.2.5 IsConstructor
 bool IsConstructor(const Value &v);

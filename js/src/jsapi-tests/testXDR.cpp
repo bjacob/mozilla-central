@@ -20,11 +20,11 @@ CompileScriptForPrincipalsVersionOrigin(JSContext *cx, JS::HandleObject obj,
                                         JSVersion version)
 {
     size_t nchars;
-    if (!JS_DecodeBytes(cx, bytes, nbytes, NULL, &nchars))
-        return NULL;
+    if (!JS_DecodeBytes(cx, bytes, nbytes, nullptr, &nchars))
+        return nullptr;
     jschar *chars = static_cast<jschar *>(JS_malloc(cx, nchars * sizeof(jschar)));
     if (!chars)
-        return NULL;
+        return nullptr;
     JS_ALWAYS_TRUE(JS_DecodeBytes(cx, bytes, nbytes, chars, &nchars));
     JS::CompileOptions options(cx);
     options.setPrincipals(principals)
@@ -36,14 +36,14 @@ CompileScriptForPrincipalsVersionOrigin(JSContext *cx, JS::HandleObject obj,
     return script;
 }
 
-JSScript *
+static JSScript *
 FreezeThaw(JSContext *cx, JS::HandleScript script)
 {
     // freeze
     uint32_t nbytes;
     void *memory = JS_EncodeScript(cx, script, &nbytes);
     if (!memory)
-        return NULL;
+        return nullptr;
 
     // thaw
     JSScript *script2 = JS_DecodeScript(cx, memory, nbytes,
@@ -58,14 +58,14 @@ GetScript(JSContext *cx, JS::HandleObject funobj)
     return JS_GetFunctionScript(cx, JS_GetObjectFunction(funobj));
 }
 
-JSObject *
+static JSObject *
 FreezeThaw(JSContext *cx, JS::HandleObject funobj)
 {
     // freeze
     uint32_t nbytes;
     void *memory = JS_EncodeInterpretedFunction(cx, funobj, &nbytes);
     if (!memory)
-        return NULL;
+        return nullptr;
 
     // thaw
     JSScript *script = GetScript(cx, funobj);
@@ -76,10 +76,8 @@ FreezeThaw(JSContext *cx, JS::HandleObject funobj)
     return funobj2;
 }
 
-static JSPrincipals testPrincipals[] = {
-    { 1 },
-    { 1 },
-};
+static TestJSPrincipals testPrincipal0(1);
+static TestJSPrincipals testPrincipal1(1);
 
 BEGIN_TEST(testXDR_principals)
 {
@@ -88,21 +86,21 @@ BEGIN_TEST(testXDR_principals)
     for (int i = TEST_FIRST; i != TEST_END; ++i) {
         // Appease the new JSAPI assertions. The stuff being tested here is
         // going away anyway.
-        JS_SetCompartmentPrincipals(compartment, &testPrincipals[0]);
-        script = createScriptViaXDR(&testPrincipals[0], NULL, i);
+        JS_SetCompartmentPrincipals(compartment, &testPrincipal0);
+        script = createScriptViaXDR(&testPrincipal0, nullptr, i);
         CHECK(script);
-        CHECK(JS_GetScriptPrincipals(script) == &testPrincipals[0]);
-        CHECK(JS_GetScriptOriginPrincipals(script) == &testPrincipals[0]);
+        CHECK(JS_GetScriptPrincipals(script) == &testPrincipal0);
+        CHECK(JS_GetScriptOriginPrincipals(script) == &testPrincipal0);
 
-        script = createScriptViaXDR(&testPrincipals[0], &testPrincipals[0], i);
+        script = createScriptViaXDR(&testPrincipal0, &testPrincipal0, i);
         CHECK(script);
-        CHECK(JS_GetScriptPrincipals(script) == &testPrincipals[0]);
-        CHECK(JS_GetScriptOriginPrincipals(script) == &testPrincipals[0]);
+        CHECK(JS_GetScriptPrincipals(script) == &testPrincipal0);
+        CHECK(JS_GetScriptOriginPrincipals(script) == &testPrincipal0);
 
-        script = createScriptViaXDR(&testPrincipals[0], &testPrincipals[1], i);
+        script = createScriptViaXDR(&testPrincipal0, &testPrincipal1, i);
         CHECK(script);
-        CHECK(JS_GetScriptPrincipals(script) == &testPrincipals[0]);
-        CHECK(JS_GetScriptOriginPrincipals(script) == &testPrincipals[1]);
+        CHECK(JS_GetScriptPrincipals(script) == &testPrincipal0);
+        CHECK(JS_GetScriptOriginPrincipals(script) == &testPrincipal1);
     }
 
     return true;
@@ -127,12 +125,12 @@ JSScript *createScriptViaXDR(JSPrincipals *prin, JSPrincipals *orig, int testCas
                                                                         src, strlen(src), "test", 1,
                                                                         JSVERSION_DEFAULT));
     if (!script)
-        return NULL;
+        return nullptr;
 
     if (testCase == TEST_SCRIPT || testCase == TEST_SERIALIZED_FUNCTION) {
         script = FreezeThaw(cx, script);
         if (!script)
-            return NULL;
+            return nullptr;
         if (testCase == TEST_SCRIPT)
             return script;
     }
@@ -140,12 +138,12 @@ JSScript *createScriptViaXDR(JSPrincipals *prin, JSPrincipals *orig, int testCas
     JS::RootedValue v(cx);
     bool ok = JS_ExecuteScript(cx, global, script, v.address());
     if (!ok || !v.isObject())
-        return NULL;
+        return nullptr;
     JS::RootedObject funobj(cx, &v.toObject());
     if (testCase == TEST_FUNCTION) {
         funobj = FreezeThaw(cx, funobj);
         if (!funobj)
-            return NULL;
+            return nullptr;
     }
     return GetScript(cx, funobj);
 }
@@ -163,7 +161,10 @@ BEGIN_TEST(testXDR_bug506491)
         "var f = makeClosure('0;', 'status', 'ok');\n";
 
     // compile
-    JS::RootedScript script(cx, JS_CompileScript(cx, global, s, strlen(s), __FILE__, __LINE__));
+    JS::CompileOptions options(cx);
+    options.setFileAndLine(__FILE__, __LINE__);
+    JS::RootedScript script(cx, JS_CompileScript(cx, global, s, strlen(s),
+                                                 options));
     CHECK(script);
 
     script = FreezeThaw(cx, script);
@@ -187,14 +188,16 @@ END_TEST(testXDR_bug506491)
 BEGIN_TEST(testXDR_bug516827)
 {
     // compile an empty script
-    JS::RootedScript script(cx, JS_CompileScript(cx, global, "", 0, __FILE__, __LINE__));
+    JS::CompileOptions options(cx);
+    options.setFileAndLine(__FILE__, __LINE__);
+    JS::RootedScript script(cx, JS_CompileScript(cx, global, "", 0, options));
     CHECK(script);
 
     script = FreezeThaw(cx, script);
     CHECK(script);
 
     // execute with null result meaning no result wanted
-    CHECK(JS_ExecuteScript(cx, global, script, NULL));
+    CHECK(JS_ExecuteScript(cx, global, script, nullptr));
     return true;
 }
 END_TEST(testXDR_bug516827)
@@ -205,10 +208,13 @@ BEGIN_TEST(testXDR_source)
         // This can't possibly fail to compress well, can it?
         "function f(x) { return x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x + x }",
         "short",
-        NULL
+        nullptr
     };
     for (const char **s = samples; *s; s++) {
-        JS::RootedScript script(cx, JS_CompileScript(cx, global, *s, strlen(*s), __FILE__, __LINE__));
+        JS::CompileOptions options(cx);
+        options.setFileAndLine(__FILE__, __LINE__);
+        JS::RootedScript script(cx, JS_CompileScript(cx, global, *s, strlen(*s),
+                                                     options));
         CHECK(script);
         script = FreezeThaw(cx, script);
         CHECK(script);
@@ -227,11 +233,13 @@ BEGIN_TEST(testXDR_sourceMap)
     const char *sourceMaps[] = {
         "http://example.com/source-map.json",
         "file:///var/source-map.json",
-        NULL
+        nullptr
     };
     JS::RootedScript script(cx);
     for (const char **sm = sourceMaps; *sm; sm++) {
-        script = JS_CompileScript(cx, global, "", 0, __FILE__, __LINE__);
+        JS::CompileOptions options(cx);
+        options.setFileAndLine(__FILE__, __LINE__);
+        script = JS_CompileScript(cx, global, "", 0, options);
         CHECK(script);
 
         size_t len = strlen(*sm);

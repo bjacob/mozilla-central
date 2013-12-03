@@ -20,67 +20,6 @@ using namespace JS;
 
 /***************************************************************************/
 
-#ifdef XPC_TRACK_SCOPE_STATS
-static int DEBUG_TotalScopeCount;
-static int DEBUG_TotalLiveScopeCount;
-static int DEBUG_TotalMaxScopeCount;
-static int DEBUG_TotalScopeTraversalCount;
-static bool    DEBUG_DumpedStats;
-#endif
-
-#ifdef DEBUG
-static void DEBUG_TrackNewScope(XPCWrappedNativeScope* scope)
-{
-#ifdef XPC_TRACK_SCOPE_STATS
-    DEBUG_TotalScopeCount++;
-    DEBUG_TotalLiveScopeCount++;
-    if (DEBUG_TotalMaxScopeCount < DEBUG_TotalLiveScopeCount)
-        DEBUG_TotalMaxScopeCount = DEBUG_TotalLiveScopeCount;
-#endif
-}
-
-static void DEBUG_TrackDeleteScope(XPCWrappedNativeScope* scope)
-{
-#ifdef XPC_TRACK_SCOPE_STATS
-    DEBUG_TotalLiveScopeCount--;
-#endif
-}
-
-static void DEBUG_TrackScopeTraversal()
-{
-#ifdef XPC_TRACK_SCOPE_STATS
-    DEBUG_TotalScopeTraversalCount++;
-#endif
-}
-
-static void DEBUG_TrackScopeShutdown()
-{
-#ifdef XPC_TRACK_SCOPE_STATS
-    if (!DEBUG_DumpedStats) {
-        DEBUG_DumpedStats = true;
-        printf("%d XPCWrappedNativeScope(s) were constructed.\n",
-               DEBUG_TotalScopeCount);
-
-        printf("%d XPCWrappedNativeScopes(s) max alive at one time.\n",
-               DEBUG_TotalMaxScopeCount);
-
-        printf("%d XPCWrappedNativeScope(s) alive now.\n" ,
-               DEBUG_TotalLiveScopeCount);
-
-        printf("%d traversals of Scope list.\n",
-               DEBUG_TotalScopeTraversalCount);
-    }
-#endif
-}
-#else
-#define DEBUG_TrackNewScope(scope) ((void)0)
-#define DEBUG_TrackDeleteScope(scope) ((void)0)
-#define DEBUG_TrackScopeTraversal() ((void)0)
-#define DEBUG_TrackScopeShutdown() ((void)0)
-#endif
-
-/***************************************************************************/
-
 XPCWrappedNativeScope* XPCWrappedNativeScope::gScopes = nullptr;
 XPCWrappedNativeScope* XPCWrappedNativeScope::gDyingScopes = nullptr;
 
@@ -129,7 +68,6 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext *cx,
                                              JS::HandleObject aGlobal)
       : mWrappedNativeMap(Native2WrappedNativeMap::newMap(XPC_NATIVE_MAP_SIZE)),
         mWrappedNativeProtoMap(ClassInfo2WrappedNativeProtoMap::newMap(XPC_NATIVE_PROTO_MAP_SIZE)),
-        mMainThreadWrappedNativeProtoMap(ClassInfo2WrappedNativeProtoMap::newMap(XPC_NATIVE_PROTO_MAP_SIZE)),
         mComponents(nullptr),
         mNext(nullptr),
         mGlobalJSObject(aGlobal),
@@ -140,9 +78,6 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext *cx,
         MOZ_ASSERT(aGlobal);
         MOZ_ASSERT(js::GetObjectClass(aGlobal)->flags & (JSCLASS_PRIVATE_IS_NSISUPPORTS |
                                                          JSCLASS_HAS_PRIVATE)); 
-        // scoped lock
-        XPCAutoLock lock(XPCJSRuntime::Get()->GetMapLock());
-
 #ifdef DEBUG
         for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext)
             MOZ_ASSERT(aGlobal != cur->GetGlobalJSObjectPreserveColor(), "dup object");
@@ -156,7 +91,6 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext *cx,
         mContext->AddScope(this);
     }
 
-    DEBUG_TrackNewScope(this);
     MOZ_COUNT_CTOR(XPCWrappedNativeScope);
 
     // Attach ourselves to the compartment private.
@@ -215,7 +149,7 @@ XPCWrappedNativeScope::GetComponentsJSObject()
     // The call to wrap() here is necessary even though the object is same-
     // compartment, because it applies our security wrapper.
     JS::RootedObject obj(cx, wrapper->GetFlatJSObject());
-    if (!JS_WrapObject(cx, obj.address()))
+    if (!JS_WrapObject(cx, &obj))
         return nullptr;
     return obj;
 }
@@ -245,7 +179,7 @@ XPCWrappedNativeScope::EnsureXBLScope(JSContext *cx)
     // However, wantXrays lives a secret double life, and one of its other
     // hobbies is to waive Xray on the returned sandbox when set to false.
     // So make sure to keep this set to true, here.
-    SandboxOptions options(cx);
+    SandboxOptions options;
     options.wantXrays = true;
     options.wantComponents = true;
     options.proto = global;
@@ -260,8 +194,8 @@ XPCWrappedNativeScope::EnsureXBLScope(JSContext *cx)
     ep = new nsExpandedPrincipal(principalAsArray);
 
     // Create the sandbox.
-    JS::RootedValue v(cx, JS::UndefinedValue());
-    nsresult rv = CreateSandboxObject(cx, v.address(), ep, options);
+    RootedValue v(cx);
+    nsresult rv = CreateSandboxObject(cx, &v, ep, options);
     NS_ENSURE_SUCCESS(rv, nullptr);
     mXBLScope = &v.toObject();
 
@@ -298,12 +232,18 @@ bool AllowXBLScope(JSCompartment *c)
   XPCWrappedNativeScope *scope = EnsureCompartmentPrivate(c)->scope;
   return scope && scope->AllowXBLScope();
 }
+
+bool UseXBLScope(JSCompartment *c)
+{
+  XPCWrappedNativeScope *scope = EnsureCompartmentPrivate(c)->scope;
+  return scope && scope->UseXBLScope();
+}
+
 } /* namespace xpc */
 
 XPCWrappedNativeScope::~XPCWrappedNativeScope()
 {
     MOZ_COUNT_DTOR(XPCWrappedNativeScope);
-    DEBUG_TrackDeleteScope(this);
 
     // We can do additional cleanup assertions here...
 
@@ -315,11 +255,6 @@ XPCWrappedNativeScope::~XPCWrappedNativeScope()
     if (mWrappedNativeProtoMap) {
         MOZ_ASSERT(0 == mWrappedNativeProtoMap->Count(), "scope has non-empty map");
         delete mWrappedNativeProtoMap;
-    }
-
-    if (mMainThreadWrappedNativeProtoMap) {
-        MOZ_ASSERT(0 == mMainThreadWrappedNativeProtoMap->Count(), "scope has non-empty map");
-        delete mMainThreadWrappedNativeProtoMap;
     }
 
     if (mContext)
@@ -354,10 +289,6 @@ WrappedNativeJSGCThingTracer(PLDHashTable *table, PLDHashEntryHdr *hdr,
 void
 XPCWrappedNativeScope::TraceWrappedNativesInAllScopes(JSTracer* trc, XPCJSRuntime* rt)
 {
-    // FIXME The lock may not be necessary during tracing as that serializes
-    // access to JS runtime. See bug 380139.
-    XPCAutoLock lock(rt->GetMapLock());
-
     // Do JS_CallTracer for all wrapped natives with external references, as
     // well as any DOM expando objects.
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext) {
@@ -397,8 +328,6 @@ void
 XPCWrappedNativeScope::SuspectAllWrappers(XPCJSRuntime* rt,
                                           nsCycleCollectionNoteRootCallback& cb)
 {
-    XPCAutoLock lock(rt->GetMapLock());
-
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext) {
         cur->mWrappedNativeMap->Enumerate(WrappedNativeSuspecter, &cb);
         if (cur->mDOMExpandoSet) {
@@ -412,10 +341,6 @@ XPCWrappedNativeScope::SuspectAllWrappers(XPCJSRuntime* rt,
 void
 XPCWrappedNativeScope::StartFinalizationPhaseOfGC(JSFreeOp *fop, XPCJSRuntime* rt)
 {
-    // FIXME The lock may not be necessary since we are inside JSGC_MARK_END
-    // callback and GX serializes access to JS runtime. See bug 380139.
-    XPCAutoLock lock(rt->GetMapLock());
-
     // We are in JSGC_MARK_END and JSGC_FINALIZE_END must always follow it
     // calling FinishedFinalizationPhaseOfGC and clearing gDyingScopes in
     // KillDyingScopes.
@@ -452,12 +377,6 @@ XPCWrappedNativeScope::StartFinalizationPhaseOfGC(JSFreeOp *fop, XPCJSRuntime* r
 void
 XPCWrappedNativeScope::FinishedFinalizationPhaseOfGC()
 {
-    XPCJSRuntime* rt = nsXPConnect::GetRuntimeInstance();
-
-    // FIXME The lock may not be necessary since we are inside
-    // JSGC_FINALIZE_END callback and at this point GC still serializes access
-    // to JS runtime. See bug 380139.
-    XPCAutoLock lock(rt->GetMapLock());
     KillDyingScopes();
 }
 
@@ -486,10 +405,7 @@ XPCWrappedNativeScope::MarkAllWrappedNativesAndProtos()
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext) {
         cur->mWrappedNativeMap->Enumerate(WrappedNativeMarker, nullptr);
         cur->mWrappedNativeProtoMap->Enumerate(WrappedNativeProtoMarker, nullptr);
-        cur->mMainThreadWrappedNativeProtoMap->Enumerate(WrappedNativeProtoMarker, nullptr);
     }
-
-    DEBUG_TrackScopeTraversal();
 }
 
 #ifdef DEBUG
@@ -516,7 +432,6 @@ XPCWrappedNativeScope::ASSERT_NoInterfaceSetsAreMarked()
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext) {
         cur->mWrappedNativeMap->Enumerate(ASSERT_WrappedNativeSetNotMarked, nullptr);
         cur->mWrappedNativeProtoMap->Enumerate(ASSERT_WrappedNativeProtoSetNotMarked, nullptr);
-        cur->mMainThreadWrappedNativeProtoMap->Enumerate(ASSERT_WrappedNativeProtoSetNotMarked, nullptr);
     }
 }
 #endif
@@ -535,15 +450,12 @@ XPCWrappedNativeScope::SweepAllWrappedNativeTearOffs()
 {
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext)
         cur->mWrappedNativeMap->Enumerate(WrappedNativeTearoffSweeper, nullptr);
-
-    DEBUG_TrackScopeTraversal();
 }
 
 // static
 void
 XPCWrappedNativeScope::KillDyingScopes()
 {
-    // always called inside the lock!
     XPCWrappedNativeScope* cur = gDyingScopes;
     while (cur) {
         XPCWrappedNativeScope* next = cur->mNext;
@@ -591,9 +503,6 @@ WrappedNativeProtoShutdownEnumerator(PLDHashTable *table, PLDHashEntryHdr *hdr,
 void
 XPCWrappedNativeScope::SystemIsBeingShutDown()
 {
-    DEBUG_TrackScopeTraversal();
-    DEBUG_TrackScopeShutdown();
-
     int liveScopeCount = 0;
 
     ShutdownData data;
@@ -625,26 +534,12 @@ XPCWrappedNativeScope::SystemIsBeingShutDown()
         // proto pointers in the proto map.
         cur->mWrappedNativeProtoMap->
                 Enumerate(WrappedNativeProtoShutdownEnumerator,  &data);
-        cur->mMainThreadWrappedNativeProtoMap->
-                Enumerate(WrappedNativeProtoShutdownEnumerator,  &data);
         cur->mWrappedNativeMap->
                 Enumerate(WrappedNativeShutdownEnumerator,  &data);
     }
 
     // Now it is safe to kill all the scopes.
     KillDyingScopes();
-
-#ifdef XPC_DUMP_AT_SHUTDOWN
-    if (data.wrapperCount)
-        printf("deleting nsXPConnect  with %d live XPCWrappedNatives\n",
-               data.wrapperCount);
-    if (data.protoCount)
-        printf("deleting nsXPConnect  with %d live XPCWrappedNativeProtos\n",
-               data.protoCount);
-    if (liveScopeCount)
-        printf("deleting nsXPConnect  with %d live XPCWrappedNativeScopes\n",
-               liveScopeCount);
-#endif
 }
 
 
@@ -664,15 +559,9 @@ WNProtoSecPolicyClearer(PLDHashTable *table, PLDHashEntryHdr *hdr,
 nsresult
 XPCWrappedNativeScope::ClearAllWrappedNativeSecurityPolicies()
 {
-    // Hold the lock throughout.
-    XPCAutoLock lock(XPCJSRuntime::Get()->GetMapLock());
-
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext) {
         cur->mWrappedNativeProtoMap->Enumerate(WNProtoSecPolicyClearer, nullptr);
-        cur->mMainThreadWrappedNativeProtoMap->Enumerate(WNProtoSecPolicyClearer, nullptr);
     }
-
-    DEBUG_TrackScopeTraversal();
 
     return NS_OK;
 }
@@ -694,12 +583,8 @@ WNProtoRemover(PLDHashTable *table, PLDHashEntryHdr *hdr,
 void
 XPCWrappedNativeScope::RemoveWrappedNativeProtos()
 {
-    XPCAutoLock al(XPCJSRuntime::Get()->GetMapLock());
-
     mWrappedNativeProtoMap->Enumerate(WNProtoRemover,
                                       GetRuntime()->GetDetachedWrappedNativeProtoMap());
-    mMainThreadWrappedNativeProtoMap->Enumerate(WNProtoRemover,
-                                                GetRuntime()->GetDetachedWrappedNativeProtoMap());
 }
 
 /***************************************************************************/
@@ -774,16 +659,6 @@ XPCWrappedNativeScope::DebugDump(int16_t depth)
             mWrappedNativeProtoMap->Enumerate(WrappedNativeProtoMapDumpEnumerator, &depth);
             XPC_LOG_OUTDENT();
         }
-
-        XPC_LOG_ALWAYS(("mMainThreadWrappedNativeProtoMap @ %x with %d protos(s)", \
-                        mMainThreadWrappedNativeProtoMap,                     \
-                        mMainThreadWrappedNativeProtoMap ? mMainThreadWrappedNativeProtoMap->Count() : 0));
-        // iterate contexts...
-        if (depth && mMainThreadWrappedNativeProtoMap && mMainThreadWrappedNativeProtoMap->Count()) {
-            XPC_LOG_INDENT();
-            mMainThreadWrappedNativeProtoMap->Enumerate(WrappedNativeProtoMapDumpEnumerator, &depth);
-            XPC_LOG_OUTDENT();
-        }
     XPC_LOG_OUTDENT();
 #endif
 }
@@ -791,9 +666,6 @@ XPCWrappedNativeScope::DebugDump(int16_t depth)
 size_t
 XPCWrappedNativeScope::SizeOfAllScopesIncludingThis(MallocSizeOf mallocSizeOf)
 {
-    XPCJSRuntime *rt = nsXPConnect::GetRuntimeInstance();
-    XPCAutoLock lock(rt->GetMapLock());
-
     size_t n = 0;
     for (XPCWrappedNativeScope *cur = gScopes; cur; cur = cur->mNext) {
         n += cur->SizeOfIncludingThis(mallocSizeOf);
@@ -808,7 +680,6 @@ XPCWrappedNativeScope::SizeOfIncludingThis(MallocSizeOf mallocSizeOf)
     n += mallocSizeOf(this);
     n += mWrappedNativeMap->SizeOfIncludingThis(mallocSizeOf);
     n += mWrappedNativeProtoMap->SizeOfIncludingThis(mallocSizeOf);
-    n += mMainThreadWrappedNativeProtoMap->SizeOfIncludingThis(mallocSizeOf);
 
     // There are other XPCWrappedNativeScope members that could be measured;
     // the above ones have been seen by DMD to be worth measuring.  More stuff

@@ -102,6 +102,7 @@ HTMLBreadcrumbs.prototype = {
     this.selection.on("new-node-front", this.update);
     this.selection.on("pseudoclass", this.updateSelectors);
     this.selection.on("attribute-changed", this.updateSelectors);
+    this.inspector.on("markupmutation", this.update);
     this.update();
   },
 
@@ -349,6 +350,7 @@ HTMLBreadcrumbs.prototype = {
     this.selection.off("new-node-front", this.update);
     this.selection.off("pseudoclass", this.updateSelectors);
     this.selection.off("attribute-changed", this.updateSelectors);
+    this.inspector.off("markupmutation", this.update);
 
     this.container.removeEventListener("underflow", this.onscrollboxreflow, false);
     this.container.removeEventListener("overflow", this.onscrollboxreflow, false);
@@ -369,16 +371,6 @@ HTMLBreadcrumbs.prototype = {
     while (this.container.hasChildNodes()) {
       this.container.removeChild(this.container.firstChild);
     }
-  },
-
-  /**
-   * Re-init the cache and remove all the buttons.
-   */
-  invalidateHierarchy: function BC_invalidateHierarchy()
-  {
-    this.inspector.hideNodeMenu();
-    this.nodeHierarchy = [];
-    this.empty();
   },
 
   /**
@@ -611,9 +603,11 @@ HTMLBreadcrumbs.prototype = {
   /**
    * Update the breadcrumbs display when a new node is selected.
    */
-  update: function BC_update()
+  update: function BC_update(reason)
   {
-    this.inspector.hideNodeMenu();
+    if (reason !== "markupmutation") {
+      this.inspector.hideNodeMenu();
+    }
 
     let cmdDispatcher = this.chromeDoc.commandDispatcher;
     this.hadFocus = (cmdDispatcher.focusedElement &&
@@ -632,7 +626,8 @@ HTMLBreadcrumbs.prototype = {
     let idx = this.indexOf(this.selection.nodeFront);
 
     // Is the node already displayed in the breadcrumbs?
-    if (idx > -1) {
+    // (and there are no mutations that need re-display of the crumbs)
+    if (idx > -1 && reason !== "markupmutation") {
       // Yes. We select it.
       this.setCursor(idx);
     } else {
@@ -666,7 +661,7 @@ HTMLBreadcrumbs.prototype = {
       doneUpdating(this.selection.nodeFront);
       this.selectionGuardEnd(err);
     });
-  },
+  }
 }
 
 XPCOMUtils.defineLazyGetter(this, "DOMUtils", function () {

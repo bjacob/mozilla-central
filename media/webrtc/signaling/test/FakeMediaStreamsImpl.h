@@ -10,6 +10,9 @@
 #include "nspr.h"
 #include "nsError.h"
 
+void LogTime(AsyncLatencyLogger::LatencyLogIndex index, uint64_t b, int64_t c) {}
+void LogLatency(AsyncLatencyLogger::LatencyLogIndex index, uint64_t b, int64_t c) {}
+
 static const int AUDIO_BUFFER_SIZE = 1600;
 static const int NUM_CHANNELS      = 2;
 
@@ -44,7 +47,7 @@ void Fake_SourceMediaStream::Periodic() {
     for (std::set<Fake_MediaStreamListener *>::iterator it =
              mListeners.begin(); it != mListeners.end(); ++it) {
       mDesiredTime += 10;
-      (*it)->NotifyPull(NULL, mozilla::MillisecondsToMediaTime(mDesiredTime));
+      (*it)->NotifyPull(nullptr, mozilla::MillisecondsToMediaTime(mDesiredTime));
     }
   }
 }
@@ -95,7 +98,7 @@ void Fake_AudioStreamSource::Periodic() {
 
   for(std::set<Fake_MediaStreamListener *>::iterator it = mListeners.begin();
        it != mListeners.end(); ++it) {
-    (*it)->NotifyQueuedTrackChanges(NULL, // Graph
+    (*it)->NotifyQueuedTrackChanges(nullptr, // Graph
                                     0, // TrackID
                                     16000, // Rate (hz)
                                     0, // Offset TODO(ekr@rtfm.com) fix
@@ -140,7 +143,7 @@ Fake_VideoStreamSource::Notify(nsITimer* aTimer)
   uint8_t* frame = (uint8_t*) PR_Malloc(len);
   memset(frame, 0x80, len); // Gray
 
-  mozilla::layers::PlanarYCbCrImage::Data data;
+  mozilla::layers::PlanarYCbCrData data;
   data.mYChannel = frame;
   data.mYSize = gfxIntSize(WIDTH, HEIGHT);
   data.mYStride = WIDTH * lumaBpp / 8.0;

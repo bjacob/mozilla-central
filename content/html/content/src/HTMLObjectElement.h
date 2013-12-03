@@ -97,6 +97,14 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::type, aValue, aRv);
   }
+  bool TypeMustMatch()
+  {
+    return GetBoolAttr(nsGkAtoms::typemustmatch);
+  }
+  void SetTypeMustMatch(bool aValue, ErrorResult& aRv)
+  {
+    SetHTMLBoolAttr(nsGkAtoms::typemustmatch, aValue, aRv);
+  }
   void GetName(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::name, aValue);
@@ -230,6 +238,9 @@ private:
 
   virtual JSObject* WrapNode(JSContext *aCx,
                              JS::Handle<JSObject*> aScope) MOZ_OVERRIDE;
+
+  static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
+                                    nsRuleData* aData);
 
   bool mIsDoneAddingChildren;
 };

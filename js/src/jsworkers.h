@@ -41,15 +41,6 @@ class WorkerThreadState
     WorkerThread *threads;
     size_t numThreads;
 
-    /*
-     * Whether all worker threads thread should pause their activity. This acts
-     * like the runtime's interrupt field and may be read without locking.
-     */
-    volatile size_t shouldPause;
-
-    /* After shouldPause is set, the number of threads which are paused. */
-    uint32_t numPaused;
-
     enum CondVar {
         /* For notifying threads waiting for work that they may be able to make progress. */
         CONSUMER,
@@ -71,17 +62,26 @@ class WorkerThreadState
      */
     Vector<AsmJSParallelTask*, 0, SystemAllocPolicy> asmJSFinishedList;
 
+    /*
+     * For now, only allow a single parallel asm.js compilation to happen at a
+     * time. This avoids race conditions on asmJSWorklist/asmJSFinishedList/etc.
+     */
+    mozilla::Atomic<uint32_t> asmJSCompilationInProgress;
+
     /* Shared worklist for parsing/emitting scripts on worker threads. */
     Vector<ParseTask*, 0, SystemAllocPolicy> parseWorklist, parseFinishedList;
 
     /* Worklist for source compression worker threads. */
     Vector<SourceCompressionTask *, 0, SystemAllocPolicy> compressionWorklist;
 
-    WorkerThreadState() { mozilla::PodZero(this); }
+    WorkerThreadState(JSRuntime *rt) {
+        mozilla::PodZero(this);
+        runtime = rt;
+    }
     ~WorkerThreadState();
 
-    bool init(JSRuntime *rt);
-    void cleanup(JSRuntime *rt);
+    bool init();
+    void cleanup();
 
     void lock();
     void unlock();
@@ -116,7 +116,7 @@ class WorkerThreadState
     }
     void resetAsmJSFailureState() {
         numAsmJSFailedJobs = 0;
-        asmJSFailedFunction = NULL;
+        asmJSFailedFunction = nullptr;
     }
     void *maybeAsmJSFailedFunction() const {
         return asmJSFailedFunction;
@@ -127,6 +127,8 @@ class WorkerThreadState
     SourceCompressionTask *compressionTaskForSource(ScriptSource *ss);
 
   private:
+
+    JSRuntime *runtime;
 
     /*
      * Lock protecting all mutable shared state accessed by helper threads, and
@@ -182,9 +184,6 @@ struct WorkerThread
         return !ionBuilder && !asmData && !parseTask && !compressionTask;
     }
 
-    inline void maybePause();
-
-    void pause();
     void destroy();
 
     void handleAsmJSWorkload(WorkerThreadState &state);
@@ -197,18 +196,6 @@ struct WorkerThread
 };
 
 #endif /* JS_WORKER_THREADS */
-
-inline bool
-OffThreadIonCompilationEnabled(JSRuntime *rt)
-{
-#ifdef JS_WORKER_THREADS
-    return rt->useHelperThreads()
-        && rt->helperThreadCount() != 0
-        && rt->useHelperThreadsForIonCompilation();
-#else
-    return false;
-#endif
-}
 
 /* Methods for interacting with worker threads. */
 
@@ -229,7 +216,7 @@ StartOffThreadIonCompile(JSContext *cx, jit::IonBuilder *builder);
 
 /*
  * Cancel a scheduled or in progress Ion compilation for script. If script is
- * NULL, all compilations for the compartment are cancelled.
+ * nullptr, all compilations for the compartment are cancelled.
  */
 void
 CancelOffThreadIonCompile(JSCompartment *compartment, JSScript *script);
@@ -239,7 +226,7 @@ CancelOffThreadIonCompile(JSCompartment *compartment, JSScript *script);
  * alive until the compilation finishes.
  */
 bool
-StartOffThreadParseScript(JSContext *cx, const CompileOptions &options,
+StartOffThreadParseScript(JSContext *cx, const ReadOnlyCompileOptions &options,
                           const jschar *chars, size_t length, HandleObject scopeChain,
                           JS::OffThreadCompileCallback callback, void *callbackData);
 
@@ -308,59 +295,6 @@ class AutoUnlockWorkerThreadState
     }
 };
 
-#ifdef JS_WORKER_THREADS
-
-inline void
-WorkerThread::maybePause()
-{
-    if (runtime->workerThreadState->shouldPause) {
-        AutoLockWorkerThreadState lock(*runtime->workerThreadState);
-        pause();
-    }
-}
-
-#endif // JS_WORKER_THREADS
-
-/* Pause any threads that are running jobs off thread during GC activity. */
-class AutoPauseWorkersForGC
-{
-#ifdef JS_WORKER_THREADS
-    JSRuntime *runtime;
-    bool needsUnpause;
-    mozilla::DebugOnly<bool> oldExclusiveThreadsPaused;
-#endif
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-
-  public:
-    AutoPauseWorkersForGC(JSRuntime *rt MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
-    ~AutoPauseWorkersForGC();
-};
-
-/*
- * If the current thread is a worker thread, treat it as paused during this
- * class's lifetime. This should be used at any time the current thread is
- * waiting for a worker to complete.
- */
-class AutoPauseCurrentWorkerThread
-{
-#ifdef JS_WORKER_THREADS
-    ExclusiveContext *cx;
-#endif
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-
-  public:
-    AutoPauseCurrentWorkerThread(ExclusiveContext *cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
-    ~AutoPauseCurrentWorkerThread();
-};
-
-/* Wait for any in progress off thread parses to halt. */
-void
-PauseOffThreadParsing();
-
-/* Resume any paused off thread parses. */
-void
-ResumeOffThreadParsing();
-
 #ifdef JS_ION
 struct AsmJSParallelTask
 {
@@ -371,13 +305,13 @@ struct AsmJSParallelTask
     unsigned compileTime;
 
     AsmJSParallelTask(size_t defaultChunkSize)
-      : lifo(defaultChunkSize), func(NULL), mir(NULL), lir(NULL), compileTime(0)
+      : lifo(defaultChunkSize), func(nullptr), mir(nullptr), lir(nullptr), compileTime(0)
     { }
 
     void init(void *func, jit::MIRGenerator *mir) {
         this->func = func;
         this->mir = mir;
-        this->lir = NULL;
+        this->lir = nullptr;
     }
 };
 #endif
@@ -385,7 +319,7 @@ struct AsmJSParallelTask
 struct ParseTask
 {
     ExclusiveContext *cx;
-    CompileOptions options;
+    OwningCompileOptions options;
     const jschar *chars;
     size_t length;
     LifoAlloc alloc;
@@ -407,10 +341,12 @@ struct ParseTask
     // Any errors or warnings produced during compilation. These are reported
     // when finishing the script.
     Vector<frontend::CompileError *> errors;
+    bool overRecursed;
 
-    ParseTask(ExclusiveContext *cx, const CompileOptions &options,
+    ParseTask(ExclusiveContext *cx, JSContext *initCx,
               const jschar *chars, size_t length, JSObject *scopeChain,
               JS::OffThreadCompileCallback callback, void *callbackData);
+    bool init(JSContext *cx, const ReadOnlyCompileOptions &options);
 
     ~ParseTask();
 };
@@ -445,22 +381,16 @@ struct SourceCompressionTask
 
   public:
     explicit SourceCompressionTask(ExclusiveContext *cx)
-      : cx(cx), ss(NULL), chars(NULL), oom(false), abort_(0)
+      : cx(cx), ss(nullptr), chars(nullptr), oom(false), abort_(0)
     {
 #ifdef JS_WORKER_THREADS
-        workerThread = NULL;
+        workerThread = nullptr;
 #endif
     }
 
     ~SourceCompressionTask()
     {
         complete();
-    }
-
-    void maybePause() { 
-#ifdef JS_WORKER_THREADS
-        workerThread->maybePause();
-#endif
     }
 
     bool compress();

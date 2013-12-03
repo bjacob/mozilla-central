@@ -8,11 +8,11 @@ XPIDL_SOURCES += [
     'nsIBFCacheEntry.idl',
     'nsISHContainer.idl',
     'nsISHEntry.idl',
-    'nsISHTransaction.idl',
     'nsISHistory.idl',
     'nsISHistoryInternal.idl',
     'nsISHistoryListener.idl',
+    'nsISHTransaction.idl',
 ]
 
-MODULE = 'shistory'
+XPIDL_MODULE = 'shistory'
 

@@ -15,7 +15,9 @@
 #include "nsStyleConsts.h"
 #include "nsDisplayList.h"
 #include "nsRenderingContext.h"
+#include "nsIScrollableFrame.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Maybe.h"
 
 using namespace mozilla;
 using namespace mozilla::layout;
@@ -78,6 +80,10 @@ public:
     return nsContainerFrame::IsFrameOfType(aFlags &
              ~nsIFrame::eCanContainOverflowContainers);
   }
+  virtual nsIScrollableFrame* GetScrollTargetFrame() MOZ_OVERRIDE
+  {
+    return do_QueryFrame(GetInner());
+  }
 
 #ifdef ACCESSIBILITY  
   virtual mozilla::a11y::AccType AccessibleType() MOZ_OVERRIDE;
@@ -93,8 +99,6 @@ public:
 #endif
 
 protected:
-
-  void ReparentFrameList(const nsFrameList& aFrameList);
 
   /**
    * Return the anonymous frame that contains all descendants except
@@ -356,10 +360,14 @@ nsFieldSetFrame::GetIntrinsicWidth(nsRenderingContext* aRenderingContext,
   }
 
   if (nsIFrame* inner = GetInner()) {
+    // Ignore padding on the inner, since the padding will be applied to the
+    // outer instead, and the padding computed for the inner is wrong
+    // for percentage padding.
     contentWidth =
-      nsLayoutUtils::IntrinsicForContainer(aRenderingContext, inner, aType);
+      nsLayoutUtils::IntrinsicForContainer(aRenderingContext, inner, aType,
+                                           nsLayoutUtils::IGNORE_PADDING);
   }
-      
+
   return std::max(legendWidth, contentWidth);
 }
 
@@ -444,7 +452,10 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
 
   // We don't allow fieldsets to break vertically. If we did, we'd
   // need logic here to push and pull overflow frames.
-  nsSize availSize(aReflowState.ComputedWidth(), NS_UNCONSTRAINEDSIZE);
+  // Since we're not applying our padding in this frame, we need to add it here
+  // to compute the available width for our children.
+  nsSize availSize(aReflowState.ComputedWidth() + aReflowState.mComputedPadding.LeftRight(),
+                   NS_UNCONSTRAINEDSIZE);
   NS_ASSERTION(!inner ||
       nsLayoutUtils::IntrinsicForContainer(aReflowState.rendContext,
                                            inner,
@@ -459,20 +470,20 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
                "Bogus availSize.width; should be bigger");
 
   // get our border and padding
-  const nsMargin &borderPadding = aReflowState.mComputedBorderPadding;
-  nsMargin border = borderPadding - aReflowState.mComputedPadding;  
+  nsMargin border = aReflowState.mComputedBorderPadding - aReflowState.mComputedPadding;
 
   // Figure out how big the legend is if there is one. 
   // get the legend's margin
   nsMargin legendMargin(0,0,0,0);
   // reflow the legend only if needed
+  Maybe<nsHTMLReflowState> legendReflowState;
+  if (legend) {
+    legendReflowState.construct(aPresContext, aReflowState, legend, availSize);
+  }
   if (reflowLegend) {
-    nsHTMLReflowState legendReflowState(aPresContext, aReflowState,
-                                        legend, availSize);
-
     nsHTMLReflowMetrics legendDesiredSize;
 
-    ReflowChild(legend, aPresContext, legendDesiredSize, legendReflowState,
+    ReflowChild(legend, aPresContext, legendDesiredSize, legendReflowState.ref(),
                 0, 0, NS_FRAME_NO_MOVE_FRAME, aStatus);
 #ifdef NOISY_REFLOW
     printf("  returned (%d, %d)\n", legendDesiredSize.width, legendDesiredSize.height);
@@ -481,7 +492,7 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
     legendMargin = legend->GetUsedMargin();
     mLegendRect.width  = legendDesiredSize.width + legendMargin.left + legendMargin.right;
     mLegendRect.height = legendDesiredSize.height + legendMargin.top + legendMargin.bottom;
-    mLegendRect.x = borderPadding.left;
+    mLegendRect.x = 0;
     mLegendRect.y = 0;
 
     nscoord oldSpace = mLegendSpace;
@@ -499,7 +510,7 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
       reflowInner = true;
     }
 
-    FinishReflowChild(legend, aPresContext, &legendReflowState, 
+    FinishReflowChild(legend, aPresContext, &legendReflowState.ref(), 
                       legendDesiredSize, 0, 0, NS_FRAME_NO_MOVE_FRAME);    
   } else if (!legend) {
     mLegendRect.SetEmpty();
@@ -513,16 +524,22 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
   // reflow the content frame only if needed
   if (reflowInner) {
     nsHTMLReflowState kidReflowState(aPresContext, aReflowState, inner,
-                                     availSize);
+                                     availSize, -1, -1, nsHTMLReflowState::CALLER_WILL_INIT);
+    // Override computed padding, in case it's percentage padding
+    kidReflowState.Init(aPresContext, -1, -1, nullptr,
+                        &aReflowState.mComputedPadding);
     // Our child is "height:100%" but we actually want its height to be reduced
     // by the amount of content-height the legend is eating up, unless our
     // height is unconstrained (in which case the child's will be too).
     if (aReflowState.ComputedHeight() != NS_UNCONSTRAINEDSIZE) {
-      kidReflowState.SetComputedHeight(std::max(0, aReflowState.ComputedHeight() - mLegendSpace));
+      kidReflowState.SetComputedHeight(
+         std::max(0, aReflowState.ComputedHeight() - mLegendSpace));
     }
 
-    kidReflowState.mComputedMinHeight =
-      std::max(0, aReflowState.mComputedMinHeight - mLegendSpace);
+    if (aReflowState.mComputedMinHeight > 0) {
+      kidReflowState.mComputedMinHeight =
+        std::max(0, aReflowState.mComputedMinHeight - mLegendSpace);
+    }
 
     if (aReflowState.mComputedMaxHeight != NS_UNCONSTRAINEDSIZE) {
       kidReflowState.mComputedMaxHeight =
@@ -533,7 +550,7 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
     // Reflow the frame
     NS_ASSERTION(kidReflowState.mComputedMargin == nsMargin(0,0,0,0),
                  "Margins on anonymous fieldset child not supported!");
-    nsPoint pt(borderPadding.left, borderPadding.top + mLegendSpace);
+    nsPoint pt(border.left, border.top + mLegendSpace);
     ReflowChild(inner, aPresContext, kidDesiredSize, kidReflowState,
                 pt.x, pt.y, 0, aStatus);
 
@@ -542,68 +559,70 @@ nsFieldSetFrame::Reflow(nsPresContext*           aPresContext,
     NS_FRAME_TRACE_REFLOW_OUT("FieldSet::Reflow", aStatus);
   }
 
-  nsRect contentRect(0,0,0,0);
+  nsRect contentRect;
   if (inner) {
-    // We don't support margins on inner, so our "content rect" is just
-    // its rect.
+    // We don't support margins on inner, so our content rect is just the
+    // inner's border-box.
     contentRect = inner->GetRect();
   }
 
-  // use the computed width if the inner content does not fill it
-  if (aReflowState.ComputedWidth() > contentRect.width) {
-    contentRect.width = aReflowState.ComputedWidth();
+  // Our content rect must fill up the available width
+  if (availSize.width > contentRect.width) {
+    contentRect.width = availSize.width;
   }
 
   if (legend) {
-    // if the content rect is larger then the  legend we can align the legend
-    if (contentRect.width > mLegendRect.width) {
+    // the legend is postioned horizontally within the inner's content rect
+    // (so that padding on the fieldset affects the legend position).
+    nsRect innerContentRect = contentRect;
+    innerContentRect.Deflate(aReflowState.mComputedPadding);
+    // if the inner content rect is larger than the legend, we can align the legend
+    if (innerContentRect.width > mLegendRect.width) {
       int32_t align = static_cast<nsLegendFrame*>
         (legend->GetContentInsertionFrame())->GetAlign();
 
-      switch(align) {
+      switch (align) {
         case NS_STYLE_TEXT_ALIGN_RIGHT:
-          mLegendRect.x = contentRect.width - mLegendRect.width + borderPadding.left;
+          mLegendRect.x = innerContentRect.XMost() - mLegendRect.width;
           break;
         case NS_STYLE_TEXT_ALIGN_CENTER:
           // Note: rounding removed; there doesn't seem to be any need
-          mLegendRect.x = contentRect.width / 2 - mLegendRect.width / 2 + borderPadding.left;
+          mLegendRect.x = innerContentRect.width / 2 - mLegendRect.width / 2 + innerContentRect.x;
+          break;
+        default:
+          mLegendRect.x = innerContentRect.x;
           break;
       }
-  
     } else {
       // otherwise make place for the legend
-      contentRect.width = mLegendRect.width;
+      mLegendRect.x = innerContentRect.x;
+      innerContentRect.width = mLegendRect.width;
+      contentRect.width = mLegendRect.width + aReflowState.mComputedPadding.LeftRight();
     }
+
     // place the legend
     nsRect actualLegendRect(mLegendRect);
     actualLegendRect.Deflate(legendMargin);
-
-    nsPoint curOrigin = legend->GetPosition();
-
-    // only if the origin changed
-    if ((curOrigin.x != actualLegendRect.x) || (curOrigin.y != actualLegendRect.y)) {
-      legend->SetPosition(nsPoint(actualLegendRect.x , actualLegendRect.y));
-      nsContainerFrame::PositionFrameView(legend);
-
-      // We need to recursively process the legend frame's
-      // children since we're moving the frame after Reflow.
-      nsContainerFrame::PositionChildViews(legend);
-    }
+    nsPoint actualLegendPos(actualLegendRect.TopLeft());
+    legendReflowState.ref().ApplyRelativePositioning(&actualLegendPos);
+    legend->SetPosition(actualLegendPos);
+    nsContainerFrame::PositionFrameView(legend);
+    nsContainerFrame::PositionChildViews(legend);
   }
 
   // Return our size and our result
   if (aReflowState.ComputedHeight() == NS_INTRINSICSIZE) {
     aDesiredSize.height = mLegendSpace + 
-                          borderPadding.TopBottom() +
-                          contentRect.height;
+                          border.TopBottom() +
+                          (inner ? inner->GetRect().height : 0);
   } else {
-    nscoord min = borderPadding.TopBottom() + mLegendRect.height;
+    nscoord min = border.TopBottom() + mLegendRect.height;
     aDesiredSize.height =
-      aReflowState.ComputedHeight() + borderPadding.TopBottom();
+      aReflowState.ComputedHeight() + aReflowState.mComputedBorderPadding.TopBottom();
     if (aDesiredSize.height < min)
       aDesiredSize.height = min;
   }
-  aDesiredSize.width = contentRect.width + borderPadding.LeftRight();
+  aDesiredSize.width = contentRect.width + border.LeftRight();
   aDesiredSize.SetOverflowAreasToDesiredBounds();
   if (legend)
     ConsiderChildOverflow(aDesiredSize.mOverflowAreas, legend);
@@ -626,9 +645,8 @@ NS_IMETHODIMP
 nsFieldSetFrame::AppendFrames(ChildListID    aListID,
                               nsFrameList&   aFrameList)
 {
-  // aFrameList is not allowed to contain "the legend" for this fieldset
-  ReparentFrameList(aFrameList);
-  return GetInner()->AppendFrames(aListID, aFrameList);
+  MOZ_CRASH("nsFieldSetFrame::AppendFrames not supported");
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
@@ -636,25 +654,16 @@ nsFieldSetFrame::InsertFrames(ChildListID    aListID,
                               nsIFrame*      aPrevFrame,
                               nsFrameList&   aFrameList)
 {
-  NS_ASSERTION(!aPrevFrame || aPrevFrame->GetParent() == this ||
-               aPrevFrame->GetParent() == GetInner(),
-               "inserting after sibling frame with different parent");
-
-  // aFrameList is not allowed to contain "the legend" for this fieldset
-  ReparentFrameList(aFrameList);
-  if (MOZ_UNLIKELY(aPrevFrame == GetLegend())) {
-    aPrevFrame = nullptr;
-  }
-  return GetInner()->InsertFrames(aListID, aPrevFrame, aFrameList);
+  MOZ_CRASH("nsFieldSetFrame::InsertFrames not supported");
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
 nsFieldSetFrame::RemoveFrame(ChildListID    aListID,
                              nsIFrame*      aOldFrame)
 {
-  // For reference, see bug 70648, bug 276104 and bug 236071.
-  NS_ASSERTION(aOldFrame != GetLegend(), "Cannot remove legend here");
-  return GetInner()->RemoveFrame(aListID, aOldFrame);
+  MOZ_CRASH("nsFieldSetFrame::RemoveFrame not supported");
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 #ifdef ACCESSIBILITY
@@ -665,25 +674,9 @@ nsFieldSetFrame::AccessibleType()
 }
 #endif
 
-void
-nsFieldSetFrame::ReparentFrameList(const nsFrameList& aFrameList)
-{
-  RestyleManager* restyleManager = PresContext()->RestyleManager();
-  nsIFrame* inner = GetInner();
-  for (nsFrameList::Enumerator e(aFrameList); !e.AtEnd(); e.Next()) {
-    NS_ASSERTION(GetLegend() || e.get()->GetType() != nsGkAtoms::legendFrame,
-                 "The fieldset's legend is not allowed in this list");
-    e.get()->SetParent(inner);
-    restyleManager->ReparentStyleContext(e.get());
-  }
-}
-
 nscoord
 nsFieldSetFrame::GetBaseline() const
 {
-  // We know inner is a block, so calling GetBaseline() on it will do
-  // the right thing (that being to return the baseline of the last line).
   nsIFrame* inner = GetInner();
-  NS_ASSERTION(nsLayoutUtils::GetAsBlock(inner), "Unexpected inner");
   return inner->GetPosition().y + inner->GetBaseline();
 }

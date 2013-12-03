@@ -110,35 +110,39 @@ JSCompartment::sweepCallsiteClones()
 }
 
 JSFunction *
-js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript script, jsbytecode *pc)
+js::ExistingCloneFunctionAtCallsite(const CallsiteCloneTable &table, JSFunction *fun,
+                                    JSScript *script, jsbytecode *pc)
 {
-    JS_ASSERT(cx->typeInferenceEnabled());
     JS_ASSERT(fun->nonLazyScript()->shouldCloneAtCallsite);
     JS_ASSERT(!fun->nonLazyScript()->enclosingStaticScope());
     JS_ASSERT(types::UseNewTypeForClone(fun));
 
-    typedef CallsiteCloneKey Key;
-    typedef CallsiteCloneTable Table;
+    /*
+     * If we start allocating function objects in the nursery, then the callsite
+     * clone table will need a postbarrier.
+     */
+    JS_ASSERT(fun->isTenured());
 
-    Table &table = cx->compartment()->callsiteClones;
-    if (!table.initialized() && !table.init())
-        return NULL;
+    if (!table.initialized())
+        return nullptr;
 
-    uint32_t offset = pc - script->code;
-    void* originalScript = script;
-    void* originalFun = fun;
-    SkipRoot skipScript(cx, &originalScript);
-    SkipRoot skipFun(cx, &originalFun);
-
-    Table::AddPtr p = table.lookupForAdd(Key(fun, script, offset));
-    SkipRoot skipHash(cx, &p); /* Prevent the hash from being poisoned. */
+    CallsiteCloneTable::Ptr p = table.lookup(CallsiteCloneKey(fun, script, script->pcToOffset(pc)));
     if (p)
         return p->value;
 
+    return nullptr;
+}
+
+JSFunction *
+js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript script, jsbytecode *pc)
+{
+    if (JSFunction *clone = ExistingCloneFunctionAtCallsite(cx->compartment()->callsiteClones, fun, script, pc))
+        return clone;
+
     RootedObject parent(cx, fun->environment());
-    RootedFunction clone(cx, CloneFunctionObject(cx, fun, parent));
+    JSFunction *clone = CloneFunctionObject(cx, fun, parent);
     if (!clone)
-        return NULL;
+        return nullptr;
 
     /*
      * Store a link back to the original for function.caller and avoid cloning
@@ -148,16 +152,15 @@ js::CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun, HandleScript scri
     clone->nonLazyScript()->isCallsiteClone = true;
     clone->nonLazyScript()->setOriginalFunctionObject(fun);
 
-    Key key(fun, script, offset);
+    typedef CallsiteCloneKey Key;
+    typedef CallsiteCloneTable Table;
 
-    /* Recalculate the hash if script or fun have been moved. */
-    if (script != originalScript || fun != originalFun) {
-        p = table.lookupForAdd(key);
-        JS_ASSERT(!p);
-    }
+    Table &table = cx->compartment()->callsiteClones;
+    if (!table.initialized() && !table.init())
+        return nullptr;
 
-    if (!table.relookupOrAdd(p, key, clone.get()))
-        return NULL;
+    if (!table.putNew(Key(fun, script, script->pcToOffset(pc)), clone))
+        return nullptr;
 
     return clone;
 }
@@ -169,11 +172,11 @@ js::NewContext(JSRuntime *rt, size_t stackChunkSize)
 
     JSContext *cx = js_new<JSContext>(rt);
     if (!cx)
-        return NULL;
+        return nullptr;
 
     if (!cx->cycleDetectorSet.init()) {
         js_delete(cx);
-        return NULL;
+        return nullptr;
     }
 
     /*
@@ -204,7 +207,7 @@ js::NewContext(JSRuntime *rt, size_t stackChunkSize)
 #endif
         if (!ok) {
             DestroyContext(cx, DCM_NEW_FAILED);
-            return NULL;
+            return nullptr;
         }
         rt->haveCreatedContext = true;
     }
@@ -212,7 +215,7 @@ js::NewContext(JSRuntime *rt, size_t stackChunkSize)
     JSContextCallback cxCallback = rt->cxCallback;
     if (cxCallback && !cxCallback(cx, JSCONTEXT_NEW, rt->cxCallbackData)) {
         DestroyContext(cx, DCM_NEW_FAILED);
-        return NULL;
+        return nullptr;
     }
 
     return cx;
@@ -231,7 +234,7 @@ js::DestroyContext(JSContext *cx, DestroyContextMode mode)
 
 #if (defined(JSGC_ROOT_ANALYSIS) || defined(JSGC_USE_EXACT_ROOTING)) && defined(DEBUG)
     for (int i = 0; i < THING_ROOT_LIMIT; ++i)
-        JS_ASSERT(cx->thingGCRooters[i] == NULL);
+        JS_ASSERT(cx->thingGCRooters[i] == nullptr);
 #endif
 
     if (mode != DCM_NEW_FAILED) {
@@ -252,7 +255,7 @@ js::DestroyContext(JSContext *cx, DestroyContextMode mode)
          * Dump remaining type inference results while we still have a context.
          * This printing depends on atoms still existing.
          */
-        for (CompartmentsIter c(rt); !c.done(); c.next())
+        for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next())
             c->types.print(cx, false);
     }
     if (mode == DCM_FORCE_GC) {
@@ -349,6 +352,20 @@ PopulateReportBlame(JSContext *cx, JSErrorReport *report)
 void
 js_ReportOutOfMemory(ThreadSafeContext *cxArg)
 {
+#ifdef JS_MORE_DETERMINISTIC
+    /*
+     * OOMs are non-deterministic, especially across different execution modes
+     * (e.g. interpreter vs JIT). In more-deterministic builds, print to stderr
+     * so that the fuzzers can detect this.
+     */
+    fprintf(stderr, "js_ReportOutOfMemory called\n");
+#endif
+
+    if (cxArg->isForkJoinSlice()) {
+        cxArg->asForkJoinSlice()->setPendingAbortFatal(ParallelBailoutOutOfMemory);
+        return;
+    }
+
     if (!cxArg->isJSContext())
         return;
     JSContext *cx = cxArg->asJSContext();
@@ -362,7 +379,7 @@ js_ReportOutOfMemory(ThreadSafeContext *cxArg)
 
     /* Get the message for this error, but we don't expand any arguments. */
     const JSErrorFormatString *efs =
-        js_GetLocalizedErrorMessage(cx, NULL, NULL, JSMSG_OUT_OF_MEMORY);
+        js_GetLocalizedErrorMessage(cx, nullptr, nullptr, JSMSG_OUT_OF_MEMORY);
     const char *msg = efs ? efs->format : "Out of memory";
 
     /* Fill out the report, but don't do anything that requires allocation. */
@@ -406,24 +423,35 @@ js_ReportOverRecursed(JSContext *maybecx)
     fprintf(stderr, "js_ReportOverRecursed called\n");
 #endif
     if (maybecx)
-        JS_ReportErrorNumber(maybecx, js_GetErrorMessage, NULL, JSMSG_OVER_RECURSED);
+        JS_ReportErrorNumber(maybecx, js_GetErrorMessage, nullptr, JSMSG_OVER_RECURSED);
 }
 
 void
 js_ReportOverRecursed(ThreadSafeContext *cx)
 {
-    js_ReportOverRecursed(cx->maybeJSContext());
+    if (cx->isJSContext())
+        js_ReportOverRecursed(cx->asJSContext());
+    else if (cx->isExclusiveContext())
+        cx->asExclusiveContext()->addPendingOverRecursed();
 }
 
 void
 js_ReportAllocationOverflow(ThreadSafeContext *cxArg)
 {
-    if (!cxArg || !cxArg->isJSContext())
+    if (!cxArg)
+        return;
+
+    if (cxArg->isForkJoinSlice()) {
+        cxArg->asForkJoinSlice()->setPendingAbortFatal(ParallelBailoutOutOfMemory);
+        return;
+    }
+
+    if (!cxArg->isJSContext())
         return;
     JSContext *cx = cxArg->asJSContext();
 
     AutoSuppressGC suppressGC(cx);
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_ALLOC_OVERFLOW);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_ALLOC_OVERFLOW);
 }
 
 /*
@@ -444,18 +472,18 @@ checkReportFlags(JSContext *cx, unsigned *flags)
         JSScript *script = cx->currentScript();
         if (script && script->strict)
             *flags &= ~JSREPORT_WARNING;
-        else if (cx->hasExtraWarningsOption())
+        else if (cx->options().extraWarnings())
             *flags |= JSREPORT_WARNING;
         else
             return true;
     } else if (JSREPORT_IS_STRICT(*flags)) {
         /* Warning/error only when JSOPTION_STRICT is set. */
-        if (!cx->hasExtraWarningsOption())
+        if (!cx->options().extraWarnings())
             return true;
     }
 
     /* Warnings become errors when JSOPTION_WERROR is set. */
-    if (JSREPORT_IS_WARNING(*flags) && cx->hasWErrorOption())
+    if (JSREPORT_IS_WARNING(*flags) && cx->options().werror())
         *flags &= ~JSREPORT_WARNING;
 
     return false;
@@ -486,7 +514,7 @@ js_ReportErrorVA(JSContext *cx, unsigned flags, const char *format, va_list ap)
 
     warning = JSREPORT_IS_WARNING(report.flags);
 
-    ReportError(cx, message, &report, NULL, NULL);
+    ReportError(cx, message, &report, nullptr, nullptr);
     js_free(message);
     js_free(ucmessage);
     return warning;
@@ -534,7 +562,7 @@ js::PrintError(JSContext *cx, FILE *file, const char *message, JSErrorReport *re
     if (JSREPORT_IS_WARNING(report->flags) && !reportWarnings)
         return false;
 
-    char *prefix = NULL;
+    char *prefix = nullptr;
     if (report->filename)
         prefix = JS_smprintf("%s:", report->filename);
     if (report->lineno) {
@@ -598,7 +626,7 @@ js_strdup(ExclusiveContext *cx, const char *s)
     size_t n = strlen(s) + 1;
     void *p = cx->malloc_(n);
     if (!p)
-        return NULL;
+        return nullptr;
     return (char *)js_memcpy(p, s, n);
 }
 
@@ -624,13 +652,13 @@ js_ExpandErrorArguments(ExclusiveContext *cx, JSErrorCallback callback,
     int argCount;
     bool messageArgsPassed = !!reportp->messageArgs;
 
-    *messagep = NULL;
+    *messagep = nullptr;
 
-    /* Most calls supply js_GetErrorMessage; if this is so, assume NULL. */
+    /* Most calls supply js_GetErrorMessage; if this is so, assume nullptr. */
     if (!callback || callback == js_GetErrorMessage)
-        efs = js_GetLocalizedErrorMessage(cx, userRef, NULL, errorNumber);
+        efs = js_GetLocalizedErrorMessage(cx, userRef, nullptr, errorNumber);
     else
-        efs = callback(userRef, NULL, errorNumber);
+        efs = callback(userRef, nullptr, errorNumber);
     if (efs) {
         reportp->exnType = efs->exnType;
 
@@ -651,8 +679,8 @@ js_ExpandErrorArguments(ExclusiveContext *cx, JSErrorCallback callback,
                 reportp->messageArgs = cx->pod_malloc<const jschar*>(argCount + 1);
                 if (!reportp->messageArgs)
                     return false;
-                /* NULL-terminate for easy copying. */
-                reportp->messageArgs[argCount] = NULL;
+                /* nullptr-terminate for easy copying. */
+                reportp->messageArgs[argCount] = nullptr;
             }
             for (i = 0; i < argCount; i++) {
                 if (messageArgsPassed) {
@@ -741,7 +769,7 @@ js_ExpandErrorArguments(ExclusiveContext *cx, JSErrorCallback callback,
             }
         }
     }
-    if (*messagep == NULL) {
+    if (*messagep == nullptr) {
         /* where's the right place for this ??? */
         const char *defaultErrorMessage
             = "No error message available for error number %d";
@@ -762,15 +790,15 @@ error:
                 js_free((void *)reportp->messageArgs[i++]);
         }
         js_free((void *)reportp->messageArgs);
-        reportp->messageArgs = NULL;
+        reportp->messageArgs = nullptr;
     }
     if (reportp->ucmessage) {
         js_free((void *)reportp->ucmessage);
-        reportp->ucmessage = NULL;
+        reportp->ucmessage = nullptr;
     }
     if (*messagep) {
         js_free((void *)*messagep);
-        *messagep = NULL;
+        *messagep = nullptr;
     }
     return false;
 }
@@ -866,7 +894,7 @@ js_ReportErrorAgain(JSContext *cx, const char *message, JSErrorReport *reportp)
     if (onError) {
         JSDebugErrorHook hook = cx->runtime()->debugHooks.debugErrorHook;
         if (hook && !hook(cx, message, reportp, cx->runtime()->debugHooks.debugErrorHookData))
-            onError = NULL;
+            onError = nullptr;
     }
     if (onError)
         onError(cx, message, reportp);
@@ -875,7 +903,7 @@ js_ReportErrorAgain(JSContext *cx, const char *message, JSErrorReport *reportp)
 void
 js_ReportIsNotDefined(JSContext *cx, const char *name)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_NOT_DEFINED, name);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_NOT_DEFINED, name);
 }
 
 bool
@@ -892,20 +920,20 @@ js_ReportIsNullOrUndefined(JSContext *cx, int spindex, HandleValue v,
     if (strcmp(bytes, js_undefined_str) == 0 ||
         strcmp(bytes, js_null_str) == 0) {
         ok = JS_ReportErrorFlagsAndNumber(cx, JSREPORT_ERROR,
-                                          js_GetErrorMessage, NULL,
+                                          js_GetErrorMessage, nullptr,
                                           JSMSG_NO_PROPERTIES, bytes,
-                                          NULL, NULL);
+                                          nullptr, nullptr);
     } else if (v.isUndefined()) {
         ok = JS_ReportErrorFlagsAndNumber(cx, JSREPORT_ERROR,
-                                          js_GetErrorMessage, NULL,
+                                          js_GetErrorMessage, nullptr,
                                           JSMSG_UNEXPECTED_TYPE, bytes,
-                                          js_undefined_str, NULL);
+                                          js_undefined_str, nullptr);
     } else {
         JS_ASSERT(v.isNull());
         ok = JS_ReportErrorFlagsAndNumber(cx, JSREPORT_ERROR,
-                                          js_GetErrorMessage, NULL,
+                                          js_GetErrorMessage, nullptr,
                                           JSMSG_UNEXPECTED_TYPE, bytes,
-                                          js_null_str, NULL);
+                                          js_null_str, nullptr);
     }
 
     js_free(bytes);
@@ -920,7 +948,7 @@ js_ReportMissingArg(JSContext *cx, HandleValue v, unsigned arg)
     RootedAtom atom(cx);
 
     JS_snprintf(argbuf, sizeof argbuf, "%u", arg);
-    bytes = NULL;
+    bytes = nullptr;
     if (IsFunctionObject(v)) {
         atom = v.toObject().as<JSFunction>().atom();
         bytes = DecompileValueGenerator(cx, JSDVG_SEARCH_STACK,
@@ -928,7 +956,7 @@ js_ReportMissingArg(JSContext *cx, HandleValue v, unsigned arg)
         if (!bytes)
             return;
     }
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL,
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr,
                          JSMSG_MISSING_FUN_ARG, argbuf,
                          bytes ? bytes : "");
     js_free(bytes);
@@ -949,7 +977,7 @@ js_ReportValueErrorFlags(JSContext *cx, unsigned flags, const unsigned errorNumb
         return false;
 
     ok = JS_ReportErrorFlagsAndNumber(cx, flags, js_GetErrorMessage,
-                                      NULL, errorNumber, bytes, arg1, arg2);
+                                      nullptr, errorNumber, bytes, arg1, arg2);
     js_free(bytes);
     return ok;
 }
@@ -966,7 +994,7 @@ js_GetErrorMessage(void *userRef, const char *locale, const unsigned errorNumber
 {
     if ((errorNumber > 0) && (errorNumber < JSErr_Limit))
         return &js_ErrorFormatString[errorNumber];
-    return NULL;
+    return nullptr;
 }
 
 bool
@@ -992,7 +1020,7 @@ js_InvokeOperationCallback(JSContext *cx)
 
 #ifdef JSGC_GENERATIONAL
     if (rt->gcStoreBuffer.isAboutToOverflow())
-        MinorGC(rt, JS::gcreason::FULL_STORE_BUFFER);
+        MinorGC(cx, JS::gcreason::FULL_STORE_BUFFER);
 #endif
 
 #ifdef JS_ION
@@ -1024,7 +1052,7 @@ js::ThreadSafeContext::ThreadSafeContext(JSRuntime *rt, PerThreadData *pt, Conte
   : ContextFriendFields(rt),
     contextKind_(kind),
     perThreadData(pt),
-    allocator_(NULL)
+    allocator_(nullptr)
 { }
 
 bool
@@ -1044,16 +1072,16 @@ JSContext::JSContext(JSRuntime *rt)
   : ExclusiveContext(rt, &rt->mainThread, Context_JS),
     throwing(false),
     exception(UndefinedValue()),
-    options_(0),
+    options_(),
     reportGranularity(JS_DEFAULT_JITREPORT_GRANULARITY),
-    resolvingList(NULL),
+    resolvingList(nullptr),
     generatingError(false),
     savedFrameChains_(),
-    defaultCompartmentObject_(NULL),
+    defaultCompartmentObject_(nullptr),
     cycleDetectorSet(MOZ_THIS_IN_INITIALIZER_LIST()),
-    errorReporter(NULL),
-    data(NULL),
-    data2(NULL),
+    errorReporter(nullptr),
+    data(nullptr),
+    data2(nullptr),
 #ifdef JS_THREADSAFE
     outstandingRequests(0),
 #endif
@@ -1061,9 +1089,9 @@ JSContext::JSContext(JSRuntime *rt)
     iterValue(MagicValue(JS_NO_ITER_VALUE)),
     jitIsBroken(false),
 #ifdef MOZ_TRACE_JSCALLS
-    functionCallback(NULL),
+    functionCallback(nullptr),
 #endif
-    innermostGenerator_(NULL)
+    innermostGenerator_(nullptr)
 {
 #ifdef DEBUG
     stackIterAssertionEnabled = true;
@@ -1107,7 +1135,7 @@ JSContext::leaveGenerator(JSGenerator *gen)
 {
     JS_ASSERT(innermostGenerator_ == gen);
     innermostGenerator_ = innermostGenerator_->prevGenerator;
-    gen->prevGenerator = NULL;
+    gen->prevGenerator = nullptr;
 }
 
 
@@ -1126,7 +1154,7 @@ JSContext::saveFrameChain()
     if (Activation *act = mainThread().activation())
         act->saveFrameChain();
 
-    setCompartment(NULL);
+    setCompartment(nullptr);
     enterCompartmentDepth_ = 0;
 
     return true;
@@ -1197,7 +1225,7 @@ ComputeIsJITBroken()
                 "SCH-I500",     // Samsung i9000, Fascinate device
                 "SPH-D700",     // Samsung i9000, Epic device
                 "GT-I9000",     // Samsung i9000, UK/Europe device
-                NULL
+                nullptr
             };
             for (const char* const* hw = &blacklist[0]; *hw; ++hw) {
                 if (line.npos != line.find(*hw)) {
@@ -1267,7 +1295,7 @@ JSContext::mark(JSTracer *trc)
 JSVersion
 JSContext::findVersion() const
 {
-    if (JSScript *script = currentScript(NULL, ALLOW_CROSS_COMPARTMENT))
+    if (JSScript *script = currentScript(nullptr, ALLOW_CROSS_COMPARTMENT))
         return script->getVersion();
 
     if (compartment() && compartment()->options().version() != JSVERSION_UNKNOWN)

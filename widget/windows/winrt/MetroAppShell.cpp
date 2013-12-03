@@ -15,6 +15,7 @@
 #include "WinUtils.h"
 #include "nsIAppStartup.h"
 #include "nsToolkitCompsCID.h"
+#include <shellapi.h>
 
 using namespace mozilla;
 using namespace mozilla::widget;
@@ -43,7 +44,6 @@ extern UINT sAppShellGeckoMsgId;
 static ComPtr<ICoreWindowStatic> sCoreStatic;
 static bool sIsDispatching = false;
 static bool sWillEmptyThreadQueue = false;
-static bool sEmptyingThreadQueue = false;
 
 MetroAppShell::~MetroAppShell()
 {
@@ -58,7 +58,7 @@ MetroAppShell::Init()
   LogFunction();
 
   WNDCLASSW wc;
-  HINSTANCE module = GetModuleHandle(NULL);
+  HINSTANCE module = GetModuleHandle(nullptr);
 
   const PRUnichar *const kWindowClass = L"nsAppShell:EventWindowClass";
   if (!GetClassInfoW(module, kWindowClass, &wc)) {
@@ -67,16 +67,16 @@ MetroAppShell::Init()
     wc.cbClsExtra    = 0;
     wc.cbWndExtra    = 0;
     wc.hInstance     = module;
-    wc.hIcon         = NULL;
-    wc.hCursor       = NULL;
-    wc.hbrBackground = (HBRUSH) NULL;
-    wc.lpszMenuName  = (LPCWSTR) NULL;
+    wc.hIcon         = nullptr;
+    wc.hCursor       = nullptr;
+    wc.hbrBackground = (HBRUSH) nullptr;
+    wc.lpszMenuName  = (LPCWSTR) nullptr;
     wc.lpszClassName = kWindowClass;
     RegisterClassW(&wc);
   }
 
   mEventWnd = CreateWindowW(kWindowClass, L"nsAppShell:EventWindow",
-                           0, 0, 0, 10, 10, NULL, NULL, module, NULL);
+                           0, 0, 0, 10, 10, nullptr, nullptr, module, nullptr);
   NS_ENSURE_STATE(mEventWnd);
 
   nsresult rv;
@@ -114,14 +114,14 @@ HRESULT SHCreateShellItemArrayFromShellItemDynamic(IShellItem *psi, REFIID riid,
 }
 
 BOOL
-WinLaunchDeferredMetroFirefox()
+WinLaunchDeferredMetroFirefox(bool aInMetro)
 {
   // Create an instance of the Firefox Metro DEH which is used to launch the browser
   const CLSID CLSID_FirefoxMetroDEH = {0x5100FEC1,0x212B, 0x4BF5 ,{0x9B,0xF8, 0x3E,0x65, 0x0F,0xD7,0x94,0xA3}};
 
   nsRefPtr<IExecuteCommand> executeCommand;
   HRESULT hr = CoCreateInstance(CLSID_FirefoxMetroDEH,
-                                NULL,
+                                nullptr,
                                 CLSCTX_LOCAL_SERVER,
                                 IID_IExecuteCommand,
                                 getter_AddRefs(executeCommand));
@@ -140,7 +140,8 @@ WinLaunchDeferredMetroFirefox()
 
   // Create an IShellItem for the current browser path
   nsRefPtr<IShellItem> shellItem;
-  hr = WinUtils::SHCreateItemFromParsingName(exePath, NULL, IID_IShellItem, getter_AddRefs(shellItem));
+  hr = WinUtils::SHCreateItemFromParsingName(exePath, nullptr, IID_IShellItem,
+                                             getter_AddRefs(shellItem));
   if (FAILED(hr))
     return FALSE;
 
@@ -159,7 +160,11 @@ WinLaunchDeferredMetroFirefox()
   if (FAILED(hr))
     return FALSE;
 
-  hr = executeCommand->SetParameters(L"--metro-restart");
+  if (aInMetro) {
+    hr = executeCommand->SetParameters(L"--metro-restart");
+  } else {
+    hr = executeCommand->SetParameters(L"--desktop-restart");
+  }
   if (FAILED(hr))
     return FALSE;
 
@@ -195,16 +200,35 @@ MetroAppShell::Run(void)
       mozilla::widget::StopAudioSession();
 
       nsCOMPtr<nsIAppStartup> appStartup (do_GetService(NS_APPSTARTUP_CONTRACTID));
-      bool restarting;
-      if (appStartup && NS_SUCCEEDED(appStartup->GetRestarting(&restarting)) && restarting) {
-        if (!WinLaunchDeferredMetroFirefox()) {
-          NS_WARNING("Couldn't deferred launch Metro Firefox.");
-        }
+      bool restartingInMetro = false, restarting = false;
+
+      if (appStartup && NS_SUCCEEDED(appStartup->GetRestartingTouchEnvironment(&restartingInMetro)) &&
+          restartingInMetro) {
+        WinLaunchDeferredMetroFirefox(true);
+      }
+
+      if (!appStartup || NS_FAILED(appStartup->GetRestarting(&restarting))) {
+        WinUtils::Log("appStartup->GetRestarting() unsuccessful");
       }
 
       // This calls XRE_metroShutdown() in xre. This will also destroy
       // MessagePump.
       sMetroApp->ShutdownXPCOM();
+
+      if (restarting) {
+        SHELLEXECUTEINFOW sinfo;
+        memset(&sinfo, 0, sizeof(SHELLEXECUTEINFOW));
+        sinfo.cbSize       = sizeof(SHELLEXECUTEINFOW);
+        // Per the Metro style enabled desktop browser, for some reason,
+        // SEE_MASK_FLAG_LOG_USAGE is needed to change from immersive mode
+        // to desktop.
+        sinfo.fMask        = SEE_MASK_FLAG_LOG_USAGE;
+        sinfo.lpFile       = L"http://-desktop";
+        sinfo.lpVerb       = L"open";
+        sinfo.lpParameters = L"--desktop-restart";
+        sinfo.nShow        = SW_SHOWNORMAL;
+        ShellExecuteEx(&sinfo);
+      }
 
       // This will free the real main thread in CoreApplication::Run()
       // once winrt cleans up this thread.
@@ -221,7 +245,6 @@ MetroAppShell::Run(void)
 void // static
 MetroAppShell::MarkEventQueueForPurge()
 {
-  LogFunction();
   sWillEmptyThreadQueue = true;
 
   // If we're dispatching native events, wait until the dispatcher is
@@ -242,13 +265,9 @@ MetroAppShell::DispatchAllGeckoEvents()
     return;
   }
 
-  LogFunction();
-  NS_ASSERTION(NS_IsMainThread(), "DispatchAllXPCOMEvents should be called on the main thread");
+  NS_ASSERTION(NS_IsMainThread(), "DispatchAllGeckoEvents should be called on the main thread");
 
   sWillEmptyThreadQueue = false;
-
-  AutoRestore<bool> dispatching(sEmptyingThreadQueue);
-  sEmptyingThreadQueue = true;
   nsIThread *thread = NS_GetCurrentThread();
   NS_ProcessPendingEvents(thread, 0);
 }
@@ -280,7 +299,7 @@ MetroAppShell::ProcessOneNativeEventIfPresent()
     // Calling into ProcessNativeEvents is harmless, but won't actually process any
     // native events. So we log here so we can spot this and get a handle on the
     // corner cases where this can happen.
-    Log("WARNING: Reentrant call into process events detected, returning early.");
+    WinUtils::Log("WARNING: Reentrant call into process events detected, returning early.");
     return false;
   }
 
@@ -298,19 +317,12 @@ MetroAppShell::ProcessOneNativeEventIfPresent()
 bool
 MetroAppShell::ProcessNextNativeEvent(bool mayWait)
 {
-  // NS_ProcessPendingEvents will process thread events *and* call
-  // nsBaseAppShell::OnProcessNextEvent to process native events. However
-  // we do not want native events getting dispatched while we are in
-  // DispatchAllGeckoEvents.
-  if (sEmptyingThreadQueue) {
-    return false;
-  }
-
   if (ProcessOneNativeEventIfPresent()) {
     return true;
   }
   if (mayWait) {
-    DWORD result = ::MsgWaitForMultipleObjectsEx(0, NULL, MSG_WAIT_TIMEOUT, MOZ_QS_ALLEVENT,
+    DWORD result = ::MsgWaitForMultipleObjectsEx(0, nullptr, MSG_WAIT_TIMEOUT,
+                                                 MOZ_QS_ALLEVENT,
                                                  MWMO_INPUTAVAILABLE|MWMO_ALERTABLE);
     NS_WARN_IF_FALSE(result != WAIT_FAILED, "Wait failed");
   }
@@ -393,7 +405,7 @@ MetroAppShell::Observe(nsISupports *subject, const char *topic,
     NS_ENSURE_ARG_POINTER(topic);
     if (!strcmp(topic, "dl-start")) {
       if (mPowerRequestCount++ == 0) {
-        Log("Download started - Disallowing suspend");
+        WinUtils::Log("Download started - Disallowing suspend");
         REASON_CONTEXT context;
         context.Version = POWER_REQUEST_CONTEXT_VERSION;
         context.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
@@ -406,7 +418,7 @@ MetroAppShell::Observe(nsISupports *subject, const char *topic,
                !strcmp(topic, "dl-cancel") ||
                !strcmp(topic, "dl-failed")) {
       if (--mPowerRequestCount == 0 && mPowerRequest) {
-        Log("All downloads ended - Allowing suspend");
+        WinUtils::Log("All downloads ended - Allowing suspend");
         PowerClearRequestDyn(mPowerRequest, PowerRequestExecutionRequired); 
         mPowerRequest.reset();
       }

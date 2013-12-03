@@ -94,6 +94,13 @@ partial interface HTMLElement {
   readonly attribute long offsetHeight;
 };
 
+// Extension for scroll-grabbing, used in the B2G dynamic toolbar.
+// This is likely to be revised.
+partial interface HTMLElement {
+  [Func="nsGenericHTMLElement::IsScrollGrabAllowed"]
+           attribute boolean scrollgrab;
+};
+
 [NoInterfaceObject]
 interface TouchEventHandlers {
   [Func="nsGenericHTMLElement::TouchEventsEnabled"]
@@ -111,7 +118,7 @@ interface TouchEventHandlers {
 };
 
 HTMLElement implements GlobalEventHandlers;
-HTMLElement implements NodeEventHandlers;
 HTMLElement implements TouchEventHandlers;
+HTMLElement implements OnErrorEventHandlerForNodes;
 
 interface HTMLUnknownElement : HTMLElement {};

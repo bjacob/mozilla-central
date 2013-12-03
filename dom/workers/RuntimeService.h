@@ -14,9 +14,11 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/dom/BindingDeclarations.h"
 #include "nsAutoPtr.h"
 #include "nsClassHashtable.h"
 #include "nsCOMPtr.h"
+#include "nsCycleCollectionParticipant.h"
 #include "nsHashKeys.h"
 #include "nsString.h"
 #include "nsTArray.h"
@@ -27,18 +29,35 @@ class nsPIDOMWindow;
 
 BEGIN_WORKERS_NAMESPACE
 
+class SharedWorker;
 class WorkerPrivate;
 
 class RuntimeService MOZ_FINAL : public nsIObserver
 {
+  struct SharedWorkerInfo
+  {
+    WorkerPrivate* mWorkerPrivate;
+    nsCString mScriptSpec;
+    nsString mName;
+
+    SharedWorkerInfo(WorkerPrivate* aWorkerPrivate,
+                     const nsACString& aScriptSpec,
+                     const nsAString& aName)
+    : mWorkerPrivate(aWorkerPrivate), mScriptSpec(aScriptSpec), mName(aName)
+    { }
+  };
+
   struct WorkerDomainInfo
   {
     nsCString mDomain;
     nsTArray<WorkerPrivate*> mActiveWorkers;
     nsTArray<WorkerPrivate*> mQueuedWorkers;
+    nsClassHashtable<nsCStringHashKey, SharedWorkerInfo> mSharedWorkerInfos;
     uint32_t mChildWorkerCount;
 
-    WorkerDomainInfo() : mActiveWorkers(1), mChildWorkerCount(0) { }
+    WorkerDomainInfo()
+    : mActiveWorkers(1), mChildWorkerCount(0)
+    { }
 
     uint32_t
     ActiveWorkerCount() const
@@ -53,6 +72,16 @@ class RuntimeService MOZ_FINAL : public nsIObserver
     mozilla::TimeStamp mExpirationTime;
   };
 
+  struct MatchSharedWorkerInfo
+  {
+    WorkerPrivate* mWorkerPrivate;
+    SharedWorkerInfo* mSharedWorkerInfo;
+
+    MatchSharedWorkerInfo(WorkerPrivate* aWorkerPrivate)
+    : mWorkerPrivate(aWorkerPrivate), mSharedWorkerInfo(nullptr)
+    { }
+  };
+
   mozilla::Mutex mMutex;
 
   // Protected by mMutex.
@@ -62,7 +91,8 @@ class RuntimeService MOZ_FINAL : public nsIObserver
   nsTArray<IdleThreadInfo> mIdleThreadArray;
 
   // *Not* protected by mMutex.
-  nsClassHashtable<nsPtrHashKey<nsPIDOMWindow>, nsTArray<WorkerPrivate*> > mWindowMap;
+  nsClassHashtable<nsPtrHashKey<nsPIDOMWindow>,
+                   nsTArray<WorkerPrivate*> > mWindowMap;
 
   // Only used on the main thread.
   nsCOMPtr<nsITimer> mIdleThreadTimer;
@@ -71,6 +101,7 @@ class RuntimeService MOZ_FINAL : public nsIObserver
   nsCString mSystemCharset;
 
   static JSSettings sDefaultJSSettings;
+  static bool sDefaultPreferences[WORKERPREF_COUNT];
 
 public:
   struct NavigatorStrings
@@ -106,13 +137,22 @@ public:
   UnregisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate);
 
   void
-  CancelWorkersForWindow(JSContext* aCx, nsPIDOMWindow* aWindow);
+  CancelWorkersForWindow(nsPIDOMWindow* aWindow);
 
   void
-  SuspendWorkersForWindow(JSContext* aCx, nsPIDOMWindow* aWindow);
+  SuspendWorkersForWindow(nsPIDOMWindow* aWindow);
 
   void
-  ResumeWorkersForWindow(nsIScriptContext* aCx, nsPIDOMWindow* aWindow);
+  ResumeWorkersForWindow(nsPIDOMWindow* aWindow);
+
+  nsresult
+  CreateSharedWorker(const GlobalObject& aGlobal,
+                     const nsAString& aScriptURL,
+                     const nsAString& aName,
+                     SharedWorker** aSharedWorker);
+
+  void
+  ForgetSharedWorker(WorkerPrivate* aWorkerPrivate);
 
   const nsACString&
   GetDetectorName() const
@@ -143,7 +183,15 @@ public:
   }
 
   static void
-  SetDefaultJSContextOptions(uint32_t aContentOptions, uint32_t aChromeOptions)
+  GetDefaultPreferences(bool aPreferences[WORKERPREF_COUNT])
+  {
+    AssertIsOnMainThread();
+    memcpy(aPreferences, sDefaultPreferences, WORKERPREF_COUNT * sizeof(bool));
+  }
+
+  static void
+  SetDefaultJSContextOptions(const JS::ContextOptions& aContentOptions,
+                             const JS::ContextOptions& aChromeOptions)
   {
     AssertIsOnMainThread();
     sDefaultJSSettings.content.options = aContentOptions;
@@ -152,6 +200,9 @@ public:
 
   void
   UpdateAllWorkerJSContextOptions();
+
+  void
+  UpdateAllWorkerPreference(WorkerPreference aPref, bool aValue);
 
   static void
   SetDefaultJSGCSettings(JSGCParamKey aKey, uint32_t aValue)
@@ -219,6 +270,16 @@ private:
                                WorkerDomainInfo* aData,
                                void* aUserArg);
 
+  static PLDHashOperator
+  RemoveSharedWorkerFromWindowMap(nsPIDOMWindow* aKey,
+                                  nsAutoPtr<nsTArray<WorkerPrivate*> >& aData,
+                                  void* aUserArg);
+
+  static PLDHashOperator
+  FindSharedWorkerInfo(const nsACString& aKey,
+                       SharedWorkerInfo* aData,
+                       void* aUserArg);
+
   void
   GetWorkersForWindow(nsPIDOMWindow* aWindow,
                       nsTArray<WorkerPrivate*>& aWorkers);
@@ -228,6 +289,9 @@ private:
 
   static void
   ShutdownIdleThreads(nsITimer* aTimer, void* aClosure);
+
+  static int
+  WorkerPrefChanged(const char* aPrefName, void* aClosure);
 };
 
 END_WORKERS_NAMESPACE

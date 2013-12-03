@@ -24,10 +24,10 @@
 #include "nsINameSpaceManager.h"
 #include "nsIPersistentProperties2.h"
 #include "nsISelectionController.h"
-#include "jsapi.h"
 #include "nsIServiceManager.h"
 #include "nsITextControlFrame.h"
 
+#include "mozilla/FloatingPoint.h"
 #include "mozilla/Preferences.h"
 
 using namespace mozilla;
@@ -306,6 +306,21 @@ HTMLTextFieldAccessible::NativeRole()
   return roles::ENTRY;
 }
 
+already_AddRefed<nsIPersistentProperties>
+HTMLTextFieldAccessible::NativeAttributes()
+{
+  nsCOMPtr<nsIPersistentProperties> attributes =
+    HyperTextAccessibleWrap::NativeAttributes();
+
+  // Expose type for text input elements as it gives some useful context,
+  // especially for mobile.
+  nsAutoString type;
+  if (mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, type))
+    nsAccUtils::SetAccAttr(attributes, nsGkAtoms::textInputType, type);
+
+  return attributes.forget();
+}
+
 ENameValueFlag
 HTMLTextFieldAccessible::NativeName(nsString& aName)
 {
@@ -518,9 +533,7 @@ HTMLFileInputAccessible::HandleAccEvent(AccEvent* aEvent)
     if (button && button->Role() == roles::PUSHBUTTON) {
       nsRefPtr<AccStateChangeEvent> childEvent =
         new AccStateChangeEvent(button, event->GetState(),
-                                event->IsStateEnabled(),
-                                (event->IsFromUserInput() ? eFromUserInput
-                                                          : eNoUserInput));
+                                event->IsStateEnabled(), event->FromUserInput());
       nsEventShell::FireEvent(childEvent);
     }
   }
@@ -532,9 +545,6 @@ HTMLFileInputAccessible::HandleAccEvent(AccEvent* aEvent)
 ////////////////////////////////////////////////////////////////////////////////
 // HTMLRangeAccessible
 ////////////////////////////////////////////////////////////////////////////////
-
-NS_IMPL_ISUPPORTS_INHERITED1(HTMLRangeAccessible, LeafAccessible,
-                             nsIAccessibleValue)
 
 role
 HTMLRangeAccessible::NativeRole()
@@ -558,58 +568,53 @@ HTMLRangeAccessible::Value(nsString& aValue)
   HTMLInputElement::FromContent(mContent)->GetValue(aValue);
 }
 
-NS_IMETHODIMP
-HTMLRangeAccessible::GetMaximumValue(double* aMaximumValue)
+double
+HTMLRangeAccessible::MaxValue() const
 {
-  nsresult rv = LeafAccessible::GetMaximumValue(aMaximumValue);
-  if (rv != NS_OK_NO_ARIA_VALUE)
-    return rv;
+  double value = LeafAccessible::MaxValue();
+  if (!IsNaN(value))
+    return value;
 
-  *aMaximumValue = HTMLInputElement::FromContent(mContent)->GetMaximum().toDouble();
-  return NS_OK;
+  return HTMLInputElement::FromContent(mContent)->GetMaximum().toDouble();
 }
 
 
-NS_IMETHODIMP
-HTMLRangeAccessible::GetMinimumValue(double* aMinimumValue)
+double
+HTMLRangeAccessible::MinValue() const
 {
-  nsresult rv = LeafAccessible::GetMinimumValue(aMinimumValue);
-  if (rv != NS_OK_NO_ARIA_VALUE)
-    return rv;
+  double value = LeafAccessible::MinValue();
+  if (!IsNaN(value))
+    return value;
 
-  *aMinimumValue = HTMLInputElement::FromContent(mContent)->GetMinimum().toDouble();
-  return NS_OK;
+  return HTMLInputElement::FromContent(mContent)->GetMinimum().toDouble();
 }
 
-
-NS_IMETHODIMP
-HTMLRangeAccessible::GetMinimumIncrement(double* aMinimumIncrement)
+double
+HTMLRangeAccessible::Step() const
 {
-  nsresult rv = LeafAccessible::GetMinimumIncrement(aMinimumIncrement);
-  if (rv != NS_OK_NO_ARIA_VALUE)
-    return rv;
+  double value = LeafAccessible::Step();
+  if (!IsNaN(value))
+    return value;
 
-  *aMinimumIncrement = HTMLInputElement::FromContent(mContent)->GetStep().toDouble();
-  return NS_OK;
+  return HTMLInputElement::FromContent(mContent)->GetStep().toDouble();
 }
 
-NS_IMETHODIMP
-HTMLRangeAccessible::GetCurrentValue(double* aCurrentValue)
+double
+HTMLRangeAccessible::CurValue() const
 {
-  nsresult rv = LeafAccessible::GetCurrentValue(aCurrentValue);
-  if (rv != NS_OK_NO_ARIA_VALUE)
-    return rv;
+  double value = LeafAccessible::CurValue();
+  if (!IsNaN(value))
+    return value;
 
-  *aCurrentValue = HTMLInputElement::FromContent(mContent)->GetValueAsDecimal().toDouble();
-  return NS_OK;
+  return HTMLInputElement::FromContent(mContent)->GetValueAsDecimal().toDouble();
 }
 
-NS_IMETHODIMP
-HTMLRangeAccessible::SetCurrentValue(double aValue)
+bool
+HTMLRangeAccessible::SetCurValue(double aValue)
 {
   ErrorResult er;
   HTMLInputElement::FromContent(mContent)->SetValueAsNumber(aValue, er);
-  return er.ErrorCode();
+  return !er.Failed();
 }
 
 
@@ -659,11 +664,11 @@ HTMLGroupboxAccessible::NativeName(nsString& aName)
 }
 
 Relation
-HTMLGroupboxAccessible::RelationByType(uint32_t aType)
+HTMLGroupboxAccessible::RelationByType(RelationType aType)
 {
   Relation rel = HyperTextAccessibleWrap::RelationByType(aType);
     // No override for label, so use <legend> for this <fieldset>
-  if (aType == nsIAccessibleRelation::RELATION_LABELLED_BY)
+  if (aType == RelationType::LABELLED_BY)
     rel.AppendTarget(mDoc, GetLegend());
 
   return rel;
@@ -680,10 +685,10 @@ HTMLLegendAccessible::
 }
 
 Relation
-HTMLLegendAccessible::RelationByType(uint32_t aType)
+HTMLLegendAccessible::RelationByType(RelationType aType)
 {
   Relation rel = HyperTextAccessibleWrap::RelationByType(aType);
-  if (aType != nsIAccessibleRelation::RELATION_LABEL_FOR)
+  if (aType != RelationType::LABEL_FOR)
     return rel;
 
   Accessible* groupbox = Parent();
@@ -742,10 +747,10 @@ HTMLFigureAccessible::NativeName(nsString& aName)
 }
 
 Relation
-HTMLFigureAccessible::RelationByType(uint32_t aType)
+HTMLFigureAccessible::RelationByType(RelationType aType)
 {
   Relation rel = HyperTextAccessibleWrap::RelationByType(aType);
-  if (aType == nsIAccessibleRelation::RELATION_LABELLED_BY)
+  if (aType == RelationType::LABELLED_BY)
     rel.AppendTarget(mDoc, Caption());
 
   return rel;
@@ -782,10 +787,10 @@ HTMLFigcaptionAccessible::NativeRole()
 }
 
 Relation
-HTMLFigcaptionAccessible::RelationByType(uint32_t aType)
+HTMLFigcaptionAccessible::RelationByType(RelationType aType)
 {
   Relation rel = HyperTextAccessibleWrap::RelationByType(aType);
-  if (aType != nsIAccessibleRelation::RELATION_LABEL_FOR)
+  if (aType != RelationType::LABEL_FOR)
     return rel;
 
   Accessible* figure = Parent();

@@ -17,9 +17,8 @@ class nsDOMMutationEvent : public nsDOMEvent,
 {
 public:
   nsDOMMutationEvent(mozilla::dom::EventTarget* aOwner,
-                     nsPresContext* aPresContext, nsMutationEvent* aEvent);
-
-  virtual ~nsDOMMutationEvent();
+                     nsPresContext* aPresContext,
+                     mozilla::InternalMutationEvent* aEvent);
 
   NS_DECL_ISUPPORTS_INHERITED
 

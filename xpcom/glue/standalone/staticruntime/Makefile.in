@@ -9,9 +9,6 @@ LOCAL_INCLUDES	= \
 	-I$(srcdir)/../../../build \
 	$(NULL)
 
-# create a static lib
-FORCE_STATIC_LIB = 1
-
 # Statically link to the CRT on Windows
 USE_STATIC_LIBS = 1
 
@@ -24,11 +21,4 @@ ifdef _MSC_VER
 # Don't include directives in obj files about which CRT to use
 OS_COMPILE_CXXFLAGS += -Zl
 OS_COMPILE_CFLAGS += -Zl
-DEFINES += -D_USE_ANSI_CPP
-endif
-
-DEFINES		+= -DXPCOM_GLUE
-
-ifdef TARGET_XPCOM_ABI
-DEFINES += -DTARGET_XPCOM_ABI=\"$(TARGET_XPCOM_ABI)\"
 endif

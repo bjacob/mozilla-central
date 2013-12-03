@@ -32,7 +32,6 @@
 #include "nsIPrincipal.h"
 #include "nsLayoutCID.h"
 #include "mozilla/dom/Attr.h"
-#include "nsGUIEvent.h"
 #include "nsCExternalHandlerService.h"
 #include "nsMimeTypes.h"
 #include "nsEventListenerManager.h"
@@ -41,7 +40,6 @@
 #include "nsJSUtils.h"
 #include "nsCRT.h"
 #include "nsIAuthPrompt.h"
-#include "nsIScriptGlobalObjectOwner.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsContentPolicyUtils.h"
 #include "nsIDOMUserDataHandler.h"
@@ -50,6 +48,7 @@
 #include "nsIConsoleService.h"
 #include "nsIScriptError.h"
 #include "nsIHTMLDocument.h"
+#include "mozilla/BasicEvents.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/XMLDocumentBinding.h"
 
@@ -275,15 +274,6 @@ XMLDocument::SetAsync(bool aAsync)
   return NS_OK;
 }
 
-static void
-ReportUseOfDeprecatedMethod(nsIDocument *aDoc, const char* aWarning)
-{
-  nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
-                                  NS_LITERAL_CSTRING("DOM3 Load"), aDoc,
-                                  nsContentUtils::eDOM_PROPERTIES,
-                                  aWarning);
-}
-
 NS_IMETHODIMP
 XMLDocument::Load(const nsAString& aUrl, bool *aReturn)
 {
@@ -303,7 +293,7 @@ XMLDocument::Load(const nsAString& aUrl, ErrorResult& aRv)
     return false;
   }
 
-  ReportUseOfDeprecatedMethod(this, "UseOfDOM3LoadMethodWarning");
+  WarnOnceAbout(nsIDocument::eUseOfDOM3LoadMethod);
 
   nsCOMPtr<nsIDocument> callingDoc = nsContentUtils::GetDocumentFromContext();
 
@@ -581,16 +571,16 @@ XMLDocument::EndLoad()
     // Generate a document load event for the case when an XML
     // document was loaded as pure data without any presentation
     // attached to it.
-    nsEvent event(true, NS_LOAD);
+    WidgetEvent event(true, NS_LOAD);
     nsEventDispatcher::Dispatch(static_cast<nsIDocument*>(this), nullptr,
                                 &event);
-  }    
+  }
 }
- 
+
 /* virtual */ void
-XMLDocument::DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
+XMLDocument::DocAddSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const
 {
-  nsDocument::DocSizeOfExcludingThis(aWindowSizes);
+  nsDocument::DocAddSizeOfExcludingThis(aWindowSizes);
 }
 
 // nsIDOMDocument interface

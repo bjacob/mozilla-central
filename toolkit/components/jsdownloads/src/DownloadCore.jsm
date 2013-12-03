@@ -137,12 +137,12 @@ const kProgressUpdateIntervalMs = 400;
  * is transient, though it can be included in a DownloadList so that it can be
  * managed by the user interface and persisted across sessions.
  */
-function Download()
+this.Download = function ()
 {
   this._deferSucceeded = Promise.defer();
 }
 
-Download.prototype = {
+this.Download.prototype = {
   /**
    * DownloadSource object associated with this download.
    */
@@ -338,8 +338,8 @@ Download.prototype = {
     // While shutting down or disposing of this object, we prevent the download
     // from returning to be in progress.
     if (this._finalized) {
-      return Promise.reject(new DownloadError(Cr.NS_ERROR_FAILURE,
-                                "Cannot start after finalization."));
+      return Promise.reject(new DownloadError({
+                                message: "Cannot start after finalization."}));
     }
 
     // Initialize all the status properties for a new or restarted download.
@@ -408,19 +408,27 @@ Download.prototype = {
         }
       }
 
-      // Disallow download if parental controls service restricts it.
-      if (yield DownloadIntegration.shouldBlockForParentalControls(this)) {
-        let error = new DownloadError(Cr.NS_ERROR_FAILURE, "Download blocked.");
-        error.becauseBlocked = true;
-        error.becauseBlockedByParentalControls = true;
-        throw error;
-      }
-
       try {
+        // Disallow download if parental controls service restricts it.
+        if (yield DownloadIntegration.shouldBlockForParentalControls(this)) {
+          throw new DownloadError({ becauseBlockedByParentalControls: true });
+        }
+
         // Execute the actual download through the saver object.
         yield this.saver.execute(DS_setProgressBytes.bind(this),
                                  DS_setProperties.bind(this));
-
+        // Check for application reputation, which requires the entire file to
+        // be downloaded.
+        if (yield DownloadIntegration.shouldBlockForReputationCheck(this)) {
+          // Delete the target file that BackgroundFileSaver already moved
+          // into place.
+          try {
+            yield OS.File.remove(this.target.path);
+          } catch (ex) {
+            Cu.reportError(ex);
+          }
+          throw new DownloadError({ becauseBlockedByReputationCheck: true });
+        }
         // Update the status properties for a successful download.
         this.progress = 100;
         this.succeeded = true;
@@ -430,7 +438,16 @@ Download.prototype = {
         // is forced to actually check the status properties to see if the
         // download was canceled or failed because of other reasons.
         if (this._promiseCanceled) {
-          throw new DownloadError(Cr.NS_ERROR_FAILURE, "Download canceled.");
+          throw new DownloadError({ message: "Download canceled." });
+        }
+
+        // An HTTP 450 error code is used by Windows to indicate that a uri is
+        // blocked by parental controls. This will prevent the download from
+        // occuring, so an error needs to be raised. This is not performed
+        // during the parental controls check above as it requires the request
+        // to start.
+        if (this._blockedByParentalControls) {
+          ex = new DownloadError({ becauseBlockedByParentalControls: true });
         }
 
         // Update the download error, unless a new attempt already started. The
@@ -475,7 +492,7 @@ Download.prototype = {
 
     // Notify the new download state before returning.
     this._notifyChange();
-    return this._currentAttempt;
+    return currentAttempt;
   },
 
   /*
@@ -981,9 +998,9 @@ Download.fromSerializable = function (aSerializable) {
 /**
  * Represents the source of a download, for example a document or an URI.
  */
-function DownloadSource() { }
+this.DownloadSource = function () {}
 
-DownloadSource.prototype = {
+this.DownloadSource.prototype = {
   /**
    * String containing the URI for the download source.
    */
@@ -1045,7 +1062,7 @@ DownloadSource.prototype = {
  *
  * @return The newly created DownloadSource object.
  */
-DownloadSource.fromSerializable = function (aSerializable) {
+this.DownloadSource.fromSerializable = function (aSerializable) {
   let source = new DownloadSource();
   if (isString(aSerializable)) {
     // Convert String objects to primitive strings at this point.
@@ -1076,9 +1093,9 @@ DownloadSource.fromSerializable = function (aSerializable) {
  * Represents the target of a download, for example a file in the global
  * downloads directory, or a file in the system temporary directory.
  */
-function DownloadTarget() { }
+this.DownloadTarget = function () {}
 
-DownloadTarget.prototype = {
+this.DownloadTarget.prototype = {
   /**
    * String containing the path of the target file.
    */
@@ -1124,7 +1141,7 @@ DownloadTarget.prototype = {
  *
  * @return The newly created DownloadTarget object.
  */
-DownloadTarget.fromSerializable = function (aSerializable) {
+this.DownloadTarget.fromSerializable = function (aSerializable) {
   let target = new DownloadTarget();
   if (isString(aSerializable)) {
     // Convert String objects to primitive strings at this point.
@@ -1152,18 +1169,22 @@ DownloadTarget.fromSerializable = function (aSerializable) {
 /**
  * Provides detailed information about a download failure.
  *
- * @param aResult
- *        The result code associated with the error.
- * @param aMessage
- *        The message to be displayed, or null to use the message associated
- *        with the result code.
- * @param aInferCause
- *        If true, attempts to determine if the cause of the download is a
- *        network failure or a local file failure, based on a set of known
- *        values of the result code.  This is useful when the error is received
- *        by a component that handles both aspects of the download.
+ * @param aProperties
+ *        Object which may contain any of the following properties:
+ *          {
+ *            result: Result error code, defaulting to Cr.NS_ERROR_FAILURE
+ *            message: String error message to be displayed, or null to use the
+ *                     message associated with the result code.
+ *            inferCause: If true, attempts to determine if the cause of the
+ *                        download is a network failure or a local file failure,
+ *                        based on a set of known values of the result code.
+ *                        This is useful when the error is received by a
+ *                        component that handles both aspects of the download.
+ *          }
+ *        The properties object may also contain any of the DownloadError's
+ *        because properties, which will be set accordingly in the error object.
  */
-function DownloadError(aResult, aMessage, aInferCause)
+this.DownloadError = function (aProperties)
 {
   const NS_ERROR_MODULE_BASE_OFFSET = 0x45;
   const NS_ERROR_MODULE_NETWORK = 6;
@@ -1171,22 +1192,46 @@ function DownloadError(aResult, aMessage, aInferCause)
 
   // Set the error name used by the Error object prototype first.
   this.name = "DownloadError";
-  this.result = aResult || Cr.NS_ERROR_FAILURE;
-  if (aMessage) {
-    this.message = aMessage;
+  this.result = aProperties.result || Cr.NS_ERROR_FAILURE;
+  if (aProperties.message) {
+    this.message = aProperties.message;
+  } else if (aProperties.becauseBlocked ||
+             aProperties.becauseBlockedByParentalControls ||
+             aProperties.becauseBlockedByReputationCheck) {
+    this.message = "Download blocked.";
   } else {
     let exception = new Components.Exception("", this.result);
     this.message = exception.toString();
   }
-  if (aInferCause) {
-    let module = ((aResult & 0x7FFF0000) >> 16) - NS_ERROR_MODULE_BASE_OFFSET;
+  if (aProperties.inferCause) {
+    let module = ((this.result & 0x7FFF0000) >> 16) -
+                 NS_ERROR_MODULE_BASE_OFFSET;
     this.becauseSourceFailed = (module == NS_ERROR_MODULE_NETWORK);
     this.becauseTargetFailed = (module == NS_ERROR_MODULE_FILES);
   }
+  else {
+    if (aProperties.becauseSourceFailed) {
+      this.becauseSourceFailed = true;
+    }
+    if (aProperties.becauseTargetFailed) {
+      this.becauseTargetFailed = true;
+    }
+  }
+
+  if (aProperties.becauseBlockedByParentalControls) {
+    this.becauseBlocked = true;
+    this.becauseBlockedByParentalControls = true;
+  } else if (aProperties.becauseBlockedByReputationCheck) {
+    this.becauseBlocked = true;
+    this.becauseBlockedByReputationCheck = true;
+  } else if (aProperties.becauseBlocked) {
+    this.becauseBlocked = true;
+  }
+
   this.stack = new Error().stack;
 }
 
-DownloadError.prototype = {
+this.DownloadError.prototype = {
   __proto__: Error.prototype,
 
   /**
@@ -1215,6 +1260,12 @@ DownloadError.prototype = {
    * disallowed by the Parental Controls or Family Safety features on Windows.
    */
   becauseBlockedByParentalControls: false,
+
+  /**
+   * Indicates the download was blocked because it failed the reputation check
+   * and may be malware.
+   */
+  becauseBlockedByReputationCheck: false,
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1223,9 +1274,9 @@ DownloadError.prototype = {
 /**
  * Template for an object that actually transfers the data for the download.
  */
-function DownloadSaver() { }
+this.DownloadSaver = function () {}
 
-DownloadSaver.prototype = {
+this.DownloadSaver.prototype = {
   /**
    * Download object for raising notifications and reading properties.
    *
@@ -1310,6 +1361,31 @@ DownloadSaver.prototype = {
   },
 
   /**
+   * Return true if the request's response has been blocked by Windows parental
+   * controls with an HTTP 450 error code.
+   *
+   * @param aRequest
+   *        nsIRequest object
+   * @return True if the response is blocked.
+   */
+  isResponseParentalBlocked: function(aRequest)
+  {
+    // If the HTTP status is 450, then Windows Parental Controls have
+    // blocked this download.
+    if (aRequest instanceof Ci.nsIHttpChannel &&
+        aRequest.responseStatus == 450) {
+      // Cancel the request, but set a flag on the download that can be
+      // retrieved later when handling the cancellation so that the proper
+      // blocked by parental controls error can be thrown.
+      this.download._blockedByParentalControls = true;
+      aRequest.cancel(Cr.NS_BINDING_ABORTED);
+      return true;
+    }
+
+    return false;
+  },
+
+  /**
    * Returns a static representation of the current object state.
    *
    * @return A JavaScript object that can be serialized to JSON.
@@ -1318,7 +1394,15 @@ DownloadSaver.prototype = {
   {
     throw new Error("Not implemented.");
   },
-};
+
+  /**
+   * Returns the SHA-256 hash of the downloaded file, if it exists.
+   */
+  getSha256Hash: function ()
+  {
+    throw new Error("Not implemented.");
+  }
+}; // DownloadSaver
 
 /**
  * Creates a new DownloadSaver object from its serializable representation.
@@ -1330,7 +1414,7 @@ DownloadSaver.prototype = {
  *
  * @return The newly created DownloadSaver object.
  */
-DownloadSaver.fromSerializable = function (aSerializable) {
+this.DownloadSaver.fromSerializable = function (aSerializable) {
   let serializable = isString(aSerializable) ? { type: aSerializable }
                                              : aSerializable;
   let saver;
@@ -1353,9 +1437,9 @@ DownloadSaver.fromSerializable = function (aSerializable) {
 /**
  * Saver object that simply copies the entire source file to the target.
  */
-function DownloadCopySaver() { }
+this.DownloadCopySaver = function () {}
 
-DownloadCopySaver.prototype = {
+this.DownloadCopySaver.prototype = {
   __proto__: DownloadSaver.prototype,
 
   /**
@@ -1369,6 +1453,12 @@ DownloadCopySaver.prototype = {
    * the BackgroundFileSaver instance has been created.
    */
   _canceled: false,
+
+  /**
+   * Save the SHA-256 hash in raw bytes of the downloaded file. This is null
+   * unless BackgroundFileSaver has successfully completed saving the file.
+   */
+  _sha256Hash: null,
 
   /**
    * True if the associated download has already been added to browsing history.
@@ -1420,7 +1510,7 @@ DownloadCopySaver.prototype = {
         // Throw a DownloadError indicating that the operation failed because of
         // the target file.  We cannot translate this into a specific result
         // code, but we preserve the original message using the toString method.
-        let error = new DownloadError(Cr.NS_ERROR_FAILURE, ex.toString());
+        let error = new DownloadError({ message: ex.toString() });
         error.becauseTargetFailed = true;
         throw error;
       }
@@ -1431,7 +1521,7 @@ DownloadCopySaver.prototype = {
         if (this._canceled) {
           // Don't create the BackgroundFileSaver object if we have been
           // canceled meanwhile.
-          throw new DownloadError(Cr.NS_ERROR_FAILURE, "Saver canceled.");
+          throw new DownloadError({ message: "Saver canceled." });
         }
 
         // Create the object that will save the file in a background thread.
@@ -1441,21 +1531,21 @@ DownloadCopySaver.prototype = {
           // returned by this download execution function.
           backgroundFileSaver.observer = {
             onTargetChange: function () { },
-            onSaveComplete: function DCSE_onSaveComplete(aSaver, aStatus)
-            {
-              // Free the reference cycle, to release resources earlier.
-              backgroundFileSaver.observer = null;
-              this._backgroundFileSaver = null;
-
+            onSaveComplete: (aSaver, aStatus) => {
               // Send notifications now that we can restart if needed.
               if (Components.isSuccessCode(aStatus)) {
+                // Save the hash before freeing backgroundFileSaver.
+                this._sha256Hash = aSaver.sha256Hash;
                 deferSaveComplete.resolve();
               } else {
                 // Infer the origin of the error from the failure code, because
                 // BackgroundFileSaver does not provide more specific data.
-                deferSaveComplete.reject(new DownloadError(aStatus, null,
-                                                           true));
+                let properties = { result: aStatus, inferCause: true };
+                deferSaveComplete.reject(new DownloadError(properties));
               }
+              // Free the reference cycle, to release resources earlier.
+              backgroundFileSaver.observer = null;
+              this._backgroundFileSaver = null;
             },
           };
 
@@ -1506,6 +1596,10 @@ DownloadCopySaver.prototype = {
             onStartRequest: function (aRequest, aContext) {
               backgroundFileSaver.onStartRequest(aRequest, aContext);
 
+              if (this.isResponseParentalBlocked(aRequest)) {
+                return;
+              }
+
               aSetPropertiesFn({ contentType: channel.contentType });
 
               // Ensure we report the value of "Content-Length", if available,
@@ -1549,6 +1643,8 @@ DownloadCopySaver.prototype = {
                 }
               }
 
+              // Enable hashing before setting the target.
+              backgroundFileSaver.enableSha256();
               if (partFilePath) {
                 // If we actually resumed a request, append to the partial data.
                 if (resumeAttempted) {
@@ -1611,7 +1707,16 @@ DownloadCopySaver.prototype = {
         // background file saver may have already removed the file.
         try {
           yield OS.File.remove(targetPath);
-        } catch (e2 if e2 instanceof OS.File.Error && e2.becauseNoSuchFile) { }
+        } catch (e2) {
+          // If we failed during the operation, we report the error but use the
+          // original one as the failure reason of the download.  Note that on
+          // Windows we may get an access denied error instead of a no such file
+          // error if the file existed before, and was recently deleted.
+          if (!(e2 instanceof OS.File.Error &&
+                (e2.becauseNoSuchFile || e2.becauseAccessDenied))) {
+            Cu.reportError(e2);
+          }
+        }
         throw ex;
       }
     }.bind(this));
@@ -1658,6 +1763,14 @@ DownloadCopySaver.prototype = {
     serializeUnknownProperties(this, serializable);
     return serializable;
   },
+
+  /**
+   * Implements "DownloadSaver.getSha256Hash"
+   */
+  getSha256Hash: function ()
+  {
+    return this._sha256Hash;
+  }
 };
 
 /**
@@ -1669,7 +1782,7 @@ DownloadCopySaver.prototype = {
  *
  * @return The newly created DownloadCopySaver object.
  */
-DownloadCopySaver.fromSerializable = function (aSerializable) {
+this.DownloadCopySaver.fromSerializable = function (aSerializable) {
   let saver = new DownloadCopySaver();
   if ("entityID" in aSerializable) {
     saver.entityID = aSerializable.entityID;
@@ -1689,14 +1802,21 @@ DownloadCopySaver.fromSerializable = function (aSerializable) {
  *
  * For more background on the process, see the DownloadLegacyTransfer object.
  */
-function DownloadLegacySaver()
+this.DownloadLegacySaver = function()
 {
   this.deferExecuted = Promise.defer();
   this.deferCanceled = Promise.defer();
 }
 
-DownloadLegacySaver.prototype = {
+this.DownloadLegacySaver.prototype = {
   __proto__: DownloadSaver.prototype,
+
+  /**
+   * Save the SHA-256 hash in raw bytes of the downloaded file. This may be
+   * null when nsExternalHelperAppService (and thus BackgroundFileSaver) is not
+   * invoked.
+   */
+  _sha256Hash: null,
 
   /**
    * nsIRequest object associated to the status and progress updates we
@@ -1777,6 +1897,10 @@ DownloadLegacySaver.prototype = {
                      ex.result == Cr.NS_ERROR_NOT_RESUMABLE) { }
     }
 
+    if (this.isResponseParentalBlocked(aRequest)) {
+      return;
+    }
+
     // For legacy downloads, we must update the referrer at this time.
     if (aRequest instanceof Ci.nsIHttpChannel && aRequest.referrer) {
       this.download.source.referrer = aRequest.referrer.spec;
@@ -1805,7 +1929,8 @@ DownloadLegacySaver.prototype = {
     } else {
       // Infer the origin of the error from the failure code, because more
       // specific data is not available through the nsITransfer implementation.
-      this.deferExecuted.reject(new DownloadError(aStatus, null, true));
+      let properties = { result: aStatus, inferCause: true };
+      this.deferExecuted.reject(new DownloadError(properties));
     }
   },
 
@@ -1882,6 +2007,23 @@ DownloadLegacySaver.prototype = {
             yield file.close();
           } catch (ex if ex instanceof OS.File.Error && ex.becauseExists) { }
         }
+      } catch (ex) {
+        // Ensure we always remove the final target file on failure,
+        // independently of which code path failed.  In some cases, the
+        // component executing the download may have already removed the file.
+        try {
+          yield OS.File.remove(this.download.target.path);
+        } catch (e2) {
+          // If we failed during the operation, we report the error but use the
+          // original one as the failure reason of the download.  Note that on
+          // Windows we may get an access denied error instead of a no such file
+          // error if the file existed before, and was recently deleted.
+          if (!(e2 instanceof OS.File.Error &&
+                (e2.becauseNoSuchFile || e2.becauseAccessDenied))) {
+            Cu.reportError(e2);
+          }
+        }
+        throw ex;
       } finally {
         // We don't need the reference to the request anymore.
         this.request = null;
@@ -1927,6 +2069,25 @@ DownloadLegacySaver.prototype = {
     // DownloadCopySaver for the purpose of serialization.
     return DownloadCopySaver.prototype.toSerializable.call(this);
   },
+
+  /**
+   * Implements "DownloadSaver.getSha256Hash".
+   */
+  getSha256Hash: function ()
+  {
+    if (this.copySaver) {
+      return this.copySaver.getSha256Hash();
+    }
+    return this._sha256Hash;
+  },
+
+  /**
+   * Called by the nsITransfer implementation when the hash is available.
+   */
+  setSha256Hash: function (hash)
+  {
+    this._sha256Hash = hash;
+  },
 };
 
 /**
@@ -1934,6 +2095,6 @@ DownloadLegacySaver.prototype = {
  * deserializable form only when creating a new object in memory, because it
  * cannot be serialized to disk.
  */
-DownloadLegacySaver.fromSerializable = function () {
+this.DownloadLegacySaver.fromSerializable = function () {
   return new DownloadLegacySaver();
 };

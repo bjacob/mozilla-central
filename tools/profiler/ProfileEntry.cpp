@@ -4,7 +4,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <ostream>
-#include "GeckoProfilerImpl.h"
 #include "platform.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
@@ -24,7 +23,7 @@
 // BEGIN ProfileEntry
 
 ProfileEntry::ProfileEntry()
-  : mTagData(NULL)
+  : mTagData(nullptr)
   , mTagName(0)
 { }
 
@@ -91,8 +90,9 @@ void ProfileEntry::log()
   // There is no compiler enforced mapping between tag chars
   // and union variant fields, so the following was derived
   // by looking through all the use points of TableTicker.cpp.
-  //   mTagData   (const char*)  m,c,s
-  //   mTagPtr    (void*)        d,l,L, S(start-of-stack)
+  //   mTagMarker (ProfilerMarker*) m
+  //   mTagData   (const char*)  c,s
+  //   mTagPtr    (void*)        d,l,L,B (immediate backtrace), S(start-of-stack)
   //   mTagLine   (int)          n,f
   //   mTagChar   (char)         h
   //   mTagFloat  (double)       r,t
@@ -101,7 +101,7 @@ void ProfileEntry::log()
       LOGF("%c \"%s\"", mTagName, mTagMarker->GetMarkerName()); break;
     case 'c': case 's':
       LOGF("%c \"%s\"", mTagName, mTagData); break;
-    case 'd': case 'l': case 'L': case 'S':
+    case 'd': case 'l': case 'L': case 'B': case 'S':
       LOGF("%c %p", mTagName, mTagPtr); break;
     case 'n': case 'f':
       LOGF("%c %d", mTagName, mTagLine); break;
@@ -143,7 +143,7 @@ std::ostream& operator<<(std::ostream& stream, const ProfileEntry& entry)
 #define DYNAMIC_MAX_STRING 512
 
 ThreadProfile::ThreadProfile(const char* aName, int aEntrySize,
-                             PseudoStack *aStack, int aThreadId,
+                             PseudoStack *aStack, Thread::tid_t aThreadId,
                              PlatformData* aPlatform,
                              bool aIsMainThread, void *aStackTop)
   : mWritePos(0)
@@ -156,10 +156,11 @@ ThreadProfile::ThreadProfile(const char* aName, int aEntrySize,
   , mThreadId(aThreadId)
   , mIsMainThread(aIsMainThread)
   , mPlatformData(aPlatform)
+  , mGeneration(0)
+  , mPendingGenerationFlush(0)
   , mStackTop(aStackTop)
 {
   mEntries = new ProfileEntry[mEntrySize];
-  mGeneration = 0;
 }
 
 ThreadProfile::~ThreadProfile()
@@ -323,8 +324,9 @@ JSObject* ThreadProfile::ToJSObject(JSContext *aCx)
 }
 
 template <typename Builder>
-void ThreadProfile::BuildJSObject(Builder& b, typename Builder::ObjectHandle profile) {
-
+void ThreadProfile::BuildJSObject(Builder& b,
+                                  typename Builder::ObjectHandle profile)
+{
   // Thread meta data
   if (XRE_GetProcessType() == GeckoProcessType_Plugin) {
     // TODO Add the proper plugin name
@@ -333,7 +335,7 @@ void ThreadProfile::BuildJSObject(Builder& b, typename Builder::ObjectHandle pro
     b.DefineProperty(profile, "name", mName);
   }
 
-  b.DefineProperty(profile, "tid", mThreadId);
+  b.DefineProperty(profile, "tid", static_cast<int>(mThreadId));
 
   typename Builder::RootedArray samples(b.context(), b.CreateArray());
   b.DefineProperty(profile, "samples", samples);
@@ -385,6 +387,13 @@ void ThreadProfile::BuildJSObject(Builder& b, typename Builder::ObjectHandle pro
         {
           if (sample) {
             b.DefineProperty(sample, "responsiveness", entry.mTagFloat);
+          }
+        }
+        break;
+      case 'p':
+        {
+          if (sample) {
+            b.DefineProperty(sample, "power", entry.mTagFloat);
           }
         }
         break;
@@ -440,6 +449,16 @@ template void ThreadProfile::BuildJSObject<JSCustomObjectBuilder>(JSCustomObject
 PseudoStack* ThreadProfile::GetPseudoStack()
 {
   return mPseudoStack;
+}
+
+void ThreadProfile::BeginUnwind()
+{
+  mMutex.Lock();
+}
+
+void ThreadProfile::EndUnwind()
+{
+  mMutex.Unlock();
 }
 
 mozilla::Mutex* ThreadProfile::GetMutex()

@@ -24,7 +24,7 @@ MacroAssemblerX86::getDouble(double d)
     if (!doubleMap_.initialized()) {
         enoughMemory_ &= doubleMap_.init();
         if (!enoughMemory_)
-            return NULL;
+            return nullptr;
     }
     size_t doubleIndex;
     DoubleMap::AddPtr p = doubleMap_.lookupForAdd(d);
@@ -35,7 +35,7 @@ MacroAssemblerX86::getDouble(double d)
         enoughMemory_ &= doubles_.append(Double(d));
         enoughMemory_ &= doubleMap_.add(p, d, doubleIndex);
         if (!enoughMemory_)
-            return NULL;
+            return nullptr;
     }
     Double &dbl = doubles_[doubleIndex];
     JS_ASSERT(!dbl.uses.bound());
@@ -70,7 +70,7 @@ MacroAssemblerX86::getFloat(float f)
     if (!floatMap_.initialized()) {
         enoughMemory_ &= floatMap_.init();
         if (!enoughMemory_)
-            return NULL;
+            return nullptr;
     }
     size_t floatIndex;
     FloatMap::AddPtr p = floatMap_.lookupForAdd(f);
@@ -81,7 +81,7 @@ MacroAssemblerX86::getFloat(float f)
         enoughMemory_ &= floats_.append(Float(f));
         enoughMemory_ &= floatMap_.add(p, f, floatIndex);
         if (!enoughMemory_)
-            return NULL;
+            return nullptr;
     }
     Float &flt = floats_[floatIndex];
     JS_ASSERT(!flt.uses.bound());
@@ -236,8 +236,14 @@ MacroAssemblerX86::callWithABIPost(uint32_t stackAdjust, Result result)
     if (result == DOUBLE) {
         reserveStack(sizeof(double));
         fstp(Operand(esp, 0));
-        movsd(Operand(esp, 0), ReturnFloatReg);
+        loadDouble(Operand(esp, 0), ReturnFloatReg);
         freeStack(sizeof(double));
+    }
+    if (result == FLOAT) {
+        reserveStack(sizeof(float));
+        fstp32(Operand(esp, 0));
+        loadFloat(Operand(esp, 0), ReturnFloatReg);
+        freeStack(sizeof(float));
     }
     if (dynamicAlignment_)
         pop(esp);
@@ -285,7 +291,7 @@ MacroAssemblerX86::handleFailureWithHandler(void *handler)
     passABIArg(eax);
     callWithABI(handler);
 
-    IonCode *excTail = GetIonContext()->runtime->ionRuntime()->getExceptionTail();
+    IonCode *excTail = GetIonContext()->runtime->jitRuntime()->getExceptionTail();
     jmp(excTail);
 }
 
@@ -311,15 +317,15 @@ MacroAssemblerX86::handleFailureWithHandlerTail()
     // and return from the entry frame.
     bind(&entryFrame);
     moveValue(MagicValue(JS_ION_ERROR), JSReturnOperand);
-    movl(Operand(esp, offsetof(ResumeFromException, stackPointer)), esp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, stackPointer)), esp);
     ret();
 
     // If we found a catch handler, this must be a baseline frame. Restore state
     // and jump to the catch block.
     bind(&catch_);
-    movl(Operand(esp, offsetof(ResumeFromException, target)), eax);
-    movl(Operand(esp, offsetof(ResumeFromException, framePointer)), ebp);
-    movl(Operand(esp, offsetof(ResumeFromException, stackPointer)), esp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, target)), eax);
+    loadPtr(Address(esp, offsetof(ResumeFromException, framePointer)), ebp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, stackPointer)), esp);
     jmp(Operand(eax));
 
     // If we found a finally block, this must be a baseline frame. Push
@@ -327,11 +333,11 @@ MacroAssemblerX86::handleFailureWithHandlerTail()
     // exception.
     bind(&finally);
     ValueOperand exception = ValueOperand(ecx, edx);
-    loadValue(Operand(esp, offsetof(ResumeFromException, exception)), exception);
+    loadValue(Address(esp, offsetof(ResumeFromException, exception)), exception);
 
-    movl(Operand(esp, offsetof(ResumeFromException, target)), eax);
-    movl(Operand(esp, offsetof(ResumeFromException, framePointer)), ebp);
-    movl(Operand(esp, offsetof(ResumeFromException, stackPointer)), esp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, target)), eax);
+    loadPtr(Address(esp, offsetof(ResumeFromException, framePointer)), ebp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, stackPointer)), esp);
 
     pushValue(BooleanValue(true));
     pushValue(exception);
@@ -339,8 +345,8 @@ MacroAssemblerX86::handleFailureWithHandlerTail()
 
     // Only used in debug mode. Return BaselineFrame->returnValue() to the caller.
     bind(&return_);
-    movl(Operand(esp, offsetof(ResumeFromException, framePointer)), ebp);
-    movl(Operand(esp, offsetof(ResumeFromException, stackPointer)), esp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, framePointer)), ebp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, stackPointer)), esp);
     loadValue(Address(ebp, BaselineFrame::reverseOffsetOfReturnValue()), JSReturnOperand);
     movl(ebp, esp);
     pop(ebp);
@@ -349,7 +355,7 @@ MacroAssemblerX86::handleFailureWithHandlerTail()
     // If we are bailing out to baseline to handle an exception, jump to
     // the bailout tail stub.
     bind(&bailout);
-    movl(Operand(esp, offsetof(ResumeFromException, bailoutInfo)), ecx);
+    loadPtr(Address(esp, offsetof(ResumeFromException, bailoutInfo)), ecx);
     movl(Imm32(BAILOUT_RETURN_OK), eax);
     jmp(Operand(esp, offsetof(ResumeFromException, target)));
 }
@@ -400,4 +406,12 @@ MacroAssemblerX86::testNegativeZero(const FloatRegister &reg, const Register &sc
 
     bind(&nonZero);
     return Zero;
+}
+
+Assembler::Condition
+MacroAssemblerX86::testNegativeZeroFloat32(const FloatRegister &reg, const Register &scratch)
+{
+    movd(reg, scratch);
+    cmpl(scratch, Imm32(1));
+    return Overflow;
 }

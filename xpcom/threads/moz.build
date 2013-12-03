@@ -20,8 +20,6 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'xpcom_threads'
 
-MODULE = 'xpcom'
-
 EXPORTS += [
     'nsEventQueue.h',
     'nsMemoryPressure.h',
@@ -30,15 +28,16 @@ EXPORTS += [
 ]
 
 EXPORTS.mozilla += [
+    'BackgroundHangMonitor.h',
     'HangMonitor.h',
     'LazyIdleThread.h',
     'SyncRunnable.h',
 ]
 
-CPP_SOURCES += [
+UNIFIED_SOURCES += [
+    'BackgroundHangMonitor.cpp',
     'HangMonitor.cpp',
     'LazyIdleThread.cpp',
-    'TimerThread.cpp',
     'nsEnvironment.cpp',
     'nsEventQueue.cpp',
     'nsMemoryPressure.cpp',
@@ -47,14 +46,14 @@ CPP_SOURCES += [
     'nsThreadManager.cpp',
     'nsThreadPool.cpp',
     'nsTimerImpl.cpp',
+    'ThreadStackHelper.cpp',
+    'TimerThread.cpp',
 ]
-
-LIBRARY_NAME = 'xpcomthreads_s'
-
-LIBXUL_LIBRARY = True
 
 MSVC_ENABLE_PGO = True
 
 LOCAL_INCLUDES += [
     '../build',
 ]
+
+FINAL_LIBRARY = 'xpcom_core'

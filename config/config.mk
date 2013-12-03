@@ -29,6 +29,91 @@ endif
 
 -include $(DEPTH)/.mozconfig.mk
 
+# Integrate with mozbuild-generated make files. We first verify that no
+# variables provided by the automatically generated .mk files are
+# present. If they are, this is a violation of the separation of
+# responsibility between Makefile.in and mozbuild files.
+_MOZBUILD_EXTERNAL_VARIABLES := \
+  ANDROID_GENERATED_RESFILES \
+  ANDROID_RESFILES \
+  CMSRCS \
+  CMMSRCS \
+  CPP_UNIT_TESTS \
+  DIRS \
+  EXTRA_PP_COMPONENTS \
+  EXTRA_PP_JS_MODULES \
+  FORCE_SHARED_LIB \
+  FORCE_STATIC_LIB \
+  FINAL_LIBRARY \
+  GTEST_CMMSRCS \
+  GTEST_CPPSRCS \
+  GTEST_CSRCS \
+  HOST_CSRCS \
+  HOST_CMMSRCS \
+  HOST_LIBRARY_NAME \
+  HOST_PROGRAM \
+  HOST_SIMPLE_PROGRAMS \
+  IS_COMPONENT \
+  JAVA_JAR_TARGETS \
+  JS_MODULES_PATH \
+  LIBRARY_NAME \
+  LIBXUL_LIBRARY \
+  MODULE \
+  MSVC_ENABLE_PGO \
+  NO_DIST_INSTALL \
+  PARALLEL_DIRS \
+  PROGRAM \
+  SDK_HEADERS \
+  SIMPLE_PROGRAMS \
+  TEST_DIRS \
+  TIERS \
+  TOOL_DIRS \
+  XPCSHELL_TESTS \
+  XPIDL_MODULE \
+  $(NULL)
+
+_DEPRECATED_VARIABLES := \
+  MOCHITEST_FILES_PARTS \
+  MOCHITEST_BROWSER_FILES_PARTS \
+  SHORT_LIBNAME \
+  $(NULL)
+
+ifndef EXTERNALLY_MANAGED_MAKE_FILE
+# Using $(firstword) may not be perfect. But it should be good enough for most
+# scenarios.
+_current_makefile = $(CURDIR)/$(firstword $(MAKEFILE_LIST))
+
+$(foreach var,$(_MOZBUILD_EXTERNAL_VARIABLES),$(if $(filter file override,$(subst $(NULL) ,_,$(origin $(var)))),\
+    $(error Variable $(var) is defined in $(_current_makefile). It should only be defined in moz.build files),\
+    ))
+
+$(foreach var,$(_DEPRECATED_VARIABLES),$(if $(filter file override,$(subst $(NULL) ,_,$(origin $(var)))),\
+    $(error Variable $(var) is defined in $(_current_makefile). This variable has been deprecated. It does nothing. It must be removed in order to build)\
+    ))
+
+# Import the automatically generated backend file. If this file doesn't exist,
+# the backend hasn't been properly configured. We want this to be a fatal
+# error, hence not using "-include".
+ifndef STANDALONE_MAKEFILE
+GLOBAL_DEPS += backend.mk
+include backend.mk
+endif
+
+# Freeze the values specified by moz.build to catch them if they fail.
+
+$(foreach var,$(_MOZBUILD_EXTERNAL_VARIABLES),$(eval $(var)_FROZEN := '$($(var))'))
+$(foreach var,$(_DEPRECATED_VARIABLES),$(eval $(var)_FROZEN := '$($(var))'))
+
+CHECK_MOZBUILD_VARIABLES = $(foreach var,$(_MOZBUILD_EXTERNAL_VARIABLES), \
+  $(if $(subst $($(var)_FROZEN),,'$($(var))'), \
+	  $(error Variable $(var) is defined in $(_current_makefile). It should only be defined in moz.build files),\
+  )) $(foreach var,$(_DEPRECATED_VARIABLES), \
+	$(if $(subst $($(var)_FROZEN),,'$($(var))'), \
+    $(error Variable $(var) is defined in $(_current_makefile). This variable has been deprecated. It does nothing. It must be removed in order to build),\
+    ))
+
+endif
+
 space = $(NULL) $(NULL)
 
 # Include defs.mk files that can be found in $(srcdir)/$(DEPTH),
@@ -51,7 +136,6 @@ CHECK_VARS := \
  LIBRARY_NAME \
  MODULE \
  DEPTH \
- SHORT_LIBNAME \
  XPI_PKGNAME \
  INSTALL_EXTENSION_ID \
  SHARED_LIBRARY_NAME \
@@ -74,12 +158,16 @@ RM = rm -f
 LIBXUL_DIST ?= $(DIST)
 
 # FINAL_TARGET specifies the location into which we copy end-user-shipped
-# build products (typelibs, components, chrome).
+# build products (typelibs, components, chrome). It may already be specified by
+# a moz.build file.
 #
 # If XPI_NAME is set, the files will be shipped to $(DIST)/xpi-stage/$(XPI_NAME)
 # instead of $(DIST)/bin. In both cases, if DIST_SUBDIR is set, the files will be
 # shipped to a $(DIST_SUBDIR) subdirectory.
-FINAL_TARGET = $(if $(XPI_NAME),$(DIST)/xpi-stage/$(XPI_NAME),$(DIST)/bin)$(DIST_SUBDIR:%=/%)
+FINAL_TARGET ?= $(if $(XPI_NAME),$(DIST)/xpi-stage/$(XPI_NAME),$(DIST)/bin)$(DIST_SUBDIR:%=/%)
+# Override the stored value for the check to make sure that the variable is not
+# redefined in the Makefile.in value.
+FINAL_TARGET_FROZEN := '$(FINAL_TARGET)'
 
 ifdef XPI_NAME
 DEFINES += -DXPI_NAME=$(XPI_NAME)
@@ -99,6 +187,21 @@ endif
 CONFIG_TOOLS	= $(MOZ_BUILD_ROOT)/config
 AUTOCONF_TOOLS	= $(topsrcdir)/build/autoconf
 
+# Disable MOZ_PSEUDO_DERECURSE when it contains no-pymake and we're running
+# pymake. This can be removed when no-pymake is removed from the default in
+# build/autoconf/compiler-opts.m4.
+ifdef .PYMAKE
+comma = ,
+ifneq (,$(filter no-pymake,$(subst $(comma), ,$(MOZ_PSEUDO_DERECURSE))))
+MOZ_PSEUDO_DERECURSE :=
+endif
+endif
+
+# Disable MOZ_PSEUDO_DERECURSE on PGO builds until it's fixed.
+ifneq (,$(MOZ_PROFILE_USE)$(MOZ_PROFILE_GENERATE))
+MOZ_PSEUDO_DERECURSE :=
+endif
+
 #
 # Strip off the excessively long version numbers on these platforms,
 # but save the version to allow multiple versions of the same base
@@ -117,12 +220,9 @@ endif
 
 OS_CONFIG	:= $(OS_ARCH)$(OS_RELEASE)
 
-MOZ_UNICHARUTIL_LIBS = $(LIBXUL_DIST)/lib/$(LIB_PREFIX)unicharutil_s.$(LIB_SUFFIX)
-MOZ_WIDGET_SUPPORT_LIBS    = $(DIST)/lib/$(LIB_PREFIX)widgetsupport_s.$(LIB_SUFFIX)
-
 ifdef _MSC_VER
-CC_WRAPPER ?= $(PYTHON) -O $(topsrcdir)/build/cl.py
-CXX_WRAPPER ?= $(PYTHON) -O $(topsrcdir)/build/cl.py
+CC_WRAPPER ?= $(call py_action,cl)
+CXX_WRAPPER ?= $(call py_action,cl)
 endif # _MSC_VER
 
 CC := $(CC_WRAPPER) $(CC)
@@ -132,7 +232,7 @@ SLEEP ?= sleep
 TOUCH ?= touch
 
 ifdef .PYMAKE
-PYCOMMANDPATH += $(topsrcdir)/config
+PYCOMMANDPATH += $(PYTHON_SITE_PACKAGES)
 endif
 
 PYTHON_PATH = $(PYTHON) $(topsrcdir)/config/pythonpath.py
@@ -234,20 +334,18 @@ _ENABLE_PIC=1
 # Determine if module being compiled is destined
 # to be merged into libxul
 
+ifeq ($(FINAL_LIBRARY),xul)
+  ifdef LIBXUL_LIBRARY
+    $(error FINAL_LIBRARY is "xul", LIBXUL_LIBRARY is implied)
+  endif
+  LIBXUL_LIBRARY := 1
+endif
+
 ifdef LIBXUL_LIBRARY
 ifdef IS_COMPONENT
 $(error IS_COMPONENT is set, but is not compatible with LIBXUL_LIBRARY)
 endif
-ifdef MODULE_NAME
-$(error MODULE_NAME is $(MODULE_NAME) but MODULE_NAME and LIBXUL_LIBRARY are not compatible)
-endif
-ifdef FORCE_STATIC_LIB
-$(error Makefile sets FORCE_STATIC_LIB which was already implied by LIBXUL_LIBRARY)
-endif
 FORCE_STATIC_LIB=1
-ifneq ($(SHORT_LIBNAME),)
-$(error SHORT_LIBNAME is $(SHORT_LIBNAME) but SHORT_LIBNAME is not compatable with LIBXUL_LIBRARY)
-endif
 endif
 
 # If we are building this component into an extension/xulapp, it cannot be
@@ -298,10 +396,10 @@ NO_PROFILE_GUIDED_OPTIMIZE = 1
 endif
 
 # Enable profile-based feedback
-ifndef NO_PROFILE_GUIDED_OPTIMIZE
+ifneq (1,$(NO_PROFILE_GUIDED_OPTIMIZE))
 ifdef MOZ_PROFILE_GENERATE
-OS_CFLAGS += $(PROFILE_GEN_CFLAGS)
-OS_CXXFLAGS += $(PROFILE_GEN_CFLAGS)
+OS_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_GEN_CFLAGS))
+OS_CXXFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_GEN_CFLAGS))
 OS_LDFLAGS += $(PROFILE_GEN_LDFLAGS)
 ifeq (WINNT,$(OS_ARCH))
 AR_FLAGS += -LTCG
@@ -309,8 +407,8 @@ endif
 endif # MOZ_PROFILE_GENERATE
 
 ifdef MOZ_PROFILE_USE
-OS_CFLAGS += $(PROFILE_USE_CFLAGS)
-OS_CXXFLAGS += $(PROFILE_USE_CFLAGS)
+OS_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_USE_CFLAGS))
+OS_CXXFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_USE_CFLAGS))
 OS_LDFLAGS += $(PROFILE_USE_LDFLAGS)
 ifeq (WINNT,$(OS_ARCH))
 AR_FLAGS += -LTCG
@@ -336,7 +434,6 @@ DEFINES += -DSTATIC_EXPORTABLE_JS_API
 endif
 endif
 
-# Flags passed to JarMaker.py
 MAKE_JARS_FLAGS = \
 	-t $(topsrcdir) \
 	-f $(MOZ_CHROME_FILE_FORMAT) \
@@ -377,9 +474,9 @@ OS_INCLUDES += $(MOZ_JPEG_CFLAGS) $(MOZ_PNG_CFLAGS) $(MOZ_ZLIB_CFLAGS)
 # NSPR_CFLAGS and NSS_CFLAGS must appear ahead of OS_INCLUDES to avoid Linux
 # builds wrongly picking up system NSPR/NSS header files.
 INCLUDES = \
-  $(LOCAL_INCLUDES) \
   -I$(srcdir) \
   -I. \
+  $(LOCAL_INCLUDES) \
   -I$(DIST)/include \
   $(if $(LIBXUL_SDK),-I$(LIBXUL_SDK)/include) \
   $(NSPR_CFLAGS) $(NSS_CFLAGS) \
@@ -522,8 +619,13 @@ endif
 endif
 
 # Default location of include files
+ifndef LIBXUL_SDK
 IDL_PARSER_DIR = $(topsrcdir)/xpcom/idl-parser
 IDL_PARSER_CACHE_DIR = $(DEPTH)/xpcom/idl-parser
+else
+IDL_PARSER_DIR = $(LIBXUL_SDK)/sdk/bin
+IDL_PARSER_CACHE_DIR = $(LIBXUL_SDK)/sdk/bin
+endif
 
 SDK_LIB_DIR = $(DIST)/sdk/lib
 SDK_BIN_DIR = $(DIST)/sdk/bin
@@ -617,7 +719,7 @@ endif
 PWD := $(CURDIR)
 endif
 
-NSINSTALL_PY := $(PYTHON) $(call core_abspath,$(topsrcdir)/config/nsinstall.py)
+NSINSTALL_PY := $(PYTHON) $(abspath $(topsrcdir)/config/nsinstall.py)
 # For Pymake, wherever we use nsinstall.py we're also going to try to make it
 # a native command where possible. Since native commands can't be used outside
 # of single-line commands, we continue to provide INSTALL for general use.
@@ -676,7 +778,7 @@ else
   IS_LANGUAGE_REPACK = 1
 endif
 
-EXPAND_LOCALE_SRCDIR = $(if $(filter en-US,$(AB_CD)),$(topsrcdir)/$(1)/en-US,$(call core_realpath,$(L10NBASEDIR))/$(AB_CD)/$(subst /locales,,$(1)))
+EXPAND_LOCALE_SRCDIR = $(if $(filter en-US,$(AB_CD)),$(topsrcdir)/$(1)/en-US,$(or $(realpath $(L10NBASEDIR)),$(abspath $(L10NBASEDIR)))/$(AB_CD)/$(subst /locales,,$(1)))
 
 ifdef relativesrcdir
 LOCALE_SRCDIR ?= $(call EXPAND_LOCALE_SRCDIR,$(relativesrcdir))
@@ -709,7 +811,7 @@ endif
 MERGE_FILES = $(foreach f,$(1),$(call MERGE_FILE,$(f)))
 
 ifeq (OS2,$(OS_ARCH))
-RUN_TEST_PROGRAM = $(topsrcdir)/build/os2/test_os2.cmd "$(LIBXUL_DIST)"
+RUN_TEST_PROGRAM = $(topsrcdir)/build/os2/test_os2.cmd '$(LIBXUL_DIST)'
 else
 ifneq (WINNT,$(OS_ARCH))
 RUN_TEST_PROGRAM = $(LIBXUL_DIST)/bin/run-mozilla.sh
@@ -727,13 +829,13 @@ ifdef MOZ_DEBUG
 JAVAC_FLAGS += -g
 endif
 
-CREATE_PRECOMPLETE_CMD = $(PYTHON) $(call core_abspath,$(topsrcdir)/config/createprecomplete.py)
+CREATE_PRECOMPLETE_CMD = $(PYTHON) $(abspath $(topsrcdir)/config/createprecomplete.py)
 
 # MDDEPDIR is the subdirectory where dependency files are stored
 MDDEPDIR := .deps
 
-EXPAND_LIBS_EXEC = $(PYTHON) $(topsrcdir)/config/expandlibs_exec.py $(if $@,--depend $(MDDEPDIR)/$(dir $@)/$(@F).pp --target $@)
-EXPAND_LIBS_GEN = $(PYTHON) $(topsrcdir)/config/expandlibs_gen.py $(if $@,--depend $(MDDEPDIR)/$(dir $@)/$(@F).pp)
+EXPAND_LIBS_EXEC = $(PYTHON) $(topsrcdir)/config/expandlibs_exec.py $(if $@,--depend $(MDDEPDIR)/$@.pp --target $@)
+EXPAND_LIBS_GEN = $(PYTHON) $(topsrcdir)/config/expandlibs_gen.py $(if $@,--depend $(MDDEPDIR)/$@.pp)
 EXPAND_AR = $(EXPAND_LIBS_EXEC) --extract -- $(AR)
 EXPAND_CC = $(EXPAND_LIBS_EXEC) --uselist -- $(CC)
 EXPAND_CCC = $(EXPAND_LIBS_EXEC) --uselist -- $(CCC)
@@ -746,7 +848,7 @@ EXPAND_MKSHLIB = $(EXPAND_LIBS_EXEC) $(EXPAND_MKSHLIB_ARGS) -- $(MKSHLIB)
 
 ifneq (,$(MOZ_LIBSTDCXX_TARGET_VERSION)$(MOZ_LIBSTDCXX_HOST_VERSION))
 ifneq ($(OS_ARCH),Darwin)
-CHECK_STDCXX = objdump -p $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' > /dev/null && echo "TEST-UNEXPECTED-FAIL | | We don't want these libstdc++ symbols to be used:" && objdump -T $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' && exit 1 || exit 0
+CHECK_STDCXX = objdump -p $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' > /dev/null && echo 'TEST-UNEXPECTED-FAIL | | We do not want these libstdc++ symbols to be used:' && objdump -T $(1) | grep -e 'GLIBCXX_3\.4\.\(9\|[1-9][0-9]\)' && exit 1 || exit 0
 endif
 
 ifdef MOZ_LIBSTDCXX_TARGET_VERSION
@@ -802,11 +904,3 @@ MOZ_GTK2_CFLAGS := -I$(topsrcdir)/widget/gtk/compat $(MOZ_GTK2_CFLAGS)
 endif
 
 DEFINES += -DNO_NSPR_10_SUPPORT
-
-# Run a named Python build action. The first argument is the name of the build
-# action. The second argument are the arguments to pass to the action (space
-# delimited arguments). e.g.
-#
-#   libs::
-#       $(call py_action,purge_manifests,_build_manifests/purge/foo.manifest)
-py_action = $(PYTHON) -m mozbuild.action.$(1) $(2)

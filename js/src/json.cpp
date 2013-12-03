@@ -8,7 +8,6 @@
 
 #include "mozilla/FloatingPoint.h"
 
-#include "jsapi.h"
 #include "jsarray.h"
 #include "jsatom.h"
 #include "jscntxt.h"
@@ -290,7 +289,7 @@ JO(JSContext *cx, HandleObject obj, StringifyContext *scx)
     if (!detect.init())
         return false;
     if (detect.foundCycle()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CYCLIC_VALUE, js_object_str);
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_CYCLIC_VALUE, js_object_str);
         return false;
     }
 
@@ -380,7 +379,7 @@ JA(JSContext *cx, HandleObject obj, StringifyContext *scx)
     if (!detect.init())
         return false;
     if (detect.foundCycle()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_CYCLIC_VALUE, js_object_str);
+        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_CYCLIC_VALUE, js_object_str);
         return false;
     }
 
@@ -598,7 +597,7 @@ js_Stringify(JSContext *cx, MutableHandleValue vp, JSObject *replacer_, Value sp
                 }
             }
         } else {
-            replacer = NULL;
+            replacer = nullptr;
         }
     }
 
@@ -689,7 +688,7 @@ Walk(JSContext *cx, HandleObject holder, HandleId name, HandleValue reviver, Mut
             RootedId id(cx);
             RootedValue newElement(cx);
             for (uint32_t i = 0; i < length; i++) {
-                if (!IndexToId(cx, i, &id))
+                if (!IndexToId(cx, i, id.address()))
                     return false;
 
                 /* Step 2a(iii)(1). */
@@ -829,7 +828,7 @@ json_stringify(JSContext *cx, unsigned argc, Value *vp)
 {
     RootedObject replacer(cx, (argc >= 2 && vp[3].isObject())
                               ? &vp[3].toObject()
-                              : NULL);
+                              : nullptr);
     RootedValue value(cx, (argc >= 1) ? vp[2] : UndefinedValue());
     RootedValue space(cx, (argc >= 3) ? vp[4] : UndefinedValue());
 
@@ -872,20 +871,21 @@ js_InitJSONClass(JSContext *cx, HandleObject obj)
      * called from PreprocessValue above.
      */
     if (!global->getOrCreateBooleanPrototype(cx))
-        return NULL;
+        return nullptr;
 
-    RootedObject JSON(cx, NewObjectWithClassProto(cx, &JSONClass, NULL, global, SingletonObject));
+    RootedObject proto(cx, obj->as<GlobalObject>().getOrCreateObjectPrototype(cx));
+    RootedObject JSON(cx, NewObjectWithClassProto(cx, &JSONClass, proto, global, SingletonObject));
     if (!JSON)
-        return NULL;
+        return nullptr;
 
     if (!JS_DefineProperty(cx, global, js_JSON_str, OBJECT_TO_JSVAL(JSON),
                            JS_PropertyStub, JS_StrictPropertyStub, 0))
-        return NULL;
+        return nullptr;
 
     if (!JS_DefineFunctions(cx, JSON, json_static_methods))
-        return NULL;
+        return nullptr;
 
-    MarkStandardClassInitializedNoProto(global, &JSONClass);
+    global->setConstructor(JSProto_JSON, ObjectValue(*JSON));
 
     return JSON;
 }

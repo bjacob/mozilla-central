@@ -48,13 +48,15 @@ nsEnvironment::Exists(const nsAString& aName, bool *aOutValue)
 {
     nsAutoCString nativeName;
     nsresult rv = NS_CopyUnicodeToNative(aName, nativeName);
-    NS_ENSURE_SUCCESS(rv, rv);
+    if (NS_WARN_IF(NS_FAILED(rv)))
+        return rv;
 
     nsAutoCString nativeVal;
 #if defined(XP_UNIX)
     /* For Unix/Linux platforms we follow the Unix definition:
-     * An environment variable exists when |getenv()| returns a non-NULL value.
-     * An environment variable does not exist when |getenv()| returns NULL.
+     * An environment variable exists when |getenv()| returns a non-nullptr
+     * value. An environment variable does not exist when |getenv()| returns
+     * nullptr.
      */
     const char *value = PR_GetEnv(nativeName.get());
     *aOutValue = value && *value;
@@ -77,7 +79,8 @@ nsEnvironment::Get(const nsAString& aName, nsAString& aOutValue)
 {
     nsAutoCString nativeName;
     nsresult rv = NS_CopyUnicodeToNative(aName, nativeName);
-    NS_ENSURE_SUCCESS(rv, rv);
+    if (NS_WARN_IF(NS_FAILED(rv)))
+        return rv;
 
     nsAutoCString nativeVal;
     const char *value = PR_GetEnv(nativeName.get());
@@ -121,10 +124,12 @@ nsEnvironment::Set(const nsAString& aName, const nsAString& aValue)
     nsAutoCString nativeVal;
 
     nsresult rv = NS_CopyUnicodeToNative(aName, nativeName);
-    NS_ENSURE_SUCCESS(rv, rv);
+    if (NS_WARN_IF(NS_FAILED(rv)))
+        return rv;
 
     rv = NS_CopyUnicodeToNative(aValue, nativeVal);
-    NS_ENSURE_SUCCESS(rv, rv);
+    if (NS_WARN_IF(NS_FAILED(rv)))
+        return rv;
 
     MutexAutoLock lock(mLock);
 

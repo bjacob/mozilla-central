@@ -8,6 +8,7 @@
 #include "mozilla/Util.h"
 
 #include "mozilla/dom/HTMLObjectElementBinding.h"
+#include "mozilla/dom/ElementInlines.h"
 #include "nsAutoPtr.h"
 #include "nsAttrValueInlines.h"
 #include "nsGkAtoms.h"
@@ -74,7 +75,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLObjectElement,
                                                 nsGenericHTMLFormElement)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mValidity)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_ADDREF_INHERITED(HTMLObjectElement, Element)
 NS_IMPL_RELEASE_INHERITED(HTMLObjectElement, Element)
@@ -365,9 +366,9 @@ HTMLObjectElement::ParseAttribute(int32_t aNamespaceID,
                                                   aValue, aResult);
 }
 
-static void
-MapAttributesIntoRule(const nsMappedAttributes *aAttributes,
-                      nsRuleData *aData)
+void
+HTMLObjectElement::MapAttributesIntoRule(const nsMappedAttributes *aAttributes,
+                                         nsRuleData *aData)
 {
   nsGenericHTMLFormElement::MapImageAlignAttributeInto(aAttributes, aData);
   nsGenericHTMLFormElement::MapImageBorderAttributeInto(aAttributes, aData);

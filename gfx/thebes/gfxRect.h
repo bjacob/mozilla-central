@@ -6,10 +6,8 @@
 #ifndef GFX_RECT_H
 #define GFX_RECT_H
 
-#include "nsAlgorithm.h"
 #include "gfxTypes.h"
 #include "gfxPoint.h"
-#include "gfxCore.h"
 #include "nsDebug.h"
 #include "nsRect.h"
 #include "mozilla/gfx/BaseMargin.h"
@@ -171,6 +169,12 @@ struct gfxCornerSizes {
 
     gfxSize& operator[] (mozilla::css::Corner index) {
         return sizes[index];
+    }
+
+    void Scale(gfxFloat aXScale, gfxFloat aYScale)
+    {
+        for (int i = 0; i < NS_NUM_CORNERS; i++)
+            sizes[i].Scale(aXScale, aYScale);
     }
 
     const gfxSize TopLeft() const { return sizes[NS_CORNER_TOP_LEFT]; }

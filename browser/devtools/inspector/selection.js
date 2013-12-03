@@ -4,6 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+"use strict";
+
 const {Cu, Ci} = require("chrome");
 let EventEmitter = require("devtools/shared/event-emitter");
 
@@ -76,32 +78,43 @@ Selection.prototype = {
     let pseudoChange = false;
     let detached = false;
     let parentNode = null;
+
     for (let m of mutations) {
       if (!attributeChange && m.type == "attributes") {
         attributeChange = true;
       }
       if (m.type == "childList") {
-        if (!detached && this.isNode() && !this.isConnected()) {
-          parentNode = m.target;
+        if (!detached && !this.isConnected()) {
+          if (this.isNode()) {
+            parentNode = m.target;
+          }
           detached = true;
         }
       }
-      if (m.type == "pseudoClassLock"){
+      if (m.type == "pseudoClassLock") {
         pseudoChange = true;
       }
     }
 
-    if (attributeChange)
+    // Fire our events depending on what changed in the mutations array
+    if (attributeChange) {
       this.emit("attribute-changed");
-    if (pseudoChange)
+    }
+    if (pseudoChange) {
       this.emit("pseudoclass");
+    }
     if (detached) {
-      this.emit("detached", parentNode ? parentNode.rawNode() : null);
+      let rawNode = null;
+      if (parentNode && parentNode.isLocal_toBeDeprecated()) {
+        rawNode = parentNode.rawNode();
+      }
+
+      this.emit("detached", rawNode, null);
       this.emit("detached-front", parentNode);
     }
   },
 
-  destroy: function SN_destroy() {
+  destroy: function() {
     this.setNode(null);
     this.setWalker(null);
   },
@@ -117,7 +130,7 @@ Selection.prototype = {
   },
 
   // Not remote-safe
-  setNode: function SN_setNode(value, reason="unknown") {
+  setNode: function(value, reason="unknown") {
     if (value) {
       value = this._walker.frontForRawNode(value);
     }
@@ -148,7 +161,10 @@ Selection.prototype = {
   setNodeFront: function(value, reason="unknown") {
     this.reason = reason;
     if (value !== this._nodeFront) {
-      let rawValue = value ? value.rawNode() : value;
+      let rawValue = null;
+      if (value && value.isLocal_toBeDeprecated()) {
+        rawValue = value.rawNode();
+      }
       this.emit("before-new-node", rawValue, reason);
       this.emit("before-new-node-front", value, reason);
       let previousNode = this._node;
@@ -168,13 +184,13 @@ Selection.prototype = {
     return this._nodeFront;
   },
 
-  isRoot: function SN_isRootNode() {
+  isRoot: function() {
     return this.isNode() &&
            this.isConnected() &&
            this._nodeFront.isDocumentElement;
   },
 
-  isNode: function SN_isNode() {
+  isNode: function() {
     if (!this._nodeFront) {
       return false;
     }
@@ -188,11 +204,11 @@ Selection.prototype = {
     return true;
   },
 
-  isLocal: function SN_nsLocal() {
+  isLocal: function() {
     return !!this._node;
   },
 
-  isConnected: function SN_isConnected() {
+  isConnected: function() {
     let node = this._nodeFront;
     if (!node || !node.actorID) {
       return false;
@@ -200,7 +216,10 @@ Selection.prototype = {
 
     // As long as there are still tools going around
     // accessing node.rawNode, this needs to stay.
-    let rawNode = node.rawNode();
+    let rawNode = null;
+    if (node.isLocal_toBeDeprecated()) {
+      rawNode = node.rawNode();
+    }
     if (rawNode) {
       try {
         let doc = this.document;
@@ -220,58 +239,58 @@ Selection.prototype = {
     return false;
   },
 
-  isHTMLNode: function SN_isHTMLNode() {
+  isHTMLNode: function() {
     let xhtml_ns = "http://www.w3.org/1999/xhtml";
     return this.isNode() && this.node.namespaceURI == xhtml_ns;
   },
 
   // Node type
 
-  isElementNode: function SN_isElementNode() {
+  isElementNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.ELEMENT_NODE;
   },
 
-  isAttributeNode: function SN_isAttributeNode() {
+  isAttributeNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.ATTRIBUTE_NODE;
   },
 
-  isTextNode: function SN_isTextNode() {
+  isTextNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.TEXT_NODE;
   },
 
-  isCDATANode: function SN_isCDATANode() {
+  isCDATANode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.CDATA_SECTION_NODE;
   },
 
-  isEntityRefNode: function SN_isEntityRefNode() {
+  isEntityRefNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.ENTITY_REFERENCE_NODE;
   },
 
-  isEntityNode: function SN_isEntityNode() {
+  isEntityNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.ENTITY_NODE;
   },
 
-  isProcessingInstructionNode: function SN_isProcessingInstructionNode() {
+  isProcessingInstructionNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.PROCESSING_INSTRUCTION_NODE;
   },
 
-  isCommentNode: function SN_isCommentNode() {
+  isCommentNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.PROCESSING_INSTRUCTION_NODE;
   },
 
-  isDocumentNode: function SN_isDocumentNode() {
+  isDocumentNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE;
   },
 
-  isDocumentTypeNode: function SN_isDocumentTypeNode() {
+  isDocumentTypeNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.DOCUMENT_TYPE_NODE;
   },
 
-  isDocumentFragmentNode: function SN_isDocumentFragmentNode() {
+  isDocumentFragmentNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE;
   },
 
-  isNotationNode: function SN_isNotationNode() {
+  isNotationNode: function() {
     return this.isNode() && this.nodeFront.nodeType == Ci.nsIDOMNode.NOTATION_NODE;
   },
-}
+};

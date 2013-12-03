@@ -9,14 +9,13 @@
 
 #include "jsobj.h"
 
-#include "jit/Ion.h"
-
 namespace js {
 
 class ParallelArrayObject : public JSObject
 {
     static const Class protoClass;
     static const JSFunctionSpec methods[];
+    static const JSPropertySpec properties[];
     static const uint32_t NumFixedSlots = 4;
     static const uint32_t NumCtors = 4;
     static FixedHeapPtr<PropertyName> ctorNames[NumCtors];
@@ -42,6 +41,7 @@ class ParallelArrayObject : public JSObject
     static JSObject *newInstance(JSContext *cx, NewObjectKind newKind = GenericObject);
 
     // Get the constructor function for argc number of arguments.
+    static JSFunction *maybeGetConstructor(GlobalObject *global, unsigned argc);
     static JSFunction *getConstructor(JSContext *cx, unsigned argc);
 
     static JSObject *initClass(JSContext *cx, HandleObject obj);

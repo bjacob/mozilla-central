@@ -4,9 +4,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'ogg'
-
-CSRCS += [
+UNIFIED_SOURCES += [
     'ogg_bitwise.c',
     'ogg_framing.c',
 ]
@@ -15,3 +13,7 @@ LIBRARY_NAME = 'ogg'
 
 MSVC_ENABLE_PGO = True
 
+FORCE_STATIC_LIB = True
+
+if CONFIG['OS_TARGET'] == 'WINNT':
+    NO_VISIBILITY_FLAGS = True

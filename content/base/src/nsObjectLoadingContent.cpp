@@ -3,7 +3,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 /*
  * A base class implementing nsIObjectLoadingContent for use by
  * various content nodes that want to provide plugin/document/image
@@ -58,7 +57,6 @@
 #include "nsNetUtil.h"
 #include "nsMimeTypes.h"
 #include "nsStyleUtil.h"
-#include "nsGUIEvent.h"
 #include "nsUnicharUtils.h"
 #include "mozilla/Preferences.h"
 #include "nsSandboxFlags.h"
@@ -80,6 +78,7 @@
 
 #include "nsWidgetsCID.h"
 #include "nsContentCID.h"
+#include "mozilla/BasicEvents.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/Telemetry.h"
 
@@ -228,6 +227,7 @@ public:
     , mDocument(aTarget->GetCurrentDoc())
     , mEvent(aEvent)
   {
+    MOZ_ASSERT(aTarget && mDocument);
   }
 
   nsSimplePluginEvent(nsIDocument* aTarget, const nsAString& aEvent)
@@ -235,6 +235,7 @@ public:
     , mDocument(aTarget)
     , mEvent(aEvent)
   {
+    MOZ_ASSERT(aTarget);
   }
 
   ~nsSimplePluginEvent() {}
@@ -250,10 +251,12 @@ private:
 NS_IMETHODIMP
 nsSimplePluginEvent::Run()
 {
-  LOG(("OBJLC [%p]: nsSimplePluginEvent firing event \"%s\"", mTarget.get(),
-       mEvent.get()));
-  nsContentUtils::DispatchTrustedEvent(mDocument, mTarget,
-                                       mEvent, true, true);
+  if (mDocument && mDocument->IsActive()) {
+    LOG(("OBJLC [%p]: nsSimplePluginEvent firing event \"%s\"", mTarget.get(),
+         NS_ConvertUTF16toUTF8(mEvent).get()));
+    nsContentUtils::DispatchTrustedEvent(mDocument, mTarget,
+                                         mEvent, true, true);
+  }
   return NS_OK;
 }
 
@@ -711,9 +714,12 @@ nsObjectLoadingContent::UnbindFromTree(bool aDeep, bool aNullParent)
     ///             would keep the docshell around, but trash the frameloader
     UnloadObject();
   }
-  nsCOMPtr<nsIRunnable> ev = new nsSimplePluginEvent(thisContent->GetCurrentDoc(),
-                                           NS_LITERAL_STRING("PluginRemoved"));
-  NS_DispatchToCurrentThread(ev);
+  nsIDocument* doc = thisContent->GetCurrentDoc();
+  if (doc && doc->IsActive()) {
+    nsCOMPtr<nsIRunnable> ev = new nsSimplePluginEvent(doc,
+                                                       NS_LITERAL_STRING("PluginRemoved"));
+    NS_DispatchToCurrentThread(ev);
+  }
 }
 
 nsObjectLoadingContent::nsObjectLoadingContent()
@@ -1381,6 +1387,7 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
 
   nsresult rv;
   nsAutoCString newMime;
+  nsAutoString typeAttr;
   nsCOMPtr<nsIURI> newURI;
   nsCOMPtr<nsIURI> newBaseURI;
   ObjectType newType;
@@ -1407,10 +1414,11 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
     newMime.AssignLiteral("application/x-java-vm");
     isJava = true;
   } else {
-    nsAutoString typeAttr;
-    thisContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, typeAttr);
-    if (!typeAttr.IsEmpty()) {
-      CopyUTF16toUTF8(typeAttr, newMime);
+    nsAutoString rawTypeAttr;
+    thisContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, rawTypeAttr);
+    if (!rawTypeAttr.IsEmpty()) {
+      typeAttr = rawTypeAttr;
+      CopyUTF16toUTF8(rawTypeAttr, newMime);
       isJava = nsPluginHost::IsJavaMIMEType(newMime.get());
     }
   }
@@ -1647,19 +1655,23 @@ nsObjectLoadingContent::UpdateObjectParameters(bool aJavaURI)
     //
     // In order of preference:
     //
-    // 1) Use our type hint if it matches a plugin
-    // 2) If we have eAllowPluginSkipChannel, use the uri file extension if
+    // 1) Perform typemustmatch check.
+    //    If check is sucessful use type without further checks.
+    //    If check is unsuccessful set stateInvalid to true
+    // 2) Use our type hint if it matches a plugin
+    // 3) If we have eAllowPluginSkipChannel, use the uri file extension if
     //    it matches a plugin
-    // 3) If the channel returns a binary stream type:
-    //    3a) If we have a type non-null non-document type hint, use that
-    //    3b) If the uri file extension matches a plugin type, use that
-    // 4) Use the channel type
-    //
-    //    XXX(johns): HTML5's "typesmustmatch" attribute would need to be
-    //                honored here if implemented
+    // 4) If the channel returns a binary stream type:
+    //    4a) If we have a type non-null non-document type hint, use that
+    //    4b) If the uri file extension matches a plugin type, use that
+    // 5) Use the channel type
 
     bool overrideChannelType = false;
-    if (typeHint == eType_Plugin) {
+    if (thisContent->HasAttr(kNameSpaceID_None, nsGkAtoms::typemustmatch)) {
+      if (!typeAttr.LowerCaseEqualsASCII(channelType.get())) {
+        stateInvalid = true;
+      }
+    } else if (typeHint == eType_Plugin) {
       LOG(("OBJLC [%p]: Using plugin type hint in favor of any channel type",
            this));
       overrideChannelType = true;
@@ -2387,6 +2399,14 @@ nsObjectLoadingContent::UnloadObject(bool aResetState)
 
   mScriptRequested = false;
 
+  if (!mInstanceOwner) {
+    // The protochain is normally thrown out after a plugin stops, but if we
+    // re-enter while stopping a plugin and try to load something new, we need
+    // to throw away the old protochain in the nested unload.
+    TeardownProtoChain();
+    mIsStopping = false;
+  }
+
   // This call should be last as it may re-enter
   StopPluginInstance();
 }
@@ -2774,9 +2794,17 @@ nsObjectLoadingContent::DoStopPlugin(nsPluginInstanceOwner* aInstanceOwner,
     NS_ASSERTION(pluginHost, "No plugin host?");
     pluginHost->StopPluginInstance(inst);
   }
-  TeardownProtoChain();
+
   aInstanceOwner->Destroy();
 
+  // If we re-enter in plugin teardown UnloadObject will tear down the
+  // protochain -- the current protochain could be from a new, unrelated, load.
+  if (!mIsStopping) {
+    LOG(("OBJLC [%p]: Re-entered in plugin teardown", this));
+    return;
+  }
+
+  TeardownProtoChain();
   mIsStopping = false;
 }
 
@@ -2880,6 +2908,17 @@ nsObjectLoadingContent::PlayPlugin()
   }
 
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsObjectLoadingContent::Reload(bool aClearActivation)
+{
+  if (aClearActivation) {
+    mActivated = false;
+    mPlayPreviewCanceled = false;
+  }
+
+  return LoadObject(true, true);
 }
 
 NS_IMETHODIMP
@@ -3126,7 +3165,7 @@ nsObjectLoadingContent::LegacyCall(JSContext* aCx,
   // random cross-compartment wrappers, so we're going to have to wrap
   // everything up into our compartment, but that means we need to check that
   // this is not an Xray situation by hand.
-  if (!JS_WrapObject(aCx, obj.address())) {
+  if (!JS_WrapObject(aCx, &obj)) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return JS::UndefinedValue();
   }
@@ -3141,17 +3180,15 @@ nsObjectLoadingContent::LegacyCall(JSContext* aCx,
   JSAutoCompartment ac(aCx, obj);
   nsTArray<JS::Value> args(aArguments);
   JS::AutoArrayRooter rooter(aCx, args.Length(), args.Elements());
-  for (JS::Value *arg = args.Elements(), *arg_end = arg + args.Length();
-       arg != arg_end;
-       ++arg) {
-    if (!JS_WrapValue(aCx, arg)) {
+  for (size_t i = 0; i < args.Length(); i++) {
+    if (!JS_WrapValue(aCx, rooter.handleAt(i))) {
       aRv.Throw(NS_ERROR_UNEXPECTED);
       return JS::UndefinedValue();
     }
   }
 
   JS::Rooted<JS::Value> thisVal(aCx, aThisVal);
-  if (!JS_WrapValue(aCx, thisVal.address())) {
+  if (!JS_WrapValue(aCx, &thisVal)) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return JS::UndefinedValue();
   }
@@ -3184,7 +3221,7 @@ nsObjectLoadingContent::LegacyCall(JSContext* aCx,
   }
 
   JS::Rooted<JS::Value> retval(aCx);
-  bool ok = JS::Call(aCx, thisVal, pi_obj, args.Length(), args.Elements(),
+  bool ok = JS::Call(aCx, thisVal, pi_obj, args.Length(), rooter.array,
                      &retval);
   if (!ok) {
     aRv.Throw(NS_ERROR_FAILURE);

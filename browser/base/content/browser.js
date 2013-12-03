@@ -7,14 +7,17 @@ let Ci = Components.interfaces;
 let Cu = Components.utils;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/NotificationDB.jsm");
 Cu.import("resource:///modules/RecentWindow.jsm");
+Cu.import("resource://gre/modules/WindowsPrefSync.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "CharsetMenu",
+                                  "resource:///modules/CharsetMenu.jsm");
 
 const nsIWebNavigation = Ci.nsIWebNavigation;
 
-var gCharsetMenu = null;
 var gLastBrowserCharset = null;
 var gPrevCharset = null;
 var gProxyFavIcon = null;
@@ -84,6 +87,12 @@ this.__defineSetter__("PluralForm", function (val) {
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch",
   "resource://gre/modules/TelemetryStopwatch.jsm");
 
+XPCOMUtils.defineLazyGetter(this, "gCustomizeMode", function() {
+  let scope = {};
+  Cu.import("resource:///modules/CustomizeMode.jsm", scope);
+  return new scope.CustomizeMode(window);
+});
+
 #ifdef MOZ_SERVICES_SYNC
 XPCOMUtils.defineLazyModuleGetter(this, "Weave",
   "resource://services-sync/main.js");
@@ -108,10 +117,10 @@ XPCOMUtils.defineLazyGetter(this, "DeveloperToolbar", function() {
   return new tmp.DeveloperToolbar(window, document.getElementById("developer-toolbar"));
 });
 
-XPCOMUtils.defineLazyGetter(this, "BrowserDebuggerProcess", function() {
+XPCOMUtils.defineLazyGetter(this, "BrowserToolboxProcess", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/DebuggerProcess.jsm", tmp);
-  return tmp.BrowserDebuggerProcess;
+  Cu.import("resource:///modules/devtools/ToolboxProcess.jsm", tmp);
+  return tmp.BrowserToolboxProcess;
 });
 
 XPCOMUtils.defineLazyModuleGetter(this, "Social",
@@ -152,6 +161,7 @@ let gInitialPages = [
 ];
 
 #include browser-addons.js
+#include browser-customization.js
 #include browser-feeds.js
 #include browser-fullScreen.js
 #include browser-fullZoom.js
@@ -314,29 +324,22 @@ function SetClickAndHoldHandlers() {
     aElm.addEventListener("click", clickHandler, true);
   }
 
-  // Bug 414797: Clone unified-back-forward-button's context menu into both the
-  // back and the forward buttons.
-  var unifiedButton = document.getElementById("unified-back-forward-button");
-  if (unifiedButton && !unifiedButton._clickHandlersAttached) {
-    unifiedButton._clickHandlersAttached = true;
+  // Bug 414797: Clone the back/forward buttons' context menu into both buttons.
+  let popup = document.getElementById("backForwardMenu").cloneNode(true);
+  popup.removeAttribute("id");
+  // Prevent the back/forward buttons' context attributes from being inherited.
+  popup.setAttribute("context", "");
 
-    let popup = document.getElementById("backForwardMenu").cloneNode(true);
-    popup.removeAttribute("id");
-    // Prevent the context attribute on unified-back-forward-button from being
-    // inherited.
-    popup.setAttribute("context", "");
+  let backButton = document.getElementById("back-button");
+  backButton.setAttribute("type", "menu");
+  backButton.appendChild(popup);
+  _addClickAndHoldListenersOnElement(backButton);
 
-    let backButton = document.getElementById("back-button");
-    backButton.setAttribute("type", "menu");
-    backButton.appendChild(popup);
-    _addClickAndHoldListenersOnElement(backButton);
-
-    let forwardButton = document.getElementById("forward-button");
-    popup = popup.cloneNode(true);
-    forwardButton.setAttribute("type", "menu");
-    forwardButton.appendChild(popup);
-    _addClickAndHoldListenersOnElement(forwardButton);
-  }
+  let forwardButton = document.getElementById("forward-button");
+  popup = popup.cloneNode(true);
+  forwardButton.setAttribute("type", "menu");
+  forwardButton.appendChild(popup);
+  _addClickAndHoldListenersOnElement(forwardButton);
 }
 
 const gSessionHistoryObserver = {
@@ -736,6 +739,8 @@ const gFormSubmitObserver = {
 };
 
 var gBrowserInit = {
+  delayedStartupFinished: false,
+
   onLoad: function() {
     gMultiProcessBrowser = gPrefService.getBoolPref("browser.tabs.remote");
 
@@ -764,7 +769,6 @@ var gBrowserInit = {
     window.addEventListener("AppCommand", HandleAppCommandEvent, true);
 
     messageManager.loadFrameScript("chrome://browser/content/content.js", true);
-    messageManager.loadFrameScript("chrome://browser/content/content-sessionStore.js", true);
 
     // initialize observers and listeners
     // and give C++ access to gBrowser
@@ -777,39 +781,6 @@ var gBrowserInit = {
           .XULBrowserWindow = window.XULBrowserWindow;
     window.QueryInterface(Ci.nsIDOMChromeWindow).browserDOMWindow =
       new nsBrowserAccess();
-
-    // set default character set if provided
-    // window.arguments[1]: character set (string)
-    if ("arguments" in window && window.arguments.length > 1 && window.arguments[1]) {
-      if (window.arguments[1].startsWith("charset=")) {
-        var arrayArgComponents = window.arguments[1].split("=");
-        if (arrayArgComponents) {
-          //we should "inherit" the charset menu setting in a new window
-          getMarkupDocumentViewer().defaultCharacterSet = arrayArgComponents[1];
-        }
-      }
-    }
-
-    // Manually hook up session and global history for the first browser
-    // so that we don't have to load global history before bringing up a
-    // window.
-    // Wire up session and global history before any possible
-    // progress notifications for back/forward button updating
-    gBrowser.webNavigation.sessionHistory = Cc["@mozilla.org/browser/shistory;1"].
-                                            createInstance(Ci.nsISHistory);
-    Services.obs.addObserver(gBrowser.browsers[0], "browser:purge-session-history", false);
-
-    // remove the disablehistory attribute so the browser cleans up, as
-    // though it had done this work itself
-    gBrowser.browsers[0].removeAttribute("disablehistory");
-
-    // enable global history
-    try {
-      if (!gMultiProcessBrowser)
-      gBrowser.docShell.useGlobalHistory = true;
-    } catch(ex) {
-      Cu.reportError("Places database may be locked: " + ex);
-    }
 
     // hook up UI through progress listener
     gBrowser.addProgressListener(window.XULBrowserWindow);
@@ -922,9 +893,6 @@ var gBrowserInit = {
       document.documentElement.setAttribute("height", defaultHeight);
     }
 
-    if (!gShowPageResizers)
-      document.getElementById("status-bar").setAttribute("hideresizer", "true");
-
     if (!window.toolbar.visible) {
       // adjust browser UI for popups
       if (gURLBar) {
@@ -934,16 +902,10 @@ var gBrowserInit = {
       goSetCommandEnabled("cmd_newNavigatorTab", false);
     }
 
-#ifdef MENUBAR_CAN_AUTOHIDE
-    updateAppButtonDisplay();
-#endif
-
     // Misc. inits.
     CombinedStopReload.init();
-    TabsOnTop.init();
     gPrivateBrowsingUI.init();
     TabsInTitlebar.init();
-    retrieveToolbarIconsizesFromTheme();
 
     // Wait until chrome is painted before executing code not critical to making the window visible
     this._boundDelayedStartup = this._delayedStartup.bind(this, mustLoadSidebar);
@@ -1045,7 +1007,13 @@ var gBrowserInit = {
     IndexedDBPromptHelper.init();
     gFormSubmitObserver.init();
     SocialUI.init();
-    AddonManager.addAddonListener(AddonsMgrListener);
+
+    // Initialize the full zoom setting.
+    // We do this before the session restore service gets initialized so we can
+    // apply full zoom settings to tabs restored by the session restore service.
+    FullZoom.init();
+    PanelUI.init();
+    LightweightThemeListener.init();
     WebrtcIndicator.init();
 
     // Ensure login manager is up and running.
@@ -1096,11 +1064,6 @@ var gBrowserInit = {
     if (!getBoolPref("ui.click_hold_context_menus", false))
       SetClickAndHoldHandlers();
 
-    // Initialize the full zoom setting.
-    // We do this before the session restore service gets initialized so we can
-    // apply full zoom settings to tabs restored by the session restore service.
-    FullZoom.init();
-
     // Bug 666804 - NetworkPrioritizer support for e10s
     if (!gMultiProcessBrowser) {
       let NP = {};
@@ -1117,24 +1080,13 @@ var gBrowserInit = {
     // auto-resume downloads begin (such as after crashing or quitting with
     // active downloads) and speeds up the first-load of the download manager UI.
     // If the user manually opens the download manager before the timeout, the
-    // downloads will start right away, and getting the service again won't hurt.
+    // downloads will start right away, and initializing again won't hurt.
     setTimeout(function() {
       try {
-        let DownloadsCommon =
-          Cu.import("resource:///modules/DownloadsCommon.jsm", {}).DownloadsCommon;
-        if (DownloadsCommon.useJSTransfer) {
-          // Open the data link without initalizing nsIDownloadManager.
-          DownloadsCommon.initializeAllDataLinks();
-          let DownloadsTaskbar =
-            Cu.import("resource:///modules/DownloadsTaskbar.jsm", {}).DownloadsTaskbar;
-          DownloadsTaskbar.registerIndicator(window);
-        } else {
-          // Initalizing nsIDownloadManager will trigger the data link.
-          Services.downloads;
-          let DownloadTaskbarProgress =
-            Cu.import("resource://gre/modules/DownloadTaskbarProgress.jsm", {}).DownloadTaskbarProgress;
-          DownloadTaskbarProgress.onBrowserWindowLoad(window);
-        }
+        Cu.import("resource:///modules/DownloadsCommon.jsm", {})
+          .DownloadsCommon.initializeAllDataLinks();
+        Cu.import("resource:///modules/DownloadsTaskbar.jsm", {})
+          .DownloadsTaskbar.registerIndicator(window);
       } catch (ex) {
         Cu.reportError(ex);
       }
@@ -1182,43 +1134,14 @@ var gBrowserInit = {
 
     gBrowserThumbnails.init();
 
-    setUrlAndSearchBarWidthForConditionalForwardButton();
-    window.addEventListener("resize", function resizeHandler(event) {
-      if (event.target == window)
-        setUrlAndSearchBarWidthForConditionalForwardButton();
-    });
-
-#ifdef MENUBAR_CAN_AUTOHIDE
-    // If the user (or the locale) hasn't enabled the top-level "Character
-    // Encoding" menu via the "browser.menu.showCharacterEncoding" preference,
-    // hide it.
-    if ("true" != gPrefService.getComplexValue("browser.menu.showCharacterEncoding",
-                                               Ci.nsIPrefLocalizedString).data)
-      document.getElementById("appmenu_charsetMenu").hidden = true;
-#endif
-
     // Add Devtools menuitems and listeners
     gDevToolsBrowser.registerBrowserWindow(window);
 
-    let appMenuButton = document.getElementById("appmenu-button");
-    let appMenuPopup = document.getElementById("appmenu-popup");
-    if (appMenuButton && appMenuPopup) {
-      let appMenuOpening = null;
-      appMenuButton.addEventListener("mousedown", function(event) {
-        if (event.button == 0)
-          appMenuOpening = new Date();
-      }, false);
-      appMenuPopup.addEventListener("popupshown", function(event) {
-        if (event.target != appMenuPopup || !appMenuOpening)
-          return;
-        let duration = new Date() - appMenuOpening;
-        appMenuOpening = null;
-        Services.telemetry.getHistogramById("FX_APP_MENU_OPEN_MS").add(duration);
-      }, false);
-    }
-
     window.addEventListener("mousemove", MousePosTracker, false);
     window.addEventListener("dragover", MousePosTracker, false);
+
+    gNavToolbox.addEventListener("customizationstarting", CustomizationHandler);
+    gNavToolbox.addEventListener("customizationending", CustomizationHandler);
 
     // End startup crash tracking after a delay to catch crashes while restoring
     // tabs and to postpone saving the pref to disk.
@@ -1229,14 +1152,10 @@ var gBrowserInit = {
       Cu.reportError("Could not end startup crash tracking: " + ex);
     }
 
-#ifdef XP_WIN
-#ifdef MOZ_METRO
-    gMetroPrefs.prefDomain.forEach(function(prefName) {
-      gMetroPrefs.pushDesktopControlledPrefToMetro(prefName);
-      Services.prefs.addObserver(prefName, gMetroPrefs, false);
-    }, this);
-#endif
-#endif
+    if (typeof WindowsPrefSync !== 'undefined') {
+      // Pulls in Metro controlled prefs and pushes out Desktop controlled prefs
+      WindowsPrefSync.init();
+    }
 
     if (gMultiProcessBrowser) {
       // Bug 862519 - Backspace doesn't work in electrolysis builds.
@@ -1247,14 +1166,13 @@ var gBrowserInit = {
 
     SessionStore.promiseInitialized.then(() => {
       // Enable the Restore Last Session command if needed
-      if (SessionStore.canRestoreLastSession &&
-          !PrivateBrowsingUtils.isWindowPrivate(window))
-        goSetCommandEnabled("Browser:RestoreLastSession", true);
+      RestoreLastSessionObserver.init();
 
       TabView.init();
 
       setTimeout(function () { BrowserChromeTest.markAsReady(); }, 0);
     });
+    this.delayedStartupFinished = true;
 
     Services.obs.notifyObservers(window, "browser-delayed-startup-finished", "");
     TelemetryTimestamps.add("delayedStartupFinished");
@@ -1320,8 +1238,6 @@ var gBrowserInit = {
 
     BookmarkingUI.uninit();
 
-    TabsOnTop.uninit();
-
     TabsInTitlebar.uninit();
 
     var enumerator = Services.wm.getEnumerator(null);
@@ -1361,19 +1277,16 @@ var gBrowserInit = {
         Cu.reportError(ex);
       }
 
-#ifdef XP_WIN
-#ifdef MOZ_METRO
-      gMetroPrefs.prefDomain.forEach(function(prefName) {
-        Services.prefs.removeObserver(prefName, gMetroPrefs);
-      });
-#endif
-#endif
+      if (typeof WindowsPrefSync !== 'undefined') {
+        WindowsPrefSync.uninit();
+      }
 
       BrowserOffline.uninit();
       OfflineApps.uninit();
       IndexedDBPromptHelper.uninit();
-      AddonManager.removeAddonListener(AddonsMgrListener);
       SocialUI.uninit();
+      LightweightThemeListener.uninit();
+      PanelUI.uninit();
     }
 
     // Final window teardown, do this last.
@@ -1398,7 +1311,7 @@ var gBrowserInit = {
                          'viewToolbarsMenu', 'viewSidebarMenuMenu', 'Browser:Reload',
                          'viewFullZoomMenu', 'pageStyleMenu', 'charsetMenu', 'View:PageSource', 'View:FullScreen',
                          'viewHistorySidebar', 'Browser:AddBookmarkAs', 'Browser:BookmarkAllTabs',
-                         'View:PageInfo', 'Browser:ToggleTabView', 'Browser:ToggleAddonBar'];
+                         'View:PageInfo', 'Browser:ToggleTabView'];
     var element;
 
     for (let disabledItem of disabledItems) {
@@ -2187,7 +2100,7 @@ function losslessDecodeURI(aURI) {
   // except ZWNJ (U+200C) and ZWJ (U+200D) (bug 582186).
   // This includes all bidirectional formatting characters.
   // (RFC 3987 sections 3.2 and 4.1 paragraph 6)
-  value = value.replace(/[\u00ad\u034f\u115f-\u1160\u17b4-\u17b5\u180b-\u180d\u200b\u200e-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8]|\ud834[\udd73-\udd7a]|[\udb40-\udb43][\udc00-\udfff]/g,
+  value = value.replace(/[\u00ad\u034f\u061c\u115f-\u1160\u17b4-\u17b5\u180b-\u180d\u200b\u200e-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8]|\ud834[\udd73-\udd7a]|[\udb40-\udb43][\udc00-\udfff]/g,
                         encodeURIComponent);
   return value;
 }
@@ -2197,13 +2110,17 @@ function UpdateUrlbarSearchSplitterState()
   var splitter = document.getElementById("urlbar-search-splitter");
   var urlbar = document.getElementById("urlbar-container");
   var searchbar = document.getElementById("search-container");
-  var stop = document.getElementById("stop-button");
+
+  // If the splitter is already in the right place, we don't need to do anything:
+  if (splitter &&
+      ((splitter.nextSibling == searchbar && splitter.previousSibling == urlbar) ||
+       (splitter.nextSibling == urlbar && splitter.previousSibling == searchbar))) {
+    return;
+  }
 
   var ibefore = null;
   if (urlbar && searchbar) {
-    if (urlbar.nextSibling == searchbar ||
-        urlbar.getAttribute("combined") &&
-        stop && stop.nextSibling == searchbar)
+    if (urlbar.nextSibling == searchbar)
       ibefore = searchbar;
     else if (searchbar.nextSibling == urlbar)
       ibefore = urlbar;
@@ -2216,29 +2133,12 @@ function UpdateUrlbarSearchSplitterState()
       splitter.setAttribute("resizebefore", "flex");
       splitter.setAttribute("resizeafter", "flex");
       splitter.setAttribute("skipintoolbarset", "true");
+      splitter.setAttribute("overflows", "false");
       splitter.className = "chromeclass-toolbar-additional";
     }
     urlbar.parentNode.insertBefore(splitter, ibefore);
   } else if (splitter)
     splitter.parentNode.removeChild(splitter);
-}
-
-function setUrlAndSearchBarWidthForConditionalForwardButton() {
-  // Workaround for bug 694084: Showing/hiding the conditional forward button resizes
-  // the search bar when the url/search bar splitter hasn't been used.
-  var urlbarContainer = document.getElementById("urlbar-container");
-  var searchbarContainer = document.getElementById("search-container");
-  if (!urlbarContainer ||
-      !searchbarContainer ||
-      urlbarContainer.hasAttribute("width") ||
-      searchbarContainer.hasAttribute("width") ||
-      urlbarContainer.parentNode != searchbarContainer.parentNode)
-    return;
-  urlbarContainer.style.width = searchbarContainer.style.width = "";
-  var urlbarWidth = urlbarContainer.clientWidth;
-  var searchbarWidth = searchbarContainer.clientWidth;
-  urlbarContainer.style.width = urlbarWidth + "px";
-  searchbarContainer.style.width = searchbarWidth + "px";
 }
 
 function UpdatePageProxyState()
@@ -2404,11 +2304,7 @@ let BrowserOnClick = {
           }
         }
         else { // It's a phishing site, not malware
-          try {
-            content.location = formatURL("browser.safebrowsing.warning.infoURL", true);
-          } catch (e) {
-            Components.utils.reportError("Couldn't get phishing info URL: " + e);
-          }
+          openHelpLink("phishing-malware", false, "current");
         }
         break;
 
@@ -2557,6 +2453,49 @@ function BrowserFullScreen()
   window.fullScreen = !window.fullScreen;
 }
 
+function _checkDefaultAndSwitchToMetro() {
+#ifdef HAVE_SHELL_SERVICE
+#ifdef XP_WIN
+#ifdef MOZ_METRO
+  let shell = Components.classes["@mozilla.org/browser/shell-service;1"].
+    getService(Components.interfaces.nsIShellService);
+  let isDefault = shell.isDefaultBrowser(false, false);
+
+  if (isDefault) {
+    let appStartup = Components.classes["@mozilla.org/toolkit/app-startup;1"].
+    getService(Components.interfaces.nsIAppStartup);
+
+    Services.prefs.setBoolPref('browser.sessionstore.resume_session_once', true);
+    appStartup.quit(Components.interfaces.nsIAppStartup.eAttemptQuit |
+                    Components.interfaces.nsIAppStartup.eRestartTouchEnvironment);
+    return true;
+  }
+  return false;
+#endif
+#endif
+#endif
+}
+
+function SwitchToMetro() {
+#ifdef HAVE_SHELL_SERVICE
+#ifdef XP_WIN
+#ifdef MOZ_METRO
+  if (this._checkDefaultAndSwitchToMetro()) {
+    return;
+  }
+
+  let shell = Components.classes["@mozilla.org/browser/shell-service;1"].
+    getService(Components.interfaces.nsIShellService);
+
+  shell.setDefaultBrowser(false, false);
+
+  let intervalID = window.setInterval(this._checkDefaultAndSwitchToMetro, 1000);
+  window.setTimeout(function() { window.clearInterval(intervalID); }, 10000);
+#endif
+#endif
+#endif
+}
+
 function onFullScreen(event) {
   FullScreen.toggle(event);
 }
@@ -2644,9 +2583,7 @@ var PrintPreviewListener = {
     if (this._chromeState.sidebarOpen)
       toggleSidebar(this._sidebarCommand);
 
-#ifdef MENUBAR_CAN_AUTOHIDE
-    updateAppButtonDisplay();
-#endif
+    TabsInTitlebar.allowedBy("print-preview", !gInPrintPreviewMode);
   },
   _hideChrome: function () {
     this._chromeState = {};
@@ -2660,9 +2597,6 @@ var PrintPreviewListener = {
     notificationBox.notificationsHidden = true;
 
     document.getElementById("sidebar").setAttribute("src", "about:blank");
-    var addonBar = document.getElementById("addon-bar");
-    this._chromeState.addonBarOpen = !addonBar.collapsed;
-    addonBar.collapsed = true;
     gBrowser.updateWindowResizers();
 
     this._chromeState.findOpen = gFindBarInitialized && !gFindBar.hidden;
@@ -2683,11 +2617,6 @@ var PrintPreviewListener = {
   _showChrome: function () {
     if (this._chromeState.notificationsOpen)
       gBrowser.getNotificationBox().notificationsHidden = false;
-
-    if (this._chromeState.addonBarOpen) {
-      document.getElementById("addon-bar").collapsed = false;
-      gBrowser.updateWindowResizers();
-    }
 
     if (this._chromeState.findOpen)
       gFindBar.open();
@@ -2762,35 +2691,6 @@ function openHomeDialog(aURL)
     } catch (ex) {
       dump("Failed to set the home page.\n"+ex+"\n");
     }
-  }
-}
-
-var bookmarksButtonObserver = {
-  onDrop: function (aEvent)
-  {
-    let name = { };
-    let url = browserDragAndDrop.drop(aEvent, name);
-    try {
-      PlacesUIUtils.showBookmarkDialog({ action: "add"
-                                       , type: "bookmark"
-                                       , uri: makeURI(url)
-                                       , title: name
-                                       , hiddenRows: [ "description"
-                                                     , "location"
-                                                     , "loadInSidebar"
-                                                     , "keyword" ]
-                                       }, window);
-    } catch(ex) { }
-  },
-
-  onDragOver: function (aEvent)
-  {
-    browserDragAndDrop.dragOver(aEvent);
-    aEvent.dropEffect = "link";
-  },
-
-  onDragExit: function (aEvent)
-  {
   }
 }
 
@@ -2912,7 +2812,7 @@ const DOMLinkHandler = {
             if (!rels.feed && rels.alternate && rels.stylesheet)
               break;
 
-            if (isValidFeed(link, link.ownerDocument.nodePrincipal, rels.feed)) {
+            if (isValidFeed(link, link.ownerDocument.nodePrincipal, "feed" in rels)) {
               FeedHandler.addFeed(link, link.ownerDocument);
               feedAdded = true;
             }
@@ -3054,11 +2954,11 @@ const BrowserSearch = {
    *        allows the search service to provide a different nsISearchSubmission
    *        depending on e.g. where the search is triggered in the UI.
    *
-   * @return string Name of the search engine used to perform a search or null
-   *         if a search was not performed.
+   * @return engine The search engine used to perform a search, or null if no
+   *                search was performed.
    */
-  loadSearch: function BrowserSearch_search(searchText, useNewTab, purpose) {
-    var engine;
+  _loadSearch: function (searchText, useNewTab, purpose) {
+    let engine;
 
     // If the search bar is visible, use the current engine, otherwise, fall
     // back to the default engine.
@@ -3067,7 +2967,7 @@ const BrowserSearch = {
     else
       engine = Services.search.defaultEngine;
 
-    var submission = engine.getSubmission(searchText, null, purpose); // HTML response
+    let submission = engine.getSubmission(searchText, null, purpose); // HTML response
 
     // getSubmission can return null if the engine doesn't have a URL
     // with a text/html response type.  This is unlikely (since
@@ -3084,6 +2984,20 @@ const BrowserSearch = {
                  inBackground: inBackground,
                  relatedToCurrent: true });
 
+    return engine;
+  },
+
+  /**
+   * Just like _loadSearch, but preserving an old API.
+   *
+   * @return string Name of the search engine used to perform a search or null
+   *         if a search was not performed.
+   */
+  loadSearch: function BrowserSearch_search(searchText, useNewTab, purpose) {
+    let engine = BrowserSearch._loadSearch(searchText, useNewTab, purpose);
+    if (!engine) {
+      return null;
+    }
     return engine.name;
   },
 
@@ -3094,7 +3008,7 @@ const BrowserSearch = {
    * BrowserSearch.loadSearch for the preferred API.
    */
   loadSearchFromContext: function (terms) {
-    let engine = BrowserSearch.loadSearch(terms, true, "contextmenu");
+    let engine = BrowserSearch._loadSearch(terms, true, "contextmenu");
     if (engine) {
       BrowserSearch.recordSearchInHealthReport(engine, "contextmenu");
     }
@@ -3120,8 +3034,7 @@ const BrowserSearch = {
    * FHR records only search counts and nothing pertaining to the search itself.
    *
    * @param engine
-   *        (string) The name of the engine used to perform the search. This
-   *        is typically nsISearchEngine.name.
+   *        (nsISearchEngine) The engine handling the search.
    * @param source
    *        (string) Where the search originated from. See the FHR
    *        SearchesProvider for allowed values.
@@ -3269,10 +3182,22 @@ function OpenBrowserWindow(options)
         doc != document &&
         doc.defaultView == win) {
       Services.obs.removeObserver(newDocumentShown, "document-shown");
+      Services.obs.removeObserver(windowClosed, "domwindowclosed");
       TelemetryStopwatch.finish("FX_NEW_WINDOW_MS", telemetryObj);
     }
-  };
+  }
+
+  function windowClosed(subject) {
+    if (subject == win) {
+      Services.obs.removeObserver(newDocumentShown, "document-shown");
+      Services.obs.removeObserver(windowClosed, "domwindowclosed");
+    }
+  }
+
+  // Make sure to remove the 'document-shown' observer in case the window
+  // is being closed right after it was opened to avoid leaking.
   Services.obs.addObserver(newDocumentShown, "document-shown", false);
+  Services.obs.addObserver(windowClosed, "domwindowclosed", false);
 
   var charsetArg = new String();
   var handler = Components.classes["@mozilla.org/browser/clh;1"]
@@ -3311,153 +3236,18 @@ function OpenBrowserWindow(options)
   return win;
 }
 
-var gCustomizeSheet = false;
+//XXXunf Are these still useful to keep around?
 function BrowserCustomizeToolbar() {
-  // Disable the toolbar context menu items
-  var menubar = document.getElementById("main-menubar");
-  for (let childNode of menubar.childNodes)
-    childNode.setAttribute("disabled", true);
-
-  var cmd = document.getElementById("cmd_CustomizeToolbars");
-  cmd.setAttribute("disabled", "true");
-
-  var splitter = document.getElementById("urlbar-search-splitter");
-  if (splitter)
-    splitter.parentNode.removeChild(splitter);
-
-  CombinedStopReload.uninit();
-
-  PlacesToolbarHelper.customizeStart();
-  BookmarkingUI.customizeStart();
-  DownloadsButton.customizeStart();
-
-  TabsInTitlebar.allowedBy("customizing-toolbars", false);
-
-  var customizeURL = "chrome://global/content/customizeToolbar.xul";
-  gCustomizeSheet = getBoolPref("toolbar.customization.usesheet", false);
-
-  if (gCustomizeSheet) {
-    let sheetFrame = document.createElement("iframe");
-    let panel = document.getElementById("customizeToolbarSheetPopup");
-    sheetFrame.id = "customizeToolbarSheetIFrame";
-    sheetFrame.toolbox = gNavToolbox;
-    sheetFrame.panel = panel;
-    sheetFrame.setAttribute("style", panel.getAttribute("sheetstyle"));
-    panel.appendChild(sheetFrame);
-
-    // Open the panel, but make it invisible until the iframe has loaded so
-    // that the user doesn't see a white flash.
-    panel.style.visibility = "hidden";
-    gNavToolbox.addEventListener("beforecustomization", function onBeforeCustomization() {
-      gNavToolbox.removeEventListener("beforecustomization", onBeforeCustomization, false);
-      panel.style.removeProperty("visibility");
-    }, false);
-
-    sheetFrame.setAttribute("src", customizeURL);
-
-    panel.openPopup(gNavToolbox, "after_start", 0, 0);
-  } else {
-    window.openDialog(customizeURL,
-                      "CustomizeToolbar",
-                      "chrome,titlebar,toolbar,location,resizable,dependent",
-                      gNavToolbox);
-  }
+  gCustomizeMode.enter();
 }
 
 function BrowserToolboxCustomizeDone(aToolboxChanged) {
-  if (gCustomizeSheet) {
-    document.getElementById("customizeToolbarSheetPopup").hidePopup();
-    let iframe = document.getElementById("customizeToolbarSheetIFrame");
-    iframe.parentNode.removeChild(iframe);
-  }
-
-  // Update global UI elements that may have been added or removed
-  if (aToolboxChanged) {
-    gURLBar = document.getElementById("urlbar");
-
-    gProxyFavIcon = document.getElementById("page-proxy-favicon");
-    gHomeButton.updateTooltip();
-    gIdentityHandler._cacheElements();
-    window.XULBrowserWindow.init();
-
-#ifndef XP_MACOSX
-    updateEditUIVisibility();
-#endif
-
-    // Hacky: update the PopupNotifications' object's reference to the iconBox,
-    // if it already exists, since it may have changed if the URL bar was
-    // added/removed.
-    if (!window.__lookupGetter__("PopupNotifications"))
-      PopupNotifications.iconBox = document.getElementById("notification-popup-box");
-  }
-
-  PlacesToolbarHelper.customizeDone();
-  BookmarkingUI.customizeDone();
-  DownloadsButton.customizeDone();
-
-  // The url bar splitter state is dependent on whether stop/reload
-  // and the location bar are combined, so we need this ordering
-  CombinedStopReload.init();
-  UpdateUrlbarSearchSplitterState();
-  setUrlAndSearchBarWidthForConditionalForwardButton();
-
-  // Update the urlbar
-  if (gURLBar) {
-    URLBarSetURI();
-    XULBrowserWindow.asyncUpdateUI();
-    BookmarkingUI.updateStarState();
-    SocialUI.updateState();
-  }
-
-  TabsInTitlebar.allowedBy("customizing-toolbars", true);
-
-  // Re-enable parts of the UI we disabled during the dialog
-  var menubar = document.getElementById("main-menubar");
-  for (let childNode of menubar.childNodes)
-    childNode.setAttribute("disabled", false);
-  var cmd = document.getElementById("cmd_CustomizeToolbars");
-  cmd.removeAttribute("disabled");
-
-  // make sure to re-enable click-and-hold
-  if (!getBoolPref("ui.click_hold_context_menus", false))
-    SetClickAndHoldHandlers();
-
-  gBrowser.selectedBrowser.focus();
+  gCustomizeMode.exit(aToolboxChanged);
 }
 
 function BrowserToolboxCustomizeChange(aType) {
-  switch (aType) {
-    case "iconsize":
-    case "mode":
-      retrieveToolbarIconsizesFromTheme();
-      break;
-    default:
-      gHomeButton.updatePersonalToolbarStyle();
-      BookmarkingUI.customizeChange();
-  }
-}
-
-/**
- * Allows themes to override the "iconsize" attribute on toolbars.
- */
-function retrieveToolbarIconsizesFromTheme() {
-  function retrieveToolbarIconsize(aToolbar) {
-    if (aToolbar.localName != "toolbar")
-      return;
-
-    // The theme indicates that it wants to override the "iconsize" attribute
-    // by specifying a special value for the "counter-reset" property on the
-    // toolbar. A custom property cannot be used because getComputedStyle can
-    // only return the values of standard CSS properties.
-    let counterReset = getComputedStyle(aToolbar).counterReset;
-    if (counterReset == "smallicons 0")
-      aToolbar.setAttribute("iconsize", "small");
-    else if (counterReset == "largeicons 0")
-      aToolbar.setAttribute("iconsize", "large");
-  }
-
-  Array.forEach(gNavToolbox.childNodes, retrieveToolbarIconsize);
-  gNavToolbox.externalToolbars.forEach(retrieveToolbarIconsize);
+  gHomeButton.updatePersonalToolbarStyle();
+  BookmarksMenuButton.customizeChange();
 }
 
 /**
@@ -3486,9 +3276,6 @@ function updateEditUIVisibility()
   let editMenuPopupState = document.getElementById("menu_EditPopup").state;
   let contextMenuPopupState = document.getElementById("contentAreaContextMenu").state;
   let placesContextMenuPopupState = document.getElementById("placesContext").state;
-#ifdef MENUBAR_CAN_AUTOHIDE
-  let appMenuPopupState = document.getElementById("appmenu-popup").state;
-#endif
 
   // The UI is visible if the Edit menu is opening or open, if the context menu
   // is open, or if the toolbar has been customized to include the Cut, Copy,
@@ -3499,13 +3286,7 @@ function updateEditUIVisibility()
                    contextMenuPopupState == "open" ||
                    placesContextMenuPopupState == "showing" ||
                    placesContextMenuPopupState == "open" ||
-#ifdef MENUBAR_CAN_AUTOHIDE
-                   appMenuPopupState == "showing" ||
-                   appMenuPopupState == "open" ||
-#endif
-                   document.getElementById("cut-button") ||
-                   document.getElementById("copy-button") ||
-                   document.getElementById("paste-button") ? true : false;
+                   document.getElementById("edit-controls") ? true : false;
 
   // If UI is visible, update the edit commands' enabled state to reflect
   // whether or not they are actually enabled for the current focus/selection.
@@ -3535,9 +3316,6 @@ function updateEditUIVisibility()
 function updateCharacterEncodingMenuState()
 {
   let charsetMenu = document.getElementById("charsetMenu");
-  let appCharsetMenu = document.getElementById("appmenu_charsetMenu");
-  let appDevCharsetMenu =
-    document.getElementById("appmenu_developer_charsetMenu");
   // gBrowser is null on Mac when the menubar shows in the context of
   // non-browser windows. The above elements may be null depending on
   // what parts of the menubar are present. E.g. no app menu on Mac.
@@ -3547,21 +3325,9 @@ function updateCharacterEncodingMenuState()
     if (charsetMenu) {
       charsetMenu.removeAttribute("disabled");
     }
-    if (appCharsetMenu) {
-      appCharsetMenu.removeAttribute("disabled");
-    }
-    if (appDevCharsetMenu) {
-      appDevCharsetMenu.removeAttribute("disabled");
-    }
   } else {
     if (charsetMenu) {
       charsetMenu.setAttribute("disabled", "true");
-    }
-    if (appCharsetMenu) {
-      appCharsetMenu.setAttribute("disabled", "true");
-    }
-    if (appDevCharsetMenu) {
-      appDevCharsetMenu.setAttribute("disabled", "true");
     }
   }
 }
@@ -3594,8 +3360,8 @@ var XULBrowserWindow = {
   startTime: 0,
   statusText: "",
   isBusy: false,
-  inContentWhitelist: ["about:addons", "about:downloads", "about:permissions",
-                       "about:sync-progress", "about:preferences"],
+  // Left here for add-on compatibility, see bug 752434
+  inContentWhitelist: [],
 
   QueryInterface: function (aIID) {
     if (aIID.equals(Ci.nsIWebProgressListener) ||
@@ -3624,8 +3390,6 @@ var XULBrowserWindow = {
   },
 
   init: function () {
-    this.throbberElement = document.getElementById("navigator-throbber");
-
     // Initialize the security button's state and tooltip text.
     var securityUI = gBrowser.securityUI;
     this.onSecurityChange(null, null, securityUI.state);
@@ -3749,10 +3513,6 @@ var XULBrowserWindow = {
       if (!(aStateFlags & nsIWebProgressListener.STATE_RESTORING)) {
         this._busyUI = true;
 
-        // Turn the throbber on.
-        if (this.throbberElement)
-          this.throbberElement.setAttribute("busy", "true");
-
         // XXX: This needs to be based on window activity...
         this.stopCommand.removeAttribute("disabled");
         CombinedStopReload.switchToStop();
@@ -3796,10 +3556,6 @@ var XULBrowserWindow = {
 
       if (this._busyUI) {
         this._busyUI = false;
-
-        // Turn the throbber off.
-        if (this.throbberElement)
-          this.throbberElement.removeAttribute("busy");
 
         this.stopCommand.setAttribute("disabled", "true");
         CombinedStopReload.switchToReload(aRequest instanceof Ci.nsIRequest);
@@ -3867,16 +3623,6 @@ var XULBrowserWindow = {
         SocialUI.updateState();
       }
 
-      // Show or hide browser chrome based on the whitelist
-      if (this.hideChromeForLocation(location)) {
-        document.documentElement.setAttribute("disablechrome", "true");
-      } else {
-        if (SessionStore.getTabValue(gBrowser.selectedTab, "appOrigin"))
-          document.documentElement.setAttribute("disablechrome", "true");
-        else
-          document.documentElement.removeAttribute("disablechrome");
-      }
-
       // Utility functions for disabling find
       var shouldDisableFind = function shouldDisableFind(aDocument) {
         let docElt = aDocument.documentElement;
@@ -3917,6 +3663,17 @@ var XULBrowserWindow = {
         }
       } else
         disableFindCommands(false);
+
+      // Try not to instantiate gCustomizeMode as much as possible,
+      // so don't use CustomizeMode.jsm to check for URI or customizing.
+      let customizingURI = "about:customizing";
+      if (location == customizingURI &&
+          !CustomizationHandler.isCustomizing()) {
+        gCustomizeMode.enter();
+      } else if (location != customizingURI &&
+                 CustomizationHandler.isCustomizing()) {
+        gCustomizeMode.exit();
+      }
     }
     UpdateBackForwardCommands(gBrowser.webNavigation);
 
@@ -3934,12 +3691,8 @@ var XULBrowserWindow = {
     FeedHandler.updateFeeds();
   },
 
-  hideChromeForLocation: function(aLocation) {
-    aLocation = aLocation.toLowerCase();
-    return this.inContentWhitelist.some(function(aSpec) {
-      return aSpec == aLocation;
-    });
-  },
+  // Left here for add-on compatibility, see bug 752434
+  hideChromeForLocation: function() {},
 
   onStatusChange: function (aWebProgress, aRequest, aStatus, aMessage) {
     this.status = aMessage;
@@ -4077,21 +3830,8 @@ var CombinedStopReload = {
     if (this._initialized)
       return;
 
-    var urlbar = document.getElementById("urlbar-container");
-    var reload = document.getElementById("reload-button");
-    var stop = document.getElementById("stop-button");
-
-    if (urlbar) {
-      if (urlbar.parentNode.getAttribute("mode") != "icons" ||
-          !reload || urlbar.nextSibling != reload ||
-          !stop || reload.nextSibling != stop)
-        urlbar.removeAttribute("combined");
-      else {
-        urlbar.setAttribute("combined", "true");
-        reload = document.getElementById("urlbar-reload-button");
-        stop = document.getElementById("urlbar-stop-button");
-      }
-    }
+    let reload = document.getElementById("urlbar-reload-button");
+    let stop = document.getElementById("urlbar-stop-button");
     if (!stop || !reload || reload.nextSibling != stop)
       return;
 
@@ -4233,6 +3973,10 @@ var TabsProgressListener = {
     if (aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)
       return;
 
+    // Filter out location changes in sub documents.
+    if (!aWebProgress.isTopLevel)
+      return;
+
     // Only need to call locationChange if the PopupNotifications object
     // for this window has already been initialized (i.e. its getter no
     // longer exists)
@@ -4241,10 +3985,7 @@ var TabsProgressListener = {
 
     gBrowser.getNotificationBox(aBrowser).removeTransientNotifications();
 
-    // Filter out location changes in sub documents.
-    if (aWebProgress.isTopLevel) {
-      FullZoom.onLocationChange(aLocationURI, false, aBrowser);
-    }
+    FullZoom.onLocationChange(aLocationURI, false, aBrowser);
   },
 
   onRefreshAttempted: function (aBrowser, aWebProgress, aURI, aDelay, aSameURI) {
@@ -4422,7 +4163,7 @@ function onViewToolbarsPopupShowing(aEvent, aInsertPoint) {
   var firstMenuItem = aInsertPoint || popup.firstChild;
 
   let toolbarNodes = Array.slice(gNavToolbox.childNodes);
-  toolbarNodes.push(document.getElementById("addon-bar"));
+  toolbarNodes = toolbarNodes.concat(gNavToolbox.externalToolbars);
 
   for (let toolbar of toolbarNodes) {
     let toolbarName = toolbar.getAttribute("toolbarname");
@@ -4435,8 +4176,7 @@ function onViewToolbarsPopupShowing(aEvent, aInsertPoint) {
       menuItem.setAttribute("type", "checkbox");
       menuItem.setAttribute("label", toolbarName);
       menuItem.setAttribute("checked", toolbar.getAttribute(hidingAttribute) != "true");
-      if (popup.id != "appmenu_customizeMenu")
-        menuItem.setAttribute("accesskey", toolbar.getAttribute("accesskey"));
+      menuItem.setAttribute("accesskey", toolbar.getAttribute("accesskey"));
       if (popup.id != "toolbar-context-menu")
         menuItem.setAttribute("key", toolbar.getAttribute("key"));
 
@@ -4444,6 +4184,44 @@ function onViewToolbarsPopupShowing(aEvent, aInsertPoint) {
 
       menuItem.addEventListener("command", onViewToolbarCommand, false);
     }
+  }
+
+
+  let addToPanel = popup.querySelector(".customize-context-addToPanel");
+  let removeFromToolbar = popup.querySelector(".customize-context-removeFromToolbar");
+  // View -> Toolbars menu doesn't have the addToPanel or removeFromToolbar items.
+  if (!addToPanel || !removeFromToolbar) {
+    return;
+  }
+
+  // The explicitOriginalTarget can be a nested child element of a toolbaritem.
+  let toolbarItem = aEvent.explicitOriginalTarget;
+
+  if (toolbarItem && toolbarItem.localName == "toolbarpaletteitem") {
+    toolbarItem = toolbarItem.firstChild;
+  } else {
+    while (toolbarItem && toolbarItem.parentNode) {
+      let parent = toolbarItem.parentNode;
+      if ((parent.classList && parent.classList.contains("customization-target")) ||
+          parent.localName == "toolbarpaletteitem" ||
+          parent.localName == "toolbar")
+        break;
+      toolbarItem = parent;
+    }
+  }
+
+  // Right-clicking on an empty part of the tabstrip will exit
+  // the above loop with toolbarItem being the xul:document.
+  // That has no parentNode, and we should disable the items in
+  // this case.
+  let movable = toolbarItem && toolbarItem.parentNode &&
+                CustomizableUI.isWidgetRemovable(toolbarItem);
+  if (movable) {
+    addToPanel.removeAttribute("disabled");
+    removeFromToolbar.removeAttribute("disabled");
+  } else {
+    addToPanel.setAttribute("disabled", true);
+    removeFromToolbar.setAttribute("disabled", true);
   }
 }
 
@@ -4460,65 +4238,18 @@ function setToolbarVisibility(toolbar, isVisible) {
 
   toolbar.setAttribute(hidingAttribute, !isVisible);
   document.persist(toolbar.id, hidingAttribute);
+  let eventParams = {
+    detail: {
+      visible: isVisible
+    },
+    bubbles: true
+  };
+  let event = new CustomEvent("toolbarvisibilitychange", eventParams);
+  toolbar.dispatchEvent(event);
 
   PlacesToolbarHelper.init();
   BookmarkingUI.onToolbarVisibilityChange();
   gBrowser.updateWindowResizers();
-
-#ifdef MENUBAR_CAN_AUTOHIDE
-  updateAppButtonDisplay();
-#endif
-}
-
-var TabsOnTop = {
-  init: function TabsOnTop_init() {
-    Services.prefs.addObserver(this._prefName, this, false);
-
-    // Only show the toggle UI if the user disabled tabs on top.
-    if (Services.prefs.getBoolPref(this._prefName)) {
-      for (let item of document.querySelectorAll("menuitem[command=cmd_ToggleTabsOnTop]"))
-        item.parentNode.removeChild(item);
-    }
-  },
-
-  uninit: function TabsOnTop_uninit() {
-    Services.prefs.removeObserver(this._prefName, this);
-  },
-
-  toggle: function () {
-    this.enabled = !Services.prefs.getBoolPref(this._prefName);
-  },
-
-  syncUI: function () {
-    let userEnabled = Services.prefs.getBoolPref(this._prefName);
-    let enabled = userEnabled && gBrowser.tabContainer.visible;
-
-    document.getElementById("cmd_ToggleTabsOnTop")
-            .setAttribute("checked", userEnabled);
-
-    document.documentElement.setAttribute("tabsontop", enabled);
-    document.getElementById("navigator-toolbox").setAttribute("tabsontop", enabled);
-    document.getElementById("TabsToolbar").setAttribute("tabsontop", enabled);
-    document.getElementById("nav-bar").setAttribute("tabsontop", enabled);
-    gBrowser.tabContainer.setAttribute("tabsontop", enabled);
-    TabsInTitlebar.allowedBy("tabs-on-top", enabled);
-  },
-
-  get enabled () {
-    return gNavToolbox.getAttribute("tabsontop") == "true";
-  },
-
-  set enabled (val) {
-    Services.prefs.setBoolPref(this._prefName, !!val);
-    return val;
-  },
-
-  observe: function (subject, topic, data) {
-    if (topic == "nsPref:changed")
-      this.syncUI();
-  },
-
-  _prefName: "browser.tabs.onTop"
 }
 
 var TabsInTitlebar = {
@@ -4527,9 +4258,31 @@ var TabsInTitlebar = {
     this._readPref();
     Services.prefs.addObserver(this._prefName, this, false);
 
-    // Don't trust the initial value of the sizemode attribute; wait for
-    // the resize event (handled in tabbrowser.xml).
-    this.allowedBy("sizemode", false);
+    // We need to update the appearance of the titlebar when the menu changes
+    // from the active to the inactive state. We can't, however, rely on
+    // DOMMenuBarInactive, because the menu fires this event and then removes
+    // the inactive attribute after an event-loop spin.
+    //
+    // Because updating the appearance involves sampling the heights and margins
+    // of various elements, it's important that the layout be more or less
+    // settled before updating the titlebar. So instead of listening to
+    // DOMMenuBarActive and DOMMenuBarInactive, we use a MutationObserver to
+    // watch the "invalid" attribute directly.
+    let menu = document.getElementById("toolbar-menubar");
+    this._menuObserver = new MutationObserver(this._onMenuMutate);
+    this._menuObserver.observe(menu, {attributes: true});
+
+    gNavToolbox.addEventListener("customization-transitionend", this);
+
+    this.onAreaReset = function(aArea) {
+      if (aArea == CustomizableUI.AREA_TABSTRIP || aArea == CustomizableUI.AREA_MENUBAR)
+        this._update(true);
+    };
+    this.onWidgetAdded = this.onWidgetRemoved = function(aWidgetId, aArea) {
+      if (aArea == CustomizableUI.AREA_TABSTRIP || aArea == CustomizableUI.AREA_MENUBAR)
+        this._update(true);
+    };
+    CustomizableUI.addListener(this);
 
     this._initialized = true;
 #endif
@@ -4540,14 +4293,20 @@ var TabsInTitlebar = {
     if (allow) {
       if (condition in this._disallowed) {
         delete this._disallowed[condition];
-        this._update();
+        this._update(true);
       }
     } else {
       if (!(condition in this._disallowed)) {
         this._disallowed[condition] = null;
-        this._update();
+        this._update(true);
       }
     }
+#endif
+  },
+
+  updateAppearance: function updateAppearance(aForce) {
+#ifdef CAN_DRAW_IN_TITLEBAR
+    this._update(aForce);
 #endif
   },
 
@@ -4561,62 +4320,200 @@ var TabsInTitlebar = {
       this._readPref();
   },
 
+  handleEvent: function(ev) {
+    if (ev.type == "customization-transitionend") {
+      this._update(true);
+    }
+  },
+
+  _onMenuMutate: function (aMutations) {
+    for (let mutation of aMutations) {
+      if (mutation.attributeName == "inactive" ||
+          mutation.attributeName == "autohide") {
+        TabsInTitlebar._update(true);
+        return;
+      }
+    }
+  },
+
   _initialized: false,
   _disallowed: {},
   _prefName: "browser.tabs.drawInTitlebar",
+  _lastSizeMode: null,
 
   _readPref: function () {
     this.allowedBy("pref",
                    Services.prefs.getBoolPref(this._prefName));
   },
 
-  _update: function () {
+  _update: function (aForce=false) {
     function $(id) document.getElementById(id);
     function rect(ele) ele.getBoundingClientRect();
+    function verticalMargins(cstyle) parseFloat(cstyle.marginBottom) + parseFloat(cstyle.marginTop);
 
     if (!this._initialized || window.fullScreen)
       return;
 
     let allowed = true;
+
+    if (!aForce) {
+      // _update is called on resize events, because the window is not ready
+      // after sizemode events. However, we only care about the event when the
+      // sizemode is different from the last time we updated the appearance of
+      // the tabs in the titlebar.
+      let sizemode = document.documentElement.getAttribute("sizemode");
+      if (this._lastSizeMode == sizemode) {
+        return;
+      }
+      this._lastSizeMode = sizemode;
+    }
+
     for (let something in this._disallowed) {
       allowed = false;
       break;
     }
 
-    if (allowed == this.enabled)
-      return;
-
     let titlebar = $("titlebar");
+    let titlebarContent = $("titlebar-content");
+    let menubar = $("toolbar-menubar");
 
     if (allowed) {
-      let tabsToolbar       = $("TabsToolbar");
-
-#ifdef MENUBAR_CAN_AUTOHIDE
-      let appmenuButtonBox  = $("appmenu-button-container");
-      this._sizePlaceholder("appmenu-button", rect(appmenuButtonBox).width);
-#endif
-      let captionButtonsBox = $("titlebar-buttonbox");
-      this._sizePlaceholder("caption-buttons", rect(captionButtonsBox).width);
-
-      let tabsToolbarRect = rect(tabsToolbar);
-      let titlebarTop = rect($("titlebar-content")).top;
-      titlebar.style.marginBottom = - Math.min(tabsToolbarRect.top - titlebarTop,
-                                               tabsToolbarRect.height) + "px";
-
+      // We set the tabsintitlebar attribute first so that our CSS for
+      // tabsintitlebar manifests before we do our measurements.
       document.documentElement.setAttribute("tabsintitlebar", "true");
+      updateTitlebarDisplay();
 
-      if (!this._draghandle) {
+      // Try to avoid reflows in this code by calculating dimensions first and
+      // then later set the properties affecting layout together in a batch.
+
+      // Buttons first:
+      let captionButtonsBoxWidth = rect($("titlebar-buttonbox")).width;
+#ifdef XP_MACOSX
+      let fullscreenButtonWidth = rect($("titlebar-fullscreen-button")).width;
+      // No need to look up the menubar stuff on OS X:
+      let menuHeight = 0;
+      let fullMenuHeight = 0;
+      // Instead, look up the titlebar padding:
+      let titlebarPadding = parseInt(window.getComputedStyle(titlebar).paddingTop, 10);
+#else
+      // Otherwise, get the height and margins separately for the menubar
+      let menuHeight = rect(menubar).height;
+      let menuStyles = window.getComputedStyle(menubar);
+      let fullMenuHeight = verticalMargins(menuStyles) + menuHeight;
+#endif
+      // Get the full height of the tabs toolbar:
+      let tabsToolbar = $("TabsToolbar");
+      let tabsStyles = window.getComputedStyle(tabsToolbar);
+      let fullTabsHeight = rect(tabsToolbar).height + verticalMargins(tabsStyles);
+
+      // If the navbar overlaps the tabbar using negative margins, we need to take those into
+      // account so we don't overlap it
+      let navbarMarginTop = parseFloat(window.getComputedStyle($("nav-bar")).marginTop);
+      navbarMarginTop = Math.min(navbarMarginTop, 0);
+
+      // And get the height of what's in the titlebar:
+      let titlebarContentHeight = rect(titlebarContent).height;
+
+      // Padding surrounds the tab-view-deck when we are in customization mode,
+      // so take that into account:
+      let areCustomizing = document.documentElement.hasAttribute("customizing") ||
+                           document.documentElement.hasAttribute("customize-exiting");
+      let customizePadding = 0;
+      if (areCustomizing) {
+        let deckStyle = window.getComputedStyle($("tab-view-deck"));
+        customizePadding = parseFloat(deckStyle.paddingTop);
+      }
+
+      // Begin setting CSS properties which will cause a reflow
+
+      // If the menubar is around (menuHeight is non-zero), try to adjust
+      // its full height (i.e. including margins) to match the titlebar,
+      // by changing the menubar's bottom padding
+      if (menuHeight) {
+        // Calculate the difference between the titlebar's height and that of the menubar
+        let menuTitlebarDelta = titlebarContentHeight - fullMenuHeight;
+        let paddingBottom;
+        // The titlebar is bigger:
+        if (menuTitlebarDelta > 0) {
+          fullMenuHeight += menuTitlebarDelta;
+          // If there is already padding on the menubar, we need to add that
+          // to the difference so the total padding is correct:
+          if ((paddingBottom = menuStyles.paddingBottom)) {
+            menuTitlebarDelta += parseFloat(paddingBottom);
+          }
+          menubar.style.paddingBottom = menuTitlebarDelta + "px";
+        // The menubar is bigger, but has bottom padding we can remove:
+        } else if (menuTitlebarDelta < 0 && (paddingBottom = menuStyles.paddingBottom)) {
+          let existingPadding = parseFloat(paddingBottom);
+          // menuTitlebarDelta is negative; work out what's left, but don't set negative padding:
+          let desiredPadding = Math.max(0, existingPadding + menuTitlebarDelta);
+          menubar.style.paddingBottom = desiredPadding + "px";
+          // We've changed the menu height now:
+          fullMenuHeight += desiredPadding - existingPadding;
+        }
+      }
+
+      // Next, we calculate how much we need to stretch the titlebar down to
+      // go all the way to the bottom of the tab strip, if necessary.
+      let tabAndMenuHeight = fullTabsHeight + fullMenuHeight;
+      // Oh, and don't forget customization mode:
+      if (areCustomizing) {
+        tabAndMenuHeight += customizePadding;
+      }
+
+      if (tabAndMenuHeight > titlebarContentHeight) {
+        // We need to increase the titlebar content's outer height (ie including margins)
+        // to match the tab and menu height:
+        let extraMargin = tabAndMenuHeight - titlebarContentHeight;
+        // We need to reduce the height by the amount of navbar overlap
+        // (this value is 0 or negative):
+        extraMargin += navbarMarginTop;
+        // On non-OSX, we can just use bottom margin:
+#ifndef XP_MACOSX
+        titlebarContent.style.marginBottom = extraMargin + "px";
+#else
+        // Otherwise, center the content. This means taking the titlebar's
+        // padding into account:
+        let halfMargin = (extraMargin - titlebarPadding) / 2;
+        titlebarContent.style.marginTop =  halfMargin + "px";
+        titlebarContent.style.marginBottom =  (titlebarPadding + halfMargin) + "px";
+#endif
+        titlebarContentHeight += extraMargin;
+      }
+
+      // Then we bring up the titlebar by the same amount, but we add any negative margin:
+      titlebar.style.marginBottom = "-" + titlebarContentHeight + "px";
+
+
+      // Finally, size the placeholders:
+#ifdef XP_MACOSX
+      this._sizePlaceholder("fullscreen-button", fullscreenButtonWidth);
+#endif
+      this._sizePlaceholder("caption-buttons", captionButtonsBoxWidth);
+
+      if (!this._draghandles) {
+        this._draghandles = {};
         let tmp = {};
         Components.utils.import("resource://gre/modules/WindowDraggingUtils.jsm", tmp);
-        this._draghandle = new tmp.WindowDraggingElement(tabsToolbar);
-        this._draghandle.mouseDownCheck = function () {
+
+        let mouseDownCheck = function () {
           return !this._dragBindingAlive && TabsInTitlebar.enabled;
         };
+
+        this._draghandles.tabsToolbar = new tmp.WindowDraggingElement(tabsToolbar);
+        this._draghandles.tabsToolbar.mouseDownCheck = mouseDownCheck;
+
+        this._draghandles.navToolbox = new tmp.WindowDraggingElement(gNavToolbox);
+        this._draghandles.navToolbox.mouseDownCheck = mouseDownCheck;
       }
     } else {
       document.documentElement.removeAttribute("tabsintitlebar");
+      updateTitlebarDisplay();
 
+      // Reset the margins and padding that might have been modified:
+      titlebarContent.style.marginBottom = "";
       titlebar.style.marginBottom = "";
+      menubar.style.paddingBottom = "";
     }
   },
 
@@ -4630,30 +4527,24 @@ var TabsInTitlebar = {
 #ifdef CAN_DRAW_IN_TITLEBAR
     this._initialized = false;
     Services.prefs.removeObserver(this._prefName, this);
+    this._menuObserver.disconnect();
+    CustomizableUI.removeListener(this);
 #endif
   }
 };
 
-#ifdef MENUBAR_CAN_AUTOHIDE
-function updateAppButtonDisplay() {
-  var displayAppButton =
-    !gInPrintPreviewMode &&
-    window.menubar.visible &&
-    document.getElementById("toolbar-menubar").getAttribute("autohide") == "true";
-
 #ifdef CAN_DRAW_IN_TITLEBAR
-  document.getElementById("titlebar").hidden = !displayAppButton;
+function updateTitlebarDisplay() {
+  document.getElementById("titlebar").hidden = !TabsInTitlebar.enabled;
 
-  if (displayAppButton)
+  if (TabsInTitlebar.enabled)
+#ifdef XP_WIN
     document.documentElement.setAttribute("chromemargin", "0,2,2,2");
+#else
+    document.documentElement.setAttribute("chromemargin", "0,-1,-1,-1");
+#endif
   else
     document.documentElement.removeAttribute("chromemargin");
-
-  TabsInTitlebar.allowedBy("drawing-in-titlebar", displayAppButton);
-#else
-  document.getElementById("appmenu-toolbar-button").hidden =
-    !displayAppButton;
-#endif
 }
 #endif
 
@@ -4786,60 +4677,6 @@ function fireSidebarFocusedEvent() {
   sidebar.contentWindow.dispatchEvent(event);
 }
 
-#ifdef XP_WIN
-#ifdef MOZ_METRO
-/**
- * Some prefs that have consequences in both Metro and Desktop such as
- * app-update prefs, are automatically pushed from Desktop here for use
- * in Metro.
- */
-var gMetroPrefs = {
-  prefDomain: ["app.update.auto", "app.update.enabled",
-               "app.update.service.enabled",
-               "app.update.metro.enabled"],
-  observe: function (aSubject, aTopic, aPrefName)
-  {
-    if (aTopic != "nsPref:changed")
-      return;
-
-    this.pushDesktopControlledPrefToMetro(aPrefName);
-  },
-
-  /**
-   * Writes the pref to HKCU in the registry and adds a pref-observer to keep
-   * the registry in sync with changes to the value.
-   */
-  pushDesktopControlledPrefToMetro: function(aPrefName) {
-    let registry = Cc["@mozilla.org/windows-registry-key;1"].
-                    createInstance(Ci.nsIWindowsRegKey);
-    try {
-      var prefType = Services.prefs.getPrefType(aPrefName);
-      let prefFunc;
-      if (prefType == Components.interfaces.nsIPrefBranch.PREF_INT)
-        prefFunc = "getIntPref";
-      else if (prefType == Components.interfaces.nsIPrefBranch.PREF_BOOL)
-        prefFunc = "getBoolPref";
-      else if (prefType == Components.interfaces.nsIPrefBranch.PREF_STRING)
-        prefFunc = "getCharPref";
-      else
-        throw "Unsupported pref type";
-
-      let prefValue = Services.prefs[prefFunc](aPrefName);
-      registry.create(Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
-                    "Software\\Mozilla\\Firefox\\Metro\\Prefs\\" + prefType,
-                    Ci.nsIWindowsRegKey.ACCESS_WRITE);
-      // Always write as string, but the registry subfolder will determine
-      // how Metro interprets that string value.
-      registry.writeStringValue(aPrefName, prefValue);
-    } catch (ex) {
-      Components.utils.reportError("Couldn't push pref " + aPrefName + ": " + ex);
-    } finally {
-      registry.close();
-    }
-  }
-};
-#endif
-#endif
 
 var gHomeButton = {
   prefDomain: "browser.startup.homepage",
@@ -5139,9 +4976,26 @@ function handleLinkClick(event, href, linkNode) {
     return true;
   }
 
+  var referrerURI = doc.documentURIObject;
+  // if the mixedContentChannel is present and the referring URI passes
+  // a same origin check with the target URI, we can preserve the users
+  // decision of disabling MCB on a page for it's child tabs.
+  var persistDisableMCBInChildTab = false;
+
+  if (where == "tab" && gBrowser.docShell.mixedContentChannel) {
+    const sm = Services.scriptSecurityManager;
+    try {
+      var targetURI = makeURI(href);
+      sm.checkSameOriginURI(referrerURI, targetURI, false);
+      persistDisableMCBInChildTab = true;
+    }
+    catch (e) { }
+  }
+
   urlSecurityCheck(href, doc.nodePrincipal);
-  openLinkIn(href, where, { referrerURI: doc.documentURIObject,
-                            charset: doc.characterSet });
+  openLinkIn(href, where, { referrerURI: referrerURI,
+                            charset: doc.characterSet,
+                            disableMCB: persistDisableMCBInChildTab});
   event.preventDefault();
   return true;
 }
@@ -5217,7 +5071,7 @@ function MultiplexHandler(event)
         SelectDetector(event, false);
     } else if (name == 'charsetGroup') {
         var charset = node.getAttribute('id');
-        charset = charset.substring('charset.'.length, charset.length)
+        charset = charset.substring(charset.indexOf('charset.') + 'charset.'.length);
         BrowserSetForcedCharacterSet(charset);
     } else if (name == 'charsetCustomize') {
         //do nothing - please remove this else statement, once the charset prefs moves to the pref window
@@ -5230,7 +5084,7 @@ function MultiplexHandler(event)
 function SelectDetector(event, doReload)
 {
     var uri =  event.target.getAttribute("id");
-    var prefvalue = uri.substring('chardet.'.length, uri.length);
+    var prefvalue = uri.substring(uri.indexOf('chardet.') + 'chardet.'.length);
     if ("off" == prefvalue) { // "off" is special value to turn off the detectors
         prefvalue = "";
     }
@@ -5307,17 +5161,10 @@ function UpdateMenus(event) {
   UpdateCharsetDetector(event.target);
 }
 
-function CreateMenu(node) {
-  Services.obs.notifyObservers(null, "charsetmenu-selected", node);
-}
-
 function charsetLoadListener() {
   var charset = window.content.document.characterSet;
 
   if (charset.length > 0 && (charset != gLastBrowserCharset)) {
-    if (!gCharsetMenu)
-      gCharsetMenu = Cc['@mozilla.org/rdf/datasource;1?name=charset-menu'].getService(Ci.nsICurrentCharsetListener);
-    gCharsetMenu.SetCurrentCharset(charset);
     gPrevCharset = gLastBrowserCharset;
     gLastBrowserCharset = charset;
   }
@@ -6438,6 +6285,14 @@ var gIdentityHandler = {
   },
 
   /**
+   * Handler for commands on the help button in the "identity-popup" panel.
+   */
+  handleHelpCommand : function(event) {
+    openHelpLink("secure-connection");
+    this._identityPopup.hidePopup();
+  },
+
+  /**
    * Handler for mouseclicks on the "More Information" button in the
    * "identity-popup" panel.
    */
@@ -6498,14 +6353,21 @@ var gIdentityHandler = {
     let nsIWebProgressListener = Ci.nsIWebProgressListener;
 
     // For some URIs like data: we can't get a host and so can't do
-    // anything useful here. Chrome URIs however get special treatment.
+    // anything useful here.
     let unknown = false;
     try {
       uri.host;
     } catch (e) { unknown = true; }
 
-    if ((uri.scheme == "chrome" || uri.scheme == "about") &&
-        uri.spec !== "about:blank") {
+    // Chrome URIs however get special treatment. Some chrome URIs are
+    // whitelisted to provide a positive security signal to the user.
+    let chromeWhitelist = ["about:addons", "about:app-manager", "about:config",
+                           "about:crashes", "about:healthreport", "about:home",
+                           "about:newaddon", "about:permissions", "about:preferences",
+                           "about:privatebrowsing", "about:sessionstore",
+                           "about:support", "about:welcomeback"];
+    let lowercaseSpec = uri.spec.toLowerCase();
+    if (chromeWhitelist.some(function(whitelistedSpec) lowercaseSpec.startsWith(whitelistedSpec))) {
       this.setMode(this.IDENTITY_MODE_CHROMEUI);
     } else if (unknown) {
       this.setMode(this.IDENTITY_MODE_UNKNOWN);
@@ -6749,19 +6611,16 @@ var gIdentityHandler = {
    * Click handler for the identity-box element in primary chrome.
    */
   handleIdentityButtonEvent : function(event) {
-    TelemetryStopwatch.start("FX_IDENTITY_POPUP_OPEN_MS");
     event.stopPropagation();
 
     if ((event.type == "click" && event.button != 0) ||
         (event.type == "keypress" && event.charCode != KeyEvent.DOM_VK_SPACE &&
          event.keyCode != KeyEvent.DOM_VK_RETURN)) {
-      TelemetryStopwatch.cancel("FX_IDENTITY_POPUP_OPEN_MS");
       return; // Left click, space or enter only
     }
 
     // Don't allow left click, space or enter if the location has been modified.
     if (gURLBar.getAttribute("pageproxystate") != "valid") {
-      TelemetryStopwatch.cancel("FX_IDENTITY_POPUP_OPEN_MS");
       return;
     }
 
@@ -6787,8 +6646,6 @@ var gIdentityHandler = {
   },
 
   onPopupShown : function(event) {
-    TelemetryStopwatch.finish("FX_IDENTITY_POPUP_OPEN_MS");
-
     document.getElementById('identity-popup-more-info-button').focus();
 
     this._identityPopup.addEventListener("blur", this, true);
@@ -6915,12 +6772,6 @@ let gPrivateBrowsingUI = {
     document.getElementById("Tools:Sanitize").setAttribute("disabled", "true");
 
     if (window.location.href == getBrowserURL()) {
-#ifdef XP_MACOSX
-      if (!PrivateBrowsingUtils.permanentPrivateBrowsing) {
-        document.documentElement.setAttribute("drawintitlebar", true);
-      }
-#endif
-
       // Adjust the window's title
       let docElement = document.documentElement;
       if (!PrivateBrowsingUtils.permanentPrivateBrowsing) {
@@ -6937,7 +6788,6 @@ let gPrivateBrowsingUI = {
         // Adjust the New Window menu entries
         [
           { normal: "menu_newNavigator", private: "menu_newPrivateWindow" },
-          { normal: "appmenu_newNavigator", private: "appmenu_newPrivateWindow" },
         ].forEach(function(menu) {
           let newWindow = document.getElementById(menu.normal);
           let newPrivateWindow = document.getElementById(menu.private);
@@ -7028,6 +6878,26 @@ function switchToTabHavingURI(aURI, aOpenNew) {
 
   return false;
 }
+
+let RestoreLastSessionObserver = {
+  init: function () {
+    if (SessionStore.canRestoreLastSession &&
+        !PrivateBrowsingUtils.isWindowPrivate(window)) {
+      Services.obs.addObserver(this, "sessionstore-last-session-cleared", true);
+      goSetCommandEnabled("Browser:RestoreLastSession", true);
+    }
+  },
+
+  observe: function () {
+    // The last session can only be restored once so there's
+    // no way we need to re-enable our menu item.
+    Services.obs.removeObserver(this, "sessionstore-last-session-cleared");
+    goSetCommandEnabled("Browser:RestoreLastSession", false);
+  },
+
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
+                                         Ci.nsISupportsWeakReference])
+};
 
 function restoreLastSession() {
   SessionStore.restoreLastSession();
@@ -7123,7 +6993,14 @@ function safeModeRestart()
   let rv = Services.prompt.confirmEx(window, promptTitle, promptMessage,
                                      buttonFlags, restartText, null, null,
                                      null, {});
-  if (rv == 0) {
+  if (rv != 0)
+    return;
+
+  let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
+                     .createInstance(Ci.nsISupportsPRBool);
+  Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
+
+  if (!cancelQuit.data) {
     Services.startup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit);
   }
 }
@@ -7153,11 +7030,6 @@ function duplicateTabIn(aTab, where, delta) {
       gBrowser.selectedTab = newTab;
       break;
   }
-}
-
-function toggleAddonBar() {
-  let addonBar = document.getElementById("addon-bar");
-  setToolbarVisibility(addonBar, addonBar.collapsed);
 }
 
 var Scratchpad = {

@@ -89,6 +89,11 @@ extern bool gBluetoothDebugFlag;
  */
 #define PAIRED_STATUS_CHANGED_ID             "pairedstatuschanged"
 
+ /**
+ * This event would be fired when discovery procedure starts or stops.
+ */
+#define DISCOVERY_STATE_CHANGED_ID           "discoverystatechanged"
+
 /**
  * When receiving a query about current play status from remote device, we'll
  * dispatch an event.
@@ -98,6 +103,7 @@ extern bool gBluetoothDebugFlag;
 // Bluetooth address format: xx:xx:xx:xx:xx:xx (or xx_xx_xx_xx_xx_xx)
 #define BLUETOOTH_ADDRESS_LENGTH 17
 #define BLUETOOTH_ADDRESS_NONE   "00:00:00:00:00:00"
+#define BLUETOOTH_ADDRESS_BYTES  6
 
 BEGIN_BLUETOOTH_NAMESPACE
 

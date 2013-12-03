@@ -104,14 +104,14 @@ public:
 
       // I don't think this is actually necessary, but it can't hurt.
       FlushInstructionCache(GetCurrentProcess(),
-                            /* ignored */ NULL,
+                            /* ignored */ nullptr,
                             /* ignored */ 0);
     }
   }
 
   void Init(const char *modulename)
   {
-    mModule = LoadLibraryExA(modulename, NULL, 0);
+    mModule = LoadLibraryExA(modulename, nullptr, 0);
     if (!mModule) {
       //printf("LoadLibraryEx for '%s' failed\n", modulename);
       return;
@@ -194,7 +194,7 @@ public:
 
     // I think this routine is safe without this, but it can't hurt.
     FlushInstructionCache(GetCurrentProcess(),
-                          /* ignored */ NULL,
+                          /* ignored */ nullptr,
                           /* ignored */ 0);
 
     return true;
@@ -256,7 +256,7 @@ public:
     if (mModule)
       return;
 
-    mModule = LoadLibraryExA(modulename, NULL, 0);
+    mModule = LoadLibraryExA(modulename, nullptr, 0);
     if (!mModule) {
       //printf("LoadLibraryEx for '%s' failed\n", modulename);
       return;
@@ -268,7 +268,8 @@ public:
 
     mMaxHooks = nhooks + (hooksPerPage % nhooks);
 
-    mHookPage = (byteptr_t) VirtualAllocEx(GetCurrentProcess(), NULL, mMaxHooks * kHookSize,
+    mHookPage = (byteptr_t) VirtualAllocEx(GetCurrentProcess(), nullptr,
+             mMaxHooks * kHookSize,
              MEM_COMMIT | MEM_RESERVE,
              PAGE_EXECUTE_READWRITE);
 
@@ -327,7 +328,7 @@ protected:
                         intptr_t dest,
                         void **outTramp)
   {
-    *outTramp = NULL;
+    *outTramp = nullptr;
 
     byteptr_t tramp = FindTrampolineSpace();
     if (!tramp)
@@ -480,8 +481,10 @@ protected:
           }
         } else if (origBytes[nBytes] == 0xc7) {
           // MOV r/m64, imm32
-          if ((origBytes[nBytes + 1] & 0xf8) == 0x40) {
-            nBytes += 6;
+          if (origBytes[nBytes + 1] == 0x44) {
+            // MOV [r64+disp8], imm32
+            // ModR/W + SIB + disp8 + imm32
+            nBytes += 8;
           } else {
             return;
           }
@@ -642,7 +645,7 @@ class WindowsDllInterceptor
 
 public:
   WindowsDllInterceptor()
-    : mModuleName(NULL)
+    : mModuleName(nullptr)
     , mNHooks(0)
   {}
 

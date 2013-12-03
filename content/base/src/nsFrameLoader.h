@@ -103,7 +103,7 @@ public:
     float mYScale;
   };
 
-  nsContentView(nsFrameLoader* aFrameLoader, ViewID aScrollId,
+  nsContentView(nsFrameLoader* aFrameLoader, ViewID aScrollId, bool aIsRoot,
                 ViewConfig aConfig = ViewConfig())
     : mViewportSize(0, 0)
     , mContentSize(0, 0)
@@ -111,10 +111,14 @@ public:
     , mParentScaleY(1.0)
     , mFrameLoader(aFrameLoader)
     , mScrollId(aScrollId)
+    , mIsRoot(aIsRoot)
     , mConfig(aConfig)
   {}
 
-  bool IsRoot() const;
+  bool IsRoot() const
+  {
+    return mIsRoot;
+  }
 
   ViewID GetId() const
   {
@@ -137,6 +141,7 @@ private:
   nsresult Update(const ViewConfig& aConfig);
 
   ViewID mScrollId;
+  bool mIsRoot;
   ViewConfig mConfig;
 };
 
@@ -184,7 +189,8 @@ public:
   virtual bool DoSendAsyncMessage(JSContext* aCx,
                                   const nsAString& aMessage,
                                   const mozilla::dom::StructuredCloneData& aData,
-                                  JS::Handle<JSObject *> aCpows);
+                                  JS::Handle<JSObject *> aCpows,
+                                  nsIPrincipal* aPrincipal) MOZ_OVERRIDE;
   virtual bool CheckPermission(const nsAString& aPermission) MOZ_OVERRIDE;
   virtual bool CheckManifestURL(const nsAString& aManifestURL) MOZ_OVERRIDE;
   virtual bool CheckAppHasPermission(const nsAString& aPermission) MOZ_OVERRIDE;
@@ -310,6 +316,8 @@ public:
    */
   void ApplySandboxFlags(uint32_t sandboxFlags);
 
+  void GetURL(nsString& aURL);
+
 private:
 
   void SetOwnerContent(mozilla::dom::Element* aContent);
@@ -358,7 +366,6 @@ private:
    */
   nsresult MaybeCreateDocShell();
   nsresult EnsureMessageManager();
-  NS_HIDDEN_(void) GetURL(nsString& aURL);
 
   // Properly retrieves documentSize of any subdocument type.
   nsresult GetWindowDimensions(nsRect& aRect);

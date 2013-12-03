@@ -48,11 +48,14 @@ class MacroAssemblerARM : public Assembler
     void convertBoolToInt32(Register source, Register dest);
     void convertInt32ToDouble(const Register &src, const FloatRegister &dest);
     void convertInt32ToDouble(const Address &src, FloatRegister dest);
+    void convertUInt32ToFloat32(const Register &src, const FloatRegister &dest);
     void convertUInt32ToDouble(const Register &src, const FloatRegister &dest);
     void convertDoubleToFloat(const FloatRegister &src, const FloatRegister &dest);
     void branchTruncateDouble(const FloatRegister &src, const Register &dest, Label *fail);
     void convertDoubleToInt32(const FloatRegister &src, const Register &dest, Label *fail,
                               bool negativeZeroCheck = true);
+    void convertFloat32ToInt32(const FloatRegister &src, const Register &dest, Label *fail,
+                               bool negativeZeroCheck = true);
 
     void convertFloatToDouble(const FloatRegister &src, const FloatRegister &dest);
     void branchTruncateFloat32(const FloatRegister &src, const Register &dest, Label *fail);
@@ -86,9 +89,9 @@ class MacroAssemblerARM : public Assembler
                 SetCond_ sc = NoSetCond, Condition c = Always);
     void ma_nop();
     void ma_movPatchable(Imm32 imm, Register dest, Assembler::Condition c,
-                         RelocStyle rs, Instruction *i = NULL);
+                         RelocStyle rs, Instruction *i = nullptr);
     void ma_movPatchable(ImmPtr imm, Register dest, Assembler::Condition c,
-                         RelocStyle rs, Instruction *i = NULL);
+                         RelocStyle rs, Instruction *i = nullptr);
     // These should likely be wrapped up as a set of macros
     // or something like that.  I cannot think of a good reason
     // to explicitly have all of this code.
@@ -315,14 +318,18 @@ class MacroAssemblerARM : public Assembler
     void ma_vneg(FloatRegister src, FloatRegister dest, Condition cc = Always);
     void ma_vmov(FloatRegister src, FloatRegister dest, Condition cc = Always);
     void ma_vabs(FloatRegister src, FloatRegister dest, Condition cc = Always);
+    void ma_vabs_f32(FloatRegister src, FloatRegister dest, Condition cc = Always);
 
     void ma_vsqrt(FloatRegister src, FloatRegister dest, Condition cc = Always);
+    void ma_vsqrt_f32(FloatRegister src, FloatRegister dest, Condition cc = Always);
 
     void ma_vimm(double value, FloatRegister dest, Condition cc = Always);
     void ma_vimm_f32(float value, FloatRegister dest, Condition cc = Always);
 
     void ma_vcmp(FloatRegister src1, FloatRegister src2, Condition cc = Always);
+    void ma_vcmp_f32(FloatRegister src1, FloatRegister src2, Condition cc = Always);
     void ma_vcmpz(FloatRegister src1, Condition cc = Always);
+    void ma_vcmpz_f32(FloatRegister src1, Condition cc = Always);
 
     void ma_vadd_f32(FloatRegister src1, FloatRegister src2, FloatRegister dst);
     void ma_vsub_f32(FloatRegister src1, FloatRegister src2, FloatRegister dst);
@@ -482,7 +489,8 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
 
     enum Result {
         GENERAL,
-        DOUBLE
+        DOUBLE,
+        FLOAT
     };
 
     MacroAssemblerARMCompat()
@@ -511,9 +519,6 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
 
     void mov(Register src, Register dest) {
         ma_mov(src, dest);
-    }
-    void mov(Imm32 imm, Register dest) {
-        ma_mov(imm, dest);
     }
     void mov(ImmWord imm, Register dest) {
         ma_mov(Imm32(imm.value), dest);
@@ -605,6 +610,9 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void push(const Register &reg) {
         ma_push(reg);
     }
+    void push(const FloatRegister &reg) {
+        ma_vpush(VFPRegister(reg));
+    }
     void pushWithPadding(const Register &reg, const Imm32 extraSpace) {
         Imm32 totSpace = Imm32(extraSpace.value + 4);
         ma_dtr(IsStore, sp, totSpace, reg, PreIndex);
@@ -619,6 +627,9 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
 
     void pop(const Register &reg) {
         ma_pop(reg);
+    }
+    void pop(const FloatRegister &reg) {
+        ma_vpop(VFPRegister(reg));
     }
 
     void popN(const Register &reg, Imm32 extraSpace) {
@@ -717,6 +728,12 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     Condition testMagic(Condition cond, const Address &address);
     Condition testInt32(Condition cond, const Address &address);
     Condition testDouble(Condition cond, const Address &address);
+    Condition testBoolean(Condition cond, const Address &address);
+    Condition testNull(Condition cond, const Address &address);
+    Condition testUndefined(Condition cond, const Address &address);
+    Condition testString(Condition cond, const Address &address);
+    Condition testObject(Condition cond, const Address &address);
+    Condition testNumber(Condition cond, const Address &address);
 
     Condition testUndefined(Condition cond, const BaseIndex &src);
     Condition testNull(Condition cond, const BaseIndex &src);
@@ -1191,7 +1208,6 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     // Builds an exit frame on the stack, with a return address to an internal
     // non-function. Returns offset to be passed to markSafepointAt().
     bool buildFakeExitFrame(const Register &scratch, uint32_t *offset);
-    bool buildOOLFakeExitFrame(void *fakeReturnAddr);
 
     void callWithExitFrame(IonCode *target);
     void callWithExitFrame(IonCode *target, Register dynStack);
@@ -1399,6 +1415,9 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void passABIArg(const FloatRegister &reg);
     void passABIArg(const ValueOperand &regs);
 
+  protected:
+    bool buildOOLFakeExitFrame(void *fakeReturnAddr);
+
   private:
     void callWithABIPre(uint32_t *stackAdjust);
     void callWithABIPost(uint32_t stackAdjust, Result result);
@@ -1422,6 +1441,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
             ma_add(dest, Imm32(address.offset), dest, NoSetCond);
     }
     void floor(FloatRegister input, Register output, Label *handleNotAnInt);
+    void floorf(FloatRegister input, Register output, Label *handleNotAnInt);
     void round(FloatRegister input, Register output, Label *handleNotAnInt, FloatRegister tmp);
 
     void clampCheck(Register r, Label *handleNotAnInt) {

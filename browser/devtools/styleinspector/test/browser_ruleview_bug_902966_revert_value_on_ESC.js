@@ -20,7 +20,7 @@ let originalValue = "#00F";
 // }
 let testData = [
   {value: "red", commitKey: "VK_ESCAPE", modifiers: {}, expected: originalValue},
-  {value: "red", commitKey: "VK_RETURN", modifiers: {}, expected: "red"},
+  {value: "red", commitKey: "VK_RETURN", modifiers: {}, expected: "#F00"},
   {value: "blue", commitKey: "VK_TAB", modifiers: {shiftKey: true}, expected: "blue"}
 ];
 
@@ -61,7 +61,7 @@ function runTestData(index)
     }
     EventUtils.synthesizeKey(testData[index].commitKey, testData[index].modifiers);
 
-    is(propEditor.valueSpan.innerHTML, testData[index].expected);
+    is(propEditor.valueSpan.textContent, testData[index].expected);
 
     runTestData(index + 1);
   });

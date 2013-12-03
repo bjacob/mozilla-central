@@ -34,6 +34,7 @@
 #include "nsISettingsService.h"
 #include "nsISystemMessagesInternal.h"
 #include "nsITimer.h"
+#include "nsServiceManagerUtils.h"
 #include "nsThreadUtils.h"
 #include "nsXPCOM.h"
 
@@ -42,13 +43,28 @@
 #endif
 
 #if defined(MOZ_B2G_BT)
-# if defined(MOZ_BLUETOOTH_GONK)
-#  include "BluetoothGonkService.h"
-# elif defined(MOZ_BLUETOOTH_DBUS)
-#  include "BluetoothDBusService.h"
-# else
-#  error No_suitable_backend_for_bluetooth!
-# endif
+#if defined(MOZ_B2G_BT_BLUEZ)
+/**
+ * B2G blueZ:
+ *   MOZ_B2G_BT and MOZ_B2G_BT_BLUEZ are both defined.
+ */
+#include "BluetoothGonkService.h"
+#elif defined(MOZ_B2G_BT_BLUEDROID)
+/**
+ * B2G bluedroid:
+ *   MOZ_B2G_BT and MOZ_B2G_BT_BLUEDROID are both defined;
+ *   MOZ_B2G_BLUEZ is not defined.
+ */
+#include "BluetoothServiceBluedroid.h"
+#endif
+#elif defined(MOZ_BLUETOOTH_DBUS)
+/**
+ * Desktop bluetooth:
+ *   MOZ_B2G_BT is not defined; MOZ_BLUETOOTH_DBUS is defined.
+ */
+#include "BluetoothDBusService.h"
+#else
+#error No backend
 #endif
 
 #define MOZSETTINGS_CHANGED_ID      "mozsettings-changed"
@@ -130,28 +146,26 @@ public:
   {
     MOZ_ASSERT(NS_IsMainThread());
 
-    if (!gBluetoothService) {
-      return NS_OK;
-    }
-
-    if (!gInShutdown) {
-      gBluetoothService->SetEnabled(mEnabled);
-
-      nsAutoString signalName, signalPath;
-      BluetoothValue v = true;
-      if (mEnabled) {
-        signalName = NS_LITERAL_STRING("Enabled");
-      } else {
-        signalName = NS_LITERAL_STRING("Disabled");
-      }
-      signalPath = NS_LITERAL_STRING(KEY_MANAGER);
-      BluetoothSignal signal(signalName, signalPath, v);
-      gBluetoothService->DistributeSignal(signal);
-    }
+    NS_ENSURE_TRUE(gBluetoothService, NS_OK);
 
     if (gInShutdown) {
       gBluetoothService = nullptr;
+      return NS_OK;
     }
+
+    // Update mEnabled of BluetoothService object since
+    // StartInternal/StopInternal have been already done.
+    gBluetoothService->SetEnabled(mEnabled);
+    gToggleInProgress = false;
+
+    nsAutoString signalName;
+    signalName = mEnabled ? NS_LITERAL_STRING("Enabled")
+                          : NS_LITERAL_STRING("Disabled");
+    BluetoothSignal signal(signalName, NS_LITERAL_STRING(KEY_MANAGER), true);
+    gBluetoothService->DistributeSignal(signal);
+
+    // Event 'AdapterAdded' has to be fired after firing 'Enabled'
+    gBluetoothService->TryFiringAdapterAdded();
 
     return NS_OK;
   }
@@ -300,13 +314,16 @@ BluetoothService::Create()
   if (!IsMainProcess()) {
     return BluetoothServiceChildProcess::Create();
   }
-#endif
 
-#if defined(MOZ_BLUETOOTH_GONK)
+#if defined(MOZ_B2G_BT_BLUEZ)
   return new BluetoothGonkService();
+#elif defined(MOZ_B2G_BT_BLUEDROID)
+  return new BluetoothServiceBluedroid();
+#endif
 #elif defined(MOZ_BLUETOOTH_DBUS)
   return new BluetoothDBusService();
 #endif
+
   BT_WARNING("No platform support for bluetooth!");
   return nullptr;
 }
@@ -494,6 +511,8 @@ BluetoothService::StartStopBluetooth(bool aStart, bool aIsStartup)
                                           LazyIdleThread::ManualShutdown);
   }
 
+  mAdapterAddedReceived = false;
+
   nsCOMPtr<nsIRunnable> runnable = new ToggleBtTask(aStart, aIsStartup);
   nsresult rv = mBluetoothThread->Dispatch(runnable, NS_DISPATCH_NORMAL);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -534,8 +553,6 @@ BluetoothService::SetEnabled(bool aEnabled)
   }
 
   mEnabled = aEnabled;
-
-  gToggleInProgress = false;
 }
 
 nsresult
@@ -772,6 +789,28 @@ BluetoothService::Observe(nsISupports* aSubject, const char* aTopic,
 
   MOZ_ASSERT(false, "BluetoothService got unexpected topic!");
   return NS_ERROR_UNEXPECTED;
+}
+
+void
+BluetoothService::TryFiringAdapterAdded()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (IsToggling() || !mAdapterAddedReceived) {
+    return;
+  }
+
+  BluetoothSignal signal(NS_LITERAL_STRING("AdapterAdded"),
+                         NS_LITERAL_STRING(KEY_MANAGER), true);
+  DistributeSignal(signal);
+}
+
+void
+BluetoothService::AdapterAddedReceived()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  mAdapterAddedReceived = true;
 }
 
 void

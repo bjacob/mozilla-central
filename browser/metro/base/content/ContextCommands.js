@@ -170,8 +170,8 @@ var ContextCommands = {
   // Link specific
 
   openLinkInNewTab: function cc_openLinkInNewTab() {
-    Browser.addTab(ContextMenuUI.popupState.linkURL, false, Browser.selectedTab);
-    ContextUI.peekTabs(kOpenInNewTabAnimationDelayMsec);
+    let url = ContextMenuUI.popupState.linkURL;
+    BrowserUI.openLinkInNewTab(url, false, Browser.selectedTab);
   },
 
   copyLink: function cc_copyLink() {
@@ -257,6 +257,39 @@ var ContextCommands = {
 
   viewOnDesktop: function cc_viewOnDesktop() {
     Appbar.onViewOnDesktop();
+  },
+
+  // Checks for MS app store specific meta data, and if present opens
+  // the Windows Store to the appropriate app
+  openWindowsStoreLink: function cc_openWindowsStoreLink() {
+    let storeLink = this.getStoreLink();
+    if (storeLink) {
+      Browser.selectedBrowser.contentWindow.document.location = storeLink;
+    }
+  },
+
+  getStoreLink: function cc_getStoreLink() {
+    let metaData = Browser.selectedBrowser.contentWindow.document.getElementsByTagName("meta");
+    let msApplicationName = metaData.namedItem("msApplication-PackageFamilyName");
+    if (msApplicationName) {
+      return "ms-windows-store:PDP?PFN=" + msApplicationName.getAttribute("content");
+    }
+    return null;
+  },
+
+  getPageSource: function cc_getPageSource() {
+    let uri = Services.io.newURI(Browser.selectedBrowser.currentURI.spec, null, null);
+    if (!uri.schemeIs("view-source")) {
+      return "view-source:" + Browser.selectedBrowser.currentURI.spec;
+    }
+    return null;
+  },
+
+  viewPageSource: function cc_viewPageSource() {
+    let uri = this.getPageSource();
+    if (uri) {
+      BrowserUI.addAndShowTab(uri);
+    }
   },
 
   /*
@@ -349,20 +382,23 @@ var ContextCommands = {
     picker.appendFilters(Ci.nsIFilePicker.filterImages);
 
     // prefered save location
-    var dnldMgr = Cc["@mozilla.org/download-manager;1"].getService(Ci.nsIDownloadManager);
-    picker.displayDirectory = dnldMgr.userDownloadsDirectory;
-    try {
-      let lastDir = Services.prefs.getComplexValue("browser.download.lastDir", Ci.nsILocalFile);
-      if (this.isAccessibleDirectory(lastDir))
-        picker.displayDirectory = lastDir;
-    }
-    catch (e) { }
+    Task.spawn(function() {
+      let preferredDir = yield Downloads.getPreferredDownloadsDirectory();
+      picker.displayDirectory = new FileUtils.File(preferredDir);
 
-    this._picker = picker;
-    this._pickerUrl = mediaURL;
-    this._pickerContentDisp = aPopupState.contentDisposition;
-    this._contentType = aPopupState.contentType;
-    picker.open(ContextCommands);
+      try {
+        let lastDir = Services.prefs.getComplexValue("browser.download.lastDir", Ci.nsILocalFile);
+        if (this.isAccessibleDirectory(lastDir))
+          picker.displayDirectory = lastDir;
+      }
+      catch (e) { }
+
+      this._picker = picker;
+      this._pickerUrl = mediaURL;
+      this._pickerContentDisp = aPopupState.contentDisposition;
+      this._contentType = aPopupState.contentType;
+      picker.open(ContextCommands);
+    }.bind(this));
   },
 
   /*

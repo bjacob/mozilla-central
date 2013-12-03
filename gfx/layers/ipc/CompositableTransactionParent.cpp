@@ -36,6 +36,17 @@ CompositableHost* AsCompositable(const T& op)
   return static_cast<CompositableParent*>(op.compositableParent())->GetCompositableHost();
 }
 
+// This function can in some cases fail and return false without it being a bug.
+// This can theoretically happen if the ImageBridge sends frames before
+// we created the layer tree. Since we can't enforce that the layer
+// tree is already created before ImageBridge operates, there isn't much
+// we can do about it, but in practice it is very rare.
+// Typically when a tab with a video is dragged from a window to another,
+// there can be a short time when the video is still sending frames
+// asynchonously while the layer tree is not reconstructed. It's not a
+// big deal.
+// Note that Layers transactions do not need to call this because they always
+// schedule the composition, in LayerManagerComposite::EndTransaction.
 template<typename T>
 bool ScheduleComposition(const T& op)
 {
@@ -87,7 +98,7 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
       MOZ_LAYERS_LOG(("[ParentSide] Created double buffer"));
       const OpDestroyThebesBuffer& op = aEdit.get_OpDestroyThebesBuffer();
       CompositableParent* compositableParent = static_cast<CompositableParent*>(op.compositableParent());
-      ContentHostBase* content = static_cast<ContentHostBase*>(compositableParent->GetCompositableHost());
+      DeprecatedContentHostBase* content = static_cast<DeprecatedContentHostBase*>(compositableParent->GetCompositableHost());
       content->DestroyTextures();
 
       break;
@@ -133,7 +144,7 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
                                          op.textureId(), newBack));
         }
 
-        if (shouldRecomposite) {
+        if (IsAsync() && shouldRecomposite) {
           ScheduleComposition(op);
         }
       }
@@ -221,8 +232,8 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
       MOZ_ASSERT(tex.get());
       compositable->UseTextureHost(tex);
 
-      if (!ScheduleComposition(op)) {
-        NS_WARNING("could not find a compositor to schedule composition");
+      if (IsAsync()) {
+        ScheduleComposition(op);
       }
       break;
     }
@@ -239,7 +250,7 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
                                                     op.textureFlags());
       MOZ_ASSERT(tex.get());
       tex->SetCompositor(compositable->GetCompositor());
-      // set CompositableQuirks
+      // set CompositableBackendSpecificData
       // on gonk, create EGLImage if possible.
       // create EGLImage during buffer swap could reduce the graphic driver's task
       // during rendering.
@@ -260,16 +271,17 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
 
       TextureFlags flags = texture->GetFlags();
 
-      if (flags & TEXTURE_DEALLOCATE_HOST) {
+      if (!(flags & TEXTURE_DEALLOCATE_CLIENT) &&
+          !(flags & TEXTURE_DEALLOCATE_DEFERRED)) {
         texture->DeallocateSharedData();
       }
 
-      compositable->RemoveTextureHost(op.textureID());
+      compositable->RemoveTextureHost(texture);
 
       // if it is not the host that deallocates the shared data, then we need
       // to notfy the client side to tell when it is safe to deallocate or
       // reuse it.
-      if (!(flags & TEXTURE_DEALLOCATE_HOST)) {
+      if (flags & TEXTURE_DEALLOCATE_CLIENT) {
         replyv.push_back(ReplyTextureRemoved(op.compositableParent(), nullptr,
                                              op.textureID()));
       }

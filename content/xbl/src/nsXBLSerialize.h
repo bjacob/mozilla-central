@@ -15,7 +15,7 @@ typedef uint8_t XBLBindingSerializeDetails;
 
 // A version number to ensure we don't load cached data in a different
 // file format.
-#define XBLBinding_Serialize_Version 0x00000002
+#define XBLBinding_Serialize_Version 0x00000003
 
 // Set for the first binding in a document
 #define XBLBinding_Serialize_IsFirstBinding 1
@@ -45,6 +45,7 @@ typedef uint8_t XBLBindingSerializeDetails;
 #define XBLBinding_Serialize_Handler 8
 #define XBLBinding_Serialize_Image 9
 #define XBLBinding_Serialize_Stylesheet 10
+#define XBLBinding_Serialize_Attribute 0xA
 #define XBLBinding_Serialize_Mask 0x0F
 #define XBLBinding_Serialize_ReadOnly 0x80
 
@@ -72,7 +73,8 @@ typedef uint8_t XBLBindingSerializeDetails;
 // are no more attributes.
 #define XBLBinding_Serialize_NoMoreAttributes 0xFF
 
-PR_STATIC_ASSERT(XBLBinding_Serialize_CustomNamespace >= kNameSpaceID_LastBuiltin);
+static_assert(XBLBinding_Serialize_CustomNamespace >= kNameSpaceID_LastBuiltin,
+              "The custom namespace should not be in use as a real namespace");
 
 nsresult
 XBL_SerializeFunction(nsIObjectOutputStream* aStream,

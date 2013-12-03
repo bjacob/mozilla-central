@@ -13,8 +13,8 @@
 
 #include "assembler/jit/ExecutableAllocator.h"
 #include "jit/IonCode.h"
-#include "jit/IonCompartment.h"
 #include "jit/IonMacroAssembler.h"
+#include "jit/JitCompartment.h"
 
 namespace js {
 namespace jit {
@@ -25,9 +25,10 @@ class Linker
 
     IonCode *fail(JSContext *cx) {
         js_ReportOutOfMemory(cx);
-        return NULL;
+        return nullptr;
     }
 
+    template <AllowGC allowGC>
     IonCode *newCode(JSContext *cx, JSC::ExecutableAllocator *execAlloc, JSC::CodeKind kind) {
         JS_ASSERT(kind == JSC::ION_CODE ||
                   kind == JSC::BASELINE_CODE ||
@@ -53,10 +54,10 @@ class Linker
         // Bump the code up to a nice alignment.
         codeStart = (uint8_t *)AlignBytes((uintptr_t)codeStart, CodeAlignment);
         uint32_t headerSize = codeStart - result;
-        IonCode *code = IonCode::New(cx, codeStart,
-                                     bytesNeeded - headerSize, pool);
+        IonCode *code = IonCode::New<allowGC>(cx, codeStart,
+                                              bytesNeeded - headerSize, pool);
         if (!code)
-            return NULL;
+            return nullptr;
         if (masm.oom())
             return fail(cx);
         code->copyFrom(masm);
@@ -75,24 +76,25 @@ class Linker
         masm.finish();
     }
 
+    template <AllowGC allowGC>
     IonCode *newCode(JSContext *cx, JSC::CodeKind kind) {
-        return newCode(cx, cx->compartment()->ionCompartment()->execAlloc(), kind);
+        return newCode<allowGC>(cx, cx->compartment()->jitCompartment()->execAlloc(), kind);
     }
 
     IonCode *newCodeForIonScript(JSContext *cx) {
 #ifdef JS_CPU_ARM
         // ARM does not yet use implicit interrupt checks, see bug 864220.
-        return newCode(cx, JSC::ION_CODE);
+        return newCode<CanGC>(cx, JSC::ION_CODE);
 #else
         // The caller must lock the runtime against operation callback triggers,
         // as the triggering thread may use the executable allocator below.
         JS_ASSERT(cx->runtime()->currentThreadOwnsOperationCallbackLock());
 
-        JSC::ExecutableAllocator *alloc = cx->runtime()->ionRuntime()->getIonAlloc(cx);
+        JSC::ExecutableAllocator *alloc = cx->runtime()->jitRuntime()->getIonAlloc(cx);
         if (!alloc)
-            return NULL;
+            return nullptr;
 
-        return newCode(cx, alloc, JSC::ION_CODE);
+        return newCode<CanGC>(cx, alloc, JSC::ION_CODE);
 #endif
     }
 };

@@ -211,22 +211,6 @@ nsAccUtils::GetARIAToken(dom::Element* aElement, nsIAtom* aAttr)
 }
 
 Accessible*
-nsAccUtils::GetAncestorWithRole(Accessible* aDescendant, uint32_t aRole)
-{
-  Accessible* document = aDescendant->Document();
-  Accessible* parent = aDescendant;
-  while ((parent = parent->Parent())) {
-    uint32_t testRole = parent->Role();
-    if (testRole == aRole)
-      return parent;
-
-    if (parent == document)
-      break;
-  }
-  return nullptr;
-}
-
-Accessible*
 nsAccUtils::GetSelectableContainer(Accessible* aAccessible, uint64_t aState)
 {
   if (!aAccessible)
@@ -252,32 +236,15 @@ nsAccUtils::IsARIASelected(Accessible* aAccessible)
 }
 
 HyperTextAccessible*
-nsAccUtils::GetTextAccessibleFromSelection(nsISelection* aSelection)
+nsAccUtils::GetTextContainer(nsINode* aNode)
 {
-  // Get accessible from selection's focus DOM point (the DOM point where
-  // selection is ended).
-
-  nsCOMPtr<nsIDOMNode> focusDOMNode;
-  aSelection->GetFocusNode(getter_AddRefs(focusDOMNode));
-  if (!focusDOMNode)
-    return nullptr;
-
-  int32_t focusOffset = 0;
-  aSelection->GetFocusOffset(&focusOffset);
-
-  nsCOMPtr<nsINode> focusNode(do_QueryInterface(focusDOMNode));
-  nsCOMPtr<nsINode> resultNode =
-    nsCoreUtils::GetDOMNodeFromDOMPoint(focusNode, focusOffset);
-
   // Get text accessible containing the result node.
-  DocAccessible* doc = 
-    GetAccService()->GetDocAccessible(resultNode->OwnerDoc());
-  Accessible* accessible = doc ? 
-    doc->GetAccessibleOrContainer(resultNode) : nullptr;
-  if (!accessible) {
-    NS_NOTREACHED("No nsIAccessibleText for selection change event!");
+  DocAccessible* doc =
+    GetAccService()->GetDocAccessible(aNode->OwnerDoc());
+  Accessible* accessible =
+    doc ? doc->GetAccessibleOrContainer(aNode) : nullptr;
+  if (!accessible)
     return nullptr;
-  }
 
   do {
     HyperTextAccessible* textAcc = accessible->AsHyperText();
@@ -287,7 +254,6 @@ nsAccUtils::GetTextAccessibleFromSelection(nsISelection* aSelection)
     accessible = accessible->Parent();
   } while (accessible);
 
-  NS_NOTREACHED("We must reach document accessible implementing nsIAccessibleText!");
   return nullptr;
 }
 

@@ -28,6 +28,7 @@
 #include "nsCSSFrameConstructor.h"
 #include "nsBlockFrame.h"
 #include "mozilla/AutoRestore.h"
+#include "nsIFrameInlines.h"
 #include <algorithm>
 
 #ifdef DEBUG
@@ -992,7 +993,8 @@ nsContainerFrame::PositionChildViews(nsIFrame* aFrame)
   // Recursively walk aFrame's child frames.
   // Process the additional child lists, but skip the popup list as the
   // view for popups is managed by the parent. Currently only nsMenuFrame
-  // has a popupList and during layout will call nsMenuPopupFrame::AdjustView.
+  // and nsPopupSetFrame have a popupList and during layout will adjust the
+  // view manually to position the popup.
   ChildListIterator lists(aFrame);
   for (; !lists.IsDone(); lists.Next()) {
     if (lists.CurrentID() == kPopupList) {
@@ -1392,10 +1394,7 @@ nsContainerFrame::DeleteNextInFlowChild(nsPresContext* aPresContext,
   }
 
   // Take the next-in-flow out of the parent's child list
-#ifdef DEBUG
-  nsresult rv =
-#endif
-    StealFrame(aPresContext, aNextInFlow);
+  DebugOnly<nsresult> rv = StealFrame(aPresContext, aNextInFlow);
   NS_ASSERTION(NS_SUCCEEDED(rv), "StealFrame failure");
 
 #ifdef DEBUG

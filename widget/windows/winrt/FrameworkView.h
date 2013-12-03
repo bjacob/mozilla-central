@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include "nsGUIEvent.h"
 #include "MetroWidget.h"
 #include "MetroInput.h"
 #include "gfxWindowsPlatform.h"
@@ -151,6 +150,7 @@ protected:
   void UpdateLogicalDPI();
   void FireViewStateObservers();
   void ProcessLaunchArguments();
+  void UpdateBounds();
 
   // Printing and preview
   void CreatePrintControl(IPrintDocumentPackageTarget* aDocPackageTarget, 

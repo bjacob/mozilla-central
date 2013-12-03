@@ -26,11 +26,13 @@ using mozilla::dom::StructuredCloneData;
 using mozilla::dom::StructuredCloneClosure;
 
 bool
-nsInProcessTabChildGlobal::DoSendSyncMessage(JSContext* aCx,
-                                             const nsAString& aMessage,
-                                             const mozilla::dom::StructuredCloneData& aData,
-                                             JS::Handle<JSObject *> aCpows,
-                                             InfallibleTArray<nsString>* aJSONRetVal)
+nsInProcessTabChildGlobal::DoSendBlockingMessage(JSContext* aCx,
+                                                 const nsAString& aMessage,
+                                                 const mozilla::dom::StructuredCloneData& aData,
+                                                 JS::Handle<JSObject *> aCpows,
+                                                 nsIPrincipal* aPrincipal,
+                                                 InfallibleTArray<nsString>* aJSONRetVal,
+                                                 bool aIsSync)
 {
   nsTArray<nsCOMPtr<nsIRunnable> > asyncMessages;
   asyncMessages.SwapElements(mASyncMessages);
@@ -42,7 +44,8 @@ nsInProcessTabChildGlobal::DoSendSyncMessage(JSContext* aCx,
   if (mChromeMessageManager) {
     SameProcessCpowHolder cpows(js::GetRuntime(aCx), aCpows);
     nsRefPtr<nsFrameMessageManager> mm = mChromeMessageManager;
-    mm->ReceiveMessage(mOwner, aMessage, true, &aData, &cpows, aJSONRetVal);
+    mm->ReceiveMessage(mOwner, aMessage, true, &aData, &cpows, aPrincipal,
+                       aJSONRetVal);
   }
   return true;
 }
@@ -54,11 +57,13 @@ public:
                          nsInProcessTabChildGlobal* aTabChild,
                          const nsAString& aMessage,
                          const StructuredCloneData& aData,
-                         JS::Handle<JSObject *> aCpows)
+                         JS::Handle<JSObject *> aCpows,
+                         nsIPrincipal* aPrincipal)
     : mRuntime(js::GetRuntime(aCx)),
       mTabChild(aTabChild),
       mMessage(aMessage),
       mCpows(aCpows),
+      mPrincipal(aPrincipal),
       mRun(false)
   {
     if (aData.mDataLength && !mData.copy(aData.mData, aData.mDataLength)) {
@@ -94,7 +99,8 @@ public:
       SameProcessCpowHolder cpows(mRuntime, JS::Handle<JSObject *>::fromMarkedLocation(&mCpows));
 
       nsRefPtr<nsFrameMessageManager> mm = mTabChild->mChromeMessageManager;
-      mm->ReceiveMessage(mTabChild->mOwner, mMessage, false, &data, &cpows, nullptr);
+      mm->ReceiveMessage(mTabChild->mOwner, mMessage, false, &data, &cpows,
+                         mPrincipal, nullptr);
     }
     return NS_OK;
   }
@@ -104,6 +110,7 @@ public:
   JSAutoStructuredCloneBuffer mData;
   StructuredCloneClosure mClosure;
   JSObject* mCpows;
+  nsCOMPtr<nsIPrincipal> mPrincipal;
   // True if this runnable has already been called. This can happen if DoSendSyncMessage
   // is called while waiting for an asynchronous message send.
   bool mRun;
@@ -113,10 +120,11 @@ bool
 nsInProcessTabChildGlobal::DoSendAsyncMessage(JSContext* aCx,
                                               const nsAString& aMessage,
                                               const StructuredCloneData& aData,
-                                              JS::Handle<JSObject *> aCpows)
+                                              JS::Handle<JSObject *> aCpows,
+                                              nsIPrincipal* aPrincipal)
 {
   nsCOMPtr<nsIRunnable> ev =
-    new nsAsyncMessageToParent(aCx, this, aMessage, aData, aCpows);
+    new nsAsyncMessageToParent(aCx, this, aMessage, aData, aCpows, aPrincipal);
   mASyncMessages.AppendElement(ev);
   NS_DispatchToCurrentThread(ev);
   return true;

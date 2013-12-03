@@ -9,11 +9,12 @@
 const {Cc, Ci, Cu} = require("chrome");
 const promise = require("sdk/core/promise");
 
-let {CssLogic} = require("devtools/styleinspector/css-logic");
-let {InplaceEditor, editableField, editableItem} = require("devtools/shared/inplace-editor");
-let {ELEMENT_STYLE, PSEUDO_ELEMENTS} = require("devtools/server/actors/styles");
-let {colorUtils} = require("devtools/css-color");
-let {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
+const {CssLogic} = require("devtools/styleinspector/css-logic");
+const {InplaceEditor, editableField, editableItem} = require("devtools/shared/inplace-editor");
+const {ELEMENT_STYLE, PSEUDO_ELEMENTS} = require("devtools/server/actors/styles");
+const {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
+const {Tooltip, SwatchColorPickerTooltip} = require("devtools/shared/widgets/Tooltip");
+const {OutputParser} = require("devtools/output-parser");
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -73,6 +74,7 @@ function createDummyDocument() {
   eventTarget.addEventListener("DOMContentLoaded", function handler(event) {
     eventTarget.removeEventListener("DOMContentLoaded", handler, false);
     deferred.resolve(window.document);
+    frame.remove();
   }, false);
   gDummyPromise = deferred.promise;
   return gDummyPromise;
@@ -585,7 +587,7 @@ Rule.prototype = {
           store.userProperties.setProperty(
             this.style,
             textProp.name,
-            cssProp.value);
+            textProp.value);
         }
         textProp.priority = cssProp.priority;
       }
@@ -598,6 +600,7 @@ Rule.prototype = {
 
       this.elementStyle._changed();
     }).then(null, promiseWarn);
+
     this._applyingModifications = promise;
     return promise;
   },
@@ -675,7 +678,7 @@ Rule.prototype = {
     let props = [];
 
     for (let line of lines) {
-      let [, name, value, priority] = CSS_PROP_RE.exec(line) || []
+      let [, name, value, priority] = CSS_PROP_RE.exec(line) || [];
       if (!name || !value) {
         continue;
       }
@@ -912,7 +915,7 @@ function TextProperty(aRule, aName, aValue, aPriority)
 {
   this.rule = aRule;
   this.name = aName;
-  this.value = colorUtils.processCSSString(aValue);
+  this.value = aValue;
   this.priority = aPriority;
   this.enabled = true;
   this.updateComputed();
@@ -1028,6 +1031,7 @@ TextProperty.prototype = {
  * apply to a given element.  After construction, the 'element'
  * property will be available with the user interface.
  *
+ * @param {Inspector} aInspector
  * @param {Document} aDoc
  *        The document that will contain the rule view.
  * @param {object} aStore
@@ -1038,14 +1042,17 @@ TextProperty.prototype = {
  *        The PageStyleFront for communicating with the remote server.
  * @constructor
  */
-function CssRuleView(aDoc, aStore, aPageStyle)
+function CssRuleView(aInspector, aDoc, aStore, aPageStyle)
 {
+  this.inspector = aInspector;
   this.doc = aDoc;
   this.store = aStore || {};
   this.pageStyle = aPageStyle;
   this.element = this.doc.createElementNS(HTML_NS, "div");
   this.element.className = "ruleview devtools-monospace";
   this.element.flex = 1;
+
+  this._outputParser = new OutputParser();
 
   this._buildContextMenu = this._buildContextMenu.bind(this);
   this._contextMenuUpdate = this._contextMenuUpdate.bind(this);
@@ -1063,6 +1070,15 @@ function CssRuleView(aDoc, aStore, aPageStyle)
     theme: "auto"
   };
   this.popup = new AutocompletePopup(aDoc.defaultView.parent.document, options);
+
+  // Create a tooltip for previewing things in the rule view (images for now)
+  this.previewTooltip = new Tooltip(this.inspector.panelDoc);
+  this.previewTooltip.startTogglingOnHover(this.element,
+    this._buildTooltipContent.bind(this));
+
+  // Also create a more complex tooltip for editing colors with the spectrum
+  // color picker
+  this.colorPicker = new SwatchColorPickerTooltip(this.inspector.panelDoc);
 
   this._buildContextMenu();
   this._showEmpty();
@@ -1102,6 +1118,34 @@ CssRuleView.prototype = {
     }
 
     popupset.appendChild(this._contextmenu);
+  },
+
+  /**
+   * Verify that target is indeed a css value we want a tooltip on, and if yes
+   * prepare some content for the tooltip
+   */
+  _buildTooltipContent: function(target) {
+    let isImageHref = target.classList.contains("theme-link") &&
+      target.parentNode.classList.contains("ruleview-propertyvalue");
+
+    // If the inplace-editor is visible or if this is not a background image
+    // don't show the tooltip
+    if (!isImageHref) {
+      return false;
+    }
+
+    // Retrieve the TextProperty for the hovered element
+    let property = target.parentNode.textProperty;
+    let href = property.rule.domRule.href;
+
+    // Fill some content
+    this.previewTooltip.setCssBackgroundImageContent(property.value, href);
+
+    // Hide the color picker tooltip if shown and revert changes
+    this.colorPicker.revert();
+    this.colorPicker.hide();
+
+    return true;
   },
 
   /**
@@ -1168,7 +1212,9 @@ CssRuleView.prototype = {
         text = target.value.substr(start, count);
       } else {
         let win = this.doc.defaultView;
-        text = win.getSelection().toString();
+        let selection = win.getSelection();
+
+        text = selection.toString();
 
         // Remove any double newlines.
         text = text.replace(/(\r?\n)\r?\n/g, "$1");
@@ -1194,7 +1240,8 @@ CssRuleView.prototype = {
    * Return {bool} true if the rule view currently has an input editor visible.
    */
   get isEditing() {
-    return this.element.querySelectorAll(".styleinspector-propertyeditor").length > 0;
+    return this.element.querySelectorAll(".styleinspector-propertyeditor").length > 0
+      || this.colorPicker.tooltip.isShown();
   },
 
   _handlePrefChange: function(event, data) {
@@ -1209,10 +1256,13 @@ CssRuleView.prototype = {
   {
     this.clear();
 
+    gDummyPromise = null;
     gDevTools.off("pref-changed", this._handlePrefChange);
 
     this.element.removeEventListener("copy", this._onCopy);
     delete this._onCopy;
+
+    delete this._outputParser;
 
     // Remove context menu
     if (this._contextmenu) {
@@ -1232,6 +1282,10 @@ CssRuleView.prototype = {
 
     // We manage the popupNode ourselves so we also need to destroy it.
     this.doc.popupNode = null;
+
+    this.previewTooltip.stopTogglingOnHover(this.element);
+    this.previewTooltip.destroy();
+    this.colorPicker.destroy();
 
     if (this.element.parentNode) {
       this.element.parentNode.removeChild(this.element);
@@ -1283,13 +1337,13 @@ CssRuleView.prototype = {
   {
     // Ignore refreshes during editing or when no element is selected.
     if (this.isEditing || !this._elementStyle) {
-      return promise.resolve(null);
+      return;
     }
 
     this._clearRules();
 
     // Repopulate the element style.
-    return this._populate();
+    this._populate();
   },
 
   _populate: function() {
@@ -1299,7 +1353,6 @@ CssRuleView.prototype = {
         return promise.reject("element changed");
       }
       this._createEditors();
-
 
       // Notify anyone that cares that we refreshed.
       var evt = this.doc.createEvent("Events");
@@ -1567,9 +1620,9 @@ RuleEditor.prototype = {
         let win = this.doc.defaultView;
         win.focus();
 
-        this.ruleView._contextmenu.openPopup(
-          event.target.ownerDocument.documentElement,
-          "overlap", event.clientX, event.clientY, true, false, null);
+        this.ruleView._contextmenu.openPopupAtScreen(
+          event.screenX, event.screenY, true);
+
       } catch(e) {
         console.error(e);
       }
@@ -1748,8 +1801,8 @@ function TextPropertyEditor(aRuleEditor, aProperty)
   this.browserWindow = this.doc.defaultView.top;
   this.removeOnRevert = this.prop.value === "";
 
-  let sheet = this.prop.rule.sheet;
-  let href = sheet ? (sheet.href || sheet.nodeHref) : null;
+  let domRule = this.prop.rule.domRule;
+  let href = domRule ? domRule.href : null;
   if (href) {
     this.sheetURI = IOService.newURI(href, null, null);
   }
@@ -1770,7 +1823,8 @@ TextPropertyEditor.prototype = {
    * Boolean indicating if the name or value is being currently edited.
    */
   get editing() {
-    return !!(this.nameSpan.inplaceEditor || this.valueSpan.inplaceEditor);
+    return !!(this.nameSpan.inplaceEditor || this.valueSpan.inplaceEditor ||
+      this.ruleEditor.ruleView.colorPicker.tooltip.isShown());
   },
 
   /**
@@ -1830,9 +1884,11 @@ TextPropertyEditor.prototype = {
     let propertyContainer = createChild(this.element, "span", {
       class: "ruleview-propertycontainer"
     });
+
     propertyContainer.addEventListener("click", (aEvent) => {
       // Clicks within the value shouldn't propagate any further.
       aEvent.stopPropagation();
+
       if (aEvent.target === propertyContainer) {
         this.valueSpan.click();
       }
@@ -1845,6 +1901,20 @@ TextPropertyEditor.prototype = {
       class: "ruleview-propertyvalue theme-fg-color1",
       tabindex: "0",
     });
+
+    this.valueSpan.addEventListener("click", (event) => {
+      let target = event.target;
+
+      if (target.nodeName === "a") {
+        event.stopPropagation();
+        event.preventDefault();
+        this.browserWindow.openUILinkIn(target.href, "tab");
+      }
+    }, false);
+
+    // Storing the TextProperty on the valuespan for easy access
+    // (for instance by the tooltip)
+    this.valueSpan.textProperty = this.prop;
 
     // Save the initial value as the last committed value,
     // for restoring after pressing escape.
@@ -1939,42 +2009,42 @@ TextPropertyEditor.prototype = {
     if (this.prop.priority) {
       val += " !" + this.prop.priority;
     }
-    // Treat URLs differently than other properties.
-    // Allow the user to click a link to the resource and open it.
-    let resourceURI = this.getResourceURI();
-    if (resourceURI) {
-      this.valueSpan.textContent = "";
-
-      appendText(this.valueSpan, val.split(resourceURI)[0]);
-
-      let a = createChild(this.valueSpan, "a",  {
-        target: "_blank",
-        class: "theme-link",
-        textContent: resourceURI,
-        href: this.resolveURI(resourceURI)
-      });
-
-      a.addEventListener("click", (aEvent) => {
-
-        // Clicks within the link shouldn't trigger editing.
-        aEvent.stopPropagation();
-        aEvent.preventDefault();
-
-        this.browserWindow.openUILinkIn(aEvent.target.href, "tab");
-
-      }, false);
-
-      appendText(this.valueSpan, val.split(resourceURI)[1]);
-    } else {
-      this.valueSpan.textContent = val;
-    }
 
     let store = this.prop.rule.elementStyle.store;
     let propDirty = store.userProperties.contains(this.prop.rule.style, name);
+
     if (propDirty) {
       this.element.setAttribute("dirty", "");
     } else {
       this.element.removeAttribute("dirty");
+    }
+
+    let swatchClass = "ruleview-colorswatch";
+    let outputParser = this.ruleEditor.ruleView._outputParser;
+    let frag = outputParser.parseCssProperty(name, val, {
+      colorSwatchClass: swatchClass,
+      colorClass: "ruleview-color",
+      defaultColorType: !propDirty,
+      urlClass: "theme-link",
+      baseURI: this.sheetURI
+    });
+    this.valueSpan.innerHTML = "";
+    this.valueSpan.appendChild(frag);
+
+    // Attach the color picker tooltip to the color swatches
+    this._swatchSpans = this.valueSpan.querySelectorAll("." + swatchClass);
+    if (this._swatchSpans.length) {
+      for (let span of this._swatchSpans) {
+        // Capture the original declaration value to be able to revert later
+        let originalValue = this.valueSpan.textContent;
+        // Adding this swatch to the list of swatches our colorpicker knows
+        // about.
+        this.ruleEditor.ruleView.colorPicker.addSwatch(span, {
+          onPreview: () => this._livePreview(this.valueSpan.textContent),
+          onCommit: () => this._applyNewValue(this.valueSpan.textContent),
+          onRevert: () => this._applyNewValue(originalValue)
+        });
+      }
     }
 
     // Populate the computed styles.
@@ -2021,10 +2091,20 @@ TextPropertyEditor.prototype = {
       });
       appendText(li, ": ");
 
+      let outputParser = this.ruleEditor.ruleView._outputParser;
+      let frag = outputParser.parseCssProperty(
+        computed.name, computed.value, {
+          colorSwatchClass: "ruleview-colorswatch",
+          urlClass: "theme-link",
+          baseURI: this.sheetURI
+        }
+      );
+
       createChild(li, "span", {
         class: "ruleview-propertyvalue theme-fg-color1",
-        textContent: computed.value
+        child: frag
       });
+
       appendText(li, ";");
     }
 
@@ -2109,8 +2189,15 @@ TextPropertyEditor.prototype = {
    */
   remove: function TextPropertyEditor_remove()
   {
+    if (this._swatchSpans && this._swatchSpans.length) {
+      for (let span of this._swatchSpans) {
+        this.ruleEditor.ruleView.colorPicker.removeSwatch(span);
+      }
+    }
+
     this.element.parentNode.removeChild(this.element);
     this.ruleEditor.rule.editClosestTextProperty(this.prop);
+    this.valueSpan.textProperty = null;
     this.prop.remove();
   },
 
@@ -2126,23 +2213,31 @@ TextPropertyEditor.prototype = {
    _onValueDone: function PropertyEditor_onValueDone(aValue, aCommit)
   {
     if (aCommit) {
-      let val = this._parseValue(aValue);
-      // Any property should be removed if has an empty value.
-      if (val.value.trim() === "") {
-        this.remove();
-      } else {
-        this.prop.setValue(val.value, val.priority);
-        this.removeOnRevert = false;
-        this.committed.value = this.prop.value;
-        this.committed.priority = this.prop.priority;
-      }
+      this._applyNewValue(aValue);
     } else {
       // A new property should be removed when escape is pressed.
       if (this.removeOnRevert) {
         this.remove();
       } else {
-        this.prop.setValue(this.committed.value, this.committed.priority);
+        // We use this.valueSpan.textContent instead of this.committed.value
+        // because otherwise pressing escape to revert a color value will result
+        // in an unparsed property value.
+        this.prop.setValue(this.valueSpan.textContent, this.committed.priority);
       }
+    }
+  },
+
+  _applyNewValue: function PropetyEditor_applyNewValue(aValue)
+  {
+    let val = this._parseValue(aValue);
+    // Any property should be removed if has an empty value.
+    if (val.value.trim() === "") {
+      this.remove();
+    } else {
+      this.prop.setValue(val.value, val.priority);
+      this.removeOnRevert = false;
+      this.committed.value = this.prop.value;
+      this.committed.priority = this.prop.priority;
     }
   },
 
@@ -2230,11 +2325,7 @@ UserProperties.prototype = {
 
     if (entry && aName in entry) {
       let item = entry[aName];
-      if (item != aDefault) {
-        delete entry[aName];
-        return aDefault;
-      }
-      return item;
+      return item || aDefault;
     }
     return aDefault;
   },
@@ -2301,6 +2392,8 @@ function createChild(aParent, aTag, aAttributes)
     if (aAttributes.hasOwnProperty(attr)) {
       if (attr === "textContent") {
         elt.textContent = aAttributes[attr];
+      } else if(attr === "child") {
+        elt.appendChild(aAttributes[attr]);
       } else {
         elt.setAttribute(attr, aAttributes[attr]);
       }
@@ -2354,7 +2447,7 @@ XPCOMUtils.defineLazyGetter(this, "clipboardHelper", function() {
 
 XPCOMUtils.defineLazyGetter(this, "_strings", function() {
   return Services.strings.createBundle(
-    "chrome://browser/locale/devtools/styleinspector.properties");
+    "chrome://global/locale/devtools/styleinspector.properties");
 });
 
 XPCOMUtils.defineLazyGetter(this, "domUtils", function() {

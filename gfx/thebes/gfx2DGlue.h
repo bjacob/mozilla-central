@@ -14,6 +14,7 @@
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/2D.h"
+#include "gfxColor.h"
 
 namespace mozilla {
 namespace gfx {
@@ -30,6 +31,11 @@ inline Rect ToRect(const gfxRect &aRect)
 {
   return Rect(Float(aRect.x), Float(aRect.y),
               Float(aRect.width), Float(aRect.height));
+}
+
+inline Rect ToRect(const nsIntRect &aRect)
+{
+  return Rect(aRect.x, aRect.y, aRect.width, aRect.height);
 }
 
 inline IntRect ToIntRect(const nsIntRect &aRect)
@@ -64,25 +70,25 @@ inline IntSize ToIntSize(const gfxIntSize &aSize)
   return IntSize(aSize.width, aSize.height);
 }
 
-inline Filter ToFilter(gfxPattern::GraphicsFilter aFilter)
+inline Filter ToFilter(GraphicsFilter aFilter)
 {
   switch (aFilter) {
-  case gfxPattern::FILTER_NEAREST:
+  case GraphicsFilter::FILTER_NEAREST:
     return FILTER_POINT;
-  case gfxPattern::FILTER_GOOD:
+  case GraphicsFilter::FILTER_GOOD:
     return FILTER_GOOD;
   default:
     return FILTER_LINEAR;
   }
 }
 
-inline gfxPattern::GraphicsFilter ThebesFilter(Filter aFilter)
+inline GraphicsFilter ThebesFilter(Filter aFilter)
 {
   switch (aFilter) {
   case FILTER_POINT:
-    return gfxPattern::FILTER_NEAREST;
+    return GraphicsFilter::FILTER_NEAREST;
   default:
-    return gfxPattern::FILTER_BEST;
+    return GraphicsFilter::FILTER_BEST;
   }
 }
 
@@ -197,6 +203,12 @@ inline gfxMatrix ThebesMatrix(const Matrix &aMatrix)
 {
   return gfxMatrix(aMatrix._11, aMatrix._12, aMatrix._21,
                    aMatrix._22, aMatrix._31, aMatrix._32);
+}
+
+inline Matrix MatrixForThebesMatrix(const gfxMatrix &aMatrix)
+{
+  return Matrix(aMatrix.xx, aMatrix.yx, aMatrix.xy,
+                aMatrix.yy, aMatrix.x0, aMatrix.y0);
 }
 
 inline gfxImageFormat SurfaceFormatToImageFormat(SurfaceFormat aFormat)

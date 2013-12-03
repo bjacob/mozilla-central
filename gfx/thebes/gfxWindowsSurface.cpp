@@ -60,12 +60,12 @@ gfxWindowsSurface::gfxWindowsSurface(const gfxIntSize& realSize, gfxImageFormat 
 
     Init(surf);
 
-    RecordMemoryUsed(size.width * size.height * 4 + sizeof(gfxWindowsSurface));
-
-    if (CairoStatus() == 0)
+    if (CairoStatus() == CAIRO_STATUS_SUCCESS) {
         mDC = cairo_win32_surface_get_dc(CairoSurface());
-    else
+        RecordMemoryUsed(size.width * size.height * 4 + sizeof(gfxWindowsSurface));
+    } else {
         mDC = nullptr;
+    }
 }
 
 gfxWindowsSurface::gfxWindowsSurface(HDC dc, const gfxIntSize& realSize, gfxImageFormat imageFormat) :
@@ -125,7 +125,7 @@ gfxWindowsSurface::CreateSimilarSurface(gfxContentType aContent,
     }
 
     cairo_surface_t *surface;
-    if (GetContentType() == GFX_CONTENT_COLOR_ALPHA) {
+    if (!mForPrinting && GetContentType() == GFX_CONTENT_COLOR_ALPHA) {
         // When creating a similar surface to a transparent surface, ensure
         // the new surface uses a DIB. cairo_surface_create_similar won't
         // use  a DIB for a GFX_CONTENT_COLOR surface if this surface doesn't

@@ -4,18 +4,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/DebugOnly.h"
 #include "mozilla/Util.h"
 
 #ifdef MOZ_VALGRIND
 # include <valgrind/memcheck.h>
 #endif
 
-#include "jsapi.h"
 #include "jscntxt.h"
 #include "jsgc.h"
 #include "jsonparser.h"
 #include "jsprf.h"
+#include "jstypes.h"
 #include "jswatchpoint.h"
 
 #include "builtin/MapObject.h"
@@ -23,7 +22,6 @@
 #include "gc/GCInternals.h"
 #include "gc/Marking.h"
 #ifdef JS_ION
-# include "jit/IonFrameIterator.h"
 # include "jit/IonMacroAssembler.h"
 #endif
 #include "js/HashTable.h"
@@ -191,7 +189,7 @@ js::gc::GetAddressableGCThing(JSRuntime *rt, uintptr_t w)
     ConservativeGCTest status =
         IsAddressableGCThing(rt, w, false, &thingKind, &aheader, &thing);
     if (status != CGCT_VALID)
-        return NULL;
+        return nullptr;
     return thing;
 }
 #endif
@@ -619,6 +617,44 @@ JSPropertyDescriptor::trace(JSTracer *trc)
     }
 }
 
+// Mark a chain of PersistentRooted pointers that might be null.
+template<typename Referent>
+static void
+MarkPersistentRootedChain(JSTracer *trc,
+                          mozilla::LinkedList<PersistentRooted<Referent *> > &list,
+                          void (*marker)(JSTracer *trc, Referent **ref, const char *name),
+                          const char *name)
+{
+    for (PersistentRooted<Referent *> *r = list.getFirst();
+         r != nullptr;
+         r = r->getNext())
+    {
+        if (r->get())
+            marker(trc, r->address(), name);
+    }
+}
+
+void
+js::gc::MarkPersistentRootedChains(JSTracer *trc)
+{
+    JSRuntime *rt = trc->runtime;
+
+    MarkPersistentRootedChain(trc, rt->functionPersistentRooteds, &MarkObjectRoot,
+                              "PersistentRooted<JSFunction *>");
+    MarkPersistentRootedChain(trc, rt->objectPersistentRooteds, &MarkObjectRoot,
+                              "PersistentRooted<JSObject *>");
+    MarkPersistentRootedChain(trc, rt->scriptPersistentRooteds, &MarkScriptRoot,
+                              "PersistentRooted<JSScript *>");
+    MarkPersistentRootedChain(trc, rt->stringPersistentRooteds, &MarkStringRoot, 
+                              "PersistentRooted<JSString *>");
+
+    // Mark the PersistentRooted chains of types that are never null.
+    for (JS::PersistentRootedId *r = rt->idPersistentRooteds.getFirst(); r != nullptr; r = r->getNext())
+        MarkIdRoot(trc, r->address(), "PersistentRooted<jsid>");
+    for (JS::PersistentRootedValue *r = rt->valuePersistentRooteds.getFirst(); r != nullptr; r = r->getNext())
+        MarkValueRoot(trc, r->address(), "PersistentRooted<Value>");
+}
+
 void
 js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
 {
@@ -628,7 +664,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
     JS_ASSERT(!rt->mainThread.suppressGC);
 
     if (IS_GC_MARKING_TRACER(trc)) {
-        for (CompartmentsIter c(rt); !c.done(); c.next()) {
+        for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next()) {
             if (!c->zone()->isCollecting())
                 c->markCrossCompartmentWrappers(trc);
         }
@@ -649,15 +685,21 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
     for (RootRange r = rt->gcRootsHash.all(); !r.empty(); r.popFront()) {
         const RootEntry &entry = r.front();
         const char *name = entry.value.name ? entry.value.name : "root";
-        if (entry.value.type == JS_GC_ROOT_STRING_PTR)
-            MarkStringRoot(trc, reinterpret_cast<JSString **>(entry.key), name);
-        else if (entry.value.type == JS_GC_ROOT_OBJECT_PTR)
-            MarkObjectRoot(trc, reinterpret_cast<JSObject **>(entry.key), name);
-        else if (entry.value.type == JS_GC_ROOT_SCRIPT_PTR)
-            MarkScriptRoot(trc, reinterpret_cast<JSScript **>(entry.key), name);
-        else
+        if (entry.value.type == JS_GC_ROOT_VALUE_PTR) {
             MarkValueRoot(trc, reinterpret_cast<Value *>(entry.key), name);
+        } else if (*reinterpret_cast<void **>(entry.key)){
+            if (entry.value.type == JS_GC_ROOT_STRING_PTR)
+                MarkStringRoot(trc, reinterpret_cast<JSString **>(entry.key), name);
+            else if (entry.value.type == JS_GC_ROOT_OBJECT_PTR)
+                MarkObjectRoot(trc, reinterpret_cast<JSObject **>(entry.key), name);
+            else if (entry.value.type == JS_GC_ROOT_SCRIPT_PTR)
+                MarkScriptRoot(trc, reinterpret_cast<JSScript **>(entry.key), name);
+            else
+                MOZ_ASSUME_UNREACHABLE("unexpected js::RootInfo::type value");
+        }
     }
+
+    MarkPersistentRootedChains(trc);
 
     if (rt->scriptAndCountsVector) {
         ScriptAndCountsVector &vec = *rt->scriptAndCountsVector;
@@ -665,21 +707,20 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
             MarkScriptRoot(trc, &vec[i].script, "scriptAndCountsVector");
     }
 
-    if (!rt->isBeingDestroyed() &&
-        !trc->runtime->isHeapMinorCollecting() &&
-        (!IS_GC_MARKING_TRACER(trc) || rt->atomsCompartment()->zone()->isCollecting()))
-    {
-        MarkAtoms(trc);
-        rt->staticStrings.trace(trc);
+    if (!rt->isBeingDestroyed() && !trc->runtime->isHeapMinorCollecting()) {
+        if (!IS_GC_MARKING_TRACER(trc) || rt->atomsCompartment()->zone()->isCollecting()) {
+            MarkAtoms(trc);
+            rt->staticStrings.trace(trc);
 #ifdef JS_ION
-        jit::IonRuntime::Mark(trc);
+            jit::JitRuntime::Mark(trc);
 #endif
+        }
     }
 
     for (ContextIter acx(rt); !acx.done(); acx.next())
         acx->mark(trc);
 
-    for (ZonesIter zone(rt); !zone.done(); zone.next()) {
+    for (ZonesIter zone(rt, SkipAtoms); !zone.done(); zone.next()) {
         if (IS_GC_MARKING_TRACER(trc) && !zone->isCollecting())
             continue;
 
@@ -701,7 +742,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
     }
 
     /* We can't use GCCompartmentsIter if we're called from TraceRuntime. */
-    for (CompartmentsIter c(rt); !c.done(); c.next()) {
+    for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next()) {
         if (trc->runtime->isHeapMinorCollecting())
             c->globalWriteBarriered = false;
 
@@ -731,7 +772,7 @@ js::gc::MarkRuntime(JSTracer *trc, bool useSavedRoots)
          * which have been entered. Globals aren't nursery allocated so there's
          * no need to do this for minor GCs.
          */
-        for (CompartmentsIter c(rt); !c.done(); c.next())
+        for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next())
             c->mark(trc);
 
         /*
@@ -758,9 +799,8 @@ void
 js::gc::BufferGrayRoots(GCMarker *gcmarker)
 {
     JSRuntime *rt = gcmarker->runtime;
-    if (JSTraceDataOp op = rt->gcGrayRootTracer.op) {
-        gcmarker->startBufferingGrayRoots();
+    gcmarker->startBufferingGrayRoots();
+    if (JSTraceDataOp op = rt->gcGrayRootTracer.op)
         (*op)(gcmarker, rt->gcGrayRootTracer.data);
-        gcmarker->endBufferingGrayRoots();
-    }
+    gcmarker->endBufferingGrayRoots();
 }

@@ -16,15 +16,16 @@
 #include "nsIFrame.h"
 #include "mozilla/Util.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/ContentEvents.h"
+#include "mozilla/TextEvents.h"
 #include "prtime.h"
 
 using namespace mozilla;
 
 nsDOMUIEvent::nsDOMUIEvent(mozilla::dom::EventTarget* aOwner,
-                           nsPresContext* aPresContext, nsGUIEvent* aEvent)
-  : nsDOMEvent(aOwner, aPresContext, aEvent ?
-               static_cast<nsEvent *>(aEvent) :
-               static_cast<nsEvent *>(new nsUIEvent(false, 0, 0)))
+                           nsPresContext* aPresContext, WidgetGUIEvent* aEvent)
+  : nsDOMEvent(aOwner, aPresContext,
+               aEvent ? aEvent : new InternalUIEvent(false, 0, 0))
   , mClientPoint(0, 0), mLayerPoint(0, 0), mPagePoint(0, 0), mMovementPoint(0, 0)
   , mIsPointerLocked(nsEventStateManager::sIsPointerLocked)
   , mLastClientPoint(nsEventStateManager::sLastClientPoint)
@@ -43,14 +44,13 @@ nsDOMUIEvent::nsDOMUIEvent(mozilla::dom::EventTarget* aOwner,
   {
     case NS_UI_EVENT:
     {
-      nsUIEvent *event = static_cast<nsUIEvent*>(mEvent);
-      mDetail = event->detail;
+      mDetail = mEvent->AsUIEvent()->detail;
       break;
     }
 
     case NS_SCROLLPORT_EVENT:
     {
-      nsScrollPortEvent* scrollEvent = static_cast<nsScrollPortEvent*>(mEvent);
+      InternalScrollPortEvent* scrollEvent = mEvent->AsScrollPortEvent();
       mDetail = (int32_t)scrollEvent->orient;
       break;
     }
@@ -119,8 +119,9 @@ nsDOMUIEvent::GetMovementPoint()
        mEvent->eventStructType != NS_MOUSE_SCROLL_EVENT &&
        mEvent->eventStructType != NS_WHEEL_EVENT &&
        mEvent->eventStructType != NS_DRAG_EVENT &&
+       mEvent->eventStructType != NS_POINTER_EVENT &&
        mEvent->eventStructType != NS_SIMPLE_GESTURE_EVENT) ||
-       !(static_cast<nsGUIEvent*>(mEvent)->widget)) {
+       !mEvent->AsGUIEvent()->widget) {
     return nsIntPoint(0, 0);
   }
 
@@ -300,6 +301,7 @@ nsDOMUIEvent::GetLayerPoint() const
       (mEvent->eventStructType != NS_MOUSE_EVENT &&
        mEvent->eventStructType != NS_MOUSE_SCROLL_EVENT &&
        mEvent->eventStructType != NS_WHEEL_EVENT &&
+       mEvent->eventStructType != NS_POINTER_EVENT &&
        mEvent->eventStructType != NS_TOUCH_EVENT &&
        mEvent->eventStructType != NS_DRAG_EVENT &&
        mEvent->eventStructType != NS_SIMPLE_GESTURE_EVENT) ||
@@ -343,16 +345,12 @@ nsDOMUIEvent::GetIsChar(bool* aIsChar)
 bool
 nsDOMUIEvent::IsChar() const
 {
-  switch (mEvent->eventStructType)
-  {
-    case NS_KEY_EVENT:
-      return static_cast<nsKeyEvent*>(mEvent)->isChar;
-    case NS_TEXT_EVENT:
-      return static_cast<nsTextEvent*>(mEvent)->isChar;
-    default:
-      return false;
+  WidgetKeyboardEvent* keyEvent = mEvent->AsKeyboardEvent();
+  if (keyEvent) {
+    return keyEvent->isChar;
   }
-  MOZ_CRASH("Switch handles all cases.");
+  WidgetTextEvent* textEvent = mEvent->AsTextEvent();
+  return textEvent ? textEvent->isChar : false;
 }
 
 NS_IMETHODIMP
@@ -460,10 +458,8 @@ nsDOMUIEvent::ComputeModifierState(const nsAString& aModifiersList)
 bool
 nsDOMUIEvent::GetModifierStateInternal(const nsAString& aKey)
 {
-  if (!mEvent->IsInputDerivedEvent()) {
-    MOZ_CRASH("mEvent must be nsInputEvent or derived class");
-  }
-  nsInputEvent* inputEvent = static_cast<nsInputEvent*>(mEvent);
+  WidgetInputEvent* inputEvent = mEvent->AsInputEvent();
+  MOZ_ASSERT(inputEvent, "mEvent must be WidgetInputEvent or derived class");
   if (aKey.EqualsLiteral(NS_DOM_KEYNAME_SHIFT)) {
     return inputEvent->IsShift();
   }
@@ -507,7 +503,7 @@ nsDOMUIEvent::GetModifierStateInternal(const nsAString& aKey)
 nsresult NS_NewDOMUIEvent(nsIDOMEvent** aInstancePtrResult,
                           mozilla::dom::EventTarget* aOwner,
                           nsPresContext* aPresContext,
-                          nsGUIEvent *aEvent) 
+                          WidgetGUIEvent* aEvent) 
 {
   nsDOMUIEvent* it = new nsDOMUIEvent(aOwner, aPresContext, aEvent);
   return CallQueryInterface(it, aInstancePtrResult);

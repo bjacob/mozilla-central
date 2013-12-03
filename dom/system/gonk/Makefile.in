@@ -12,16 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include $(topsrcdir)/dom/dom-config.mk
-
-LOCAL_INCLUDES = \
-  -I$(topsrcdir)/dom/base \
-  -I$(topsrcdir)/dom/src/geolocation \
-  -I$(topsrcdir)/dom/wifi \
-  -I$(topsrcdir)/dom/bluetooth \
-  -I$(topsrcdir)/content/events/src \
-  $(NULL)
-
 # TODO: Bug 908038, move this to moz.build
 WORKER_FILES := worker_buf.js \
   $(NULL)
@@ -31,4 +21,3 @@ INSTALL_TARGETS += WORKER
 WORKER_DEST = $(FINAL_TARGET)/modules/workers
 
 include $(topsrcdir)/config/rules.mk
-include $(topsrcdir)/ipc/chromium/chromium-config.mk

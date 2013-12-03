@@ -218,18 +218,20 @@ InternalPrompt.prototype = {
 
   alert: function alert(aTitle, aText) {
     let p = this._getPrompt(aTitle, aText, [ PromptUtils.getLocaleString("OK") ]);
+    p.setHint("alert");
     this.showPrompt(p);
   },
 
   alertCheck: function alertCheck(aTitle, aText, aCheckMsg, aCheckState) {
     let p = this._getPrompt(aTitle, aText, [ PromptUtils.getLocaleString("OK") ], aCheckMsg, aCheckState);
     let data = this.showPrompt(p);
-    if (aCheckState)
+    if (aCheckState && data.button > -1)
       aCheckState.value = data.checkbox0 == "true";
   },
 
   confirm: function confirm(aTitle, aText) {
     let p = this._getPrompt(aTitle, aText);
+    p.setHint("confirm");
     let data = this.showPrompt(p);
     return (data.button == 0);
   },
@@ -238,7 +240,7 @@ InternalPrompt.prototype = {
     let p = this._getPrompt(aTitle, aText, null, aCheckMsg, aCheckState);
     let data = this.showPrompt(p);
     let ok = data.button == 0;
-    if (aCheckState)
+    if (aCheckState && data.button > -1)
       aCheckState.value = data.checkbox0 == "true";
     return ok;
   },
@@ -284,13 +286,14 @@ InternalPrompt.prototype = {
 
     let p = this._getPrompt(aTitle, aText, buttons, aCheckMsg, aCheckState);
     let data = this.showPrompt(p);
-    if (aCheckState)
+    if (aCheckState && data.button > -1)
       aCheckState.value = data.checkbox0 == "true";
     return data.button;
   },
 
   nsIPrompt_prompt: function nsIPrompt_prompt(aTitle, aText, aValue, aCheckMsg, aCheckState) {
     let p = this._getPrompt(aTitle, aText, null, aCheckMsg, aCheckState);
+    p.setHint("prompt");
     p.addTextbox({
       value: aValue.value,
       autofocus: true
@@ -298,7 +301,7 @@ InternalPrompt.prototype = {
     let data = this.showPrompt(p);
 
     let ok = data.button == 0;
-    if (aCheckState)
+    if (aCheckState && data.button > -1)
       aCheckState.value = data.checkbox0 == "true";
     if (ok)
       aValue.value = data.textbox0;
@@ -316,7 +319,7 @@ InternalPrompt.prototype = {
     let data = this.showPrompt(p);
 
     let ok = data.button == 0;
-    if (aCheckState)
+    if (aCheckState && data.button > -1)
       aCheckState.value = data.checkbox0 == "true";
     if (ok)
       aPassword.value = data.password0;
@@ -337,7 +340,7 @@ InternalPrompt.prototype = {
     let data = this.showPrompt(p);
 
     let ok = data.button == 0;
-    if (aCheckState)
+    if (aCheckState && data.button > -1)
       aCheckState.value = data.checkbox0 == "true";
     if (ok) {
       aUsername.value = data.textbox0;

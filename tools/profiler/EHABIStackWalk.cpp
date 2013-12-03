@@ -342,8 +342,19 @@ bool EHInterp::unwind() {
 
     // 1011000: Finish
     if (insn == I_FINISH) {
-      if (mState[R_PC] == 0)
+      if (mState[R_PC] == 0) {
         mState[R_PC] = mState[R_LR];
+        // Non-standard change (bug 916106): Prevent the caller from
+        // re-using LR.  Since the caller is by definition not a leaf
+        // routine, it will have to restore LR from somewhere to
+        // return to its own caller, so we can safely zero it here.
+        // This makes a difference only if an error in unwinding
+        // (e.g., caused by starting from within a prologue/epilogue)
+        // causes us to load a pointer to a leaf routine as LR; if we
+        // don't do something, we'll go into an infinite loop of
+        // "returning" to that same function.
+        mState[R_LR] = 0;
+      }
       return true;
     }
 
@@ -469,13 +480,13 @@ bool operator<(const EHEntryHandle &lhs, const EHEntryHandle &rhs) {
 const EHEntry *EHTable::lookup(uint32_t aPC) const {
   MOZ_ASSERT(aPC >= mStartPC);
   if (aPC >= mEndPC)
-    return NULL;
+    return nullptr;
 
   std::vector<EHEntryHandle>::const_iterator begin = mEntries.begin();
   std::vector<EHEntryHandle>::const_iterator end = mEntries.end();
   MOZ_ASSERT(begin < end);
   if (aPC < reinterpret_cast<uint32_t>(begin->value()->startPC.compute()))
-    return NULL;
+    return nullptr;
 
   while (end - begin > 1) {
     std::vector<EHEntryHandle>::const_iterator mid = begin + (end - begin) / 2;
@@ -513,7 +524,9 @@ EHTable::EHTable(const void *aELF, size_t aSize, const std::string &aName)
       file.e_ident[EI_DATA] != hostEndian ||
       file.e_ident[EI_VERSION] != EV_CURRENT ||
       file.e_ident[EI_OSABI] != ELFOSABI_SYSV ||
+#ifdef EI_ABIVERSION
       file.e_ident[EI_ABIVERSION] != 0 ||
+#endif
       file.e_machine != EM_ARM ||
       file.e_version != EV_CURRENT)
     // e_flags?

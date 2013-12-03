@@ -10,6 +10,7 @@ const observers = require("sdk/deprecated/observer-service");
 const { setTimeout } = require("sdk/timers");
 const tmp = require("sdk/test/tmp-file");
 const system = require("sdk/system");
+const fixtures = require("./fixtures");
 
 const testFolderURL = module.uri.split('test-addon-installer.js')[0];
 const ADDON_URL = testFolderURL + "fixtures/addon-install-unit-test@mozilla.com.xpi";
@@ -140,7 +141,7 @@ exports['test Uninstall failure'] = function (assert, done) {
   ).then(done, assert.fail);
 };
 
-exports['test Addon Disable'] = function (assert, done) {
+exports['test Addon Disable and Enable'] = function (assert, done) {
   let ensureActive = (addonId) => AddonInstaller.isActive(addonId).then(state => {
     assert.equal(state, true, 'Addon should be enabled by default');
     return addonId;
@@ -152,8 +153,14 @@ exports['test Addon Disable'] = function (assert, done) {
 
   AddonInstaller.install(ADDON_PATH)
     .then(ensureActive)
+    .then(AddonInstaller.enable) // should do nothing, yet not fail
+    .then(ensureActive)
     .then(AddonInstaller.disable)
     .then(ensureInactive)
+    .then(AddonInstaller.disable) // should do nothing, yet not fail
+    .then(ensureInactive)
+    .then(AddonInstaller.enable)
+    .then(ensureActive)
     .then(AddonInstaller.uninstall)
     .then(done, assert.fail);
 };
@@ -162,6 +169,13 @@ exports['test Disable failure'] = function (assert, done) {
   AddonInstaller.disable('not-an-id').then(
     () => assert.fail('Addon disable should not resolve successfully'),
     () => assert.pass('Addon correctly rejected invalid disable')
+  ).then(done, assert.fail);
+};
+
+exports['test Enable failure'] = function (assert, done) {
+  AddonInstaller.enable('not-an-id').then(
+    () => assert.fail('Addon enable should not resolve successfully'),
+    () => assert.pass('Addon correctly rejected invalid enable')
   ).then(done, assert.fail);
 };
 

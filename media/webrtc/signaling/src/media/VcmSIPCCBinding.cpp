@@ -15,6 +15,7 @@
 #include "VcmSIPCCBinding.h"
 #include "csf_common.h"
 #include "PeerConnectionImpl.h"
+#include "PeerConnectionMedia.h"
 #include "nsThreadUtils.h"
 #include "transportflow.h"
 #include "transportlayer.h"
@@ -24,6 +25,10 @@
 #include "cpr_stdlib.h"
 #include "cpr_string.h"
 #include "mozilla/SyncRunnable.h"
+#include "mozilla/Services.h"
+#include "nsServiceManagerUtils.h"
+#include "nsIPrefService.h"
+#include "nsIPrefBranch.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -34,6 +39,7 @@
 extern "C" {
 #include "ccsdp.h"
 #include "vcm.h"
+#include "cc_call_feature.h"
 #include "cip_mmgr_mediadefinitions.h"
 #include "cip_Sipcc_CodecMask.h"
 
@@ -62,12 +68,15 @@ typedef enum {
 
 /* static */
 
+using namespace mozilla;
 using namespace CSF;
 
-VcmSIPCCBinding * VcmSIPCCBinding::gSelf = NULL;
+VcmSIPCCBinding * VcmSIPCCBinding::gSelf = nullptr;
 int VcmSIPCCBinding::gAudioCodecMask = 0;
 int VcmSIPCCBinding::gVideoCodecMask = 0;
-nsIThread *VcmSIPCCBinding::gMainThread = NULL;
+nsIThread *VcmSIPCCBinding::gMainThread = nullptr;
+nsIEventTarget *VcmSIPCCBinding::gSTSThread = nullptr;
+nsCOMPtr<nsIPrefBranch> VcmSIPCCBinding::gBranch = nullptr;
 
 static mozilla::RefPtr<TransportFlow> vcmCreateTransportFlow(
     sipcc::PeerConnectionImpl *pc,
@@ -96,16 +105,72 @@ static mozilla::RefPtr<TransportFlow> vcmCreateTransportFlow(
   } while(0)
 
 VcmSIPCCBinding::VcmSIPCCBinding ()
-  : streamObserver(NULL)
+  : streamObserver(nullptr)
 {
-    delete gSelf;//delete is NULL safe, so I don't need to check if it's NULL
+    delete gSelf;
     gSelf = this;
+  nsresult rv;
+
+  nsCOMPtr<nsIPrefService> prefs = do_GetService("@mozilla.org/preferences-service;1", &rv);
+  if (NS_SUCCEEDED(rv)) {
+    gBranch = do_QueryInterface(prefs);
+  }
 }
+
+class VcmIceOpaque : public NrIceOpaque {
+ public:
+  VcmIceOpaque(cc_streamid_t stream_id,
+               cc_call_handle_t call_handle,
+               uint16_t level) :
+      stream_id_(stream_id),
+      call_handle_(call_handle),
+      level_(level) {}
+
+  virtual ~VcmIceOpaque() {}
+
+  cc_streamid_t stream_id_;
+  cc_call_handle_t call_handle_;
+  uint16_t level_;
+};
+
 
 VcmSIPCCBinding::~VcmSIPCCBinding ()
 {
     assert(gSelf);
-    gSelf = NULL;
+    gSelf = nullptr;
+    // In case we're torn down while STS is still running,
+    // we try to dispatch to STS to disconnect all of the
+    // ICE signals. If STS is no longer running, this will
+    // harmlessly fail.
+    SyncRunnable::DispatchToThread(
+      gSTSThread,
+      WrapRunnable(this, &VcmSIPCCBinding::disconnect_all),
+      true);
+
+  gBranch = nullptr;
+}
+
+void VcmSIPCCBinding::CandidateReady(NrIceMediaStream* stream,
+                                     const std::string& candidate)
+{
+    // This is called on the STS thread
+    NrIceOpaque *opaque = stream->opaque();
+    MOZ_ASSERT(opaque);
+
+    VcmIceOpaque *vcm_opaque = static_cast<VcmIceOpaque *>(opaque);
+    CSFLogDebug(logTag, "Candidate ready on call %u, level %u",
+                vcm_opaque->call_handle_, vcm_opaque->level_);
+
+    char *candidate_tmp = (char *)malloc(candidate.size() + 1);
+    if (!candidate_tmp)
+	return;
+    sstrncpy(candidate_tmp, candidate.c_str(), candidate.size() + 1);
+    // Send a message to the GSM thread.
+    CC_CallFeature_FoundICECandidate(vcm_opaque->call_handle_,
+				     candidate_tmp,
+				     nullptr,
+				     vcm_opaque->level_,
+				     nullptr);
 }
 
 void VcmSIPCCBinding::setStreamObserver(StreamObserver* obs)
@@ -116,10 +181,10 @@ void VcmSIPCCBinding::setStreamObserver(StreamObserver* obs)
 /* static */
 StreamObserver * VcmSIPCCBinding::getStreamObserver()
 {
-    if (gSelf != NULL)
+    if (gSelf != nullptr)
     	return gSelf->streamObserver;
 
-    return NULL;
+    return nullptr;
 }
 
 void VcmSIPCCBinding::setMediaProviderObserver(MediaProviderObserver* obs)
@@ -130,10 +195,10 @@ void VcmSIPCCBinding::setMediaProviderObserver(MediaProviderObserver* obs)
 
 MediaProviderObserver * VcmSIPCCBinding::getMediaProviderObserver()
 {
-    if (gSelf != NULL)
+    if (gSelf != nullptr)
     	return gSelf->mediaProviderObserver;
 
-    return NULL;
+    return nullptr;
 }
 
 void VcmSIPCCBinding::setAudioCodecs(int codecMask)
@@ -163,37 +228,59 @@ void VcmSIPCCBinding::setMainThread(nsIThread *thread)
   gMainThread = thread;
 }
 
+void VcmSIPCCBinding::setSTSThread(nsIEventTarget *thread)
+{
+  gSTSThread = thread;
+}
+
 nsIThread* VcmSIPCCBinding::getMainThread()
 {
   return gMainThread;
+}
+
+nsIEventTarget* VcmSIPCCBinding::getSTSThread()
+{
+  return gSTSThread;
+}
+
+void VcmSIPCCBinding::connectCandidateSignal(
+    NrIceMediaStream *stream)
+{
+  stream->SignalCandidate.connect(gSelf,
+                                  &VcmSIPCCBinding::CandidateReady);
+}
+
+nsCOMPtr<nsIPrefBranch> VcmSIPCCBinding::getPrefBranch()
+{
+  return gBranch;
 }
 
 /* static */
 AudioTermination * VcmSIPCCBinding::getAudioTermination()
 {
     // commenting as part of media provider removal
-    return NULL;
+    return nullptr;
 }
 
 /* static */
 VideoTermination * VcmSIPCCBinding::getVideoTermination()
 {
     // commenting as part of media provider removal
-    return NULL;
+    return nullptr;
 }
 
 /* static */
 AudioControl * VcmSIPCCBinding::getAudioControl()
 {
     // commenting as part of media provider removal
-    return NULL;
+    return nullptr;
 }
 
 /* static */
 VideoControl * VcmSIPCCBinding::getVideoControl()
 {
     // commenting as part of media provider removal
-    return NULL;
+    return nullptr;
 }
 
 /*
@@ -393,18 +480,18 @@ void vcmRxAllocPort(cc_mcapid_t mcap_id,
     if(CC_IS_AUDIO(mcap_id))
     {
       isVideo = false;
-      if ( VcmSIPCCBinding::getAudioTermination() != NULL )
+      if ( VcmSIPCCBinding::getAudioTermination() != nullptr )
         port = VcmSIPCCBinding::getAudioTermination()->rxAlloc( group_id, stream_id, port_requested );
     }
     else if(CC_IS_VIDEO(mcap_id))
     {
       isVideo = true;
-      if ( VcmSIPCCBinding::getVideoTermination() != NULL )
+      if ( VcmSIPCCBinding::getVideoTermination() != nullptr )
         port = VcmSIPCCBinding::getVideoTermination()->rxAlloc( group_id, stream_id, port_requested );
     }
 
     StreamObserver* obs = VcmSIPCCBinding::getStreamObserver();
-    if(obs != NULL)
+    if(obs != nullptr)
       obs->registerStream(call_handle, stream_id, isVideo);
 
     CSFLogDebug( logTag, "vcmRxAllocPort(): allocated port %d", port);
@@ -413,38 +500,27 @@ void vcmRxAllocPort(cc_mcapid_t mcap_id,
 
 
 /**
- *  Gets the ICE parameters for a stream. Called "alloc" for style consistency
+ *  Gets the ICE objects for a stream.
  *
  *  @param[in]  mcap_id - Media Capability ID
  *  @param[in]  group_id - group identifier to which stream belongs.
  *  @param[in]  stream_id - stream identifier
  *  @param[in]  call_handle  - call identifier
  *  @param[in]  peerconnection - the peerconnection in use
- *  @param[out] default_addrp - the ICE default addr
- *  @param[out] port_allocatedp - the ICE default port
- *  @param[out] candidatesp - the ICE candidate array
- *  @param[out] candidate_ctp length of the array
- *
- *  @return 0 for success; VCM_ERROR for failure
- *
+ *  @param[in]  level - the m-line index (1-based)
+ *  @param[out] ctx - the NrIceCtx
+ *  @param[out] stream - the NrIceStream
  */
-static short vcmRxAllocICE_m(cc_mcapid_t mcap_id,
-                             cc_groupid_t group_id,
-                             cc_streamid_t stream_id,
-                             cc_call_handle_t  call_handle,
-                             const char *peerconnection,
-                             uint16_t level,
-                             char **default_addrp, /* Out */
-                             int *default_portp, /* Out */
-                             char ***candidatesp, /* Out */
-                             int *candidate_ctp /* Out */
-)
-{
-  *default_addrp = NULL;
-  *default_portp = -1;
-  *candidatesp = NULL;
-  *candidate_ctp = 0;
 
+static short vcmGetIceStream_m(cc_mcapid_t mcap_id,
+                               cc_groupid_t group_id,
+                               cc_streamid_t stream_id,
+                               cc_call_handle_t  call_handle,
+                               const char *peerconnection,
+                               uint16_t level,
+                               mozilla::RefPtr<NrIceCtx> *ctx,
+                               mozilla::RefPtr<NrIceMediaStream> *stream)
+{
   CSFLogDebug( logTag, "%s: group_id=%d stream_id=%d call_handle=%d PC = %s",
     __FUNCTION__, group_id, stream_id, call_handle, peerconnection);
 
@@ -454,16 +530,65 @@ static short vcmRxAllocICE_m(cc_mcapid_t mcap_id,
   sipcc::PeerConnectionWrapper pc(peerconnection);
   ENSURE_PC(pc, VCM_ERROR);
 
+  *ctx = pc.impl()->media()->ice_ctx();
+  MOZ_ASSERT(*ctx);
+  if (!*ctx)
+    return VCM_ERROR;
+
   CSFLogDebug( logTag, "%s: Getting stream %d", __FUNCTION__, level);
-  mozilla::RefPtr<NrIceMediaStream> stream = pc.impl()->media()->
-    ice_media_stream(level-1);
-  MOZ_ASSERT(stream);
-  if (!stream) {
+  *stream = pc.impl()->media()->ice_media_stream(level-1);
+  MOZ_ASSERT(*stream);
+  if (!*stream) {
     return VCM_ERROR;
   }
 
+  return 0;
+}
+
+/**
+ *  Gets the ICE parameters for a stream. Called "alloc" for style consistency
+ *  @param[in]  ctx_in - the ICE ctx
+ *  @param[in]  stream_in - the ICE stream
+ *  @param[in]  call_handle  - call identifier
+ *  @param[in]  stream_id - stream identifier
+ *  @param[in]  level - the m-line index (1-based)
+ *  @param[out] default_addrp - the ICE default addr
+ *  @param[out] port_allocatedp - the ICE default port
+ *  @param[out] candidatesp - the ICE candidate array
+ *  @param[out] candidate_ctp length of the array
+ *
+ *  @return 0 for success; VCM_ERROR for failure
+ *
+ */
+static short vcmRxAllocICE_s(TemporaryRef<NrIceCtx> ctx_in,
+			     TemporaryRef<NrIceMediaStream> stream_in,
+                             cc_call_handle_t  call_handle,
+                             cc_streamid_t stream_id,
+                             uint16_t level,
+                             char **default_addrp, /* Out */
+                             int *default_portp, /* Out */
+                             char ***candidatesp, /* Out */
+                             int *candidate_ctp /* Out */
+)
+{
+  // Make a concrete reference to ctx_in and stream_in so we
+  // can use the pointers (TemporaryRef is not dereferencable).
+  RefPtr<NrIceCtx> ctx(ctx_in);
+  RefPtr<NrIceMediaStream> stream(stream_in);
+
+  *default_addrp = nullptr;
+  *default_portp = -1;
+  *candidatesp = nullptr;
+  *candidate_ctp = 0;
+
+  // Set the opaque so we can correlate events.
+  stream->SetOpaque(new VcmIceOpaque(stream_id, call_handle, level));
+
+  // Attach ourself to the candidate signal.
+  VcmSIPCCBinding::connectCandidateSignal(stream);
+
   std::vector<std::string> candidates = stream->GetCandidates();
-  CSFLogDebug( logTag, "%s: Got %lu candidates", __FUNCTION__, candidates.size());
+  CSFLogDebug( logTag, "%s: Got %lu candidates", __FUNCTION__, (unsigned long) candidates.size());
 
   std::string default_addr;
   int default_port;
@@ -501,12 +626,12 @@ static short vcmRxAllocICE_m(cc_mcapid_t mcap_id,
 /**
  *  Gets the ICE parameters for a stream. Called "alloc" for style consistency
  *
- *  This is a thunk to vcmRxAllocICE_m
- *
+ *  @param[in]  mcap_id  - media cap id
  *  @param[in]  group_id - group identifier to which stream belongs.
  *  @param[in]  stream_id - stream identifier
  *  @param[in]  call_handle  - call identifier
  *  @param[in]  peerconnection - the peerconnection in use
+ *  @param[in]  level - the m-line index (1-based)
  *  @param[out] default_addrp - the ICE default addr
  *  @param[out] port_allocatedp - the ICE default port
  *  @param[out] candidatesp - the ICE candidate array
@@ -528,19 +653,44 @@ short vcmRxAllocICE(cc_mcapid_t mcap_id,
                    )
 {
   int ret;
-  mozilla::SyncRunnable::DispatchToThread(VcmSIPCCBinding::getMainThread(),
-      WrapRunnableNMRet(&vcmRxAllocICE_m,
+
+  mozilla::RefPtr<NrIceCtx> ctx;
+  mozilla::RefPtr<NrIceMediaStream> stream;
+
+  // First, get a strong ref to the ICE context and stream from the
+  // main thread.
+  mozilla::SyncRunnable::DispatchToThread(
+      VcmSIPCCBinding::getMainThread(),
+      WrapRunnableNMRet(&vcmGetIceStream_m,
                         mcap_id,
                         group_id,
                         stream_id,
                         call_handle,
                         peerconnection,
                         level,
+                        &ctx,
+                        &stream,
+                        &ret));
+  if (ret)
+    return ret;
+
+  // Now get the ICE parameters from the STS thread.
+  // We .forget() the strong refs so that they can be
+  // released on the STS thread.
+  mozilla::SyncRunnable::DispatchToThread(
+      VcmSIPCCBinding::getSTSThread(),
+                        WrapRunnableNMRet(&vcmRxAllocICE_s,
+                        ctx.forget(),
+                        stream.forget(),
+                        call_handle,
+                        stream_id,
+                        level,
                         default_addrp,
                         default_portp,
                         candidatesp,
                         candidate_ctp,
                         &ret));
+
   return ret;
 }
 
@@ -557,7 +707,7 @@ static short vcmGetIceParams_m(const char *peerconnection,
 {
   CSFLogDebug( logTag, "%s: PC = %s", __FUNCTION__, peerconnection);
 
-  *ufragp = *pwdp = NULL;
+  *ufragp = *pwdp = nullptr;
 
  // Note: we don't acquire any media resources here, and we assume that the
   // ICE streams already exist, so we're just acquiring them. Any logic
@@ -569,8 +719,8 @@ static short vcmGetIceParams_m(const char *peerconnection,
     ice_ctx()->GetGlobalAttributes();
 
   // Now fish through these looking for a ufrag and passwd
-  char *ufrag = NULL;
-  char *pwd = NULL;
+  char *ufrag = nullptr;
+  char *pwd = nullptr;
 
   for (size_t i=0; i<attrs.size(); i++) {
     if (attrs[i].compare(0, strlen("ice-ufrag:"), "ice-ufrag:") == 0) {
@@ -733,6 +883,7 @@ static short vcmSetIceCandidate_m(const char *peerconnection,
   return 0;
 }
 
+
 /* Set ice candidate for trickle ICE.
  *
  * This is a thunk to vcmSetIceCandidate_m
@@ -791,7 +942,6 @@ static short vcmStartIceChecks_m(const char *peerconnection, cc_boolean isContro
 
   return 0;
 }
-
 
 /* Start ICE checks
  *
@@ -1215,14 +1365,14 @@ short vcmRxOpen(cc_mcapid_t mcap_id,
     {
     case CC_AUDIO_1:
         CSFLogDebug( logTag, "%s: audio stream", fname);
-        if ( VcmSIPCCBinding::getAudioTermination() != NULL )
+        if ( VcmSIPCCBinding::getAudioTermination() != nullptr )
             *port_allocated = VcmSIPCCBinding::getAudioTermination()->rxOpen( group_id, stream_id,
                                                     port_requested, listen_ip ? listen_ip->u.ip4 : 0,
                                                     (is_multicast != 0) );
         break;
     case CC_VIDEO_1:
         CSFLogDebug( logTag, "%s: video stream", fname);
-        if ( VcmSIPCCBinding::getVideoTermination() != NULL )
+        if ( VcmSIPCCBinding::getVideoTermination() != nullptr )
             *port_allocated = VcmSIPCCBinding::getVideoTermination()->rxOpen( group_id, stream_id,
                                                     port_requested, listen_ip ? listen_ip->u.ip4 : 0,
                                                     (is_multicast != 0) );
@@ -1287,7 +1437,7 @@ int vcmRxStart(cc_mcapid_t mcap_id,
     switch ( algorithmID )
     {
     case VCM_AES_128_COUNTER:
-        if ( rx_key == NULL )
+        if ( rx_key == nullptr )
         {
             /* No key provided */
             CSFLogDebug( logTag, "vcmRxStart(): No key for algorithm ID %d",
@@ -1302,7 +1452,7 @@ int vcmRxStart(cc_mcapid_t mcap_id,
         break;
 
     default:
-        /* Give dummy data to avoid passing NULL for key/salt */
+        /* Give dummy data to avoid passing nullptr for key/salt */
         key_len = 0;
         key = (uint8_t *)"";
         salt_len = 0;
@@ -1313,7 +1463,7 @@ int vcmRxStart(cc_mcapid_t mcap_id,
     switch ( mcap_id )
     {
     case CC_AUDIO_1:
-        if ( VcmSIPCCBinding::getAudioTermination() != NULL )
+        if ( VcmSIPCCBinding::getAudioTermination() != nullptr )
             return VcmSIPCCBinding::getAudioTermination()->rxStart(
                 group_id, stream_id, payload->remote_rtp_pt,
                 attrs->audio.packetization_period, port,
@@ -1323,7 +1473,7 @@ int vcmRxStart(cc_mcapid_t mcap_id,
         break;
 
     case CC_VIDEO_1:
-        if ( VcmSIPCCBinding::getVideoTermination() != NULL )
+        if ( VcmSIPCCBinding::getVideoTermination() != nullptr )
             return VcmSIPCCBinding::getVideoTermination()->rxStart(
                 group_id, stream_id, payload->remote_rtp_pt,
                 0, port, 0, map_algorithmID(algorithmID), key, key_len,
@@ -1423,11 +1573,14 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
     std::vector<mozilla::AudioCodecConfig *> configs;
 
     // Instantiate an appropriate conduit
-    mozilla::RefPtr<mozilla::AudioSessionConduit> tx_conduit =
+    mozilla::RefPtr<mozilla::MediaSessionConduit> tx_conduit =
       pc.impl()->media()->GetConduit(level, false);
+    MOZ_ASSERT_IF(tx_conduit, tx_conduit->type() == MediaSessionConduit::AUDIO);
 
+    // The two sides of a send/receive pair of conduits each keep a raw pointer to the other,
+    // and are responsible for cleanly shutting down.
     mozilla::RefPtr<mozilla::AudioSessionConduit> conduit =
-                    mozilla::AudioSessionConduit::Create(tx_conduit);
+      mozilla::AudioSessionConduit::Create(static_cast<AudioSessionConduit *>(tx_conduit.get()));
     if(!conduit)
       return VCM_ERROR;
 
@@ -1475,10 +1628,18 @@ static int vcmRxStartICE_m(cc_mcapid_t mcap_id,
 
     std::vector<mozilla::VideoCodecConfig *> configs;
     // Instantiate an appropriate conduit
+    mozilla::RefPtr<mozilla::MediaSessionConduit> tx_conduit =
+      pc.impl()->media()->GetConduit(level, false);
+    MOZ_ASSERT_IF(tx_conduit, tx_conduit->type() == MediaSessionConduit::VIDEO);
+
+    // The two sides of a send/receive pair of conduits each keep a raw pointer to the other,
+    // and are responsible for cleanly shutting down.
     mozilla::RefPtr<mozilla::VideoSessionConduit> conduit =
-             mozilla::VideoSessionConduit::Create();
+      mozilla::VideoSessionConduit::Create(static_cast<VideoSessionConduit *>(tx_conduit.get()));
     if(!conduit)
       return VCM_ERROR;
+
+    pc.impl()->media()->AddConduit(level, true, conduit);
 
     mozilla::VideoCodecConfig *config_raw;
 
@@ -1616,12 +1777,12 @@ short vcmRxClose(cc_mcapid_t mcap_id,
     switch ( mcap_id )
     {
     case CC_AUDIO_1:
-        if ( VcmSIPCCBinding::getAudioTermination() != NULL )
+        if ( VcmSIPCCBinding::getAudioTermination() != nullptr )
             VcmSIPCCBinding::getAudioTermination()->rxClose( group_id, stream_id );
         break;
 
     case CC_VIDEO_1:
-        if ( VcmSIPCCBinding::getVideoTermination() != NULL )
+        if ( VcmSIPCCBinding::getVideoTermination() != nullptr )
             VcmSIPCCBinding::getVideoTermination()->rxClose( group_id, stream_id );
         break;
 
@@ -1653,17 +1814,17 @@ void vcmRxReleasePort  (cc_mcapid_t mcap_id,
 
     if(CC_IS_AUDIO(mcap_id))
     {
-        if ( VcmSIPCCBinding::getAudioTermination() != NULL )
+        if ( VcmSIPCCBinding::getAudioTermination() != nullptr )
             VcmSIPCCBinding::getAudioTermination()->rxRelease( group_id, stream_id, port );
     }
     else if(CC_IS_VIDEO(mcap_id))
     {
-        if ( VcmSIPCCBinding::getVideoTermination() != NULL )
+        if ( VcmSIPCCBinding::getVideoTermination() != nullptr )
            VcmSIPCCBinding::getVideoTermination()->rxRelease( group_id, stream_id, port );
     }
 
     StreamObserver* obs = VcmSIPCCBinding::getStreamObserver();
-    if(obs != NULL)
+    if(obs != nullptr)
     	obs->deregisterStream(call_handle, stream_id);
 }
 
@@ -1953,7 +2114,7 @@ int vcmTxStart(cc_mcapid_t mcap_id,
     switch ( algorithmID )
     {
     case VCM_AES_128_COUNTER:
-        if ( tx_key == NULL )
+        if ( tx_key == nullptr )
         {
             /* No key provided */
             CSFLogDebug( logTag, "%s: No key for algorithm ID %d", fname, algorithmID);
@@ -1967,7 +2128,7 @@ int vcmTxStart(cc_mcapid_t mcap_id,
         break;
 
     default:
-        /* Give dummy data to avoid passing NULL for key/salt */
+        /* Give dummy data to avoid passing nullptr for key/salt */
         key_len  = 0;
         key      = (uint8_t *)"";
         salt_len = 0;
@@ -1978,7 +2139,7 @@ int vcmTxStart(cc_mcapid_t mcap_id,
     switch ( mcap_id )
     {
     case CC_AUDIO_1:
-        if ( VcmSIPCCBinding::getAudioTermination() != NULL )
+        if ( VcmSIPCCBinding::getAudioTermination() != nullptr )
             return VcmSIPCCBinding::getAudioTermination()->txStart(
                 group_id, stream_id, payload->remote_rtp_pt,
                 attrs->audio.packetization_period, (attrs->audio.vad != 0),
@@ -1989,7 +2150,7 @@ int vcmTxStart(cc_mcapid_t mcap_id,
         break;
 
     case CC_VIDEO_1:
-        if ( VcmSIPCCBinding::getVideoTermination() != NULL )
+        if ( VcmSIPCCBinding::getVideoTermination() != nullptr )
            return VcmSIPCCBinding::getVideoTermination()->txStart(
               group_id, stream_id, payload->remote_rtp_pt,
               0, 0, tos, dottedIP, remote_port, 0,
@@ -2082,11 +2243,14 @@ static int vcmTxStartICE_m(cc_mcapid_t mcap_id,
     mozilla::ScopedDeletePtr<mozilla::AudioCodecConfig> config(config_raw);
 
     // Instantiate an appropriate conduit
-    mozilla::RefPtr<mozilla::AudioSessionConduit> rx_conduit =
+    mozilla::RefPtr<mozilla::MediaSessionConduit> rx_conduit =
       pc.impl()->media()->GetConduit(level, true);
+    MOZ_ASSERT_IF(rx_conduit, rx_conduit->type() == MediaSessionConduit::AUDIO);
 
+    // The two sides of a send/receive pair of conduits each keep a raw pointer to the other,
+    // and are responsible for cleanly shutting down.
     mozilla::RefPtr<mozilla::AudioSessionConduit> conduit =
-      mozilla::AudioSessionConduit::Create(rx_conduit);
+      mozilla::AudioSessionConduit::Create(static_cast<AudioSessionConduit *>(rx_conduit.get()));
 
     if (!conduit || conduit->ConfigureSendMediaCodec(config))
       return VCM_ERROR;
@@ -2119,18 +2283,28 @@ static int vcmTxStartICE_m(cc_mcapid_t mcap_id,
     config_raw = new mozilla::VideoCodecConfig(
       payload->remote_rtp_pt,
       ccsdpCodecName(payload->codec_type),
-      payload->video.rtcp_fb_types);
+      payload->video.rtcp_fb_types,
+      payload->video.max_fs,
+      payload->video.max_fr);
 
     // Take possession of this pointer
     mozilla::ScopedDeletePtr<mozilla::VideoCodecConfig> config(config_raw);
 
     // Instantiate an appropriate conduit
+    mozilla::RefPtr<mozilla::MediaSessionConduit> rx_conduit =
+      pc.impl()->media()->GetConduit(level, true);
+    MOZ_ASSERT_IF(rx_conduit, rx_conduit->type() == MediaSessionConduit::VIDEO);
+
+    // The two sides of a send/receive pair of conduits each keep a raw pointer to the other,
+    // and are responsible for cleanly shutting down.
     mozilla::RefPtr<mozilla::VideoSessionConduit> conduit =
-      mozilla::VideoSessionConduit::Create();
+      mozilla::VideoSessionConduit::Create(static_cast<VideoSessionConduit *>(rx_conduit.get()));
 
     // Find the appropriate media conduit config
     if (!conduit || conduit->ConfigureSendMediaCodec(config))
       return VCM_ERROR;
+
+    pc.impl()->media()->AddConduit(level, false, conduit);
 
     // Now we have all the pieces, create the pipeline
     mozilla::RefPtr<mozilla::MediaPipeline> pipeline =
@@ -2254,12 +2428,12 @@ short vcmTxClose(cc_mcapid_t mcap_id,
     switch ( mcap_id )
     {
     case CC_AUDIO_1:
-        if ( VcmSIPCCBinding::getAudioTermination() != NULL )
+        if ( VcmSIPCCBinding::getAudioTermination() != nullptr )
             VcmSIPCCBinding::getAudioTermination()->txClose( group_id, stream_id);
         break;
 
     case CC_VIDEO_1:
-        if ( VcmSIPCCBinding::getVideoTermination() != NULL )
+        if ( VcmSIPCCBinding::getVideoTermination() != nullptr )
            VcmSIPCCBinding::getVideoTermination()->txClose( group_id, stream_id);
         break;
 
@@ -2399,7 +2573,7 @@ void vcmMediaControl(cc_call_handle_t  call_handle, vcm_media_control_to_encoder
     if ( to_encoder == VCM_MEDIA_CONTROL_PICTURE_FAST_UPDATE )
     {
     	StreamObserver* obs = VcmSIPCCBinding::getStreamObserver();
-    	if (obs != NULL)
+    	if (obs != nullptr)
     	{
     		obs->sendIFrame(call_handle);
     	}
@@ -2529,7 +2703,7 @@ cc_boolean vcmCheckAttribs(cc_uint32_t media_type, void *sdp_p, int level, void 
     uint32_t        t_uint;
     struct h264_video *rcap;
 
-    *rcapptr = NULL;
+    *rcapptr = nullptr;
 
     switch (media_type)
     {
@@ -2540,14 +2714,14 @@ cc_boolean vcmCheckAttribs(cc_uint32_t media_type, void *sdp_p, int level, void 
     case RTP_H264_P1:
 
         rcap = (struct h264_video *) cpr_malloc( sizeof(struct h264_video) );
-        if ( rcap == NULL )
+        if ( rcap == nullptr )
         {
             CSFLogDebug( logTag, "vcmCheckAttribs(): Malloc Failed for rcap");
             return FALSE;
         }
         memset( rcap, 0, sizeof(struct h264_video) );
 
-        if ( (ptr = ccsdpAttrGetFmtpParamSets(sdp_p, level, 0, 1)) != NULL )
+        if ( (ptr = ccsdpAttrGetFmtpParamSets(sdp_p, level, 0, 1)) != nullptr )
         {
             memset(rcap->sprop_parameter_set, 0, csf_countof(rcap->sprop_parameter_set));
             sstrncpy(rcap->sprop_parameter_set, ptr, csf_countof(rcap->sprop_parameter_set));
@@ -2558,7 +2732,7 @@ cc_boolean vcmCheckAttribs(cc_uint32_t media_type, void *sdp_p, int level, void 
             rcap->packetization_mode = temp;
         }
 
-        if ( (ptr = ccsdpAttrGetFmtpProfileLevelId(sdp_p, level, 0, 1)) != NULL )
+        if ( (ptr = ccsdpAttrGetFmtpProfileLevelId(sdp_p, level, 0, 1)) != nullptr )
         {
 #ifdef _WIN32
             sscanf_s(ptr, "%x", &rcap->profile_level_id, sizeof(int*));
@@ -2693,7 +2867,7 @@ int vcmDtmfBurst(int digit, int duration, int direction)
 {
     CSFLogDebug( logTag, "vcmDtmfBurst(): digit=%d duration=%d, direction=%d", digit, duration, direction);
     StreamObserver* obs = VcmSIPCCBinding::getStreamObserver();
-    if(obs != NULL)
+    if(obs != nullptr)
     	obs->dtmfBurst(digit, duration, direction);
     return 0;
 }
@@ -2780,7 +2954,7 @@ vcmCreateTransportFlow(sipcc::PeerConnectionImpl *pc, int level, bool rtcp,
                                                   &digest_len);
     if (!NS_SUCCEEDED(res)) {
       CSFLogError(logTag, "Could not convert fingerprint");
-      return NULL;
+      return nullptr;
     }
 
     std::string fingerprint_str(fingerprint_alg);
@@ -2790,7 +2964,7 @@ vcmCreateTransportFlow(sipcc::PeerConnectionImpl *pc, int level, bool rtcp,
     res = dtls->SetVerificationDigest(fingerprint_str, remote_digest, digest_len);
     if (!NS_SUCCEEDED(res)) {
       CSFLogError(logTag, "Could not set remote DTLS digest");
-      return NULL;
+      return nullptr;
     }
 
     std::vector<uint16_t> srtp_ciphers;
@@ -2800,7 +2974,7 @@ vcmCreateTransportFlow(sipcc::PeerConnectionImpl *pc, int level, bool rtcp,
     res = dtls->SetSrtpCiphers(srtp_ciphers);
     if (!NS_SUCCEEDED(res)) {
       CSFLogError(logTag, "Couldn't set SRTP ciphers");
-      return NULL;
+      return nullptr;
     }
 
     nsAutoPtr<std::queue<TransportLayer *> > layers(new std::queue<TransportLayer *>);
@@ -2816,7 +2990,7 @@ vcmCreateTransportFlow(sipcc::PeerConnectionImpl *pc, int level, bool rtcp,
         NS_DISPATCH_NORMAL);
 
     if (NS_FAILED(rv)) {
-      return NULL;
+      return nullptr;
     }
 
     // Note, this flow may actually turn out to be invalid
@@ -2919,6 +3093,50 @@ int vcmDisableRtcpComponent(const char *peerconnection, int level) {
       WrapRunnableNMRet(&vcmDisableRtcpComponent_m,
                         peerconnection,
                         level,
+                        &ret));
+  return ret;
+}
+
+static short vcmGetVideoMaxFs_m(uint16_t codec,
+                                int32_t *max_fs) {
+  nsCOMPtr<nsIPrefBranch> branch = VcmSIPCCBinding::getPrefBranch();
+  if (branch && NS_SUCCEEDED(branch->GetIntPref("media.navigator.video.max_fs",
+                                                max_fs))) {
+    return 0;
+  }
+  return VCM_ERROR;
+}
+
+short vcmGetVideoMaxFs(uint16_t codec,
+                       int32_t *max_fs) {
+  short ret;
+
+  mozilla::SyncRunnable::DispatchToThread(VcmSIPCCBinding::getMainThread(),
+      WrapRunnableNMRet(&vcmGetVideoMaxFs_m,
+                        codec,
+                        max_fs,
+                        &ret));
+  return ret;
+}
+
+static short vcmGetVideoMaxFr_m(uint16_t codec,
+                                int32_t *max_fr) {
+  nsCOMPtr<nsIPrefBranch> branch = VcmSIPCCBinding::getPrefBranch();
+  if (branch && NS_SUCCEEDED(branch->GetIntPref("media.navigator.video.max_fr",
+                                                max_fr))) {
+    return 0;
+  }
+  return VCM_ERROR;
+}
+
+short vcmGetVideoMaxFr(uint16_t codec,
+                       int32_t *max_fr) {
+  short ret;
+
+  mozilla::SyncRunnable::DispatchToThread(VcmSIPCCBinding::getMainThread(),
+      WrapRunnableNMRet(&vcmGetVideoMaxFr_m,
+                        codec,
+                        max_fr,
                         &ret));
   return ret;
 }

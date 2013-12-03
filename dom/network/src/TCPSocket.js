@@ -162,12 +162,16 @@ TCPSocket.prototype = {
   _waitingForStartTLS: false,
   _pendingDataAfterStartTLS: [],
 
+  // Used to notify when update bufferedAmount is updated.
+  _onUpdateBufferedAmount: null,
+  _trackingNumber: 0,
+
 #ifdef MOZ_WIDGET_GONK
   // Network statistics (Gonk-specific feature)
   _txBytes: 0,
   _rxBytes: 0,
   _appId: Ci.nsIScriptSecurityManager.NO_APP_ID,
-  _connectionType: Ci.nsINetworkInterface.NETWORK_TYPE_UNKNOWN,
+  _activeNetwork: null,
 #endif
 
   // Public accessors.
@@ -242,6 +246,12 @@ TCPSocket.prototype = {
              .createTransport(options, 1, host, port, null);
   },
 
+  _sendBufferedAmount: function ts_sendBufferedAmount() {
+    if (this._onUpdateBufferedAmount) {
+      this._onUpdateBufferedAmount(this.bufferedAmount, this._trackingNumber);
+    }
+  },
+
   _ensureCopying: function ts_ensureCopying() {
     let self = this;
     if (this._asyncCopierActive) {
@@ -254,6 +264,7 @@ TCPSocket.prototype = {
       onStopRequest: function ts_output_onStopRequest(request, context, status) {
         self._asyncCopierActive = false;
         self._multiplexStream.removeStream(0);
+        self._sendBufferedAmount();
 
         if (!Components.isSuccessCode(status)) {
           // Note that we can/will get an error here as well as in the
@@ -280,7 +291,9 @@ TCPSocket.prototype = {
             }
           }
 
-          if (self._waitingForDrain) {
+          // If we have a callback to update bufferedAmount, we let child to
+          // decide whether ondrain should be dispatched.
+          if (self._waitingForDrain && !self._onUpdateBufferedAmount) {
             self._waitingForDrain = false;
             self.callListener("drain");
           }
@@ -347,7 +360,7 @@ TCPSocket.prototype = {
       LOG("Error: Ci.nsINetworkStatsServiceProxy service is not available.");
       return;
     }
-    nssProxy.saveAppStats(this._appId, this._connectionType, Date.now(),
+    nssProxy.saveAppStats(this._appId, this._activeNetwork, Date.now(),
                           this._rxBytes, this._txBytes);
 
     // Reset the counters once the statistics is saved to NetworkStatsServiceProxy.
@@ -382,9 +395,36 @@ TCPSocket.prototype = {
     this.callListener(type);
   },
 
-  updateReadyStateAndBuffered: function ts_setReadyState(readyState, bufferedAmount) {
+  /**
+   * This method is expected to be called by TCPSocketChild to update child's
+   * readyState.
+   */
+  updateReadyState: function ts_updateReadyState(readyState) {
+    if (!this._inChild) {
+      LOG("Calling updateReadyState in parent, which should only be called " +
+          "in child");
+      return;
+    }
     this._readyState = readyState;
+  },
+
+  updateBufferedAmount: function ts_updateBufferedAmount(bufferedAmount, trackingNumber) {
+    if (trackingNumber != this._trackingNumber) {
+      LOG("updateBufferedAmount is called but trackingNumber is not matched " +
+          "parent's trackingNumber: " + trackingNumber + ", child's trackingNumber: " +
+          this._trackingNumber);
+      return;
+    }
     this._bufferedAmount = bufferedAmount;
+    if (bufferedAmount == 0) {
+      if (this._waitingForDrain) {
+        this._waitingForDrain = false;
+        this.callListener("drain");
+      }
+    } else {
+      LOG("bufferedAmount is updated but haven't reaches zero. bufferedAmount: " +
+          bufferedAmount);
+    }
   },
 
   createAcceptedParent: function ts_createAcceptedParent(transport, binaryType) {
@@ -418,6 +458,25 @@ TCPSocket.prototype = {
 #else
     // Do nothing because _appId only exists on Gonk-specific platform.
 #endif
+  },
+
+  setOnUpdateBufferedAmountHandler: function(aFunction) {
+    if (typeof(aFunction) == 'function') {
+      this._onUpdateBufferedAmount = aFunction;
+    } else {
+      throw new Error("only function can be passed to " +
+                      "setOnUpdateBufferedAmountHandler");
+    }
+  },
+
+  /**
+   * Handle the requst of sending data and update trackingNumber from
+   * child.
+   * This function is expected to be called by TCPSocketChild.
+   */
+  onRecvSendFromChild: function(data, byteOffset, byteLength, trackingNumber) {
+    this._trackingNumber = trackingNumber;
+    this.send(data, byteOffset, byteLength);
   },
 
   /* end nsITCPSocketInternal methods */
@@ -479,9 +538,6 @@ TCPSocket.prototype = {
 
   // nsIDOMTCPSocket
   open: function ts_open(host, port, options) {
-    if (!this.initWindowless())
-      return null;
-
     this._inChild = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime)
                        .processType != Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
     LOG("content process: " + (this._inChild ? "true" : "false"));
@@ -520,8 +576,8 @@ TCPSocket.prototype = {
     if (this._inChild) {
       that._socketBridge = Cc["@mozilla.org/tcp-socket-child;1"]
                              .createInstance(Ci.nsITCPSocketChild);
-      that._socketBridge.open(that, host, port, !!that._ssl,
-                              that._binaryType, this.useWin, this.useWin || this);
+      that._socketBridge.sendOpen(that, host, port, !!that._ssl,
+                                  that._binaryType, this.useWin, this.useWin || this);
       return that;
     }
 
@@ -530,12 +586,12 @@ TCPSocket.prototype = {
     that._initStream(that._binaryType);
 
 #ifdef MOZ_WIDGET_GONK
-    // Set _connectionType, which is only required for network statistics.
+    // Set _activeNetwork, which is only required for network statistics.
     // Note that nsINetworkManager, as well as nsINetworkStatsServiceProxy, is
     // Gonk-specific.
     let networkManager = Cc["@mozilla.org/network/manager;1"].getService(Ci.nsINetworkManager);
-    if (networkManager && networkManager.active) {
-      that._connectionType = networkManager.active.type;
+    if (networkManager) {
+      that._activeNetwork = networkManager.active;
     }
 #endif
 
@@ -554,7 +610,7 @@ TCPSocket.prototype = {
     this._ssl = 'ssl';
 
     if (this._inChild) {
-      this._socketBridge.startTLS();
+      this._socketBridge.sendStartTLS();
       return;
     }
 
@@ -566,9 +622,6 @@ TCPSocket.prototype = {
   },
 
   listen: function ts_listen(localPort, options, backlog) {
-    if (!this.initWindowless())
-      return null;
-
     // in the testing case, init won't be called and
     // hasPrivileges will be null. We want to proceed to test.
     if (this._hasPrivileges !== true && this._hasPrivileges !== null) {
@@ -591,7 +644,7 @@ TCPSocket.prototype = {
     this._readyState = kCLOSING;
 
     if (this._inChild) {
-      this._socketBridge.close();
+      this._socketBridge.sendClose();
       return;
     }
 
@@ -611,15 +664,27 @@ TCPSocket.prototype = {
     }
 
     if (this._inChild) {
-      this._socketBridge.send(data, byteOffset, byteLength);
+      this._socketBridge.sendSend(data, byteOffset, byteLength, ++this._trackingNumber);
     }
 
     let length = this._binaryType === "arraybuffer" ? byteLength : data.length;
+    let newBufferedAmount = this.bufferedAmount + length;
+    let bufferFull = newBufferedAmount >= BUFFER_SIZE;
 
-    var newBufferedAmount = this.bufferedAmount + length;
-    var bufferNotFull = newBufferedAmount < BUFFER_SIZE;
+    if (bufferFull) {
+      // If we buffered more than some arbitrary amount of data,
+      // (65535 right now) we should tell the caller so they can
+      // wait until ondrain is called if they so desire. Once all the
+      // buffered data has been written to the socket, ondrain is
+      // called.
+      this._waitingForDrain = true;
+    }
+
     if (this._inChild) {
-      return bufferNotFull;
+      // In child, we just add buffer length to our bufferedAmount and let
+      // parent to update our bufferedAmount when data have been sent.
+      this._bufferedAmount = newBufferedAmount;
+      return !bufferFull;
     }
 
     let new_stream;
@@ -639,15 +704,6 @@ TCPSocket.prototype = {
       this._multiplexStream.appendStream(new_stream);
     }
 
-    if (newBufferedAmount >= BUFFER_SIZE) {
-      // If we buffered more than some arbitrary amount of data,
-      // (65535 right now) we should tell the caller so they can
-      // wait until ondrain is called if they so desire. Once all the
-      //buffered data has been written to the socket, ondrain is
-      // called.
-      this._waitingForDrain = true;
-    }
-
     this._ensureCopying();
 
 #ifdef MOZ_WIDGET_GONK
@@ -656,12 +712,12 @@ TCPSocket.prototype = {
     this._saveNetworkStats(false);
 #endif
 
-    return bufferNotFull;
+    return !bufferFull;
   },
 
   suspend: function ts_suspend() {
     if (this._inChild) {
-      this._socketBridge.suspend();
+      this._socketBridge.sendSuspend();
       return;
     }
 
@@ -674,7 +730,7 @@ TCPSocket.prototype = {
 
   resume: function ts_resume() {
     if (this._inChild) {
-      this._socketBridge.resume();
+      this._socketBridge.sendResume();
       return;
     }
 

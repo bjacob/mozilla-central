@@ -8,7 +8,6 @@
 #include "nsObjCExceptions.h"
 #include "nsCOMPtr.h"
 #include "nsWidgetsCID.h"
-#include "nsGUIEvent.h"
 #include "nsIRollupListener.h"
 #include "nsChildView.h"
 #include "TextInputHandler.h"
@@ -36,6 +35,7 @@
 #include "gfxPlatform.h"
 #include "qcms.h"
 
+#include "mozilla/BasicEvents.h"
 #include "mozilla/Preferences.h"
 #include <algorithm>
 
@@ -96,7 +96,7 @@ static void RollUpPopups()
   nsCOMPtr<nsIWidget> rollupWidget = rollupListener->GetRollupWidget();
   if (!rollupWidget)
     return;
-  rollupListener->Rollup(0, nullptr);
+  rollupListener->Rollup(0, nullptr, nullptr);
 }
 
 nsCocoaWindow::nsCocoaWindow()
@@ -471,7 +471,14 @@ nsresult nsCocoaWindow::CreateNativeWindow(const NSRect &aRect,
   }
 
   [mWindow setBackgroundColor:[NSColor clearColor]];
+#ifdef MOZ_B2G
+  // In B2G, we don't create popups and we need OMTC to work (because out of
+  // process compositing depends on it). Therefore, we don't need our windows
+  // to be transparent.
+  [mWindow setOpaque:YES];
+#else
   [mWindow setOpaque:NO];
+#endif
   [mWindow setContentMinSize:NSMakeSize(60, 60)];
   [mWindow disableCursorRects];
 
@@ -684,6 +691,8 @@ NS_IMETHODIMP nsCocoaWindow::Show(bool bState)
   // windows forward.
   if (!mSheetNeedsShow && !bState && ![mWindow isVisible])
     return NS_OK;
+
+  [mWindow setBeingShown:bState];
 
   nsIWidget* parentWidget = mParent;
   nsCOMPtr<nsPIWidgetCocoa> piParentWidget(do_QueryInterface(parentWidget));
@@ -903,6 +912,8 @@ NS_IMETHODIMP nsCocoaWindow::Show(bool bState)
   
   if (mPopupContentView)
       mPopupContentView->Show(bState);
+
+  [mWindow setBeingShown:NO];
 
   return NS_OK;
 
@@ -1594,7 +1605,8 @@ NS_IMETHODIMP nsCocoaWindow::SetTitle(const nsAString& aTitle)
     return NS_OK;
 
   const nsString& strTitle = PromiseFlatString(aTitle);
-  NSString* title = [NSString stringWithCharacters:strTitle.get() length:strTitle.Length()];
+  NSString* title = [NSString stringWithCharacters:reinterpret_cast<const unichar*>(strTitle.get())
+                                            length:strTitle.Length()];
   [mWindow setTitle:title];
 
   return NS_OK;
@@ -1676,7 +1688,7 @@ NS_IMETHODIMP nsCocoaWindow::GetSheetWindowParent(NSWindow** sheetWindowParent)
 
 // Invokes callback and ProcessEvent methods on Event Listener object
 NS_IMETHODIMP 
-nsCocoaWindow::DispatchEvent(nsGUIEvent* event, nsEventStatus& aStatus)
+nsCocoaWindow::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
 {
   aStatus = nsEventStatus_eIgnore;
 
@@ -1862,6 +1874,13 @@ NS_IMETHODIMP nsCocoaWindow::CaptureRollupEvents(nsIRollupListener* aListener, b
   gRollupListener = nullptr;
   
   if (aDoCapture) {
+    if (![NSApp isActive]) {
+      // We need to capture mouse event if we aren't
+      // the active application. We only set this up when needed
+      // because they cause spurious mouse event after crash
+      // and gdb sessions. See bug 699538.
+      nsToolkit::GetToolkit()->RegisterForAllProcessMouseEvents();
+    }
     gRollupListener = aListener;
 
     // Sometimes more than one popup window can be visible at the same time
@@ -1879,6 +1898,8 @@ NS_IMETHODIMP nsCocoaWindow::CaptureRollupEvents(nsIRollupListener* aListener, b
     if (mWindow && (mWindowType == eWindowType_popup))
       SetPopupWindowLevel();
   } else {
+    nsToolkit::GetToolkit()->UnregisterAllProcessMouseEventHandlers();
+
     // XXXndeakin this doesn't make sense.
     // Why is the new window assumed to be a modal panel?
     if (mWindow && (mWindowType == eWindowType_popup))
@@ -1972,6 +1993,15 @@ void nsCocoaWindow::SetShowsFullScreenButton(bool aShow)
 void nsCocoaWindow::SetWindowAnimationType(nsIWidget::WindowAnimationType aType)
 {
   mAnimationType = aType;
+}
+
+NS_IMETHODIMP nsCocoaWindow::SetNonClientMargins(nsIntMargin &margins)
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+
+  SetDrawsInTitlebar(margins.top == 0);
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }
 
 NS_IMETHODIMP nsCocoaWindow::SetWindowTitlebarColor(nscolor aColor, bool aActive)
@@ -2500,13 +2530,94 @@ GetDPI(NSWindow* aWindow)
   return dpi * backingScale;
 }
 
+@interface NSView(FrameViewMethodSwizzling)
+- (NSPoint)FrameView__closeButtonOrigin;
+- (NSPoint)FrameView__fullScreenButtonOrigin;
+@end
+
+@implementation NSView(FrameViewMethodSwizzling)
+
+- (NSPoint)FrameView__closeButtonOrigin
+{
+  NSPoint defaultPosition = [self FrameView__closeButtonOrigin];
+  if ([[self window] isKindOfClass:[ToolbarWindow class]]) {
+    return [(ToolbarWindow*)[self window] windowButtonsPositionWithDefaultPosition:defaultPosition];
+  }
+  return defaultPosition;
+}
+
+- (NSPoint)FrameView__fullScreenButtonOrigin
+{
+  NSPoint defaultPosition = [self FrameView__fullScreenButtonOrigin];
+  if ([[self window] isKindOfClass:[ToolbarWindow class]]) {
+    return [(ToolbarWindow*)[self window] fullScreenButtonPositionWithDefaultPosition:defaultPosition];
+  }
+  return defaultPosition;
+}
+
+@end
+
+static NSMutableSet *gSwizzledFrameViewClasses = nil;
+
 @interface BaseWindow(Private)
 - (void)removeTrackingArea;
 - (void)cursorUpdated:(NSEvent*)aEvent;
 - (void)updateContentViewSize;
+- (void)reflowTitlebarElements;
 @end
 
 @implementation BaseWindow
+
+// The frame of a window is implemented using undocumented NSView subclasses.
+// We offset the window buttons by overriding the methods _closeButtonOrigin
+// and _fullScreenButtonOrigin on these frame view classes. The class which is
+// used for a window is determined in the window's frameViewClassForStyleMask:
+// method, so this is where we make sure that we have swizzled the method on
+// all encountered classes.
++ (Class)frameViewClassForStyleMask:(NSUInteger)styleMask
+{
+  Class frameViewClass = [super frameViewClassForStyleMask:styleMask];
+
+  if (!gSwizzledFrameViewClasses) {
+    gSwizzledFrameViewClasses = [[NSMutableSet setWithCapacity:3] retain];
+    if (!gSwizzledFrameViewClasses) {
+      return frameViewClass;
+    }
+  }
+
+  static IMP our_closeButtonOrigin =
+    class_getMethodImplementation([NSView class],
+                                  @selector(FrameView__closeButtonOrigin));
+  static IMP our_fullScreenButtonOrigin =
+    class_getMethodImplementation([NSView class],
+                                  @selector(FrameView__fullScreenButtonOrigin));
+
+  if (![gSwizzledFrameViewClasses containsObject:frameViewClass]) {
+    // Either of these methods might be implemented in both a subclass of
+    // NSFrameView and one of its own subclasses.  Which means that if we
+    // aren't careful we might end up swizzling the same method twice.
+    // Since method swizzling involves swapping pointers, this would break
+    // things.
+    IMP _closeButtonOrigin =
+      class_getMethodImplementation(frameViewClass,
+                                    @selector(_closeButtonOrigin));
+    if (_closeButtonOrigin && _closeButtonOrigin != our_closeButtonOrigin) {
+      nsToolkit::SwizzleMethods(frameViewClass, @selector(_closeButtonOrigin),
+                                @selector(FrameView__closeButtonOrigin));
+    }
+    IMP _fullScreenButtonOrigin =
+      class_getMethodImplementation(frameViewClass,
+                                    @selector(_fullScreenButtonOrigin));
+    if (_fullScreenButtonOrigin &&
+        _fullScreenButtonOrigin != our_fullScreenButtonOrigin) {
+      nsToolkit::SwizzleMethods(frameViewClass, @selector(_fullScreenButtonOrigin),
+                                @selector(FrameView__fullScreenButtonOrigin));
+    }
+    [gSwizzledFrameViewClasses addObject:frameViewClass];
+  }
+
+  return frameViewClass;
+}
 
 - (id)initWithContentRect:(NSRect)aContentRect styleMask:(NSUInteger)aStyle backing:(NSBackingStoreType)aBufferingType defer:(BOOL)aFlag
 {
@@ -2518,9 +2629,20 @@ GetDPI(NSWindow* aWindow)
   mScheduledShadowInvalidation = NO;
   mDPI = GetDPI(self);
   mTrackingArea = nil;
+  mBeingShown = NO;
   [self updateTrackingArea];
 
   return self;
+}
+
+- (void)setBeingShown:(BOOL)aValue
+{
+  mBeingShown = aValue;
+}
+
+- (BOOL)isVisibleOrBeingShown
+{
+  return [super isVisible] || mBeingShown;
 }
 
 - (void)dealloc
@@ -2568,8 +2690,12 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
 
 - (void)setDrawsContentsIntoWindowFrame:(BOOL)aState
 {
+  bool changed = (aState != mDrawsIntoWindowFrame);
   mDrawsIntoWindowFrame = aState;
-  [self updateContentViewSize];
+  if (changed) {
+    [self updateContentViewSize];
+    [self reflowTitlebarElements];
+  }
 }
 
 - (BOOL)drawsContentsIntoWindowFrame
@@ -2682,6 +2808,15 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
 {
   NSRect rect = [self contentRectForFrameRect:[self frame]];
   [[self contentView] setFrameSize:rect.size];
+}
+
+// Possibly move the titlebar buttons.
+- (void)reflowTitlebarElements
+{
+  NSView *frameView = [[self contentView] superview];
+  if ([frameView respondsToSelector:@selector(_tileTitlebarAndRedisplay:)]) {
+    [frameView _tileTitlebarAndRedisplay:NO];
+  }
 }
 
 // Override methods that translate between content rect and frame rect.
@@ -2884,6 +3019,8 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
     mBackgroundColor = [[NSColor whiteColor] retain];
 
     mUnifiedToolbarHeight = 22.0f;
+    mWindowButtonsRect = NSZeroRect;
+    mFullScreenButtonRect = NSZeroRect;
 
     // setBottomCornerRounded: is a private API call, so we check to make sure
     // we respond to it just in case.
@@ -3016,6 +3153,40 @@ static const NSString* kStateShowsToolbarButton = @"showsToolbarButton";
     // we'll send a mouse move event with the correct new position.
     ChildViewMouseTracker::ResendLastMouseMoveEvent();
   }
+}
+
+- (void)placeWindowButtons:(NSRect)aRect
+{
+  if (!NSEqualRects(mWindowButtonsRect, aRect)) {
+    mWindowButtonsRect = aRect;
+    [self reflowTitlebarElements];
+  }
+}
+
+- (NSPoint)windowButtonsPositionWithDefaultPosition:(NSPoint)aDefaultPosition
+{
+  if ([self drawsContentsIntoWindowFrame] && !NSIsEmptyRect(mWindowButtonsRect)) {
+    return NSMakePoint(std::max(mWindowButtonsRect.origin.x, aDefaultPosition.x),
+                       std::min(mWindowButtonsRect.origin.y, aDefaultPosition.y));
+  }
+  return aDefaultPosition;
+}
+
+- (void)placeFullScreenButton:(NSRect)aRect
+{
+  if (!NSEqualRects(mFullScreenButtonRect, aRect)) {
+    mFullScreenButtonRect = aRect;
+    [self reflowTitlebarElements];
+  }
+}
+
+- (NSPoint)fullScreenButtonPositionWithDefaultPosition:(NSPoint)aDefaultPosition;
+{
+  if ([self drawsContentsIntoWindowFrame] && !NSIsEmptyRect(mFullScreenButtonRect)) {
+    return NSMakePoint(std::min(mFullScreenButtonRect.origin.x, aDefaultPosition.x),
+                       std::min(mFullScreenButtonRect.origin.y, aDefaultPosition.y));
+  }
+  return aDefaultPosition;
 }
 
 // Returning YES here makes the setShowsToolbarButton method work even though

@@ -35,9 +35,9 @@ interface TestJSImplInterface {
   void passByte(byte arg);
   byte receiveByte();
   void passOptionalByte(optional byte arg);
-  void passOptionalUndefinedMissingByte([TreatUndefinedAs=Missing] optional byte arg);
+  void passOptionalByteBeforeRequired(optional byte arg1, byte arg2);
   void passOptionalByteWithDefault(optional byte arg = 0);
-  void passOptionalUndefinedMissingByteWithDefault([TreatUndefinedAs=Missing] optional byte arg = 0);
+  void passOptionalByteWithDefaultBeforeRequired(optional byte arg1 = 0, byte arg2);
   void passNullableByte(byte? arg);
   void passOptionalNullableByte(optional byte? arg);
   void passVariadicByte(byte... arg);
@@ -145,18 +145,18 @@ interface TestJSImplInterface {
   void passOptionalSelfWithDefault(optional TestJSImplInterface? arg = null);
 
   // Non-wrapper-cache interface types
-  [Creator]
+  [NewObject]
   TestNonWrapperCacheInterface receiveNonWrapperCacheInterface();
-  [Creator]
+  [NewObject]
   TestNonWrapperCacheInterface? receiveNullableNonWrapperCacheInterface();
 
-  [Creator]
+  [NewObject]
   sequence<TestNonWrapperCacheInterface> receiveNonWrapperCacheInterfaceSequence();
-  [Creator]
+  [NewObject]
   sequence<TestNonWrapperCacheInterface?> receiveNullableNonWrapperCacheInterfaceSequence();
-  [Creator]
+  [NewObject]
   sequence<TestNonWrapperCacheInterface>? receiveNonWrapperCacheInterfaceNullableSequence();
-  [Creator]
+  [NewObject]
   sequence<TestNonWrapperCacheInterface?>? receiveNullableNonWrapperCacheInterfaceNullableSequence();
 
   // Non-castable interface types
@@ -285,9 +285,7 @@ interface TestJSImplInterface {
   void passString(DOMString arg);
   void passNullableString(DOMString? arg);
   void passOptionalString(optional DOMString arg);
-  void passOptionalUndefinedMissingString([TreatUndefinedAs=Missing] optional DOMString arg);
   void passOptionalStringWithDefaultValue(optional DOMString arg = "abc");
-  void passOptionalUndefinedMissingStringWithDefaultValue([TreatUndefinedAs=Missing] optional DOMString arg = "abc");
   void passOptionalNullableString(optional DOMString? arg);
   void passOptionalNullableStringWithDefaultValue(optional DOMString? arg = null);
   void passVariadicString(DOMString... arg);
@@ -358,15 +356,23 @@ interface TestJSImplInterface {
 
   // Union types
   void passUnion((object or long) arg);
-  // Commented out tests 2-9 to avoid creating all those unused union types
-  /* void passUnion2((long or boolean) arg);
+  // Some union tests are debug-only to avoid creating all those
+  // unused union types in opt builds.
+#ifdef DEBUG
+  void passUnion2((long or boolean) arg);
   void passUnion3((object or long or boolean) arg);
   void passUnion4((Node or long or boolean) arg);
   void passUnion5((object or boolean) arg);
   void passUnion6((object or DOMString) arg);
   void passUnion7((object or DOMString or long) arg);
   void passUnion8((object or DOMString or boolean) arg);
-  void passUnion9((object or DOMString or long or boolean) arg); */
+  void passUnion9((object or DOMString or long or boolean) arg);
+  void passUnion10(optional (EventInit or long) arg);
+  void passUnion11(optional (CustomEventInit or long) arg);
+  void passUnion12(optional (EventInit or long) arg = 5);
+  void passUnion13(optional (object or long?) arg = null);
+  void passUnion14(optional (object or long?) arg = 5);
+#endif
   void passUnionWithNullable((object? or long) arg);
   // FIXME: Bug 863948 Nullable unions not supported yet
   //   void passNullableUnion((object or long)? arg);
@@ -501,6 +507,22 @@ interface TestJSImplInterface {
   void overload7(ByteString arg);
   void overload8(long arg);
   void overload8(TestJSImplInterface arg);
+  void overload9(long? arg);
+  void overload9(DOMString arg);
+  void overload10(long? arg);
+  void overload10(object arg);
+  void overload11(long arg);
+  void overload11(DOMString? arg);
+  void overload12(long arg);
+  void overload12(boolean? arg);
+  void overload13(long? arg);
+  void overload13(boolean arg);
+  void overload14(optional long arg);
+  void overload14(TestInterface arg);
+  void overload15(long arg);
+  void overload15(optional TestInterface arg);
+  void overload16(long arg);
+  void overload16(optional TestInterface? arg);
 
   // Variadic handling
   void passVariadicThirdArg(DOMString arg1, long arg2, TestJSImplInterface... arg3);

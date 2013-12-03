@@ -9,9 +9,13 @@
           xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
           xmlns:html="http://www.w3.org/1999/xhtml">
   <binding id="circular-progress-indicator">
+    <resources>
+      <stylesheet src="chrome://browser/skin/circularprogress.css"/>
+    </resources>
+
     <content>
       <xul:stack>
-        <xul:toolbarbutton anonid="progressButton" class="circularprogressindicator-progressButton appbar-secondary"/>
+        <xul:toolbarbutton anonid="progressButton" class="circularprogressindicator-progressButton"/>
         <html:div anonid="progressTrack" xbl:inherits="progress" class="circularprogressindicator-progressTrack"></html:div>
         <html:canvas anonid="progressRing" xbl:inherits="progress" class="circularprogressindicator-progressRing" width="40" height="40"></html:canvas>
       </xul:stack>

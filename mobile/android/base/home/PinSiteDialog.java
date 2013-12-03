@@ -20,9 +20,11 @@ import android.support.v4.widget.CursorAdapter;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.EditText;
 import android.widget.ListView;
@@ -94,7 +96,35 @@ class PinSiteDialog extends DialogFragment {
 
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
-                filter(mSearch.getText().toString());
+                setSearchTerm(mSearch.getText().toString());
+                filter(mSearchTerm);
+            }
+        });
+
+        mSearch.setOnKeyListener(new View.OnKeyListener() {
+            @Override
+            public boolean onKey(View v, int keyCode, KeyEvent event) {
+                if (keyCode != KeyEvent.KEYCODE_ENTER || mOnSiteSelectedListener == null) {
+                    return false;
+                }
+
+                // If the user manually entered a search term or URL, wrap the value in
+                // a special URI until we can get a valid URL for this bookmark.
+                final String text = mSearch.getText().toString();
+                final String url = TopSitesPage.encodeUserEnteredUrl(text);
+                mOnSiteSelectedListener.onSiteSelected(url, text);
+
+                dismiss();
+                return true;
+            }
+        });
+
+        mSearch.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (hasFocus) {
+                    getDialog().getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+                }
             }
         });
 
@@ -135,20 +165,23 @@ class PinSiteDialog extends DialogFragment {
         // Reconnect to the loader only if present
         manager.initLoader(LOADER_ID_SEARCH, null, mLoaderCallbacks);
 
-        // Default filter.
+        // If there is a search term, put it in the text field
+        if (!TextUtils.isEmpty(mSearchTerm)) {
+            mSearch.setText(mSearchTerm);
+            mSearch.selectAll();
+        }
+
+        // Always start with an empty filter
         filter("");
     }
 
-    private void filter(String searchTerm) {
-        if (!TextUtils.isEmpty(searchTerm) &&
-            TextUtils.equals(mSearchTerm, searchTerm)) {
-            return;
-        }
-
+    public void setSearchTerm(String searchTerm) {
         mSearchTerm = searchTerm;
+    }
 
+    private void filter(String searchTerm) {
         // Restart loaders with the new search term
-        SearchLoader.restart(getLoaderManager(), LOADER_ID_SEARCH, mLoaderCallbacks, mSearchTerm);
+        SearchLoader.restart(getLoaderManager(), LOADER_ID_SEARCH, mLoaderCallbacks, searchTerm);
     }
 
     public void setOnSiteSelectedListener(OnSiteSelectedListener listener) {
@@ -159,7 +192,7 @@ class PinSiteDialog extends DialogFragment {
         private LayoutInflater mInflater;
 
         public SearchAdapter(Context context) {
-            super(context, null);
+            super(context, null, 0);
             mInflater = LayoutInflater.from(context);
         }
 

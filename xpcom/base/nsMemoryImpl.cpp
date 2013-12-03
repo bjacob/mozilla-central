@@ -15,6 +15,11 @@
 
 #ifdef ANDROID
 #include <stdio.h>
+
+// Minimum memory threshold for a device to be considered
+// a low memory platform. This value has be in sync with
+// Java's equivalent threshold, defined in
+// mobile/android/base/util/HardwareUtils.java
 #define LOW_MEMORY_THRESHOLD_KB (384 * 1024)
 #endif
 
@@ -69,7 +74,7 @@ nsMemoryImpl::IsLowMemoryPlatform(bool *result)
             return NS_OK;
         }
         uint64_t mem = 0;
-        int rv = fscanf(fd, "MemTotal: %lu kB", &mem);
+        int rv = fscanf(fd, "MemTotal: %llu kB", &mem);
         if (fclose(fd)) {
             return NS_OK;
         }
@@ -88,7 +93,8 @@ nsMemoryImpl::IsLowMemoryPlatform(bool *result)
 /*static*/ nsresult
 nsMemoryImpl::Create(nsISupports* outer, const nsIID& aIID, void **aResult)
 {
-    NS_ENSURE_NO_AGGREGATION(outer);
+    if (NS_WARN_IF(outer))
+        return NS_ERROR_NO_AGGREGATION;
     return sGlobalMemory.QueryInterface(aIID, aResult);
 }
 

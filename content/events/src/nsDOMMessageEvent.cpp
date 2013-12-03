@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsDOMMessageEvent.h"
+#include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/MessagePortList.h"
@@ -43,7 +44,7 @@ NS_IMPL_RELEASE_INHERITED(nsDOMMessageEvent, nsDOMEvent)
 
 nsDOMMessageEvent::nsDOMMessageEvent(mozilla::dom::EventTarget* aOwner,
                                      nsPresContext* aPresContext,
-                                     nsEvent* aEvent)
+                                     WidgetEvent* aEvent)
   : nsDOMEvent(aOwner, aPresContext, aEvent),
     mData(JSVAL_VOID)
 {
@@ -53,6 +54,12 @@ nsDOMMessageEvent::~nsDOMMessageEvent()
 {
   mData = JSVAL_VOID;
   mozilla::DropJSObjects(this);
+}
+
+JSObject*
+nsDOMMessageEvent::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+{
+  return mozilla::dom::MessageEventBinding::Wrap(aCx, aScope, this);
 }
 
 NS_IMETHODIMP
@@ -67,7 +74,7 @@ JS::Value
 nsDOMMessageEvent::GetData(JSContext* aCx, ErrorResult& aRv)
 {
   JS::Rooted<JS::Value> data(aCx, mData);
-  if (!JS_WrapValue(aCx, data.address())) {
+  if (!JS_WrapValue(aCx, &data)) {
     aRv.Throw(NS_ERROR_FAILURE);
   }
   return data;
@@ -148,8 +155,8 @@ nsDOMMessageEvent::Constructor(const mozilla::dom::GlobalObject& aGlobal,
     }
 
     if (!event->mWindowSource) {
-      MessagePort* port = nullptr;
-      nsresult rv = UNWRAP_OBJECT(MessagePort, aCx, aParam.mSource, port);
+      MessagePortBase* port = nullptr;
+      nsresult rv = UNWRAP_OBJECT(MessagePort, aParam.mSource, port);
       if (NS_FAILED(rv)) {
         aRv.Throw(NS_ERROR_INVALID_ARG);
         return nullptr;
@@ -160,7 +167,7 @@ nsDOMMessageEvent::Constructor(const mozilla::dom::GlobalObject& aGlobal,
   }
 
   if (aParam.mPorts.WasPassed() && !aParam.mPorts.Value().IsNull()) {
-    nsTArray<nsRefPtr<MessagePort> > ports;
+    nsTArray<nsRefPtr<MessagePortBase>> ports;
     for (uint32_t i = 0, len = aParam.mPorts.Value().Value().Length(); i < len; ++i) {
       ports.AppendElement(aParam.mPorts.Value().Value()[i].get());
     }
@@ -193,11 +200,18 @@ nsDOMMessageEvent::InitMessageEvent(const nsAString& aType,
   return NS_OK;
 }
 
+void
+nsDOMMessageEvent::SetPorts(mozilla::dom::MessagePortList* aPorts)
+{
+  MOZ_ASSERT(!mPorts && aPorts);
+  mPorts = aPorts;
+}
+
 nsresult
 NS_NewDOMMessageEvent(nsIDOMEvent** aInstancePtrResult,
                       mozilla::dom::EventTarget* aOwner,
                       nsPresContext* aPresContext,
-                      nsEvent* aEvent) 
+                      WidgetEvent* aEvent) 
 {
   nsDOMMessageEvent* it = new nsDOMMessageEvent(aOwner, aPresContext, aEvent);
 

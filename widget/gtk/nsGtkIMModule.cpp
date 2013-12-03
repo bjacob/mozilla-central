@@ -12,8 +12,10 @@
 
 #include "nsGtkIMModule.h"
 #include "nsWindow.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/Likely.h"
+#include "mozilla/MiscEvents.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/TextEvents.h"
 
 using namespace mozilla;
 using namespace mozilla::widget;
@@ -63,6 +65,7 @@ nsGtkIMModule* nsGtkIMModule::sLastFocusedModule = nullptr;
 nsGtkIMModule::nsGtkIMModule(nsWindow* aOwnerWindow) :
     mOwnerWindow(aOwnerWindow), mLastFocusedWindow(nullptr),
     mContext(nullptr),
+    mSimpleContext(nullptr),
     mDummyContext(nullptr),
     mCompositionStart(UINT32_MAX), mProcessingKeyEvent(nullptr),
     mCompositionState(eCompositionState_NotComposing),
@@ -109,6 +112,28 @@ nsGtkIMModule::Init()
                      G_CALLBACK(nsGtkIMModule::OnStartCompositionCallback),
                      this);
     g_signal_connect(mContext, "preedit_end",
+                     G_CALLBACK(nsGtkIMModule::OnEndCompositionCallback),
+                     this);
+
+    // Simple context
+    mSimpleContext = gtk_im_context_simple_new();
+    gtk_im_context_set_client_window(mSimpleContext, gdkWindow);
+    g_signal_connect(mSimpleContext, "preedit_changed",
+                     G_CALLBACK(&nsGtkIMModule::OnChangeCompositionCallback),
+                     this);
+    g_signal_connect(mSimpleContext, "retrieve_surrounding",
+                     G_CALLBACK(&nsGtkIMModule::OnRetrieveSurroundingCallback),
+                     this);
+    g_signal_connect(mSimpleContext, "delete_surrounding",
+                     G_CALLBACK(&nsGtkIMModule::OnDeleteSurroundingCallback),
+                     this);
+    g_signal_connect(mSimpleContext, "commit",
+                     G_CALLBACK(&nsGtkIMModule::OnCommitCompositionCallback),
+                     this);
+    g_signal_connect(mSimpleContext, "preedit_start",
+                     G_CALLBACK(nsGtkIMModule::OnStartCompositionCallback),
+                     this);
+    g_signal_connect(mSimpleContext, "preedit_end",
                      G_CALLBACK(nsGtkIMModule::OnEndCompositionCallback),
                      this);
 
@@ -166,6 +191,12 @@ nsGtkIMModule::OnDestroyWindow(nsWindow* aWindow)
         mContext = nullptr;
     }
 
+    if (mSimpleContext) {
+        gtk_im_context_set_client_window(mSimpleContext, nullptr);
+        g_object_unref(mSimpleContext);
+        mSimpleContext = nullptr;
+    }
+
     if (mDummyContext) {
         // mContext and mDummyContext have the same slaveType and signal_data
         // so no need for another workaround_gtk_im_display_closed.
@@ -210,7 +241,7 @@ nsGtkIMModule::PrepareToDestroyContext(GtkIMContext *aContext)
 #if (MOZ_WIDGET_GTK == 2)
     GtkIMContext *slave = multicontext->slave;
 #else
-    GtkIMContext *slave = NULL; //TODO GTK3
+    GtkIMContext *slave = nullptr; //TODO GTK3
 #endif
     if (!slave) {
         return;
@@ -219,7 +250,7 @@ nsGtkIMModule::PrepareToDestroyContext(GtkIMContext *aContext)
     GType slaveType = G_TYPE_FROM_INSTANCE(slave);
     const gchar *im_type_name = g_type_name(slaveType);
     if (strcmp(im_type_name, "GtkIMContextXIM") == 0) {
-        if (gtk_check_version(2, 12, 1) == NULL) {
+        if (gtk_check_version(2, 12, 1) == nullptr) {
             return; // gtk bug has been fixed
         }
 
@@ -238,7 +269,7 @@ nsGtkIMModule::PrepareToDestroyContext(GtkIMContext *aContext)
 
         g_signal_handlers_disconnect_matched(
             gtk_widget_get_display(GTK_WIDGET(container)),
-            G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, signal_data);
+            G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, signal_data);
 
         // Add a reference to prevent the XIM module from being unloaded
         // and reloaded: each time the module is loaded and used, it
@@ -546,7 +577,9 @@ nsGtkIMModule::GetContext()
     if (IsEnabled()) {
         return mContext;
     }
-
+    if (mInputContext.mIMEState.mEnabled == IMEState::PASSWORD) {
+        return mSimpleContext;
+    }
     return mDummyContext;
 }
 
@@ -554,7 +587,6 @@ bool
 nsGtkIMModule::IsEnabled()
 {
     return mInputContext.mIMEState.mEnabled == IMEState::ENABLED ||
-           mInputContext.mIMEState.mEnabled == IMEState::PASSWORD ||
            mInputContext.mIMEState.mEnabled == IMEState::PLUGIN;
 }
 
@@ -927,8 +959,8 @@ nsGtkIMModule::DispatchCompositionStart()
     }
 
     nsEventStatus status;
-    nsQueryContentEvent selection(true, NS_QUERY_SELECTED_TEXT,
-                                  mLastFocusedWindow);
+    WidgetQueryContentEvent selection(true, NS_QUERY_SELECTED_TEXT,
+                                      mLastFocusedWindow);
     InitEvent(selection);
     mLastFocusedWindow->DispatchEvent(&selection, status);
 
@@ -972,8 +1004,8 @@ nsGtkIMModule::DispatchCompositionStart()
     PR_LOG(gGtkIMLog, PR_LOG_ALWAYS,
         ("    mCompositionStart=%u", mCompositionStart));
     mCompositionState = eCompositionState_CompositionStartDispatched;
-    nsCompositionEvent compEvent(true, NS_COMPOSITION_START,
-                                 mLastFocusedWindow);
+    WidgetCompositionEvent compEvent(true, NS_COMPOSITION_START,
+                                     mLastFocusedWindow);
     InitEvent(compEvent);
     nsCOMPtr<nsIWidget> kungFuDeathGrip = mLastFocusedWindow;
     mLastFocusedWindow->DispatchEvent(&compEvent, status);
@@ -1008,8 +1040,8 @@ nsGtkIMModule::DispatchCompositionEnd()
         return false;
     }
 
-    nsCompositionEvent compEvent(true, NS_COMPOSITION_END,
-                                 mLastFocusedWindow);
+    WidgetCompositionEvent compEvent(true, NS_COMPOSITION_END,
+                                     mLastFocusedWindow);
     InitEvent(compEvent);
     compEvent.data = mDispatchedCompositionString;
     nsEventStatus status;
@@ -1055,8 +1087,8 @@ nsGtkIMModule::DispatchTextEvent(const nsAString &aCompositionString,
     nsRefPtr<nsWindow> lastFocusedWindow = mLastFocusedWindow;
 
     if (aCompositionString != mDispatchedCompositionString) {
-      nsCompositionEvent compositionUpdate(true, NS_COMPOSITION_UPDATE,
-                                           mLastFocusedWindow);
+      WidgetCompositionEvent compositionUpdate(true, NS_COMPOSITION_UPDATE,
+                                               mLastFocusedWindow);
       InitEvent(compositionUpdate);
       compositionUpdate.data = aCompositionString;
       mDispatchedCompositionString = aCompositionString;
@@ -1073,9 +1105,9 @@ nsGtkIMModule::DispatchTextEvent(const nsAString &aCompositionString,
     if (mCompositionState == eCompositionState_CompositionStartDispatched) {
         // XXX We should assume, for now, any web applications don't change
         //     selection at handling this text event.
-        nsQueryContentEvent querySelectedTextEvent(true,
-                                                   NS_QUERY_SELECTED_TEXT,
-                                                   mLastFocusedWindow);
+        WidgetQueryContentEvent querySelectedTextEvent(true,
+                                                       NS_QUERY_SELECTED_TEXT,
+                                                       mLastFocusedWindow);
         mLastFocusedWindow->DispatchEvent(&querySelectedTextEvent, status);
         if (querySelectedTextEvent.mSucceeded) {
             mSelectedString = querySelectedTextEvent.mReply.mString;
@@ -1083,18 +1115,18 @@ nsGtkIMModule::DispatchTextEvent(const nsAString &aCompositionString,
         }
     }
 
-    nsTextEvent textEvent(true, NS_TEXT_TEXT, mLastFocusedWindow);
+    WidgetTextEvent textEvent(true, NS_TEXT_TEXT, mLastFocusedWindow);
     InitEvent(textEvent);
 
     uint32_t targetOffset = mCompositionStart;
 
-    nsAutoTArray<nsTextRange, 4> textRanges;
+    nsAutoTArray<TextRange, 4> textRanges;
     if (!aIsCommit) {
         // NOTE: SetTextRangeList() assumes that mDispatchedCompositionString
         //       has been updated already.
         SetTextRangeList(textRanges);
         for (uint32_t i = 0; i < textRanges.Length(); i++) {
-            nsTextRange& range = textRanges[i];
+            TextRange& range = textRanges[i];
             if (range.mRangeType == NS_TEXTRANGE_SELECTEDRAWTEXT ||
                 range.mRangeType == NS_TEXTRANGE_SELECTEDCONVERTEDTEXT) {
                 targetOffset += range.mStartOffset;
@@ -1125,7 +1157,7 @@ nsGtkIMModule::DispatchTextEvent(const nsAString &aCompositionString,
 }
 
 void
-nsGtkIMModule::SetTextRangeList(nsTArray<nsTextRange> &aTextRangeList)
+nsGtkIMModule::SetTextRangeList(nsTArray<TextRange> &aTextRangeList)
 {
     PR_LOG(gGtkIMLog, PR_LOG_ALWAYS,
         ("GtkIMModule(%p): SetTextRangeList", this));
@@ -1177,7 +1209,7 @@ nsGtkIMModule::SetTextRangeList(nsTArray<nsTextRange> &aTextRangeList)
         gint start, end;
         pango_attr_iterator_range(iter, &start, &end);
 
-        nsTextRange range;
+        TextRange range;
         // XIMReverse | XIMUnderline
         if (attrUnderline && attrForeground) {
             range.mRangeType = NS_TEXTRANGE_SELECTEDCONVERTEDTEXT;
@@ -1199,7 +1231,7 @@ nsGtkIMModule::SetTextRangeList(nsTArray<nsTextRange> &aTextRangeList)
         } else {
             glong uniStrLen;
             uniStr = g_utf8_to_utf16(preedit_string, start,
-                                     NULL, &uniStrLen, NULL);
+                                     nullptr, &uniStrLen, nullptr);
             if (uniStr) {
                 range.mStartOffset = uniStrLen;
                 g_free(uniStr);
@@ -1209,7 +1241,7 @@ nsGtkIMModule::SetTextRangeList(nsTArray<nsTextRange> &aTextRangeList)
 
         glong uniStrLen;
         uniStr = g_utf8_to_utf16(preedit_string + start, end - start,
-                                 NULL, &uniStrLen, NULL);
+                                 nullptr, &uniStrLen, nullptr);
         if (!uniStr) {
             range.mEndOffset = range.mStartOffset;
         } else {
@@ -1226,7 +1258,7 @@ nsGtkIMModule::SetTextRangeList(nsTArray<nsTextRange> &aTextRangeList)
              GetRangeTypeName(range.mRangeType)));
     } while (pango_attr_iterator_next(iter));
 
-    nsTextRange range;
+    TextRange range;
     if (cursor_pos < 0) {
         range.mStartOffset = 0;
     } else if (uint32_t(cursor_pos) > mDispatchedCompositionString.Length()) {
@@ -1274,8 +1306,8 @@ nsGtkIMModule::SetCursorPosition(uint32_t aTargetOffset)
         return;
     }
 
-    nsQueryContentEvent charRect(true, NS_QUERY_TEXT_RECT,
-                                 mLastFocusedWindow);
+    WidgetQueryContentEvent charRect(true, NS_QUERY_TEXT_RECT,
+                                     mLastFocusedWindow);
     charRect.InitForQueryTextRect(aTargetOffset, 1);
     InitEvent(charRect);
     nsEventStatus status;
@@ -1328,9 +1360,9 @@ nsGtkIMModule::GetCurrentParagraph(nsAString& aText, uint32_t& aCursorPos)
     // current selection.
     if (!EditorHasCompositionString()) {
         // Query cursor position & selection
-        nsQueryContentEvent querySelectedTextEvent(true,
-                                                   NS_QUERY_SELECTED_TEXT,
-                                                   mLastFocusedWindow);
+        WidgetQueryContentEvent querySelectedTextEvent(true,
+                                                       NS_QUERY_SELECTED_TEXT,
+                                                       mLastFocusedWindow);
         mLastFocusedWindow->DispatchEvent(&querySelectedTextEvent, status);
         NS_ENSURE_TRUE(querySelectedTextEvent.mSucceeded, NS_ERROR_FAILURE);
 
@@ -1353,9 +1385,9 @@ nsGtkIMModule::GetCurrentParagraph(nsAString& aText, uint32_t& aCursorPos)
     }
 
     // Get all text contents of the focused editor
-    nsQueryContentEvent queryTextContentEvent(true,
-                                              NS_QUERY_TEXT_CONTENT,
-                                              mLastFocusedWindow);
+    WidgetQueryContentEvent queryTextContentEvent(true,
+                                                  NS_QUERY_TEXT_CONTENT,
+                                                  mLastFocusedWindow);
     queryTextContentEvent.InitForQueryTextContent(0, UINT32_MAX);
     mLastFocusedWindow->DispatchEvent(&queryTextContentEvent, status);
     NS_ENSURE_TRUE(queryTextContentEvent.mSucceeded, NS_ERROR_FAILURE);
@@ -1438,9 +1470,9 @@ nsGtkIMModule::DeleteText(const int32_t aOffset, const uint32_t aNChars)
         }
     } else {
         // Query cursor position & selection
-        nsQueryContentEvent querySelectedTextEvent(true,
-                                                   NS_QUERY_SELECTED_TEXT,
-                                                   mLastFocusedWindow);
+        WidgetQueryContentEvent querySelectedTextEvent(true,
+                                                       NS_QUERY_SELECTED_TEXT,
+                                                       mLastFocusedWindow);
         lastFocusedWindow->DispatchEvent(&querySelectedTextEvent, status);
         NS_ENSURE_TRUE(querySelectedTextEvent.mSucceeded, NS_ERROR_FAILURE);
 
@@ -1448,9 +1480,9 @@ nsGtkIMModule::DeleteText(const int32_t aOffset, const uint32_t aNChars)
     }
 
     // Get all text contents of the focused editor
-    nsQueryContentEvent queryTextContentEvent(true,
-                                              NS_QUERY_TEXT_CONTENT,
-                                              mLastFocusedWindow);
+    WidgetQueryContentEvent queryTextContentEvent(true,
+                                                  NS_QUERY_TEXT_CONTENT,
+                                                  mLastFocusedWindow);
     queryTextContentEvent.InitForQueryTextContent(0, UINT32_MAX);
     mLastFocusedWindow->DispatchEvent(&queryTextContentEvent, status);
     NS_ENSURE_TRUE(queryTextContentEvent.mSucceeded, NS_ERROR_FAILURE);
@@ -1494,8 +1526,8 @@ nsGtkIMModule::DeleteText(const int32_t aOffset, const uint32_t aNChars)
         g_utf8_offset_to_pointer(utf8Str.get(), endInUTF8Characters);
 
     // Set selection to delete
-    nsSelectionEvent selectionEvent(true, NS_SELECTION_SET,
-                                    mLastFocusedWindow);
+    WidgetSelectionEvent selectionEvent(true, NS_SELECTION_SET,
+                                        mLastFocusedWindow);
 
     nsDependentCSubstring utf8StrBeforeOffset(utf8Str, 0,
                                               charAtOffset - utf8Str.get());
@@ -1522,9 +1554,9 @@ nsGtkIMModule::DeleteText(const int32_t aOffset, const uint32_t aNChars)
     }
 
     // Delete the selection
-    nsContentCommandEvent contentCommandEvent(true,
-                                              NS_CONTENT_COMMAND_DELETE,
-                                              mLastFocusedWindow);
+    WidgetContentCommandEvent contentCommandEvent(true,
+                                                  NS_CONTENT_COMMAND_DELETE,
+                                                  mLastFocusedWindow);
     mLastFocusedWindow->DispatchEvent(&contentCommandEvent, status);
 
     if (!contentCommandEvent.mSucceeded ||
@@ -1563,7 +1595,7 @@ nsGtkIMModule::DeleteText(const int32_t aOffset, const uint32_t aNChars)
 }
 
 void
-nsGtkIMModule::InitEvent(nsGUIEvent &aEvent)
+nsGtkIMModule::InitEvent(WidgetGUIEvent& aEvent)
 {
     aEvent.time = PR_Now() / 1000;
 }

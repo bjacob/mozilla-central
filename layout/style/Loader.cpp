@@ -47,6 +47,9 @@
 #include "nsGkAtoms.h"
 #include "nsIThreadInternal.h"
 #include "nsCrossSiteListenerProxy.h"
+#include "nsINetworkSeer.h"
+#include "mozilla/dom/ShadowRoot.h"
+#include "mozilla/dom/URL.h"
 
 #ifdef MOZ_XUL
 #include "nsXULPrototypeCache.h"
@@ -941,16 +944,6 @@ SheetLoadData::OnStreamComplete(nsIUnicharStreamLoader* aLoader,
   return result;
 }
 
-#ifdef MOZ_XUL
-static bool IsChromeURI(nsIURI* aURI)
-{
-  NS_ASSERTION(aURI, "Have to pass in a URI");
-  bool isChrome = false;
-  aURI->SchemeIs("chrome", &isChrome);
-  return isChrome;
-}
-#endif
-
 bool
 Loader::IsAlternate(const nsAString& aTitle, bool aHasAlternateRel)
 {
@@ -1233,7 +1226,7 @@ Loader::CreateSheet(nsIURI* aURI,
  * well as setting the enabled state based on the title and whether
  * the sheet had "alternate" in its rel.
  */
-nsresult
+void
 Loader::PrepareSheet(nsCSSStyleSheet* aSheet,
                      const nsSubstring& aTitle,
                      const nsSubstring& aMediaString,
@@ -1243,22 +1236,18 @@ Loader::PrepareSheet(nsCSSStyleSheet* aSheet,
 {
   NS_PRECONDITION(aSheet, "Must have a sheet!");
 
-  nsresult rv;
   nsRefPtr<nsMediaList> mediaList(aMediaList);
 
   if (!aMediaString.IsEmpty()) {
     NS_ASSERTION(!aMediaList,
                  "must not provide both aMediaString and aMediaList");
     mediaList = new nsMediaList();
-    NS_ENSURE_TRUE(mediaList, NS_ERROR_OUT_OF_MEMORY);
 
     nsCSSParser mediumParser(this);
 
     // We have aMediaString only when linked from link elements, style
     // elements, or PIs, so pass true.
-    rv = mediumParser.ParseMediaList(aMediaString, nullptr, 0, mediaList,
-                                     true);
-    NS_ENSURE_SUCCESS(rv, rv);
+    mediumParser.ParseMediaList(aMediaString, nullptr, 0, mediaList, true);
   }
 
   aSheet->SetMedia(mediaList);
@@ -1266,7 +1255,6 @@ Loader::PrepareSheet(nsCSSStyleSheet* aSheet,
   aSheet->SetTitle(aTitle);
   aSheet->SetEnabled(! isAlternate);
   aSheet->SetScopeElement(aScopeElement);
-  return NS_OK;
 }
 
 /**
@@ -1431,6 +1419,12 @@ Loader::LoadSheet(SheetLoadData* aLoadData, StyleSheetState aSheetState)
       LOG_ERROR(("  Failed to create stream loader for sync load"));
       SheetComplete(aLoadData, rv);
       return rv;
+    }
+
+    if (mDocument) {
+      mozilla::net::SeerLearn(aLoadData->mURI, mDocument->GetDocumentURI(),
+                              nsINetworkSeer::LEARN_LOAD_SUBRESOURCE,
+                              mDocument);
     }
 
     // Just load it
@@ -1604,6 +1598,11 @@ Loader::LoadSheet(SheetLoadData* aLoadData, StyleSheetState aSheetState)
     channelListener = corsListener;
   } else {
     channelListener = streamLoader;
+  }
+
+  if (mDocument) {
+    mozilla::net::SeerLearn(aLoadData->mURI, mDocument->GetDocumentURI(),
+                            nsINetworkSeer::LEARN_LOAD_SUBRESOURCE, mDocument);
   }
 
   rv = channel->AsyncOpen(channelListener, nullptr);
@@ -1878,12 +1877,16 @@ Loader::LoadInlineStyle(nsIContent* aElement,
 
   LOG(("  Sheet is alternate: %d", *aIsAlternate));
 
-  rv = PrepareSheet(sheet, aTitle, aMedia, nullptr, aScopeElement,
-                    *aIsAlternate);
-  NS_ENSURE_SUCCESS(rv, rv);
+  PrepareSheet(sheet, aTitle, aMedia, nullptr, aScopeElement, *aIsAlternate);
 
-  rv = InsertSheetInDoc(sheet, aElement, mDocument);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (aElement->HasFlag(NODE_IS_IN_SHADOW_TREE)) {
+    ShadowRoot* containingShadow = aElement->GetContainingShadow();
+    MOZ_ASSERT(containingShadow);
+    containingShadow->InsertSheet(sheet, aElement);
+  } else {
+    rv = InsertSheetInDoc(sheet, aElement, mDocument);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
 
   SheetLoadData* data = new SheetLoadData(this, aTitle, nullptr, sheet,
                                           owningElement, *aIsAlternate,
@@ -1952,8 +1955,7 @@ Loader::LoadStyleLink(nsIContent* aElement,
 
   LOG(("  Sheet is alternate: %d", *aIsAlternate));
 
-  rv = PrepareSheet(sheet, aTitle, aMedia, nullptr, nullptr, *aIsAlternate);
-  NS_ENSURE_SUCCESS(rv, rv);
+  PrepareSheet(sheet, aTitle, aMedia, nullptr, nullptr, *aIsAlternate);
 
   rv = InsertSheetInDoc(sheet, aElement, mDocument);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -2110,8 +2112,7 @@ Loader::LoadChildSheet(nsCSSStyleSheet* aParentSheet,
                    false, empty, state, &isAlternate, getter_AddRefs(sheet));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = PrepareSheet(sheet, empty, empty, aMedia, nullptr, isAlternate);
-  NS_ENSURE_SUCCESS(rv, rv);
+  PrepareSheet(sheet, empty, empty, aMedia, nullptr, isAlternate);
 
   rv = InsertChildSheet(sheet, aParentSheet, aParentRule);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -2221,8 +2222,7 @@ Loader::InternalLoadNonDocumentSheet(nsIURI* aURL,
                    empty, state, &isAlternate, getter_AddRefs(sheet));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = PrepareSheet(sheet, empty, empty, nullptr, nullptr, isAlternate);
-  NS_ENSURE_SUCCESS(rv, rv);
+  PrepareSheet(sheet, empty, empty, nullptr, nullptr, isAlternate);
 
   if (state == eSheetComplete) {
     LOG(("  Sheet already complete"));

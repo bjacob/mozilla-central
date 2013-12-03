@@ -61,6 +61,9 @@ let maketest = function(prefix, test) {
         utils.info("Complete");
       }, function catch_uncaught_errors(err) {
         utils.fail("Uncaught error " + err);
+        if (err && typeof err == "object" && "message" in err) {
+          utils.fail("(" + err.message + ")");
+        }
         if (err && typeof err == "object" && "stack" in err) {
           utils.fail("at " + err.stack);
         }
@@ -148,19 +151,15 @@ let test = maketest("Main", function main(test) {
     SimpleTest.waitForExplicitFinish();
     yield test_constants();
     yield test_path();
-    yield test_open();
     yield test_stat();
     yield test_debug();
     yield test_info_features_detect();
     yield test_read_write();
     yield test_read_write_all();
     yield test_position();
-    yield test_copy();
-    yield test_mkdir();
     yield test_iter();
     yield test_exists();
     yield test_debug_test();
-    yield test_system_shutdown();
     yield test_duration();
     info("Test is over");
     SimpleTest.finish();
@@ -195,50 +194,6 @@ let test_path = maketest("path",  function path(test) {
     test.is(OS.Constants.Path.tmpDir, Services.dirsvc.get("TmpD", Components.interfaces.nsIFile).path, "OS.Constants.Path.tmpDir is correct");
     test.is(OS.Constants.Path.profileDir, Services.dirsvc.get("ProfD", Components.interfaces.nsIFile).path, "OS.Constants.Path.profileDir is correct");
     test.is(OS.Constants.Path.localProfileDir, Services.dirsvc.get("ProfLD", Components.interfaces.nsIFile).path, "OS.Constants.Path.localProfileDir is correct");
-  });
-});
-
-/**
- * Test OS.File.open for reading:
- * - with an existing file (should succeed);
- * - with a non-existing file (should fail);
- * - with inconsistent arguments (should fail).
- */
-let test_open = maketest("open",  function open(test) {
-  return Task.spawn(function() {
-    // Attempt to open a file that does not exist, ensure that it yields the
-    // appropriate error.
-    try {
-      let fd = yield OS.File.open(OS.Path.join(".", "This file does not exist"));
-      test.ok(false, "File opening 1 succeeded (it should fail)" + fd);
-    } catch (err) {
-      test.ok(true, "File opening 1 failed " + err);
-      test.ok(err instanceof OS.File.Error, "File opening 1 returned a file error");
-      test.ok(err.becauseNoSuchFile, "File opening 1 informed that the file does not exist");
-    }
-
-    // Attempt to open a file with the wrong args, so that it fails before
-    // serialization, ensure that it yields the appropriate error.
-    test.info("Attempting to open a file with wrong arguments");
-    try {
-      let fd = yield OS.File.open(1, 2, 3);
-      test.ok(false, "File opening 2 succeeded (it should fail)" + fd);
-    } catch (err) {
-      test.ok(true, "File opening 2 failed " + err);
-      test.ok(!(err instanceof OS.File.Error), "File opening 2 returned something that is not a file error");
-      test.ok(err.constructor.name == "TypeError", "File opening 2 returned a TypeError");
-    }
-
-    // Attempt to open a file correctly
-    test.info("Attempting to open a file correctly");
-    let openedFile = yield OS.File.open(EXISTING_FILE);
-    test.ok(true, "File opened correctly");
-
-    test.info("Attempting to close a file correctly");
-    yield openedFile.close();
-
-    test.info("Attempting to close a file again");
-    yield openedFile.close();
   });
 });
 
@@ -474,102 +429,6 @@ let test_position = maketest("position", function position(test) {
 });
 
 /**
- * Test OS.File.prototype.{copy, move}
- */
-let test_copy = maketest("copy", function copy(test) {
-  return Task.spawn(function() {
-    let currentDir = yield OS.File.getCurrentDirectory();
-    let pathSource = OS.Path.join(currentDir, EXISTING_FILE);
-    let pathDest = OS.Path.join(OS.Constants.Path.tmpDir,
-      "osfile async test 2.tmp");
-    yield OS.File.copy(pathSource, pathDest);
-    test.info("Copy complete");
-    yield reference_compare_files(pathSource, pathDest, test);
-    test.info("First compare complete");
-
-    let pathDest2 = OS.Path.join(OS.Constants.Path.tmpDir,
-      "osfile async test 3.tmp");
-    yield OS.File.move(pathDest, pathDest2);
-    test.info("Move complete");
-    yield reference_compare_files(pathSource, pathDest2, test);
-    test.info("Second compare complete");
-    OS.File.remove(pathDest2);
-
-    try {
-      let field = yield OS.File.open(pathDest);
-      test.fail("I should not have been able to open " + pathDest);
-      file.close();
-    } catch (err) {
-      test.ok(err, "Could not open a file after it has been moved away " + err);
-      test.ok(err instanceof OS.File.Error, "Error is an OS.File.Error");
-      test.ok(err.becauseNoSuchFile, "Error mentions that the file does not exist");
-    }
-  });
-});
-
-/**
- * Test OS.File.{removeEmptyDir, makeDir}
- */
-let test_mkdir = maketest("mkdir", function mkdir(test) {
-  return Task.spawn(function() {
-    const DIRNAME = "test_dir.tmp";
-
-    // Cleanup
-    yield OS.File.removeEmptyDir(DIRNAME, {ignoreAbsent: true});
-
-    // Remove an absent directory with ignoreAbsent
-    yield OS.File.removeEmptyDir(DIRNAME, {ignoreAbsent: true});
-    test.ok(true, "Removing an absent directory with ignoreAbsent succeeds");
-
-    // Remove an absent directory without ignoreAbsent
-    try {
-      yield OS.File.removeEmptyDir(DIRNAME);
-      test.fail("Removing an absent directory without ignoreAbsent should have failed");
-    } catch (err) {
-      test.ok(err, "Removing an absent directory without ignoreAbsent throws the right error");
-      test.ok(err instanceof OS.File.Error, "Error is an OS.File.Error");
-      test.ok(err.becauseNoSuchFile, "Error mentions that the file does not exist");
-    }
-
-    // Creating a directory (should succeed)
-    test.ok(true, "Creating a directory");
-    yield OS.File.makeDir(DIRNAME);
-    let stat = yield OS.File.stat(DIRNAME);
-    test.ok(stat.isDir, "I have effectively created a directory");
-
-    // Creating a directory with ignoreExisting (should succeed)
-    try {
-      yield OS.File.makeDir(DIRNAME, {ignoreExisting: true});
-      test.ok(true, "Creating a directory with ignoreExisting succeeds");
-    } catch(err) {
-      test.ok(false, "Creating a directory with ignoreExisting fails");
-    }
-
-    // Creating a directory (should fail)
-    try {
-      yield OS.File.makeDir(DIRNAME);
-      test.fail("Creating over an existing directory should have failed");
-    } catch (err) {
-      test.ok(err, "Creating over an existing directory throws the right error");
-      test.ok(err instanceof OS.File.Error, "Error is an OS.File.Error");
-      test.ok(err.becauseExists, "Error mentions that the file already exists");
-    }
-
-    // Remove a directory and check the result
-    yield OS.File.removeEmptyDir(DIRNAME);
-    test.ok(true, "Removing empty directory suceeded");
-    try {
-      yield OS.File.stat(DIRNAME);
-      test.fail("Removing directory should have failed");
-    } catch (err) {
-      test.ok(err, "Directory was effectively removed");
-      test.ok(err instanceof OS.File.Error, "Error is an OS.File.Error");
-      test.ok(err.becauseNoSuchFile, "Error mentions that the file does not exist");
-    }
-  });
-});
-
-/**
  * Test OS.File.prototype.{DirectoryIterator}
  */
 let test_iter = maketest("iter", function iter(test) {
@@ -756,92 +615,6 @@ let test_debug_test = maketest("debug_test", function debug_test(test) {
   });
 });
 
-/**
- * Test logging of file descriptors leaks.
- */
-let test_system_shutdown = maketest("system_shutdown", function system_shutdown(test) {
-
-  // Test that unclosed files cause warnings
-  // Test that unclosed directories cause warnings
-  // Test that closed files do not cause warnings
-  // Test that closed directories do not cause warnings
-
-  return Task.spawn(function () {
-    function testLeaksOf(resource, topic) {
-      return Task.spawn(function() {
-        let deferred = Promise.defer();
-
-        // Register observer
-        Services.prefs.setBoolPref("toolkit.asyncshutdown.testing", true);
-        Services.prefs.setBoolPref("toolkit.osfile.log", true);
-        Services.prefs.setBoolPref("toolkit.osfile.log.redirect", true);
-        Services.prefs.setCharPref("toolkit.osfile.test.shutdown.observer", topic);
-
-        let observer = {
-          observe: function(aMessage) {
-          try {
-              test.info("Got message: " + aMessage);
-            if (!(aMessage instanceof Components.interfaces.nsIConsoleMessage)) {
-              return;
-            }
-            let message = aMessage.message;
-            test.info("Got message: " + message);
-            if (message.indexOf("TEST OS Controller WARNING") < 0) {
-              return;
-            }
-            test.info("Got message: " + message + ", looking for resource " + resource);
-            if (message.indexOf(resource) < 0) {
-              return;
-            }
-            test.info("Resource: " + resource + " found");
-            setTimeout(deferred.resolve);
-          } catch (ex) {
-            setTimeout(function() {
-              deferred.reject(ex);
-            });
-          }
-        }};
-        Services.console.registerListener(observer);
-        Services.obs.notifyObservers(null, topic, null);
-        setTimeout(function() {
-          test.info("Timeout while waiting for resource: " + resource);
-          deferred.reject("timeout");
-        }, 1000);
-
-        let resolved = false;
-        try {
-          yield deferred.promise;
-          resolved = true;
-        } catch (ex) {
-          if (ex != "timeout") {
-            test.ok(false, "Error during 'test.osfile.web-workers-shutdown'" + ex);
-          }
-          resolved = false;
-        }
-        Services.console.unregisterListener(observer);
-        Services.prefs.clearUserPref("toolkit.osfile.log");
-        Services.prefs.clearUserPref("toolkit.osfile.log.redirect");
-        Services.prefs.clearUserPref("toolkit.osfile.test.shutdown.observer");
-        Services.prefs.clearUserPref("toolkit.async_shutdown.testing", true);
-
-        throw new Task.Result(resolved);
-      });
-    }
-
-    let TEST_DIR = OS.Path.join((yield OS.File.getCurrentDirectory()), "..");
-    test.info("Testing for leaks of directory iterator " + TEST_DIR);
-    let iterator = new OS.File.DirectoryIterator(TEST_DIR);
-    ok((yield testLeaksOf(TEST_DIR, "test.shutdown.dir.leak")), "Detected directory leak");
-    yield iterator.close();
-    ok(!(yield testLeaksOf(TEST_DIR, "test.shutdown.dir.noleak")), "We don't leak the directory anymore");
-
-    test.info("Testing for leaks of file descriptor: " + EXISTING_FILE);
-    let openedFile = yield OS.File.open(EXISTING_FILE);
-    ok((yield testLeaksOf(EXISTING_FILE, "test.shutdown.file.leak")), "Detected file leak");
-    yield openedFile.close();
-    ok(!(yield testLeaksOf(EXISTING_FILE, "test.shutdown.file.noleak")), "We don't leak the file anymore");
-  });
-});
 
 /**
  * Test optional duration reporting that can be used for telemetry.
@@ -924,12 +697,9 @@ let test_duration = maketest("duration", function duration(test) {
     test.ok(copyOptions.outExecutionDuration >= backupDuration, "duration has increased 3");
     OS.File.remove(pathDest);
 
-    OS.Shared.TEST = true;
-
     // Testing an operation that doesn't take arguments at all
     let file = yield OS.File.open(pathSource);
     yield file.stat();
     yield file.close();
-    Services.prefs.setBoolPref("toolkit.osfile.log", false);
   });
 });

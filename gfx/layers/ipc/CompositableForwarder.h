@@ -153,7 +153,7 @@ public:
    * Tell the compositor side to create a TextureHost that corresponds to
    * aClient.
    */
-  virtual void AddTexture(CompositableClient* aCompositable,
+  virtual bool AddTexture(CompositableClient* aCompositable,
                           TextureClient* aClient) = 0;
 
   /**
@@ -217,6 +217,11 @@ public:
   bool ForwardsToDifferentProcess() const
   {
     return mMultiProcess;
+  }
+
+  const TextureFactoryIdentifier& GetTextureFactoryIdentifier() const
+  {
+    return mTextureFactoryIdentifier;
   }
 
 protected:

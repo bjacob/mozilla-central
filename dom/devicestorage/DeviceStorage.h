@@ -95,6 +95,7 @@ public:
 
   void GetDiskFreeSpace(int64_t* aSoFar);
   void GetStatus(nsAString& aStatus);
+  void DoFormat(nsAString& aStatus);
   static void GetRootDirectoryForType(const nsAString& aStorageType,
                                       const nsAString& aStorageName,
                                       nsIFile** aFile);
@@ -156,6 +157,11 @@ public:
 
   NS_DECL_NSIOBSERVER
   NS_DECL_NSIDOMEVENTTARGET
+
+  virtual nsEventListenerManager*
+  GetExistingListenerManager() const MOZ_OVERRIDE;
+  virtual nsEventListenerManager*
+  GetOrCreateListenerManager() MOZ_OVERRIDE;
 
   virtual void
   AddEventListener(const nsAString& aType,
@@ -232,6 +238,7 @@ public:
   already_AddRefed<DOMRequest> FreeSpace(ErrorResult& aRv);
   already_AddRefed<DOMRequest> UsedSpace(ErrorResult& aRv);
   already_AddRefed<DOMRequest> Available(ErrorResult& aRv);
+  already_AddRefed<DOMRequest> Format(ErrorResult& aRv);
 
   bool Default();
 

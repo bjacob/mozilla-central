@@ -114,7 +114,7 @@ public:
    */
   static void StartUp();
 
-  static bool
+  static PImageBridgeChild*
   StartUpInChildProcess(Transport* aTransport, ProcessId aOtherProcess);
 
   /**
@@ -237,17 +237,18 @@ public:
   TemporaryRef<ImageClient> CreateImageClientNow(CompositableType aType);
 
   static void DispatchReleaseImageClient(ImageClient* aClient);
+  static void DispatchReleaseTextureClient(TextureClient* aClient);
   static void DispatchImageClientUpdate(ImageClient* aClient, ImageContainer* aContainer);
 
   /**
    * Flush all Images sent to CompositableHost.
    */
-  static void FlushImage(ImageClient* aClient, ImageContainer* aContainer);
+  static void FlushAllImages(ImageClient* aClient, ImageContainer* aContainer, bool aExceptFront);
 
   /**
    * Must be called on the ImageBridgeChild's thread.
    */
-  static void FlushImageNow(ImageClient* aClient, ImageContainer* aContainer);
+  static void FlushAllImagesNow(ImageClient* aClient, ImageContainer* aContainer, bool aExceptFront);
 
   // CompositableForwarder
 
@@ -256,7 +257,7 @@ public:
   /**
    * See CompositableForwarder::AddTexture
    */
-  virtual void AddTexture(CompositableClient* aCompositable,
+  virtual bool AddTexture(CompositableClient* aCompositable,
                           TextureClient* aClient) MOZ_OVERRIDE;
 
   /**
@@ -358,8 +359,8 @@ public:
    * call on the ImageBridgeChild thread.
    */
   virtual bool AllocUnsafeShmem(size_t aSize,
-                                ipc::SharedMemory::SharedMemoryType aType,
-                                ipc::Shmem* aShmem) MOZ_OVERRIDE;
+                                mozilla::ipc::SharedMemory::SharedMemoryType aType,
+                                mozilla::ipc::Shmem* aShmem) MOZ_OVERRIDE;
   /**
    * See ISurfaceAllocator.h
    * Can be used from any thread.
@@ -367,15 +368,15 @@ public:
    * call on the ImageBridgeChild thread.
    */
   virtual bool AllocShmem(size_t aSize,
-                          ipc::SharedMemory::SharedMemoryType aType,
-                          ipc::Shmem* aShmem) MOZ_OVERRIDE;
+                          mozilla::ipc::SharedMemory::SharedMemoryType aType,
+                          mozilla::ipc::Shmem* aShmem) MOZ_OVERRIDE;
   /**
    * See ISurfaceAllocator.h
    * Can be used from any thread.
    * If used outside the ImageBridgeChild thread, it will proxy a synchronous
    * call on the ImageBridgeChild thread.
    */
-  virtual void DeallocShmem(ipc::Shmem& aShmem);
+  virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem);
 
 protected:
   ImageBridgeChild();

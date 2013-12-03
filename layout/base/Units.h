@@ -69,7 +69,6 @@ typedef gfx::ScaleFactor<LayoutDevicePixel, ScreenPixel> LayoutDeviceToScreenSca
 typedef gfx::ScaleFactor<ScreenPixel, LayoutDevicePixel> ScreenToLayoutDeviceScale;
 typedef gfx::ScaleFactor<LayerPixel, ScreenPixel> LayerToScreenScale;
 typedef gfx::ScaleFactor<ScreenPixel, LayerPixel> ScreenToLayerScale;
-typedef gfx::ScaleFactor<ScreenPixel, ScreenPixel> ScreenToScreenScale;
 
 /*
  * The pixels that content authors use to specify sizes in.
@@ -154,6 +153,10 @@ struct LayoutDevicePixel {
 
   static LayoutDeviceIntRect FromUntyped(const nsIntRect& aRect) {
     return LayoutDeviceIntRect(aRect.x, aRect.y, aRect.width, aRect.height);
+  }
+
+  static nsIntRect ToUntyped(const LayoutDeviceIntRect& aRect) {
+    return nsIntRect(aRect.x, aRect.y, aRect.width, aRect.height);
   }
 
   static LayoutDeviceRect FromAppUnits(const nsRect& aRect, nscoord aAppUnitsPerDevPixel) {

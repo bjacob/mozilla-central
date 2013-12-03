@@ -25,7 +25,6 @@
 #include "nsIDOMStyleSheetList.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIContent.h"
-#include "nsEventListenerManager.h"
 #include "nsIPrincipal.h"
 #include "nsIParser.h"
 #include "nsBindingManager.h"
@@ -68,6 +67,7 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Attributes.h"
 #include "nsIDOMXPathEvaluator.h"
+#include "jsfriendapi.h"
 
 #define XML_DECLARATION_BITS_DECLARATION_EXISTS   (1 << 0)
 #define XML_DECLARATION_BITS_ENCODING_EXISTS      (1 << 1)
@@ -134,7 +134,7 @@ public:
   }
   ~nsIdentifierMapEntry();
 
-  void AddNameElement(nsIDocument* aDocument, Element* aElement);
+  void AddNameElement(nsINode* aDocument, Element* aElement);
   void RemoveNameElement(Element* aElement);
   bool IsEmpty();
   nsBaseContentList* GetNameContentList() {
@@ -278,22 +278,6 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_NODEWILLBEDESTROYED
 
   nsIStyleSheet* GetItemAt(uint32_t aIndex);
-
-  static nsDOMStyleSheetList* FromSupports(nsISupports* aSupports)
-  {
-    nsIDOMStyleSheetList* list = static_cast<nsIDOMStyleSheetList*>(aSupports);
-#ifdef DEBUG
-    {
-      nsCOMPtr<nsIDOMStyleSheetList> list_qi = do_QueryInterface(aSupports);
-
-      // If this assertion fires the QI implementation for the object in
-      // question doesn't use the nsIDOMStyleSheetList pointer as the
-      // nsISupports pointer. That must be fixed, or we'll crash...
-      NS_ASSERTION(list_qi == list, "Uh, fix QI!");
-    }
-#endif
-    return static_cast<nsDOMStyleSheetList*>(list);
-  }
 
 protected:
   int32_t       mLength;
@@ -773,8 +757,8 @@ public:
 
   // nsIDOMEventTarget
   virtual nsresult PreHandleEvent(nsEventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
-  virtual nsEventListenerManager*
-    GetListenerManager(bool aCreateIfNotFound) MOZ_OVERRIDE;
+  virtual nsEventListenerManager* GetOrCreateListenerManager() MOZ_OVERRIDE;
+  virtual nsEventListenerManager* GetExistingListenerManager() const MOZ_OVERRIDE;
 
   // nsIScriptObjectPrincipal
   virtual nsIPrincipal* GetPrincipal() MOZ_OVERRIDE;
@@ -1011,8 +995,8 @@ public:
   // Posts an event to call UpdateVisibilityState
   virtual void PostVisibilityUpdateEvent() MOZ_OVERRIDE;
 
-  virtual void DocSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const MOZ_OVERRIDE;
-  // DocSizeOfIncludingThis is inherited from nsIDocument.
+  virtual void DocAddSizeOfExcludingThis(nsWindowSizes* aWindowSizes) const MOZ_OVERRIDE;
+  // DocAddSizeOfIncludingThis is inherited from nsIDocument.
 
   virtual nsIDOMNode* AsDOMNode() MOZ_OVERRIDE { return this; }
 
@@ -1156,6 +1140,8 @@ protected:
 
   void EnsureOnloadBlocker();
 
+  void NotifyStyleSheetApplicableStateChanged();
+
   nsTArray<nsIObserver*> mCharSetObservers;
 
   PLDHashTable *mSubDocuments;
@@ -1278,6 +1264,10 @@ protected:
   bool mAllowRelocking:1;
 
   bool mAsyncFullscreenPending:1;
+
+  // Keeps track of whether we have a pending
+  // 'style-sheet-applicable-state-changed' notification.
+  bool mSSApplicableStateNotificationPending:1;
 
   uint32_t mCancelledPointerLockRequests;
 

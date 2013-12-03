@@ -51,7 +51,7 @@ nsBasePrincipal::AddRef()
 {
   NS_PRECONDITION(int32_t(refcount) >= 0, "illegal refcnt");
   // XXXcaa does this need to be threadsafe?  See bug 143559.
-  nsrefcnt count = PR_ATOMIC_INCREMENT(&refcount);
+  nsrefcnt count = ++refcount;
   NS_LOG_ADDREF(this, count, "nsBasePrincipal", sizeof(*this));
   return count;
 }
@@ -60,7 +60,7 @@ NS_IMETHODIMP_(nsrefcnt)
 nsBasePrincipal::Release()
 {
   NS_PRECONDITION(0 != refcount, "dup release");
-  nsrefcnt count = PR_ATOMIC_DECREMENT(&refcount);
+  nsrefcnt count = --refcount;
   NS_LOG_RELEASE(this, count, "nsBasePrincipal");
   if (count == 0) {
     delete this;
@@ -572,9 +572,8 @@ nsPrincipal::GetAppStatus()
   nsCOMPtr<nsIAppsService> appsService = do_GetService(APPS_SERVICE_CONTRACTID);
   NS_ENSURE_TRUE(appsService, nsIPrincipal::APP_STATUS_NOT_INSTALLED);
 
-  nsCOMPtr<mozIDOMApplication> domApp;
-  appsService->GetAppByLocalId(mAppId, getter_AddRefs(domApp));
-  nsCOMPtr<mozIApplication> app = do_QueryInterface(domApp);
+  nsCOMPtr<mozIApplication> app;
+  appsService->GetAppByLocalId(mAppId, getter_AddRefs(app));
   NS_ENSURE_TRUE(app, nsIPrincipal::APP_STATUS_NOT_INSTALLED);
 
   uint16_t status = nsIPrincipal::APP_STATUS_INSTALLED;

@@ -11,7 +11,6 @@
 #include "nsSMILValue.h"
 #include "nsSVGAttrTearoffTable.h"
 #include "nsTextFormatter.h"
-#include "prdtoa.h"
 #include "SVGAngle.h"
 #include "SVGAnimatedAngle.h"
 #include "SVGOrientSMILType.h"
@@ -94,28 +93,23 @@ GetValueString(nsAString &aValueAsString, float aValue, uint16_t aUnitType)
   aValueAsString.Append(unitString);
 }
 
-static nsresult
-GetValueFromString(const nsAString &aValueAsString,
-                   float *aValue,
-                   uint16_t *aUnitType)
+static bool
+GetValueFromString(const nsAString& aString,
+                   float& aValue,
+                   uint16_t* aUnitType)
 {
-  NS_ConvertUTF16toUTF8 value(aValueAsString);
-  const char *str = value.get();
+  RangedPtr<const PRUnichar> iter =
+    SVGContentUtils::GetStartRangedPtr(aString);
+  const RangedPtr<const PRUnichar> end =
+    SVGContentUtils::GetEndRangedPtr(aString);
 
-  if (IsSVGWhitespace(*str))
-    return NS_ERROR_DOM_SYNTAX_ERR;
-  
-  char *rest;
-  *aValue = float(PR_strtod(str, &rest));
-  if (rest != str && NS_finite(*aValue)) {
-    *aUnitType = GetUnitTypeForString(
-      Substring(aValueAsString, rest - str));
-    if (IsValidUnitType(*aUnitType)) {
-      return NS_OK;
-    }
+  if (!SVGContentUtils::ParseNumber(iter, end, aValue)) {
+    return false;
   }
-  
-  return NS_ERROR_DOM_SYNTAX_ERR;
+
+  const nsAString& units = Substring(iter.get(), end.get());
+  *aUnitType = GetUnitTypeForString(units);
+  return IsValidUnitType(*aUnitType);
 }
 
 /* static */ float
@@ -258,12 +252,11 @@ nsSVGAngle::SetBaseValueString(const nsAString &aValueAsString,
                                nsSVGElement *aSVGElement,
                                bool aDoSetAttr)
 {
-  float value = 0;
-  uint16_t unitType = 0;
+  float value;
+  uint16_t unitType;
   
-  nsresult rv = GetValueFromString(aValueAsString, &value, &unitType);
-  if (NS_FAILED(rv)) {
-    return rv;
+  if (!GetValueFromString(aValueAsString, value, &unitType)) {
+     return NS_ERROR_DOM_SYNTAX_ERR;
   }
   if (mBaseVal == value && mBaseValUnit == uint8_t(unitType)) {
     return NS_OK;
@@ -382,9 +375,8 @@ nsSVGAngle::SMILOrient::ValueFromString(const nsAString& aStr,
   } else {
     float value;
     uint16_t unitType;
-    nsresult rv = GetValueFromString(aStr, &value, &unitType);
-    if (NS_FAILED(rv)) {
-      return rv;
+    if (!GetValueFromString(aStr, value, &unitType)) {
+      return NS_ERROR_DOM_SYNTAX_ERR;
     }
     val.mU.mOrient.mAngle = value;
     val.mU.mOrient.mUnit = unitType;

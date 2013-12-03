@@ -73,19 +73,24 @@ ifndef MOZ_NATIVE_NSPR
 ifeq ($(_MSC_VER),1400)
 JSSHELL_BINS += $(DIST)/bin/Microsoft.VC80.CRT.manifest
 JSSHELL_BINS += $(DIST)/bin/msvcr80.dll
+JSSHELL_BINS += $(DIST)/bin/msvcp80.dll
 endif
 ifeq ($(_MSC_VER),1500)
 JSSHELL_BINS += $(DIST)/bin/Microsoft.VC90.CRT.manifest
 JSSHELL_BINS += $(DIST)/bin/msvcr90.dll
+JSSHELL_BINS += $(DIST)/bin/msvcp90.dll
 endif
 ifeq ($(_MSC_VER),1600)
 JSSHELL_BINS += $(DIST)/bin/msvcr100.dll
+JSSHELL_BINS += $(DIST)/bin/msvcp100.dll
 endif
 ifeq ($(_MSC_VER),1700)
 JSSHELL_BINS += $(DIST)/bin/msvcr110.dll
+JSSHELL_BINS += $(DIST)/bin/msvcp110.dll
 endif
 ifeq ($(_MSC_VER),1800)
 JSSHELL_BINS += $(DIST)/bin/msvcr120.dll
+JSSHELL_BINS += $(DIST)/bin/msvcp120.dll
 endif
 ifdef MOZ_FOLD_LIBS
 JSSHELL_BINS += $(DIST)/bin/$(DLL_PREFIX)nss3$(DLL_SUFFIX)
@@ -100,13 +105,13 @@ endif # MOZ_NATIVE_NSPR
 MAKE_JSSHELL  = $(ZIP) -9j $(PKG_JSSHELL) $(JSSHELL_BINS)
 endif # LIBXUL_SDK
 
-_ABS_DIST = $(call core_abspath,$(DIST))
-JARLOG_DIR = $(call core_abspath,$(DEPTH)/jarlog/)
+_ABS_DIST = $(abspath $(DIST))
+JARLOG_DIR = $(abspath $(DEPTH)/jarlog/)
 JARLOG_FILE_AB_CD = $(JARLOG_DIR)/$(AB_CD).log
 
 TAR_CREATE_FLAGS := --exclude=.mkdir.done $(TAR_CREATE_FLAGS)
 CREATE_FINAL_TAR = $(TAR) -c --owner=0 --group=0 --numeric-owner \
-  --mode="go-w" --exclude=.mkdir.done -f
+  --mode=go-w --exclude=.mkdir.done -f
 UNPACK_TAR       = tar -xf-
 
 ifeq ($(MOZ_PKG_FORMAT),TAR)
@@ -158,8 +163,8 @@ endif
 #Create an RPM file
 ifeq ($(MOZ_PKG_FORMAT),RPM)
 PKG_SUFFIX  = .rpm
-MOZ_NUMERIC_APP_VERSION = $(shell echo $(MOZ_PKG_VERSION) | sed "s/[^0-9.].*//" )
-MOZ_RPM_RELEASE = $(shell echo $(MOZ_PKG_VERSION) | sed "s/[0-9.]*//" )
+MOZ_NUMERIC_APP_VERSION = $(shell echo $(MOZ_PKG_VERSION) | sed 's/[^0-9.].*//' )
+MOZ_RPM_RELEASE = $(shell echo $(MOZ_PKG_VERSION) | sed 's/[0-9.]*//' )
 
 RPMBUILD_TOPDIR=$(_ABS_DIST)/rpmbuild
 RPMBUILD_RPMDIR=$(_ABS_DIST)
@@ -173,50 +178,49 @@ RPM_INCIDENTALS=$(topsrcdir)/toolkit/mozapps/installer/linux/rpm
 
 RPM_CMD = \
   echo Creating RPM && \
-  mkdir -p $(RPMBUILD_SOURCEDIR) && \
-  $(PYTHON) $(topsrcdir)/config/Preprocessor.py \
+  $(PYTHON) -m mozbuild.action.preprocessor \
 	-DMOZ_APP_NAME=$(MOZ_APP_NAME) \
-	-DMOZ_APP_DISPLAYNAME="$(MOZ_APP_DISPLAYNAME)" \
-	< $(RPM_INCIDENTALS)/mozilla.desktop \
-	> $(RPMBUILD_SOURCEDIR)/$(MOZ_APP_NAME).desktop && \
+	-DMOZ_APP_DISPLAYNAME='$(MOZ_APP_DISPLAYNAME)' \
+	$(RPM_INCIDENTALS)/mozilla.desktop \
+	-o $(RPMBUILD_SOURCEDIR)/$(MOZ_APP_NAME).desktop && \
   rm -rf $(_ABS_DIST)/$(TARGET_CPU) && \
   $(RPMBUILD) -bb \
   $(SPEC_FILE) \
   --target $(TARGET_CPU) \
   --buildroot $(RPMBUILD_TOPDIR)/BUILDROOT \
-  --define "moz_app_name $(MOZ_APP_NAME)" \
-  --define "moz_app_displayname $(MOZ_APP_DISPLAYNAME)" \
-  --define "moz_app_version $(MOZ_APP_VERSION)" \
-  --define "moz_numeric_app_version $(MOZ_NUMERIC_APP_VERSION)" \
-  --define "moz_rpm_release $(MOZ_RPM_RELEASE)" \
-  --define "buildid $(BUILDID)" \
-  --define "moz_source_repo $(MOZ_SOURCE_REPO)" \
-  --define "moz_source_stamp $(MOZ_SOURCE_STAMP)" \
-  --define "moz_branding_directory $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)" \
-  --define "_topdir $(RPMBUILD_TOPDIR)" \
-  --define "_rpmdir $(RPMBUILD_RPMDIR)" \
-  --define "_sourcedir $(RPMBUILD_SOURCEDIR)" \
-  --define "_specdir $(RPMBUILD_SPECDIR)" \
-  --define "_srcrpmdir $(RPMBUILD_SRPMDIR)" \
-  --define "_builddir $(RPMBUILD_BUILDDIR)" \
-  --define "_prefix $(prefix)" \
-  --define "_libdir $(libdir)" \
-  --define "_bindir $(bindir)" \
-  --define "_datadir $(datadir)" \
-  --define "_installdir $(installdir)" 
+  --define 'moz_app_name $(MOZ_APP_NAME)' \
+  --define 'moz_app_displayname $(MOZ_APP_DISPLAYNAME)' \
+  --define 'moz_app_version $(MOZ_APP_VERSION)' \
+  --define 'moz_numeric_app_version $(MOZ_NUMERIC_APP_VERSION)' \
+  --define 'moz_rpm_release $(MOZ_RPM_RELEASE)' \
+  --define 'buildid $(BUILDID)' \
+  --define 'moz_source_repo $(MOZ_SOURCE_REPO)' \
+  --define 'moz_source_stamp $(MOZ_SOURCE_STAMP)' \
+  --define 'moz_branding_directory $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)' \
+  --define '_topdir $(RPMBUILD_TOPDIR)' \
+  --define '_rpmdir $(RPMBUILD_RPMDIR)' \
+  --define '_sourcedir $(RPMBUILD_SOURCEDIR)' \
+  --define '_specdir $(RPMBUILD_SPECDIR)' \
+  --define '_srcrpmdir $(RPMBUILD_SRPMDIR)' \
+  --define '_builddir $(RPMBUILD_BUILDDIR)' \
+  --define '_prefix $(prefix)' \
+  --define '_libdir $(libdir)' \
+  --define '_bindir $(bindir)' \
+  --define '_datadir $(datadir)' \
+  --define '_installdir $(installdir)' 
 
 ifdef ENABLE_TESTS
 RPM_CMD += \
-  --define "createtests yes" \
-  --define "_testsinstalldir $(shell basename $(installdir))" 
+  --define 'createtests yes' \
+  --define '_testsinstalldir $(shell basename $(installdir))' 
 endif 
 
 ifdef INSTALL_SDK
 RPM_CMD += \
-  --define "createdevel yes" \
-  --define "_idldir $(idldir)" \
-  --define "_sdkdir $(sdkdir)" \
-  --define "_includedir $(includedir)" 
+  --define 'createdevel yes' \
+  --define '_idldir $(idldir)' \
+  --define '_sdkdir $(sdkdir)' \
+  --define '_includedir $(includedir)' 
 endif
 
 #For each of the main, tests, sdk rpms we want to make sure that
@@ -324,24 +328,40 @@ ABI_DIR = armeabi
 endif
 endif
 
-GECKO_APP_AP_PATH = $(call core_abspath,$(DEPTH)/mobile/android/base)
+GECKO_APP_AP_PATH = $(abspath $(DEPTH)/mobile/android/base)
 
 ifdef ENABLE_TESTS
 INNER_ROBOCOP_PACKAGE=echo
+INNER_BACKGROUND_TESTS_PACKAGE=echo
 ifeq ($(MOZ_BUILD_APP),mobile/android)
 UPLOAD_EXTRA_FILES += robocop.apk
 UPLOAD_EXTRA_FILES += fennec_ids.txt
-ROBOCOP_PATH = $(call core_abspath,$(_ABS_DIST)/../build/mobile/robocop)
-# Robocop and Fennec need to be signed with the same key, which means
-# release signing them both.
+UPLOAD_EXTRA_FILES += geckoview_library/geckoview_library.zip
+UPLOAD_EXTRA_FILES += geckoview_library/geckoview_assets.zip
+
+# Robocop/Robotium tests, Android Background tests, and Fennec need to
+# be signed with the same key, which means release signing them all.
+
+# $(1) is the full path to input:  foo-debug-unsigned-unaligned.apk.
+# $(2) is the full path to output: foo.apk.
+RELEASE_SIGN_ANDROID_APK = \
+  cp $(1) $(2)-unaligned.apk && \
+  $(RELEASE_JARSIGNER) $(2)-unaligned.apk && \
+  $(ZIPALIGN) -f -v 4 $(2)-unaligned.apk $(2) && \
+  $(RM) $(2)-unaligned.apk
+
+ROBOCOP_PATH = $(abspath $(_ABS_DIST)/../build/mobile/robocop)
 INNER_ROBOCOP_PACKAGE= \
   $(NSINSTALL) $(GECKO_APP_AP_PATH)/fennec_ids.txt $(_ABS_DIST) && \
-  cp $(ROBOCOP_PATH)/robocop-debug-unsigned-unaligned.apk $(_ABS_DIST)/robocop-unaligned.apk && \
-  $(RELEASE_JARSIGNER) $(_ABS_DIST)/robocop-unaligned.apk && \
-  $(ZIPALIGN) -f -v 4 $(_ABS_DIST)/robocop-unaligned.apk $(_ABS_DIST)/robocop.apk
+  $(call RELEASE_SIGN_ANDROID_APK,$(ROBOCOP_PATH)/robocop-debug-unsigned-unaligned.apk,$(_ABS_DIST)/robocop.apk)
+
+BACKGROUND_TESTS_PATH = $(abspath $(_ABS_DIST)/../mobile/android/tests/background/junit3)
+INNER_BACKGROUND_TESTS_PACKAGE= \
+  $(call RELEASE_SIGN_ANDROID_APK,$(BACKGROUND_TESTS_PATH)/background-debug-unsigned-unaligned.apk,$(_ABS_DIST)/background.apk)
 endif
 else
-INNER_ROBOCOP_PACKAGE=echo 'Testing is disabled - No Robocop for you'
+INNER_ROBOCOP_PACKAGE=echo 'Testing is disabled - No Android Robocop for you'
+INNER_BACKGROUND_TESTS_PACKAGE=echo 'Testing is disabled - No Android Background tests for you'
 endif
 
 # Create geckoview_library/geckoview_{assets,library}.zip for third-party GeckoView consumers.
@@ -403,6 +423,7 @@ INNER_MAKE_PACKAGE	= \
   $(RELEASE_JARSIGNER) $(_ABS_DIST)/gecko.apk && \
   $(ZIPALIGN) -f -v 4 $(_ABS_DIST)/gecko.apk $(PACKAGE) && \
   $(INNER_ROBOCOP_PACKAGE) && \
+  $(INNER_BACKGROUND_TESTS_PACKAGE) && \
   $(INNER_MAKE_GECKOVIEW_LIBRARY)
 
 # Language repacks root the resources contained in assets/omni.ja
@@ -426,16 +447,16 @@ ifeq ($(MOZ_PKG_FORMAT),DMG)
 PKG_SUFFIX	= .dmg
 PKG_DMG_FLAGS	=
 ifneq (,$(MOZ_PKG_MAC_DSSTORE))
-PKG_DMG_FLAGS += --copy "$(MOZ_PKG_MAC_DSSTORE):/.DS_Store"
+PKG_DMG_FLAGS += --copy '$(MOZ_PKG_MAC_DSSTORE):/.DS_Store'
 endif
 ifneq (,$(MOZ_PKG_MAC_BACKGROUND))
-PKG_DMG_FLAGS += --mkdir /.background --copy "$(MOZ_PKG_MAC_BACKGROUND):/.background"
+PKG_DMG_FLAGS += --mkdir /.background --copy '$(MOZ_PKG_MAC_BACKGROUND):/.background'
 endif
 ifneq (,$(MOZ_PKG_MAC_ICON))
-PKG_DMG_FLAGS += --icon "$(MOZ_PKG_MAC_ICON)"
+PKG_DMG_FLAGS += --icon '$(MOZ_PKG_MAC_ICON)'
 endif
 ifneq (,$(MOZ_PKG_MAC_RSRC))
-PKG_DMG_FLAGS += --resource "$(MOZ_PKG_MAC_RSRC)"
+PKG_DMG_FLAGS += --resource '$(MOZ_PKG_MAC_RSRC)'
 endif
 ifneq (,$(MOZ_PKG_MAC_EXTRA))
 PKG_DMG_FLAGS += $(MOZ_PKG_MAC_EXTRA)
@@ -445,25 +466,25 @@ ifndef PKG_DMG_SOURCE
 PKG_DMG_SOURCE = $(STAGEPATH)$(MOZ_PKG_DIR)
 endif
 INNER_MAKE_PACKAGE	= $(_ABS_MOZSRCDIR)/build/package/mac_osx/pkg-dmg \
-  --source "$(PKG_DMG_SOURCE)" --target "$(PACKAGE)" \
-  --volname "$(MOZ_APP_DISPLAYNAME)" $(PKG_DMG_FLAGS)
+  --source '$(PKG_DMG_SOURCE)' --target '$(PACKAGE)' \
+  --volname '$(MOZ_APP_DISPLAYNAME)' $(PKG_DMG_FLAGS)
 INNER_UNMAKE_PACKAGE	= \
   set -ex; \
   rm -rf $(_ABS_DIST)/unpack.tmp; \
   mkdir -p $(_ABS_DIST)/unpack.tmp; \
   $(_ABS_MOZSRCDIR)/build/package/mac_osx/unpack-diskimage $(UNPACKAGE) /tmp/$(MOZ_PKG_APPNAME)-unpack $(_ABS_DIST)/unpack.tmp; \
-  rsync -a "$(_ABS_DIST)/unpack.tmp/$(_APPNAME)" $(MOZ_PKG_DIR); \
-  test -n "$(MOZ_PKG_MAC_DSSTORE)" && \
-    rsync -a "$(_ABS_DIST)/unpack.tmp/.DS_Store" "$(MOZ_PKG_MAC_DSSTORE)"; \
-  test -n "$(MOZ_PKG_MAC_BACKGROUND)" && \
-    rsync -a "$(_ABS_DIST)/unpack.tmp/.background/`basename "$(MOZ_PKG_MAC_BACKGROUND)"`" "$(MOZ_PKG_MAC_BACKGROUND)"; \
-  test -n "$(MOZ_PKG_MAC_ICON)" && \
-    rsync -a "$(_ABS_DIST)/unpack.tmp/.VolumeIcon.icns" "$(MOZ_PKG_MAC_ICON)"; \
+  rsync -a '$(_ABS_DIST)/unpack.tmp/$(_APPNAME)' $(MOZ_PKG_DIR); \
+  test -n '$(MOZ_PKG_MAC_DSSTORE)' && \
+    rsync -a '$(_ABS_DIST)/unpack.tmp/.DS_Store' '$(MOZ_PKG_MAC_DSSTORE)'; \
+  test -n '$(MOZ_PKG_MAC_BACKGROUND)' && \
+    rsync -a '$(_ABS_DIST)/unpack.tmp/.background/`basename '$(MOZ_PKG_MAC_BACKGROUND)'`' '$(MOZ_PKG_MAC_BACKGROUND)'; \
+  test -n '$(MOZ_PKG_MAC_ICON)' && \
+    rsync -a '$(_ABS_DIST)/unpack.tmp/.VolumeIcon.icns' '$(MOZ_PKG_MAC_ICON)'; \
   rm -rf $(_ABS_DIST)/unpack.tmp; \
-  if test -n "$(MOZ_PKG_MAC_RSRC)" ; then \
+  if test -n '$(MOZ_PKG_MAC_RSRC)' ; then \
     cp $(UNPACKAGE) $(MOZ_PKG_APPNAME).tmp.dmg && \
     hdiutil unflatten $(MOZ_PKG_APPNAME).tmp.dmg && \
-    { /Developer/Tools/DeRez -skip plst -skip blkx $(MOZ_PKG_APPNAME).tmp.dmg > "$(MOZ_PKG_MAC_RSRC)" || { rm -f $(MOZ_PKG_APPNAME).tmp.dmg && false; }; } && \
+    { /Developer/Tools/DeRez -skip plst -skip blkx $(MOZ_PKG_APPNAME).tmp.dmg > '$(MOZ_PKG_MAC_RSRC)' || { rm -f $(MOZ_PKG_APPNAME).tmp.dmg && false; }; } && \
     rm -f $(MOZ_PKG_APPNAME).tmp.dmg; \
   fi
 # The plst and blkx resources are skipped because they belong to each
@@ -479,7 +500,7 @@ endif
 ifdef MOZ_INTERNAL_SIGNING_FORMAT
 MOZ_SIGN_PREPARED_PACKAGE_CMD=$(MOZ_SIGN_CMD) $(foreach f,$(MOZ_INTERNAL_SIGNING_FORMAT),-f $(f)) $(foreach i,$(SIGN_INCLUDES),-i $(i)) $(foreach x,$(SIGN_EXCLUDES),-x $(x))
 ifeq (WINNT,$(OS_ARCH))
-MOZ_SIGN_PREPARED_PACKAGE_CMD += --nsscmd "$(_ABS_DIST)/bin/shlibsign$(BIN_SUFFIX) -v -i"
+MOZ_SIGN_PREPARED_PACKAGE_CMD += --nsscmd '$(_ABS_DIST)/bin/shlibsign$(BIN_SUFFIX) -v -i'
 endif
 endif
 
@@ -505,7 +526,7 @@ MAKE_PACKAGE    = $(INNER_MAKE_PACKAGE)
 endif
 
 ifdef MOZ_SIGN_PACKAGE_CMD
-MAKE_PACKAGE    += && $(MOZ_SIGN_PACKAGE_CMD) "$(PACKAGE)"
+MAKE_PACKAGE    += && $(MOZ_SIGN_PACKAGE_CMD) '$(PACKAGE)'
 endif
 
 ifdef MOZ_SIGN_CMD
@@ -537,6 +558,7 @@ NO_PKG_FILES += \
 	certutil* \
 	pk12util* \
 	OCSPStaplingServer* \
+	GenerateOCSPResponse* \
 	winEmbed.exe \
 	chrome/chrome.rdf \
 	chrome/app-chrome.manifest \
@@ -566,14 +588,14 @@ GARBAGE		+= $(DIST)/$(PACKAGE) $(PACKAGE)
 # core files, and one for optional extensions based on the information in
 # the MOZ_PKG_MANIFEST file.
 
-PKG_ARG = , "$(pkg)"
+PKG_ARG = , '$(pkg)'
 
 installer-stage: prepare-package
 ifndef MOZ_PKG_MANIFEST
 	$(error MOZ_PKG_MANIFEST unspecified!)
 endif
 	@rm -rf $(DEPTH)/installer-stage $(DIST)/xpt
-	@echo "Staging installer files..."
+	@echo 'Staging installer files...'
 	@$(NSINSTALL) -D $(DEPTH)/installer-stage/core
 	@cp -av $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH)/. $(DEPTH)/installer-stage/core
 	@(cd $(DEPTH)/installer-stage/core && $(CREATE_PRECOMPLETE_CMD))
@@ -636,7 +658,7 @@ stage-package: $(MOZ_PKG_MANIFEST)
 ifndef LIBXUL_SDK
 ifdef MOZ_PACKAGE_JSSHELL
 # Package JavaScript Shell
-	@echo "Packaging JavaScript Shell..."
+	@echo 'Packaging JavaScript Shell...'
 	$(RM) $(PKG_JSSHELL)
 	$(MAKE_JSSHELL)
 endif # MOZ_PACKAGE_JSSHELL
@@ -645,7 +667,7 @@ endif # LIBXUL_SDK
 prepare-package: stage-package
 
 make-package-internal: prepare-package make-sourcestamp-file make-buildinfo-file
-	@echo "Compressing..."
+	@echo 'Compressing...'
 	cd $(DIST) && $(MAKE_PACKAGE)
 
 make-package: FORCE
@@ -656,8 +678,8 @@ GARBAGE += make-package
 
 make-sourcestamp-file::
 	$(NSINSTALL) -D $(DIST)/$(PKG_PATH)
-	@echo "$(BUILDID)" > $(MOZ_SOURCESTAMP_FILE)
-	@echo "$(MOZ_SOURCE_REPO)/rev/$(MOZ_SOURCE_STAMP)" >> $(MOZ_SOURCESTAMP_FILE)
+	@echo '$(BUILDID)' > $(MOZ_SOURCESTAMP_FILE)
+	@echo '$(MOZ_SOURCE_REPO)/rev/$(MOZ_SOURCE_STAMP)' >> $(MOZ_SOURCESTAMP_FILE)
 
 .PHONY: make-buildinfo-file
 make-buildinfo-file:
@@ -701,7 +723,7 @@ ifdef INSTALL_SDK # Here comes the hard part
 	if test -f $(DIST)/include/xpcom-config.h; then \
 	  $(SYSINSTALL) $(IFLAGS1) $(DIST)/include/xpcom-config.h $(DESTDIR)$(sdkdir); \
 	fi
-	find $(DIST)/sdk -name "*.pyc" | xargs rm -f
+	find $(DIST)/sdk -name '*.pyc' | xargs rm -f
 	(cd $(DIST)/sdk/lib && $(TAR) $(TAR_CREATE_FLAGS) - .) | (cd $(DESTDIR)$(sdkdir)/sdk/lib && tar -xf -)
 	(cd $(DIST)/sdk/bin && $(TAR) $(TAR_CREATE_FLAGS) - .) | (cd $(DESTDIR)$(sdkdir)/sdk/bin && tar -xf -)
 	$(RM) -f $(DESTDIR)$(sdkdir)/lib $(DESTDIR)$(sdkdir)/bin $(DESTDIR)$(sdkdir)/include $(DESTDIR)$(sdkdir)/include $(DESTDIR)$(sdkdir)/sdk/idl $(DESTDIR)$(sdkdir)/idl
@@ -713,7 +735,7 @@ endif # INSTALL_SDK
 
 make-sdk:
 	$(MAKE) stage-package UNIVERSAL_BINARY= STAGE_SDK=1 MOZ_PKG_DIR=sdk-stage
-	@echo "Packaging SDK..."
+	@echo 'Packaging SDK...'
 	$(RM) -rf $(DIST)/$(MOZ_APP_NAME)-sdk
 	$(NSINSTALL) -D $(DIST)/$(MOZ_APP_NAME)-sdk/bin
 	(cd $(DIST)/sdk-stage && $(TAR) $(TAR_CREATE_FLAGS) - .) | \
@@ -722,7 +744,7 @@ make-sdk:
 	(cd $(DIST)/host/bin && $(TAR) $(TAR_CREATE_FLAGS) - .) | \
 	  (cd $(DIST)/$(MOZ_APP_NAME)-sdk/host/bin && tar -xf -)
 	$(NSINSTALL) -D $(DIST)/$(MOZ_APP_NAME)-sdk/sdk
-	find $(DIST)/sdk -name "*.pyc" | xargs rm -f
+	find $(DIST)/sdk -name '*.pyc' | xargs rm -f
 	(cd $(DIST)/sdk && $(TAR) $(TAR_CREATE_FLAGS) - .) | \
 	  (cd $(DIST)/$(MOZ_APP_NAME)-sdk/sdk && tar -xf -)
 	$(NSINSTALL) -D $(DIST)/$(MOZ_APP_NAME)-sdk/include
@@ -750,7 +772,7 @@ endif
 # deal with them.
 empty :=
 space = $(empty) $(empty)
-QUOTED_WILDCARD = $(if $(wildcard $(subst $(space),?,$(1))),"$(1)")
+QUOTED_WILDCARD = $(if $(wildcard $(subst $(space),?,$(1))),'$(1)')
 ESCAPE_SPACE = $(subst $(space),\$(space),$(1))
 ESCAPE_WILDCARD = $(subst $(space),?,$(1))
 
@@ -759,7 +781,7 @@ ESCAPE_WILDCARD = $(subst $(space),?,$(1))
 CHECKSUM_ALGORITHM_PARAM = -d sha512 -d md5 -d sha1
 
 # This variable defines where the checksum file will be located
-CHECKSUM_FILE = "$(DIST)/$(PKG_PATH)/$(CHECKSUMS_FILE_BASENAME).checksums"
+CHECKSUM_FILE = '$(DIST)/$(PKG_PATH)/$(CHECKSUMS_FILE_BASENAME).checksums'
 CHECKSUM_FILES = $(CHECKSUM_FILE)
 
 ifeq (WINNT,$(OS_TARGET))
@@ -813,9 +835,9 @@ checksum:
 		$(CHECKSUM_ALGORITHM_PARAM) \
 		-s $(call QUOTED_WILDCARD,$(DIST)) \
 		$(UPLOAD_FILES)
-	@echo "CHECKSUM FILE START"
+	@echo 'CHECKSUM FILE START'
 	@cat $(CHECKSUM_FILE)
-	@echo "CHECKSUM FILE END"
+	@echo 'CHECKSUM FILE END'
 	$(SIGN_CHECKSUM_CMD)
 
 
@@ -830,18 +852,18 @@ endif
 
 DIR_TO_BE_PACKAGED ?= ../$(notdir $(topsrcdir))
 SRC_TAR_EXCLUDE_PATHS += \
-  --exclude=".hg*" \
-  --exclude="CVS" \
-  --exclude=".cvs*" \
-  --exclude=".mozconfig*" \
-  --exclude="*.pyc" \
-  --exclude="$(MOZILLA_DIR)/Makefile" \
-  --exclude="$(MOZILLA_DIR)/dist"
+  --exclude='.hg*' \
+  --exclude='CVS' \
+  --exclude='.cvs*' \
+  --exclude='.mozconfig*' \
+  --exclude='*.pyc' \
+  --exclude='$(MOZILLA_DIR)/Makefile' \
+  --exclude='$(MOZILLA_DIR)/dist'
 ifdef MOZ_OBJDIR
-SRC_TAR_EXCLUDE_PATHS += --exclude="$(MOZ_OBJDIR)"
+SRC_TAR_EXCLUDE_PATHS += --exclude='$(MOZ_OBJDIR)'
 endif
 CREATE_SOURCE_TAR = $(TAR) -c --owner=0 --group=0 --numeric-owner \
-  --mode="go-w" $(SRC_TAR_EXCLUDE_PATHS) -f
+  --mode=go-w $(SRC_TAR_EXCLUDE_PATHS) -f
 
 SOURCE_TAR = $(DIST)/$(PKG_SRCPACK_PATH)$(PKG_SRCPACK_BASENAME).tar.bz2
 HG_BUNDLE_FILE = $(DIST)/$(PKG_SRCPACK_PATH)$(PKG_BUNDLE_BASENAME).bundle
@@ -870,7 +892,7 @@ endif
 # source-package creates a source tarball from the files in MOZ_PKG_SRCDIR,
 # which is either set to a clean checkout or defaults to $topsrcdir
 source-package:
-	@echo "Packaging source tarball..."
+	@echo 'Packaging source tarball...'
 	$(MKDIR) -p $(DIST)/$(PKG_SRCPACK_PATH)
 	(cd $(MOZ_PKG_SRCDIR) && $(CREATE_SOURCE_TAR) - $(DIR_TO_BE_PACKAGED)) | bzip2 -vf > $(SOURCE_TAR)
 	$(SIGN_SOURCE_TAR_CMD)
@@ -881,4 +903,4 @@ hg-bundle:
 	$(SIGN_HG_BUNDLE_CMD)
 
 source-upload:
-	$(MAKE) upload UPLOAD_FILES="$(SOURCE_UPLOAD_FILES)" CHECKSUM_FILE="$(SOURCE_CHECKSUM_FILE)"
+	$(MAKE) upload UPLOAD_FILES='$(SOURCE_UPLOAD_FILES)' CHECKSUM_FILE='$(SOURCE_CHECKSUM_FILE)'

@@ -152,6 +152,7 @@ LayerTransactionParent::LayerTransactionParent(LayerManagerComposite* aManager,
   , mShadowLayersManager(aLayersManager)
   , mId(aId)
   , mDestroyed(false)
+  , mIPCOpen(false)
 {
   MOZ_COUNT_CTOR(LayerTransactionParent);
 }
@@ -187,6 +188,7 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
                                    const bool& isFirstPaint,
                                    InfallibleTArray<EditReply>* reply)
 {
+  profiler_tracing("Paint", "Composite", TRACING_INTERVAL_START);
   PROFILER_LABEL("LayerTransactionParent", "RecvUpdate");
 #ifdef COMPOSITOR_PERFORMANCE_WARNING
   TimeStamp updateStart = TimeStamp::Now();
@@ -200,7 +202,7 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
 
   EditReplyVector replyv;
 
-  layer_manager()->BeginTransactionWithTarget(nullptr);
+  layer_manager()->BeginTransactionWithDrawTarget(nullptr);
 
   for (EditArray::index_type i = 0; i < cset.Length(); ++i) {
     const Edit& edit = cset[i];
@@ -283,6 +285,7 @@ LayerTransactionParent::RecvUpdate(const InfallibleTArray<Edit>& cset,
         layer->SetMaskLayer(nullptr);
       }
       layer->SetAnimations(common.animations());
+      layer->SetInvalidRegion(common.invalidRegion());
 
       typedef SpecificLayerAttributes Specific;
       const SpecificLayerAttributes& specific = attrs.specific();
@@ -488,7 +491,7 @@ LayerTransactionParent::RecvGetTransform(PLayerParent* aParent,
   }
   float scale = 1;
   gfxPoint3D scaledOrigin;
-  gfxPoint3D mozOrigin;
+  gfxPoint3D transformOrigin;
   for (uint32_t i=0; i < layer->GetAnimations().Length(); i++) {
     if (layer->GetAnimations()[i].data().type() == AnimationData::TTransformData) {
       const TransformData& data = layer->GetAnimations()[i].data().get_TransformData();
@@ -497,13 +500,13 @@ LayerTransactionParent::RecvGetTransform(PLayerParent* aParent,
         gfxPoint3D(NS_round(NSAppUnitsToFloatPixels(data.origin().x, scale)),
                    NS_round(NSAppUnitsToFloatPixels(data.origin().y, scale)),
                    0.0f);
-      mozOrigin = data.mozOrigin();
+      transformOrigin = data.transformOrigin();
       break;
     }
   }
 
   aTransform->Translate(-scaledOrigin);
-  *aTransform = nsLayoutUtils::ChangeMatrixBasis(-scaledOrigin - mozOrigin, *aTransform);
+  *aTransform = nsLayoutUtils::ChangeMatrixBasis(-scaledOrigin - transformOrigin, *aTransform);
   return true;
 }
 

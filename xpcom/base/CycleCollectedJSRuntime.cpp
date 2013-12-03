@@ -440,9 +440,6 @@ CycleCollectedJSRuntime::CycleCollectedJSRuntime(uint32_t aMaxbytes,
     mJSZoneCycleCollectorGlobal(sJSZoneCycleCollectorGlobal),
     mJSRuntime(nullptr),
     mJSHolders(512)
-#ifdef DEBUG
-  , mObjectToUnlink(nullptr)
-#endif
 {
   mJSRuntime = JS_NewRuntime(aMaxbytes, aUseHelperThreads);
   if (!mJSRuntime) {
@@ -455,17 +452,15 @@ CycleCollectedJSRuntime::CycleCollectedJSRuntime(uint32_t aMaxbytes,
   JS_SetGrayGCRootsTracer(mJSRuntime, TraceGrayJS, this);
   JS_SetGCCallback(mJSRuntime, GCCallback, this);
   JS_SetContextCallback(mJSRuntime, ContextCallback, this);
+  JS_SetDestroyZoneCallback(mJSRuntime, XPCStringConvert::FreeZoneCache);
+  JS_SetSweepZoneCallback(mJSRuntime, XPCStringConvert::ClearZoneCache);
 
   nsCycleCollector_registerJSRuntime(this);
 }
 
-void
-CycleCollectedJSRuntime::DestroyRuntime()
+CycleCollectedJSRuntime::~CycleCollectedJSRuntime()
 {
-  if (!mJSRuntime) {
-    return;
-  }
-
+  MOZ_ASSERT(mJSRuntime);
   MOZ_ASSERT(!mDeferredFinalizerTable.Count());
   MOZ_ASSERT(!mDeferredSupports.Length());
 
@@ -477,18 +472,12 @@ CycleCollectedJSRuntime::DestroyRuntime()
   nsCycleCollector_forgetJSRuntime();
 }
 
-CycleCollectedJSRuntime::~CycleCollectedJSRuntime()
-{
-  // Destroy our runtime if the subclass hasn't done it already.
-  DestroyRuntime();
-}
-
 size_t
 CycleCollectedJSRuntime::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
   size_t n = 0;
 
-  // NULL for the second arg;  we're not measuring anything hanging off the
+  // nullptr for the second arg;  we're not measuring anything hanging off the
   // entries in mJSHolders.
   n += mJSHolders.SizeOfExcludingThis(nullptr, aMallocSizeOf);
 
@@ -519,8 +508,10 @@ CycleCollectedJSRuntime::DescribeGCThing(bool aIsMarked, void* aThing,
   }
 
   char name[72];
+  uint64_t compartmentAddress = 0;
   if (aTraceKind == JSTRACE_OBJECT) {
     JSObject* obj = static_cast<JSObject*>(aThing);
+    compartmentAddress = (uint64_t)js::GetObjectCompartment(obj);
     const js::Class* clasp = js::GetObjectClass(obj);
 
     // Give the subclass a chance to do something
@@ -556,7 +547,7 @@ CycleCollectedJSRuntime::DescribeGCThing(bool aIsMarked, void* aThing,
   }
 
   // Disable printing global for objects while we figure out ObjShrink fallout.
-  aCb.DescribeGCedNode(aIsMarked, name);
+  aCb.DescribeGCedNode(aIsMarked, name, compartmentAddress);
 }
 
 void
@@ -968,7 +959,7 @@ CycleCollectedJSRuntime::DeferredFinalize(nsISupports* aSupports)
 void
 CycleCollectedJSRuntime::DumpJSHeap(FILE* file)
 {
-  js::DumpHeapComplete(Runtime(), file);
+  js::DumpHeapComplete(Runtime(), file, js::CollectNurseryBeforeDump);
 }
 
 

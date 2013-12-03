@@ -62,12 +62,11 @@ namespace mozilla {
 namespace dom {
 
 // The default value for kKindTable is "subtitles"
-static const char* kKindTableDefaultString = kKindTable->tag;
+static MOZ_CONSTEXPR const char* kKindTableDefaultString = kKindTable->tag;
 
 /** HTMLTrackElement */
 HTMLTrackElement::HTMLTrackElement(already_AddRefed<nsINodeInfo> aNodeInfo)
   : nsGenericHTMLElement(aNodeInfo)
-  , mReadyState(NONE)
 {
 #ifdef PR_LOGGING
   if (!gTrackElementLog) {
@@ -126,7 +125,7 @@ HTMLTrackElement::Track()
   if (!mTrack) {
     // We're expected to always have an internal TextTrack so create
     // an empty object to return if we don't already have one.
-    mTrack = new TextTrack(OwnerDoc()->GetParentObject());
+    mTrack = new TextTrack(OwnerDoc()->GetParentObject(), mMediaParent);
   }
 
   return mTrack;
@@ -146,7 +145,8 @@ HTMLTrackElement::CreateTextTrack()
     kind = TextTrackKind::Subtitles;
   }
 
-  mTrack = new TextTrack(OwnerDoc()->GetParentObject(), kind, label, srcLang);
+  mTrack = new TextTrack(OwnerDoc()->GetParentObject(), mMediaParent, kind,
+                         label, srcLang);
 
   if (mMediaParent) {
     mMediaParent->AddTextTrack(mTrack);
@@ -302,6 +302,16 @@ HTMLTrackElement::UnbindFromTree(bool aDeep, bool aNullParent)
   }
 
   nsGenericHTMLElement::UnbindFromTree(aDeep, aNullParent);
+}
+
+uint16_t
+HTMLTrackElement::ReadyState() const
+{
+  if (!mTrack) {
+    return NONE;
+  }
+
+  return mTrack->ReadyState();
 }
 
 } // namespace dom

@@ -30,9 +30,8 @@ this.webappsUI = {
     Services.obs.addObserver(this, "webapps-launch", false);
     Services.obs.addObserver(this, "webapps-uninstall", false);
     cpmm.addMessageListener("Webapps:Install:Return:OK", this);
-    cpmm.addMessageListener("Webapps:OfflineCache", this);
     cpmm.addMessageListener("Webapps:Install:Return:KO", this);
-    cpmm.addMessageListener("Webapps:PackageEvent", this);
+    cpmm.addMessageListener("Webapps:UpdateState", this);
   },
 
   uninit: function webappsUI_uninit() {
@@ -40,9 +39,8 @@ this.webappsUI = {
     Services.obs.removeObserver(this, "webapps-launch");
     Services.obs.removeObserver(this, "webapps-uninstall");
     cpmm.removeMessageListener("Webapps:Install:Return:OK", this);
-    cpmm.removeMessageListener("Webapps:OfflineCache", this);
     cpmm.removeMessageListener("Webapps:Install:Return:KO", this);
-    cpmm.removeMessageListener("Webapps:PackageEvent", this);
+    cpmm.removeMessageListener("Webapps:UpdateState", this);
   },
 
   receiveMessage: function(aMessage) {
@@ -56,10 +54,10 @@ this.webappsUI = {
       return;
     }
 
-    if (aMessage.name == "Webapps:OfflineCache") {
+    if (aMessage.name == "Webapps:UpdateState") {
       if (data.error) {
         this.installations[manifestURL].reject(data.error);
-      } else if (data.installState == "installed") {
+      } else if (data.app.installState == "installed") {
         this.installations[manifestURL].resolve();
       }
     } else if (aMessage.name == "Webapps:Install:Return:OK" &&
@@ -70,12 +68,6 @@ this.webappsUI = {
       }
     } else if (aMessage.name == "Webapps:Install:Return:KO") {
       this.installations[manifestURL].reject(data.error);
-    } else if (aMessage.name == "Webapps:PackageEvent") {
-      if (data.type == "installed") {
-        this.installations[manifestURL].resolve();
-      } else if (data.type == "error") {
-        this.installations[manifestURL].reject(data.error);
-      }
     }
   },
 
@@ -102,48 +94,6 @@ this.webappsUI = {
   _getWindowForId: function(aId) {
     let someWindow = Services.wm.getMostRecentWindow(null);
     return someWindow && Services.wm.getOuterWindowWithId(aId);
-  },
-
-  openURL: function(aUrl, aOrigin) {
-    let browserEnumerator = Services.wm.getEnumerator("navigator:browser");
-    let ss = Cc["@mozilla.org/browser/sessionstore;1"].getService(Ci.nsISessionStore);
-
-    // Check each browser instance for our URL
-    let found = false;
-    while (!found && browserEnumerator.hasMoreElements()) {
-      let browserWin = browserEnumerator.getNext();
-      if (browserWin.closed) {
-        continue;
-      }
-      let tabbrowser = browserWin.gBrowser;
-
-      // Check each tab of this browser instance
-      let numTabs = tabbrowser.tabs.length;
-      for (let index = 0; index < numTabs; index++) {
-        let tab = tabbrowser.tabs[index];
-        let appURL = ss.getTabValue(tab, "appOrigin");
-        if (appURL == aOrigin) {
-          // The URL is already opened. Select this tab.
-          tabbrowser.selectedTab = tab;
-          browserWin.focus();
-          found = true;
-          break;
-        }
-      }
-    }
-
-    // Our URL isn't open. Open it now.
-    if (!found) {
-      let recentWindow = Services.wm.getMostRecentWindow("navigator:browser");
-      if (recentWindow) {
-        // Use an existing browser window
-        let browser = recentWindow.gBrowser;
-        let tab = browser.addTab(aUrl);
-        browser.pinTab(tab);
-        browser.selectedTab = tab;
-        ss.setTabValue(tab, "appOrigin", aOrigin);
-      }
-    }
   },
 
   doInstall: function(aData, aWindow) {

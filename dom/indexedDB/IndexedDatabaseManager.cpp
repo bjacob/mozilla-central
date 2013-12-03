@@ -13,14 +13,17 @@
 #include "nsIObserverService.h"
 #include "nsIScriptError.h"
 
+#include "jsapi.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/CondVar.h"
+#include "mozilla/ContentEvents.h"
 #include "mozilla/dom/quota/OriginOrPatternString.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozilla/dom/quota/Utilities.h"
 #include "mozilla/dom/TabContext.h"
 #include "mozilla/Services.h"
 #include "mozilla/storage.h"
+#include "mozilla/Util.h"
 #include "nsContentUtils.h"
 #include "nsEventDispatcher.h"
 #include "nsThreadUtils.h"
@@ -29,6 +32,21 @@
 #include "IDBFactory.h"
 #include "IDBKeyRange.h"
 #include "IDBRequest.h"
+
+// Bindings for ResolveConstructors
+#include "mozilla/dom/IDBCursorBinding.h"
+#include "mozilla/dom/IDBDatabaseBinding.h"
+#include "mozilla/dom/IDBFactoryBinding.h"
+#include "mozilla/dom/IDBFileHandleBinding.h"
+#include "mozilla/dom/IDBKeyRangeBinding.h"
+#include "mozilla/dom/IDBIndexBinding.h"
+#include "mozilla/dom/IDBObjectStoreBinding.h"
+#include "mozilla/dom/IDBOpenDBRequestBinding.h"
+#include "mozilla/dom/IDBRequestBinding.h"
+#include "mozilla/dom/IDBTransactionBinding.h"
+#include "mozilla/dom/IDBVersionChangeEventBinding.h"
+
+#define IDB_STR "indexedDB"
 
 // The two possible values for the data argument when receiving the disk space
 // observer notification.
@@ -323,7 +341,7 @@ IndexedDatabaseManager::FireWindowOnError(nsPIDOMWindow* aOwner,
     error->GetName(errorName);
   }
 
-  nsScriptErrorEvent event(true, NS_LOAD_ERROR);
+  mozilla::InternalScriptErrorEvent event(true, NS_LOAD_ERROR);
   request->FillScriptErrorEvent(&event);
   NS_ABORT_IF_FALSE(event.fileName,
                     "FillScriptErrorEvent should give us a non-null string "
@@ -384,6 +402,49 @@ IndexedDatabaseManager::TabContextMayAccessOrigin(const TabContext& aContext,
                                                 pattern);
 
   return PatternMatchesOrigin(pattern, aOrigin);
+}
+
+// static
+bool
+IndexedDatabaseManager::DefineIndexedDB(JSContext* aCx,
+                                        JS::Handle<JSObject*> aGlobal)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(nsContentUtils::IsCallerChrome(), "Only for chrome!");
+  MOZ_ASSERT(js::GetObjectClass(aGlobal)->flags & JSCLASS_DOM_GLOBAL,
+             "Passed object is not a global object!");
+
+  if (!IDBCursorBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBCursorWithValueBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBDatabaseBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBFactoryBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBFileHandleBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBIndexBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBKeyRangeBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBObjectStoreBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBOpenDBRequestBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBRequestBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBTransactionBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBVersionChangeEventBinding::GetConstructorObject(aCx, aGlobal))
+  {
+    return false;
+  }
+
+  nsRefPtr<IDBFactory> factory;
+  if (NS_FAILED(IDBFactory::Create(aCx, aGlobal, nullptr,
+                                   getter_AddRefs(factory)))) {
+    return false;
+  }
+
+  MOZ_ASSERT(factory, "This should never fail for chrome!");
+
+  JS::Rooted<JS::Value> indexedDB(aCx);
+  if (!WrapNewBindingObject(aCx, aGlobal, factory, &indexedDB)) {
+    return false;
+  }
+
+  return JS_DefineProperty(aCx, aGlobal, IDB_STR, indexedDB, nullptr, nullptr,
+                           JSPROP_ENUMERATE);
 }
 
 // static
@@ -586,15 +647,18 @@ NS_IMPL_QUERY_INTERFACE2(IndexedDatabaseManager, nsIIndexedDatabaseManager,
                                                  nsIObserver)
 
 NS_IMETHODIMP
-IndexedDatabaseManager::InitWindowless(const jsval& aObj, JSContext* aCx)
+IndexedDatabaseManager::InitWindowless(const jsval& aGlobal, JSContext* aCx)
 {
   NS_ENSURE_TRUE(nsContentUtils::IsCallerChrome(), NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_ARG(!JSVAL_IS_PRIMITIVE(aObj));
 
-  JS::Rooted<JSObject*> obj(aCx, JSVAL_TO_OBJECT(aObj));
+  JS::Rooted<JSObject*> global(aCx, JSVAL_TO_OBJECT(aGlobal));
+  if (!(js::GetObjectClass(global)->flags & JSCLASS_DOM_GLOBAL)) {
+    NS_WARNING("Passed object is not a global object!");
+    return NS_ERROR_FAILURE;
+  }
 
   bool hasIndexedDB;
-  if (!JS_HasProperty(aCx, obj, "indexedDB", &hasIndexedDB)) {
+  if (!JS_HasProperty(aCx, global, IDB_STR, &hasIndexedDB)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -603,35 +667,7 @@ IndexedDatabaseManager::InitWindowless(const jsval& aObj, JSContext* aCx)
     return NS_ERROR_FAILURE;
   }
 
-  JS::Rooted<JSObject*> global(aCx, JS_GetGlobalForObject(aCx, obj));
-  NS_ASSERTION(global, "What?! No global!");
-
-  nsRefPtr<IDBFactory> factory;
-  nsresult rv =
-    IDBFactory::Create(aCx, global, nullptr, getter_AddRefs(factory));
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR);
-
-  NS_ASSERTION(factory, "This should never fail for chrome!");
-
-  JS::Rooted<JS::Value> indexedDBVal(aCx);
-  rv = nsContentUtils::WrapNative(aCx, obj, factory, indexedDBVal.address());
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (!JS_DefineProperty(aCx, obj, "indexedDB", indexedDBVal, nullptr,
-                         nullptr, JSPROP_ENUMERATE)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  JS::Rooted<JSObject*> keyrangeObj(aCx,
-    JS_NewObject(aCx, nullptr, nullptr, nullptr));
-  NS_ENSURE_TRUE(keyrangeObj, NS_ERROR_OUT_OF_MEMORY);
-
-  if (!IDBKeyRange::DefineConstructors(aCx, keyrangeObj)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  if (!JS_DefineProperty(aCx, obj, "IDBKeyRange", OBJECT_TO_JSVAL(keyrangeObj),
-                         nullptr, nullptr, JSPROP_ENUMERATE)) {
+  if (!DefineIndexedDB(aCx, global)) {
     return NS_ERROR_FAILURE;
   }
 

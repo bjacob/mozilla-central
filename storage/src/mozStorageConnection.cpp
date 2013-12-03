@@ -704,7 +704,9 @@ Connection::databaseElementExists(enum DatabaseElementType aElementType,
 {
   if (!mDBConn) return NS_ERROR_NOT_INITIALIZED;
 
-  nsAutoCString query("SELECT name FROM sqlite_master WHERE type = '");
+  nsCString query("SELECT name FROM (SELECT * FROM sqlite_master UNION ALL "
+                                    "SELECT * FROM sqlite_temp_master) "
+                  "WHERE type = '");
   switch (aElementType) {
     case INDEX:
       query.Append("index");
@@ -822,6 +824,11 @@ Connection::internalClose()
                                       leafName.get()));
 #endif
 
+  // Set the property to null before closing the connection, otherwise the other
+  // functions in the module may try to use the connection after it is closed.
+  sqlite3 *dbConn = mDBConn;
+  mDBConn = nullptr;
+
   // At this stage, we may still have statements that need to be
   // finalized. Attempt to close the database connection. This will
   // always disconnect any virtual tables and cleanly finalize their
@@ -829,13 +836,13 @@ Connection::internalClose()
   // unfinalized client statements, in which case we need to finalize
   // these statements and close again.
 
-  int srv = sqlite3_close(mDBConn);
+  int srv = sqlite3_close(dbConn);
 
   if (srv == SQLITE_BUSY) {
     // We still have non-finalized statements. Finalize them.
 
-    sqlite3_stmt *stmt = NULL;
-    while ((stmt = ::sqlite3_next_stmt(mDBConn, stmt))) {
+    sqlite3_stmt *stmt = nullptr;
+    while ((stmt = ::sqlite3_next_stmt(dbConn, stmt))) {
       PR_LOG(gStorageLog, PR_LOG_NOTICE,
              ("Auto-finalizing SQL statement '%s' (%x)",
               ::sqlite3_sql(stmt),
@@ -864,13 +871,13 @@ Connection::internalClose()
       // Ensure that the loop continues properly, whether closing has succeeded
       // or not.
       if (srv == SQLITE_OK) {
-        stmt = NULL;
+        stmt = nullptr;
       }
     }
 
     // Now that all statements have been finalized, we
-    // shoudl be able to close.
-    srv = ::sqlite3_close(mDBConn);
+    // should be able to close.
+    srv = ::sqlite3_close(dbConn);
 
   }
 
@@ -879,7 +886,6 @@ Connection::internalClose()
                "sqlite3_close failed. There are probably outstanding statements that are listed above!");
   }
 
-  mDBConn = nullptr;
   return convertResultCode(srv);
 }
 
@@ -984,9 +990,7 @@ Connection::prepareStatement(const nsCString &aSQL,
 #ifdef DEBUG
     NS_WARNING(warnMsg.get());
 #endif
-#ifdef PR_LOGGING
     PR_LOG(gStorageLog, PR_LOG_ERROR, ("%s", warnMsg.get()));
-#endif
   }
 
   (void)::sqlite3_extended_result_codes(mDBConn, 0);

@@ -4,8 +4,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'gl'
-
 gl_provider = 'Null'
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
@@ -28,20 +26,24 @@ if CONFIG['MOZ_GL_PROVIDER']:
     gl_provider = CONFIG['MOZ_GL_PROVIDER']
 
 EXPORTS += [
+    'DecomposeIntoNoRepeatTriangles.h',
     'ForceDiscreteGPUHelperCGL.h',
+    'GfxTexturesReporter.h',
+    'GLBlitTextureImageHelper.h',
     'GLConsts.h',
     'GLContext.h',
     'GLContextProvider.h',
     'GLContextProviderImpl.h',
     'GLContextSymbols.h',
     'GLContextTypes.h',
+    'GLContextUtils.h',
     'GLDefs.h',
     'GLLibraryEGL.h',
     'GLLibraryLoader.h',
     'GLScreenBuffer.h',
     'GLTextureImage.h',
     'GLTypes.h',
-    'GfxTexturesReporter.h',
+    'ScopedGLHelpers.h',
     'SharedSurface.h',
     'SharedSurfaceEGL.h',
     'SharedSurfaceGL.h',
@@ -61,59 +63,82 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
         'SharedSurfaceANGLE.h',
         'WGLLibrary.h',
     ]
-    CPP_SOURCES += [
+    UNIFIED_SOURCES += [
         'GLContextProviderEGL.cpp',
         'SharedSurfaceANGLE.cpp',
     ]
 if CONFIG['MOZ_ENABLE_SKIA_GPU']:
     EXPORTS += ['GLContextSkia.h']
-    CPP_SOURCES += [
+    UNIFIED_SOURCES += [
         'GLContextSkia.cpp',
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-    CPP_SOURCES += ['SharedSurfaceGralloc.cpp']
+    UNIFIED_SOURCES += ['SharedSurfaceGralloc.cpp']
     EXPORTS += ['SharedSurfaceGralloc.h']
+    LOCAL_INCLUDES += ['/widget/gonk']
 
 if gl_provider == 'CGL':
-    CMMSRCS += [
+    # This file includes Mac headers that are unfriendly to unified builds,
+    # and we have only one .mm file here anyway.
+    SOURCES += [
         "GLContextProvider%s.mm" % (gl_provider),
     ]
     EXPORTS += [
         'SharedSurfaceIO.h',
     ]
-    CPP_SOURCES += [
+    # SharedSurfaceIO.cpp includes MacIOSurface.h which include Mac headers
+    # which define Size and Point types in root namespace with often conflict with
+    # our own types. While I haven't actually hit this issue in the present case,
+    # it's been an issue in gfx/layers so let's not risk it.
+    SOURCES += [
         'SharedSurfaceIO.cpp',
     ]
+elif gl_provider == 'GLX':
+    # GLContextProviderGLX.cpp needs to be kept out of UNIFIED_SOURCES
+    # as it includes X11 headers which cause conflicts.
+    SOURCES += [
+        'GLContextProviderGLX.cpp',
+    ]
 else:
-    CPP_SOURCES += [
+    UNIFIED_SOURCES += [
         'GLContextProvider%s.cpp' % gl_provider,
     ]
 
-CPP_SOURCES += [
+UNIFIED_SOURCES += [
+    'DecomposeIntoNoRepeatTriangles.cpp',
+    'GfxTexturesReporter.cpp',
+    'GLBlitHelper.cpp',
+    'GLBlitTextureImageHelper.cpp',
     'GLContext.cpp',
     'GLContextFeatures.cpp',
     'GLContextTypes.cpp',
     'GLContextUtils.cpp',
+    'GLLibraryEGL.cpp',
     'GLLibraryLoader.cpp',
     'GLScreenBuffer.cpp',
     'GLTextureImage.cpp',
-    'GfxTexturesReporter.cpp',
+    'ScopedGLHelpers.cpp',
     'SharedSurface.cpp',
-    'GLLibraryEGL.cpp',
     'SharedSurfaceEGL.cpp',
     'SharedSurfaceGL.cpp',
     'SurfaceFactory.cpp',
     'SurfaceStream.cpp',
-    'VBOArena.cpp',
     'TextureGarbageBin.cpp',
+    'TextureImageEGL.cpp',
+    'VBOArena.cpp',
 ]
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
-
 MSVC_ENABLE_PGO = True
 
-LIBRARY_NAME = 'gl'
+include('/ipc/chromium/chromium-config.mozbuild')
 
+FINAL_LIBRARY = 'xul'
+
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows' and CONFIG['MOZ_WEBGL']:
+    DEFINES['MOZ_D3DCOMPILER_DLL'] = CONFIG['MOZ_D3DCOMPILER_DLL']
+
+if CONFIG['MOZ_ANDROID_OMTC']:
+    DEFINES['MOZ_ANDROID_OMTC'] = True

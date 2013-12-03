@@ -61,9 +61,17 @@ MacroAssemblerARM::convertUInt32ToDouble(const Register &src, const FloatRegiste
 {
     // direct conversions aren't possible.
     VFPRegister dest = VFPRegister(dest_);
-    as_vxfer(src, InvalidReg, dest.uintOverlay(),
-             CoreToFloat);
+    as_vxfer(src, InvalidReg, dest.uintOverlay(), CoreToFloat);
     as_vcvt(dest, dest.uintOverlay());
+}
+
+void
+MacroAssemblerARM::convertUInt32ToFloat32(const Register &src, const FloatRegister &dest_)
+{
+    // direct conversions aren't possible.
+    VFPRegister dest = VFPRegister(dest_);
+    as_vxfer(src, InvalidReg, dest.uintOverlay(), CoreToFloat);
+    as_vcvt(VFPRegister(dest).singleOverlay(), dest.uintOverlay());
 }
 
 void MacroAssemblerARM::convertDoubleToFloat(const FloatRegister &src, const FloatRegister &dest)
@@ -92,7 +100,8 @@ MacroAssemblerARM::branchTruncateDouble(const FloatRegister &src, const Register
 // integer is written to the output register. Otherwise, a bailout is taken to
 // the given snapshot. This function overwrites the scratch float register.
 void
-MacroAssemblerARM::convertDoubleToInt32(const FloatRegister &src, const Register &dest, Label *fail, bool negativeZeroCheck)
+MacroAssemblerARM::convertDoubleToInt32(const FloatRegister &src, const Register &dest,
+                                        Label *fail, bool negativeZeroCheck)
 {
     // convert the floating point value to an integer, if it did not fit,
     //     then when we convert it *back* to  a float, it will have a
@@ -111,6 +120,35 @@ MacroAssemblerARM::convertDoubleToInt32(const FloatRegister &src, const Register
         // Move the top word of the double into the output reg, if it is non-zero,
         // then the original value was -0.0
         as_vxfer(dest, InvalidReg, src, FloatToCore, Assembler::Equal, 1);
+        ma_cmp(dest, Imm32(0x80000000), Assembler::Equal);
+        ma_b(fail, Assembler::Equal);
+    }
+}
+
+// Checks whether a float32 is representable as a 32-bit integer. If so, the
+// integer is written to the output register. Otherwise, a bailout is taken to
+// the given snapshot. This function overwrites the scratch float register.
+void
+MacroAssemblerARM::convertFloat32ToInt32(const FloatRegister &src, const Register &dest,
+                                         Label *fail, bool negativeZeroCheck)
+{
+    // convert the floating point value to an integer, if it did not fit,
+    //     then when we convert it *back* to  a float, it will have a
+    //     different value, which we can test.
+    ma_vcvt_F32_I32(src, ScratchFloatReg);
+    // move the value into the dest register.
+    ma_vxfer(ScratchFloatReg, dest);
+    ma_vcvt_I32_F32(ScratchFloatReg, ScratchFloatReg);
+    ma_vcmp_f32(src, ScratchFloatReg);
+    as_vmrs(pc);
+    ma_b(fail, Assembler::VFP_NotEqualOrUnordered);
+
+    if (negativeZeroCheck) {
+        ma_cmp(dest, Imm32(0));
+        // Test and bail for -0.0, when integer result is 0
+        // Move the float into the output reg, and if it is non-zero then
+        // the original value was -0.0
+        as_vxfer(dest, InvalidReg, VFPRegister(src).singleOverlay(), FloatToCore, Assembler::Equal, 0);
         ma_cmp(dest, Imm32(0x80000000), Assembler::Equal);
         ma_b(fail, Assembler::Equal);
     }
@@ -337,11 +375,11 @@ MacroAssemblerARM::ma_alu(Register src1, Imm32 imm, Register dest,
         // Going to have to use a load.  If the operation is a move, then just move it into the
         // destination register
         if (op == op_mov) {
-            as_Imm32Pool(dest, imm.value, NULL, c);
+            as_Imm32Pool(dest, imm.value, nullptr, c);
             return;
         } else {
             // If this isn't just going into a register, then stick it in a temp, and then proceed.
-            as_Imm32Pool(ScratchRegister, imm.value, NULL, c);
+            as_Imm32Pool(ScratchRegister, imm.value, nullptr, c);
         }
     }
     as_alu(dest, src1, O2Reg(ScratchRegister), op, sc, c);
@@ -370,8 +408,8 @@ MacroAssemblerARM::ma_nop()
 Instruction *
 NextInst(Instruction *i)
 {
-    if (i == NULL)
-        return NULL;
+    if (i == nullptr)
+        return nullptr;
     return i->next();
 }
 
@@ -391,15 +429,15 @@ MacroAssemblerARM::ma_movPatchable(Imm32 imm_, Register dest, Assembler::Conditi
     switch(rs) {
       case L_MOVWT:
         as_movw(dest, Imm16(imm & 0xffff), c, i);
-        // i can be NULL here.  that just means "insert in the next in sequence."
-        // NextInst is special cased to not do anything when it is passed NULL, so two
-        // consecutive instructions will be inserted.
+        // i can be nullptr here.  that just means "insert in the next in sequence."
+        // NextInst is special cased to not do anything when it is passed nullptr, so
+        // two consecutive instructions will be inserted.
         i = NextInst(i);
         as_movt(dest, Imm16(imm >> 16 & 0xffff), c, i);
         break;
       case L_LDR:
-        if(i == NULL)
-            as_Imm32Pool(dest, imm, NULL, c);
+        if(i == nullptr)
+            as_Imm32Pool(dest, imm, nullptr, c);
         else
             as_WritePoolEntry(i, c, imm);
         break;
@@ -1291,11 +1329,11 @@ MacroAssemblerARM::ma_b(void *target, Relocation::Kind reloc, Assembler::Conditi
         as_bx(ScratchRegister, c);
         break;
       case Assembler::B_LDR_BX:
-        as_Imm32Pool(ScratchRegister, trg, NULL, c);
+        as_Imm32Pool(ScratchRegister, trg, nullptr, c);
         as_bx(ScratchRegister, c);
         break;
       case Assembler::B_LDR:
-        as_Imm32Pool(pc, trg, NULL, c);
+        as_Imm32Pool(pc, trg, nullptr, c);
         if (c == Always)
             m_buffer.markGuard();
         break;
@@ -1396,9 +1434,21 @@ MacroAssemblerARM::ma_vabs(FloatRegister src, FloatRegister dest, Condition cc)
 }
 
 void
+MacroAssemblerARM::ma_vabs_f32(FloatRegister src, FloatRegister dest, Condition cc)
+{
+    as_vabs(VFPRegister(dest).singleOverlay(), VFPRegister(src).singleOverlay(), cc);
+}
+
+void
 MacroAssemblerARM::ma_vsqrt(FloatRegister src, FloatRegister dest, Condition cc)
 {
     as_vsqrt(dest, src, cc);
+}
+
+void
+MacroAssemblerARM::ma_vsqrt_f32(FloatRegister src, FloatRegister dest, Condition cc)
+{
+    as_vsqrt(VFPRegister(dest).singleOverlay(), VFPRegister(src).singleOverlay(), cc);
 }
 
 union DoublePun
@@ -1449,7 +1499,7 @@ MacroAssemblerARM::ma_vimm(double value, FloatRegister dest, Condition cc)
         }
     }
     // Fall back to putting the value in a pool.
-    as_FImm64Pool(dest, value, NULL, cc);
+    as_FImm64Pool(dest, value, nullptr, cc);
 }
 
 static inline uint32_t
@@ -1477,7 +1527,7 @@ MacroAssemblerARM::ma_vimm_f32(float value, FloatRegister dest, Condition cc)
         }
     }
     // Fall back to putting the value in a pool.
-    as_FImm32Pool(vd, value, NULL, cc);
+    as_FImm32Pool(vd, value, nullptr, cc);
 }
 
 void
@@ -1486,9 +1536,19 @@ MacroAssemblerARM::ma_vcmp(FloatRegister src1, FloatRegister src2, Condition cc)
     as_vcmp(VFPRegister(src1), VFPRegister(src2), cc);
 }
 void
+MacroAssemblerARM::ma_vcmp_f32(FloatRegister src1, FloatRegister src2, Condition cc)
+{
+    as_vcmp(VFPRegister(src1).singleOverlay(), VFPRegister(src2).singleOverlay(), cc);
+}
+void
 MacroAssemblerARM::ma_vcmpz(FloatRegister src1, Condition cc)
 {
     as_vcmpz(VFPRegister(src1), cc);
+}
+void
+MacroAssemblerARM::ma_vcmpz_f32(FloatRegister src1, Condition cc)
+{
+    as_vcmpz(VFPRegister(src1).singleOverlay(), cc);
 }
 
 void
@@ -2629,11 +2689,59 @@ MacroAssemblerARMCompat::testInt32(Assembler::Condition cond, const Address &add
 }
 
 Assembler::Condition
-MacroAssemblerARMCompat::testDouble(Assembler::Condition cond, const Address &address)
+MacroAssemblerARMCompat::testDouble(Condition cond, const Address &address)
 {
     JS_ASSERT(cond == Equal || cond == NotEqual);
     extractTag(address, ScratchRegister);
     return testDouble(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testBoolean(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testBoolean(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testNull(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testNull(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testUndefined(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testUndefined(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testString(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testString(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testObject(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testObject(cond, ScratchRegister);
+}
+
+Assembler::Condition
+MacroAssemblerARMCompat::testNumber(Condition cond, const Address &address)
+{
+    JS_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(address, ScratchRegister);
+    return testNumber(cond, ScratchRegister);
 }
 
 Assembler::Condition
@@ -3259,7 +3367,7 @@ MacroAssemblerARMCompat::storeTypeTag(ImmTag tag, Register base, Register index,
 
 void
 MacroAssemblerARMCompat::linkExitFrame() {
-    uint8_t *dest = (uint8_t*)&GetIonContext()->runtime->mainThread.ionTop;
+    uint8_t *dest = (uint8_t*)GetIonContext()->runtime->addressOfIonTop();
     movePtr(ImmPtr(dest), ScratchRegister);
     ma_str(StackPointer, Operand(ScratchRegister, 0));
 }
@@ -3619,7 +3727,7 @@ MacroAssemblerARMCompat::handleFailureWithHandler(void *handler)
     passABIArg(r0);
     callWithABI(handler);
 
-    IonCode *excTail = GetIonContext()->runtime->ionRuntime()->getExceptionTail();
+    IonCode *excTail = GetIonContext()->runtime->jitRuntime()->getExceptionTail();
     branch(excTail);
 }
 
@@ -3761,6 +3869,58 @@ MacroAssemblerARMCompat::floor(FloatRegister input, Register output, Label *bail
     ma_rsb(output, Imm32(0), output, SetCond);
     // Flip the negated input back to its original value.
     ma_vneg(input, input);
+    // If the result looks non-negative, then this value didn't actually fit into
+    // the int range, and special handling is required.
+    // zero is also caught by this case, but floor of a negative number
+    // should never be zero.
+    ma_b(bail, Unsigned);
+
+    bind(&fin);
+}
+
+void
+MacroAssemblerARMCompat::floorf(FloatRegister input, Register output, Label *bail)
+{
+    Label handleZero;
+    Label handleNeg;
+    Label fin;
+    compareFloat(input, InvalidFloatReg);
+    ma_b(&handleZero, Assembler::Equal);
+    ma_b(&handleNeg, Assembler::Signed);
+    // NaN is always a bail condition, just bail directly.
+    ma_b(bail, Assembler::Overflow);
+
+    // The argument is a positive number, truncation is the path to glory;
+    // Since it is known to be > 0.0, explicitly convert to a larger range,
+    // then a value that rounds to INT_MAX is explicitly different from an
+    // argument that clamps to INT_MAX
+    ma_vcvt_F32_U32(input, ScratchFloatReg);
+    ma_vxfer(VFPRegister(ScratchFloatReg).uintOverlay(), output);
+    ma_mov(output, output, SetCond);
+    ma_b(bail, Signed);
+    ma_b(&fin);
+
+    bind(&handleZero);
+    // Move the top word of the double into the output reg, if it is non-zero,
+    // then the original value was -0.0
+    as_vxfer(output, InvalidReg, VFPRegister(input).singleOverlay(), FloatToCore, Always, 0);
+    ma_cmp(output, Imm32(0));
+    ma_b(bail, NonZero);
+    ma_b(&fin);
+
+    bind(&handleNeg);
+    // Negative case, negate, then start dancing
+    ma_vneg_f32(input, input);
+    ma_vcvt_F32_U32(input, ScratchFloatReg);
+    ma_vxfer(VFPRegister(ScratchFloatReg).uintOverlay(), output);
+    ma_vcvt_U32_F32(ScratchFloatReg, ScratchFloatReg);
+    compareFloat(ScratchFloatReg, input);
+    ma_add(output, Imm32(1), output, NoSetCond, NotEqual);
+    // Negate the output.  Since INT_MIN < -INT_MAX, even after adding 1,
+    // the result will still be a negative number
+    ma_rsb(output, Imm32(0), output, SetCond);
+    // Flip the negated input back to its original value.
+    ma_vneg_f32(input, input);
     // If the result looks non-negative, then this value didn't actually fit into
     // the int range, and special handling is required.
     // zero is also caught by this case, but floor of a negative number

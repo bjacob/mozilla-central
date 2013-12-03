@@ -29,22 +29,22 @@ const CONTENT_MIME_TYPE_ABBREVIATIONS = {
   "x-javascript": "js"
 };
 const CONTENT_MIME_TYPE_MAPPINGS = {
-  "/ecmascript": SourceEditor.MODES.JAVASCRIPT,
-  "/javascript": SourceEditor.MODES.JAVASCRIPT,
-  "/x-javascript": SourceEditor.MODES.JAVASCRIPT,
-  "/html": SourceEditor.MODES.HTML,
-  "/xhtml": SourceEditor.MODES.HTML,
-  "/xml": SourceEditor.MODES.HTML,
-  "/atom": SourceEditor.MODES.HTML,
-  "/soap": SourceEditor.MODES.HTML,
-  "/rdf": SourceEditor.MODES.HTML,
-  "/rss": SourceEditor.MODES.HTML,
-  "/css": SourceEditor.MODES.CSS
+  "/ecmascript": Editor.modes.js,
+  "/javascript": Editor.modes.js,
+  "/x-javascript": Editor.modes.js,
+  "/html": Editor.modes.html,
+  "/xhtml": Editor.modes.html,
+  "/xml": Editor.modes.html,
+  "/atom": Editor.modes.html,
+  "/soap": Editor.modes.html,
+  "/rdf": Editor.modes.css,
+  "/rss": Editor.modes.css,
+  "/css": Editor.modes.css
 };
 const DEFAULT_EDITOR_CONFIG = {
-  mode: SourceEditor.MODES.TEXT,
+  mode: Editor.modes.text,
   readOnly: true,
-  showLineNumbers: true
+  lineNumbers: true
 };
 const GENERIC_VARIABLES_VIEW_SETTINGS = {
   lazyEmpty: true,
@@ -52,7 +52,7 @@ const GENERIC_VARIABLES_VIEW_SETTINGS = {
   searchEnabled: true,
   editableValueTooltip: "",
   editableNameTooltip: "",
-  preventDisableOnChage: true,
+  preventDisableOnChange: true,
   preventDescriptorModifiers: true,
   eval: () => {},
   switch: () => {}
@@ -156,7 +156,7 @@ let NetMonitorView = {
   },
 
   /**
-   * Lazily initializes and returns a promise for a SourceEditor instance.
+   * Lazily initializes and returns a promise for a Editor instance.
    *
    * @param string aId
    *        The id of the editor placeholder node.
@@ -175,7 +175,8 @@ let NetMonitorView = {
 
     // Initialize the source editor and store the newly created instance
     // in the ether of a resolved promise's value.
-    new SourceEditor().init($(aId), DEFAULT_EDITOR_CONFIG, deferred.resolve);
+    let editor = new Editor(DEFAULT_EDITOR_CONFIG);
+    editor.appendTo($(aId)).then(() => deferred.resolve(editor));
 
     return deferred.promise;
   },
@@ -554,6 +555,17 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
 
     this.refreshSummary();
     this.refreshZebra();
+  },
+
+  /**
+   * Removes all network requests and closes the sidebar if open.
+   */
+  clear: function() {
+    NetMonitorView.Sidebar.toggle(false);
+    $("#details-pane-toggle").disabled = true;
+
+    this.empty();
+    this.refreshSummary();
   },
 
   /**
@@ -1007,7 +1019,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
 
     // Apply CSS transforms to each waterfall in this container totalTime
     // accurately translate and resize as needed.
-    for (let { target, attachment } in this) {
+    for (let { target, attachment } of this) {
       let timingsNode = $(".requests-menu-timings", target);
       let startCapNode = $(".requests-menu-timings-cap.start", target);
       let endCapNode = $(".requests-menu-timings-cap.end", target);
@@ -1143,7 +1155,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    * Reapplies the current waterfall background on all request items.
    */
   _flushWaterfallBackgrounds: function() {
-    for (let { target } in this) {
+    for (let { target } of this) {
       let waterfallNode = $(".requests-menu-waterfall", target);
       waterfallNode.style.backgroundImage = this._cachedWaterfallBackground;
     }
@@ -1370,15 +1382,19 @@ SidebarView.prototype = {
    *
    * @param object aData
    *        The data source (this should be the attachment of a request item).
+   * @return object
+   *        Returns a promise that resolves upon population of the subview.
    */
   populate: function(aData) {
-    if (aData.isCustom) {
-      NetMonitorView.CustomRequest.populate(aData);
-      $("#details-pane").selectedIndex = 0;
-    } else {
-      NetMonitorView.NetworkDetails.populate(aData);
-      $("#details-pane").selectedIndex = 1;
-    }
+    let isCustom = aData.isCustom;
+    let view = isCustom ?
+      NetMonitorView.CustomRequest :
+      NetMonitorView.NetworkDetails;
+
+    return view.populate(aData).then(() => {
+      $("#details-pane").selectedIndex = isCustom ? 0 : 1
+      window.emit(EVENTS.SIDEBAR_POPULATED)
+    });
   },
 
   /**
@@ -1402,6 +1418,8 @@ CustomRequestView.prototype = {
    *
    * @param object aData
    *        The data source (this should be the attachment of a request item).
+   * @return object
+   *        Returns a promise that resolves upon population the view.
    */
   populate: function(aData) {
     $("#custom-url-value").value = aData.url;
@@ -1409,15 +1427,22 @@ CustomRequestView.prototype = {
     $("#custom-headers-value").value =
        writeHeaderText(aData.requestHeaders.headers);
 
+    let view = this;
+    let postDataPromise = null;
+
     if (aData.requestPostData) {
       let body = aData.requestPostData.postData.text;
 
-      gNetwork.getString(body).then(aString => {
+      postDataPromise = gNetwork.getString(body).then(aString => {
         $("#custom-postdata-value").value =  aString;
       });
+    } else {
+      postDataPromise = promise.resolve();
     }
 
-    this.updateCustomQuery(aData.url);
+    return postDataPromise
+      .then(() => view.updateCustomQuery(aData.url))
+      .then(() => window.emit(EVENTS.CUSTOMREQUESTVIEW_POPULATED));
   },
 
   /**
@@ -1537,8 +1562,10 @@ NetworkDetailsView.prototype = {
       }));
     this._json = new VariablesView($("#response-content-json"),
       Heritage.extend(GENERIC_VARIABLES_VIEW_SETTINGS, {
+        onlyEnumVisible: true,
         searchPlaceholder: L10N.getStr("jsonFilterText")
       }));
+    VariablesViewController.attach(this._json);
 
     this._paramsQueryString = L10N.getStr("paramsQueryString");
     this._paramsFormData = L10N.getStr("paramsFormData");
@@ -1570,6 +1597,8 @@ NetworkDetailsView.prototype = {
    *
    * @param object aData
    *        The data source (this should be the attachment of a request item).
+   * @return object
+   *        Returns a promise that resolves upon population the view.
    */
   populate: function(aData) {
     $("#request-params-box").setAttribute("flex", "1");
@@ -1587,6 +1616,9 @@ NetworkDetailsView.prototype = {
 
     this._dataSrc = { src: aData, populated: [] };
     this._onTabSelect();
+    window.emit(EVENTS.NETWORKDETAILSVIEW_POPULATED);
+
+    return promise.resolve();
   },
 
   /**
@@ -1595,35 +1627,38 @@ NetworkDetailsView.prototype = {
   _onTabSelect: function() {
     let { src, populated } = this._dataSrc || {};
     let tab = this.widget.selectedIndex;
+    let view = this;
 
     // Make sure the data source is valid and don't populate the same tab twice.
     if (!src || populated[tab]) {
       return;
     }
 
-    switch (tab) {
-      case 0: // "Headers"
-        this._setSummary(src);
-        this._setResponseHeaders(src.responseHeaders);
-        this._setRequestHeaders(src.requestHeaders);
-        break;
-      case 1: // "Cookies"
-        this._setResponseCookies(src.responseCookies);
-        this._setRequestCookies(src.requestCookies);
-        break;
-      case 2: // "Params"
-        this._setRequestGetParams(src.url);
-        this._setRequestPostParams(src.requestHeaders, src.requestPostData);
-        break;
-      case 3: // "Response"
-        this._setResponseBody(src.url, src.responseContent);
-        break;
-      case 4: // "Timings"
-        this._setTimingsInformation(src.eventTimings);
-        break;
-    }
-
-    populated[tab] = true;
+    Task.spawn(function*() {
+      switch (tab) {
+        case 0: // "Headers"
+          yield view._setSummary(src);
+          yield view._setResponseHeaders(src.responseHeaders);
+          yield view._setRequestHeaders(src.requestHeaders);
+          break;
+        case 1: // "Cookies"
+          yield view._setResponseCookies(src.responseCookies);
+          yield view._setRequestCookies(src.requestCookies);
+          break;
+        case 2: // "Params"
+          yield view._setRequestGetParams(src.url);
+          yield view._setRequestPostParams(src.requestHeaders, src.requestPostData);
+          break;
+        case 3: // "Response"
+          yield view._setResponseBody(src.url, src.responseContent);
+          break;
+        case 4: // "Timings"
+          yield view._setTimingsInformation(src.eventTimings);
+          break;
+      }
+      populated[tab] = true;
+      window.emit(EVENTS.TAB_UPDATED);
+    });
   },
 
   /**
@@ -1670,11 +1705,14 @@ NetworkDetailsView.prototype = {
    *
    * @param object aResponse
    *        The message received from the server.
+   * @return object
+   *        A promise that resolves when request headers are set.
    */
   _setRequestHeaders: function(aResponse) {
     if (aResponse && aResponse.headers.length) {
-      this._addHeaders(this._requestHeaders, aResponse);
+      return this._addHeaders(this._requestHeaders, aResponse);
     }
+    return promise.resolve();
   },
 
   /**
@@ -1682,12 +1720,15 @@ NetworkDetailsView.prototype = {
    *
    * @param object aResponse
    *        The message received from the server.
+   * @return object
+   *        A promise that resolves when response headers are set.
    */
   _setResponseHeaders: function(aResponse) {
     if (aResponse && aResponse.headers.length) {
       aResponse.headers.sort((a, b) => a.name > b.name);
-      this._addHeaders(this._responseHeaders, aResponse);
+      return this._addHeaders(this._responseHeaders, aResponse);
     }
+    return promise.resolve();
   },
 
   /**
@@ -1697,6 +1738,8 @@ NetworkDetailsView.prototype = {
    *        The type of headers to populate (request or response).
    * @param object aResponse
    *        The message received from the server.
+   * @return object
+   *        A promise that resolves when headers are added.
    */
   _addHeaders: function(aName, aResponse) {
     let kb = aResponse.headersSize / 1024;
@@ -1705,10 +1748,11 @@ NetworkDetailsView.prototype = {
     let headersScope = this._headers.addScope(aName + " (" + text + ")");
     headersScope.expanded = true;
 
-    for (let header of aResponse.headers) {
+    return promise.all(aResponse.headers.map(header => {
       let headerVar = headersScope.addItem(header.name, {}, true);
-      gNetwork.getString(header.value).then(aString => headerVar.setGrip(aString));
-    }
+      return gNetwork.getString(header.value)
+             .then(aString => headerVar.setGrip(aString));
+    }));
   },
 
   /**
@@ -1716,12 +1760,15 @@ NetworkDetailsView.prototype = {
    *
    * @param object aResponse
    *        The message received from the server.
+   * @return object
+   *        A promise that is resolved when the request cookies are set.
    */
   _setRequestCookies: function(aResponse) {
     if (aResponse && aResponse.cookies.length) {
       aResponse.cookies.sort((a, b) => a.name > b.name);
-      this._addCookies(this._requestCookies, aResponse);
+      return this._addCookies(this._requestCookies, aResponse);
     }
+    return promise.resolve();
   },
 
   /**
@@ -1729,11 +1776,14 @@ NetworkDetailsView.prototype = {
    *
    * @param object aResponse
    *        The message received from the server.
+   * @return object
+   *        A promise that is resolved when the response cookies are set.
    */
   _setResponseCookies: function(aResponse) {
     if (aResponse && aResponse.cookies.length) {
-      this._addCookies(this._responseCookies, aResponse);
+      return this._addCookies(this._responseCookies, aResponse);
     }
+    return promise.resolve();
   },
 
   /**
@@ -1743,33 +1793,37 @@ NetworkDetailsView.prototype = {
    *        The type of cookies to populate (request or response).
    * @param object aResponse
    *        The message received from the server.
+   * @return object
+   *        Returns a promise that resolves upon the adding of cookies.
    */
   _addCookies: function(aName, aResponse) {
     let cookiesScope = this._cookies.addScope(aName);
     cookiesScope.expanded = true;
 
-    for (let cookie of aResponse.cookies) {
+    return promise.all(aResponse.cookies.map(cookie => {
       let cookieVar = cookiesScope.addItem(cookie.name, {}, true);
-      gNetwork.getString(cookie.value).then(aString => cookieVar.setGrip(aString));
+      return gNetwork.getString(cookie.value).then(aString => {
+        cookieVar.setGrip(aString);
 
-      // By default the cookie name and value are shown. If this is the only
-      // information available, then nothing else is to be displayed.
-      let cookieProps = Object.keys(cookie);
-      if (cookieProps.length == 2) {
-        continue;
-      }
+        // By default the cookie name and value are shown. If this is the only
+        // information available, then nothing else is to be displayed.
+        let cookieProps = Object.keys(cookie);
+        if (cookieProps.length == 2) {
+          return;
+        }
 
-      // Display any other information other than the cookie name and value
-      // which may be available.
-      let rawObject = Object.create(null);
-      let otherProps = cookieProps.filter(e => e != "name" && e != "value");
-      for (let prop of otherProps) {
-        rawObject[prop] = cookie[prop];
-      }
-      cookieVar.populate(rawObject);
-      cookieVar.twisty = true;
-      cookieVar.expanded = true;
-    }
+        // Display any other information other than the cookie name and value
+        // which may be available.
+        let rawObject = Object.create(null);
+        let otherProps = cookieProps.filter(e => e != "name" && e != "value");
+        for (let prop of otherProps) {
+          rawObject[prop] = cookie[prop];
+        }
+        cookieVar.populate(rawObject);
+        cookieVar.twisty = true;
+        cookieVar.expanded = true;
+      });
+    }));
   },
 
   /**
@@ -1792,12 +1846,14 @@ NetworkDetailsView.prototype = {
    *        The "requestHeaders" message received from the server.
    * @param object aPostDataResponse
    *        The "requestPostData" message received from the server.
+   * @return object
+   *        A promise that is resolved when the request post params are set.
    */
   _setRequestPostParams: function(aHeadersResponse, aPostDataResponse) {
     if (!aHeadersResponse || !aPostDataResponse) {
-      return;
+      return promise.resolve();
     }
-    gNetwork.getString(aPostDataResponse.postData.text).then(aString => {
+    return gNetwork.getString(aPostDataResponse.postData.text).then(aString => {
       // Handle query strings (poor man's forms, e.g. "?foo=bar&baz=42").
       let cType = aHeadersResponse.headers.filter(({ name }) => name == "Content-Type")[0];
       let cString = cType ? cType.value : "";
@@ -1819,12 +1875,11 @@ NetworkDetailsView.prototype = {
         paramsScope.locked = true;
 
         $("#request-post-data-textarea-box").hidden = false;
-        NetMonitorView.editor("#request-post-data-textarea").then(aEditor => {
+        return NetMonitorView.editor("#request-post-data-textarea").then(aEditor => {
           aEditor.setText(aString);
         });
       }
-      window.emit(EVENTS.REQUEST_POST_PARAMS_DISPLAYED);
-    });
+    }).then(() => window.emit(EVENTS.REQUEST_POST_PARAMS_DISPLAYED));
   },
 
   /**
@@ -1856,14 +1911,16 @@ NetworkDetailsView.prototype = {
    *        The request's url.
    * @param object aResponse
    *        The message received from the server.
+   * @return object
+   *        A promise that is resolved when the response body is set
    */
   _setResponseBody: function(aUrl, aResponse) {
     if (!aResponse) {
-      return;
+      return promise.resolve();
     }
     let { mimeType, text, encoding } = aResponse.content;
 
-    gNetwork.getString(text).then(aString => {
+    return gNetwork.getString(text).then(aString => {
       // Handle json, which we tentatively identify by checking the MIME type
       // for "json" after any word boundary. This works for the standard
       // "application/json", and also for custom types like "x-bigcorp-json".
@@ -1873,7 +1930,7 @@ NetworkDetailsView.prototype = {
         let sanitizedJSON = aString.replace(jsonpRegex, "");
         let callbackPadding = aString.match(jsonpRegex);
 
-        // Make sure this is an valid JSON object first. If so, nicely display
+        // Make sure this is a valid JSON object first. If so, nicely display
         // the parsing results in a variables view. Otherwise, simply show
         // the contents as plain text.
         try {
@@ -1889,21 +1946,22 @@ NetworkDetailsView.prototype = {
             ? L10N.getFormatStr("jsonpScopeName", callbackPadding[0].slice(0, -1))
             : L10N.getStr("jsonScopeName");
 
-          let jsonScope = this._json.addScope(jsonScopeName);
-          jsonScope.addItem().populate(jsonObject, { expanded: true });
-          jsonScope.expanded = true;
+          return this._json.controller.setSingleVariable({
+            label: jsonScopeName,
+            rawObject: jsonObject,
+          }).expanded;
         }
         // Malformed JSON.
         else {
           $("#response-content-textarea-box").hidden = false;
-          NetMonitorView.editor("#response-content-textarea").then(aEditor => {
-            aEditor.setMode(SourceEditor.MODES.JAVASCRIPT);
-            aEditor.setText(aString);
-          });
           let infoHeader = $("#response-content-info-header");
           infoHeader.setAttribute("value", parsingError);
           infoHeader.setAttribute("tooltiptext", parsingError);
           infoHeader.hidden = false;
+          return NetMonitorView.editor("#response-content-textarea").then(aEditor => {
+            aEditor.setMode(Editor.modes.js);
+            aEditor.setText(aString);
+          });
         }
       }
       // Handle images.
@@ -1933,8 +1991,8 @@ NetworkDetailsView.prototype = {
       // Handle anything else.
       else {
         $("#response-content-textarea-box").hidden = false;
-        NetMonitorView.editor("#response-content-textarea").then(aEditor => {
-          aEditor.setMode(SourceEditor.MODES.TEXT);
+        return NetMonitorView.editor("#response-content-textarea").then(aEditor => {
+          aEditor.setMode(Editor.modes.text);
           aEditor.setText(aString);
 
           // Maybe set a more appropriate mode in the Source Editor if possible,
@@ -1949,8 +2007,7 @@ NetworkDetailsView.prototype = {
           }
         });
       }
-      window.emit(EVENTS.RESPONSE_BODY_DISPLAYED);
-    });
+    }).then(() => window.emit(EVENTS.RESPONSE_BODY_DISPLAYED));
   },
 
   /**
@@ -2040,6 +2097,7 @@ NetworkDetailsView.prototype = {
  * DOM query helper.
  */
 function $(aSelector, aTarget = document) aTarget.querySelector(aSelector);
+function $all(aSelector, aTarget = document) aTarget.querySelectorAll(aSelector);
 
 /**
  * Helper for getting an nsIURL instance out of a string.

@@ -1,4 +1,4 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,7 +11,6 @@
 #include "nsAutoPtr.h"
 #include "nsBaseWidget.h"
 #include "nsWindowBase.h"
-#include "nsGUIEvent.h"
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsWindowDbg.h"
@@ -21,8 +20,8 @@
 #ifdef ACCESSIBILITY
 #include "mozilla/a11y/Accessible.h"
 #endif
+#include "mozilla/EventForwards.h"
 #include "mozilla/layers/CompositorParent.h"
-#include "mozilla/layers/APZCTreeManager.h"
 #include "mozilla/layers/LayerManagerComposite.h"
 #include "nsDeque.h"
 #include "APZController.h"
@@ -35,6 +34,7 @@
 #include <Windows.ApplicationModel.h>
 #include <Windows.Applicationmodel.Activation.h>
 
+class nsNativeDragTarget;
 
 namespace mozilla {
 namespace widget {
@@ -57,6 +57,7 @@ class MetroWidget : public nsWindowBase,
   typedef ABI::Windows::UI::Core::ICharacterReceivedEventArgs ICharacterReceivedEventArgs;
   typedef mozilla::widget::winrt::FrameworkView FrameworkView;
   typedef mozilla::widget::winrt::APZController APZController;
+  typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
 
   static LRESULT CALLBACK
   StaticWindowProcedure(HWND aWnd, UINT aMsg, WPARAM aWParan, LPARAM aLParam);
@@ -72,17 +73,20 @@ public:
   static HWND GetICoreWindowHWND() { return sICoreHwnd; }
 
   // nsWindowBase
-  virtual bool DispatchWindowEvent(nsGUIEvent* aEvent) MOZ_OVERRIDE;
-  virtual bool DispatchKeyboardEvent(nsGUIEvent* aEvent) MOZ_OVERRIDE;
+  virtual bool DispatchWindowEvent(mozilla::WidgetGUIEvent* aEvent) MOZ_OVERRIDE;
+  virtual bool DispatchKeyboardEvent(mozilla::WidgetGUIEvent* aEvent) MOZ_OVERRIDE;
+  virtual bool DispatchScrollEvent(mozilla::WidgetGUIEvent* aEvent) MOZ_OVERRIDE;
   virtual bool DispatchPluginEvent(const MSG &aMsg) MOZ_OVERRIDE { return false; }
   virtual bool IsTopLevelWidget() MOZ_OVERRIDE { return true; }
   virtual nsWindowBase* GetParentWindowBase(bool aIncludeOwner) MOZ_OVERRIDE { return nullptr; }
   // InitEvent assumes physical coordinates and is used by shared win32 code. Do
   // not hand winrt event coordinates to this routine.
-  virtual void InitEvent(nsGUIEvent& aEvent, nsIntPoint* aPoint = nullptr) MOZ_OVERRIDE;
+  virtual void InitEvent(mozilla::WidgetGUIEvent& aEvent,
+                         nsIntPoint* aPoint = nullptr) MOZ_OVERRIDE;
 
   // nsBaseWidget
   virtual CompositorParent* NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight);
+  virtual void SetWidgetListener(nsIWidgetListener* aWidgetListener);
 
   // nsIWidget interface
   NS_IMETHOD    Create(nsIWidget *aParent,
@@ -91,6 +95,7 @@ public:
                        nsDeviceContext *aContext,
                        nsWidgetInitData *aInitData = nullptr);
   NS_IMETHOD    Destroy();
+  NS_IMETHOD    EnableDragDrop(bool aEnable);
   NS_IMETHOD    SetParent(nsIWidget *aNewParent);
   NS_IMETHOD    Show(bool bState);
   NS_IMETHOD    IsVisible(bool & aState);
@@ -102,7 +107,8 @@ public:
                 bool aUpdateNCArea = false,
                 bool aIncludeChildren = false);
   NS_IMETHOD    Invalidate(const nsIntRect & aRect);
-  NS_IMETHOD    DispatchEvent(nsGUIEvent* event, nsEventStatus & aStatus);
+  NS_IMETHOD    DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
+                              nsEventStatus& aStatus);
   NS_IMETHOD    ConstrainPosition(bool aAllowSlop, int32_t *aX, int32_t *aY);
   NS_IMETHOD    Move(double aX, double aY);
   NS_IMETHOD    Resize(double aWidth, double aHeight, bool aRepaint);
@@ -195,14 +201,23 @@ public:
   virtual void SetTransparencyMode(nsTransparencyMode aMode);
   virtual nsTransparencyMode GetTransparencyMode();
 
-  // APZ related apis
-  void ApzContentConsumingTouch();
-  void ApzContentIgnoringTouch();
-  nsEventStatus ApzReceiveInputEvent(nsInputEvent* aEvent);
-  nsEventStatus ApzReceiveInputEvent(nsInputEvent* aInEvent, nsInputEvent* aOutEvent);
-  bool HitTestAPZC(mozilla::ScreenPoint& pt);
-  nsresult RequestContentScroll();
-  void RequestContentRepaintImplMainThread();
+  // apzc controller related api
+
+  // Hit test a point to see if an apzc would consume input there
+  bool ApzHitTest(mozilla::ScreenIntPoint& pt);
+  // Transforms a coord so that it properly targets gecko content based
+  // on apzc transforms currently applied.
+  void ApzTransformGeckoCoordinate(const mozilla::ScreenIntPoint& pt,
+                                   mozilla::LayoutDeviceIntPoint* aRefPointOut);
+  // send ContentRecievedTouch calls to the apz with appropriate preventDefault params
+  void ApzContentConsumingTouch(const ScrollableLayerGuid& aGuid);
+  void ApzContentIgnoringTouch(const ScrollableLayerGuid& aGuid);
+  // Input handling
+  nsEventStatus ApzReceiveInputEvent(mozilla::WidgetInputEvent* aEvent,
+                                     ScrollableLayerGuid* aOutTargetGuid);
+  nsEventStatus ApzReceiveInputEvent(mozilla::WidgetInputEvent* aInEvent,
+                                     ScrollableLayerGuid* aOutTargetGuid,
+                                     mozilla::WidgetInputEvent* aOutEvent);
 
 protected:
   friend class FrameworkView;
@@ -211,7 +226,7 @@ protected:
     HRESULT const hr;
 
     OleInitializeWrapper()
-      : hr(::OleInitialize(NULL))
+      : hr(::OleInitialize(nullptr))
     {
     }
 
@@ -231,10 +246,6 @@ protected:
   void DispatchAsyncScrollEvent(DispatchMsg* aEvent);
   void DeliverNextScrollEvent();
   void DeliverNextKeyboardEvent();
-  DispatchMsg* CreateDispatchMsg(UINT aMsg, WPARAM aWParam, LPARAM aLParam);
-
-public:
-  static nsRefPtr<mozilla::layers::APZCTreeManager> sAPZC;
 
 protected:
   OleInitializeWrapper mOleInitializeWrapper;
@@ -248,7 +259,8 @@ protected:
   WNDPROC mMetroWndProc;
   bool mTempBasicLayerInUse;
   uint64_t mRootLayerTreeId;
-  nsDeque mMsgEventQueue;
+  nsDeque mEventQueue;
   nsDeque mKeyEventQueue;
   nsRefPtr<APZController> mController;
+  nsRefPtr<nsNativeDragTarget> mNativeDragTarget;
 };

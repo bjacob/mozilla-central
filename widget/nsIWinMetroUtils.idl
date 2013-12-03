@@ -12,23 +12,14 @@
  * implementation of this interface for non-Windows systems, for testing and
  * development purposes only.
  */
-[scriptable, uuid(fa6750a2-f0fe-411c-af23-1cd6d2fdeceb)]
+[scriptable, uuid(d30daa27-ce2b-4503-80cc-b162f4c24e93)]
 interface nsIWinMetroUtils : nsISupports
 {
-  /* return constants for the handPreference property */
-  const long handPreferenceLeft = 0;
-  const long handPreferenceRight = 1;
-
   /**
    * Determine if the current browser is running in the metro immersive
    * environment.
    */
   readonly attribute boolean immersive;
-
-  /**
-   * Determine if the user prefers left handed or right handed input.
-   */
-  readonly attribute long handPreference;
 
   /**
    * Determine the activation URI
@@ -49,7 +40,7 @@ interface nsIWinMetroUtils : nsISupports
   /**
    * Displays a native Windows 8 toast.
    */
-   void showNativeToast(in AString aTitle, in AString aMessage, in AString anImage);
+   void showNativeToast(in AString aTitle, in AString aMessage, in AString anImage, in AString aCookie);
 
   /**
    * Secondary tiles are a Windows 8 specific feature for pinning new tiles
@@ -92,29 +83,6 @@ interface nsIWinMetroUtils : nsISupports
    * @return true if the tile is pinned
    */
   bool isTilePinned(in AString aTileID);
-
-  /**
-   * Stores the sync info securely
-   *
-   * @param aEmail The sync account email
-   * @param aPassword The sync account password
-   * @param aKey The sync account key
-   */
-  void storeSyncInfo(in AString aEmail, in AString aPassword, in AString aKey);
-
-  /**
-   * Loads the sync info
-   *
-   * @param aEmail The sync account email
-   * @param aPassword The sync account password
-   * @param aKey The sync account key
-   */
-  void loadSyncInfo(out AString aEmail, out AString aPassword, out AString aKey);
-
-  /**
-   * Clears the stored sync info if any.
-   */
-  void clearSyncInfo();
 
   /**
    * Soft keyboard attributes. Used in unison with shown/hidden observer

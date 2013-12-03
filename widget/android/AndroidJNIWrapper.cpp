@@ -14,12 +14,6 @@
 #include "nsThreadUtils.h"
 #include "AndroidBridge.h"
 
-#ifdef DEBUG
-#define ALOG_BRIDGE(args...) ALOG(args)
-#else
-#define ALOG_BRIDGE(args...)
-#endif
-
 extern "C" {
   jclass __jsjni_GetGlobalClassRef(const char *className);
 }
@@ -45,7 +39,7 @@ extern "C" {
     // to missing the classpath
     MOZ_ASSERT(NS_IsMainThread());
     JNIEnv *env = mozilla::AndroidBridge::GetJNIEnv();
-    if (!env) return NULL;
+    if (!env) return nullptr;
     return env->FindClass(className);
   }
 
@@ -55,7 +49,7 @@ extern "C" {
     JNIEnv *env = mozilla::AndroidBridge::GetJNIEnv();
     jclass globalRef = static_cast<jclass>(env->NewGlobalRef(env->FindClass(className)));
     if (!globalRef)
-      return NULL;
+      return nullptr;
 
     // return the newly create global reference
     return globalRef;
@@ -73,7 +67,7 @@ extern "C" {
                                                                      &foundClass));
     mainThread->Dispatch(runnable_ref, NS_DISPATCH_SYNC);
     if (!foundClass)
-      return NULL;
+      return nullptr;
 
     return foundClass;
   }
@@ -84,7 +78,7 @@ extern "C" {
                           const char *methodName,
                           const char *signature) {
     JNIEnv *env = mozilla::AndroidBridge::GetJNIEnv();
-    if (!env) return NULL;
+    if (!env) return nullptr;
     return env->GetStaticMethodID(methodClass, methodName, signature);
   }
 
@@ -92,7 +86,7 @@ extern "C" {
   bool
   jsjni_ExceptionCheck() {
     JNIEnv *env = mozilla::AndroidBridge::GetJNIEnv();
-    if (!env) return NULL;
+    if (!env) return nullptr;
     return env->ExceptionCheck();
   }
 
@@ -128,5 +122,10 @@ extern "C" {
   __attribute__ ((visibility("default")))
   JavaVM* jsjni_GetVM() {
     return mozilla::AndroidBridge::GetVM();
+  }
+
+  __attribute__ ((visibility("default")))
+  JNIEnv* jsjni_GetJNIForThread() {
+    return GetJNIForThread();
   }
 }

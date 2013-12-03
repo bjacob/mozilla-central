@@ -8,6 +8,10 @@
 #include <math.h>
 
 using mozilla::DoublesAreIdentical;
+using mozilla::DoubleExponentBias;
+using mozilla::DoubleEqualsInt32;
+using mozilla::DoubleIsInt32;
+using mozilla::ExponentComponent;
 using mozilla::IsFinite;
 using mozilla::IsInfinite;
 using mozilla::IsNaN;
@@ -103,6 +107,22 @@ TestDoublesAreIdentical()
 }
 
 static void
+TestExponentComponent()
+{
+  MOZ_ASSERT(ExponentComponent(0.0) == -int_fast16_t(DoubleExponentBias));
+  MOZ_ASSERT(ExponentComponent(-0.0) == -int_fast16_t(DoubleExponentBias));
+  MOZ_ASSERT(ExponentComponent(0.125) == -3);
+  MOZ_ASSERT(ExponentComponent(0.5) == -1);
+  MOZ_ASSERT(ExponentComponent(1.0) == 0);
+  MOZ_ASSERT(ExponentComponent(1.5) == 0);
+  MOZ_ASSERT(ExponentComponent(2.0) == 1);
+  MOZ_ASSERT(ExponentComponent(7) == 2);
+  MOZ_ASSERT(ExponentComponent(PositiveInfinity()) == DoubleExponentBias + 1);
+  MOZ_ASSERT(ExponentComponent(NegativeInfinity()) == DoubleExponentBias + 1);
+  MOZ_ASSERT(ExponentComponent(UnspecifiedNaN()) == DoubleExponentBias + 1);
+}
+
+static void
 TestPredicates()
 {
   MOZ_ASSERT(IsNaN(UnspecifiedNaN()));
@@ -146,11 +166,34 @@ TestPredicates()
   MOZ_ASSERT(!IsNegativeZero(0.0));
   MOZ_ASSERT(!IsNegativeZero(-1.0));
   MOZ_ASSERT(!IsNegativeZero(1.0));
+
+  int32_t i;
+  MOZ_ASSERT(DoubleIsInt32(0.0, &i)); MOZ_ASSERT(i == 0);
+  MOZ_ASSERT(!DoubleIsInt32(-0.0, &i));
+  MOZ_ASSERT(DoubleEqualsInt32(0.0, &i)); MOZ_ASSERT(i == 0);
+  MOZ_ASSERT(DoubleEqualsInt32(-0.0, &i)); MOZ_ASSERT(i == 0);
+  MOZ_ASSERT(DoubleIsInt32(INT32_MIN, &i)); MOZ_ASSERT(i == INT32_MIN);
+  MOZ_ASSERT(DoubleIsInt32(INT32_MAX, &i)); MOZ_ASSERT(i == INT32_MAX);
+  MOZ_ASSERT(DoubleEqualsInt32(INT32_MIN, &i)); MOZ_ASSERT(i == INT32_MIN);
+  MOZ_ASSERT(DoubleEqualsInt32(INT32_MAX, &i)); MOZ_ASSERT(i == INT32_MAX);
+  MOZ_ASSERT(!DoubleIsInt32(0.5, &i));
+  MOZ_ASSERT(!DoubleIsInt32(double(INT32_MAX) + 0.1, &i));
+  MOZ_ASSERT(!DoubleIsInt32(double(INT32_MIN) - 0.1, &i));
+  MOZ_ASSERT(!DoubleIsInt32(NegativeInfinity(), &i));
+  MOZ_ASSERT(!DoubleIsInt32(PositiveInfinity(), &i));
+  MOZ_ASSERT(!DoubleIsInt32(UnspecifiedNaN(), &i));
+  MOZ_ASSERT(!DoubleEqualsInt32(0.5, &i));
+  MOZ_ASSERT(!DoubleEqualsInt32(double(INT32_MAX) + 0.1, &i));
+  MOZ_ASSERT(!DoubleEqualsInt32(double(INT32_MIN) - 0.1, &i));
+  MOZ_ASSERT(!DoubleEqualsInt32(NegativeInfinity(), &i));
+  MOZ_ASSERT(!DoubleEqualsInt32(PositiveInfinity(), &i));
+  MOZ_ASSERT(!DoubleEqualsInt32(UnspecifiedNaN(), &i));
 }
 
 int
 main()
 {
   TestDoublesAreIdentical();
+  TestExponentComponent();
   TestPredicates();
 }

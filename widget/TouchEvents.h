@@ -31,6 +31,11 @@ namespace mozilla {
 class WidgetGestureNotifyEvent : public WidgetGUIEvent
 {
 public:
+  virtual WidgetGestureNotifyEvent* AsGestureNotifyEvent() MOZ_OVERRIDE
+  {
+    return this;
+  }
+
   WidgetGestureNotifyEvent(bool aIsTrusted, uint32_t aMessage,
                            nsIWidget *aWidget) :
     WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_GESTURENOTIFY_EVENT),
@@ -67,6 +72,11 @@ public:
 class WidgetSimpleGestureEvent : public WidgetMouseEventBase
 {
 public:
+  virtual WidgetSimpleGestureEvent* AsSimpleGestureEvent() MOZ_OVERRIDE
+  {
+    return this;
+  }
+
   WidgetSimpleGestureEvent(bool aIsTrusted, uint32_t aMessage,
                            nsIWidget* aWidget, uint32_t aDirection,
                            double aDelta) :
@@ -76,7 +86,7 @@ public:
   {
   }
 
-  WidgetSimpleGestureEvent(const nsSimpleGestureEvent& aOther) :
+  WidgetSimpleGestureEvent(const WidgetSimpleGestureEvent& aOther) :
     WidgetMouseEventBase(aOther.mFlags.mIsTrusted,
                          aOther.message, aOther.widget,
                          NS_SIMPLE_GESTURE_EVENT),
@@ -114,6 +124,8 @@ public:
 class WidgetTouchEvent : public WidgetInputEvent
 {
 public:
+  virtual WidgetTouchEvent* AsTouchEvent() MOZ_OVERRIDE { return this; }
+
   WidgetTouchEvent()
   {
   }
@@ -134,14 +146,14 @@ public:
     MOZ_COUNT_CTOR(WidgetTouchEvent);
   }
 
-  ~WidgetTouchEvent()
+  virtual ~WidgetTouchEvent()
   {
     MOZ_COUNT_DTOR(WidgetTouchEvent);
   }
 
   nsTArray<nsRefPtr<mozilla::dom::Touch>> touches;
 
-  void AssignTouchEventData(const nsTouchEvent& aEvent, bool aCopyTargets)
+  void AssignTouchEventData(const WidgetTouchEvent& aEvent, bool aCopyTargets)
   {
     AssignInputEventData(aEvent, aCopyTargets);
 
@@ -150,10 +162,5 @@ public:
 };
 
 } // namespace mozilla
-
-// TODO: Remove following typedefs
-typedef mozilla::WidgetGestureNotifyEvent nsGestureNotifyEvent;
-typedef mozilla::WidgetSimpleGestureEvent nsSimpleGestureEvent;
-typedef mozilla::WidgetTouchEvent         nsTouchEvent;
 
 #endif // mozilla_TouchEvents_h__

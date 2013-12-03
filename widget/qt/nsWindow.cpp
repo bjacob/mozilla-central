@@ -5,6 +5,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/MiscEvents.h"
+#include "mozilla/MouseEvents.h"
+#include "mozilla/TextEvents.h"
+#include "mozilla/TouchEvents.h"
 #include "mozilla/Util.h"
 
 #include <QApplication>
@@ -95,7 +99,6 @@ using namespace QtMobility;
 #include "gfxUtils.h"
 #include "Layers.h"
 #include "GLContextProvider.h"
-#include "LayerManagerOGL.h"
 #include "nsFastStartupQt.h"
 
 // If embedding clients want to create widget without real parent window
@@ -111,7 +114,6 @@ extern "C" {
 using namespace mozilla;
 using namespace mozilla::widget;
 using mozilla::gl::GLContext;
-using mozilla::layers::LayerManagerOGL;
 
 // Cached offscreen surface
 static nsRefPtr<gfxASurface> gBufferSurface;
@@ -159,12 +161,15 @@ isContextMenuKeyEvent(const QKeyEvent *qe)
 }
 
 static void
-InitKeyEvent(nsKeyEvent &aEvent, QKeyEvent *aQEvent)
+InitKeyEvent(WidgetKeyboardEvent &aEvent, QKeyEvent *aQEvent)
 {
     aEvent.InitBasicModifiers(aQEvent->modifiers() & Qt::ControlModifier,
                               aQEvent->modifiers() & Qt::AltModifier,
                               aQEvent->modifiers() & Qt::ShiftModifier,
                               aQEvent->modifiers() & Qt::MetaModifier);
+    aEvent.mIsRepeat =
+        (aEvent.message == NS_KEY_DOWN || aEvent.message == NS_KEY_PRESS) &&
+        aQEvent->isAutoRepeat();
     aEvent.time = 0;
 
     if (sAltGrModifier) {
@@ -363,17 +368,7 @@ nsWindow::Destroy(void)
 
     /** Need to clean our LayerManager up while still alive */
     if (mLayerManager) {
-        nsRefPtr<GLContext> gl = nullptr;
-        if (mLayerManager->GetBackendType() == mozilla::layers::LAYERS_OPENGL) {
-            LayerManagerOGL *ogllm = static_cast<LayerManagerOGL*>(mLayerManager.get());
-            gl = ogllm->gl();
-        }
-
         mLayerManager->Destroy();
-
-        if (gl) {
-            gl->MarkDestroyed();
-        }
     }
     mLayerManager = nullptr;
 
@@ -1034,30 +1029,6 @@ nsWindow::DoPaint(QPainter* aPainter, const QStyleOptionGraphicsItem* aOption, Q
         startup->RemoveFakeLayout();
     }
 
-    if (GetLayerManager(nullptr)->GetBackendType() == mozilla::layers::LAYERS_OPENGL) {
-        aPainter->beginNativePainting();
-        nsIntRegion region(rect);
-        static_cast<mozilla::layers::LayerManagerOGL*>(GetLayerManager(nullptr))->
-            SetClippingRegion(region);
-
-        gfxMatrix matr;
-        matr.Translate(gfxPoint(aPainter->transform().dx(), aPainter->transform().dy()));
-#ifdef MOZ_ENABLE_QTMOBILITY
-        // This is needed for rotate transformation on MeeGo
-        // This will work very slow if pixman does not handle rotation very well
-        matr.Rotate((M_PI/180) * gOrientationFilter.GetWindowRotationAngle());
-        static_cast<mozilla::layers::LayerManagerOGL*>(GetLayerManager(nullptr))->
-            SetWorldTransform(matr);
-#endif //MOZ_ENABLE_QTMOBILITY
-
-        if (mWidgetListener)
-          painted = mWidgetListener->PaintWindow(this, region);
-        aPainter->endNativePainting();
-        if (mWidgetListener)
-          mWidgetListener->DidPaintWindow();
-        return painted;
-    }
-
     gfxQtPlatform::RenderMode renderMode = gfxQtPlatform::GetPlatform()->GetRenderMode();
     int depth = aPainter->device()->depth();
 
@@ -1240,7 +1211,7 @@ nsWindow::OnCloseEvent(QCloseEvent *aEvent)
 nsEventStatus
 nsWindow::OnEnterNotifyEvent(QGraphicsSceneHoverEvent *aEvent)
 {
-    nsMouseEvent event(true, NS_MOUSE_ENTER, this, nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_MOUSE_ENTER, this, WidgetMouseEvent::eReal);
 
     event.refPoint.x = nscoord(aEvent->pos().x());
     event.refPoint.y = nscoord(aEvent->pos().y());
@@ -1253,7 +1224,7 @@ nsWindow::OnEnterNotifyEvent(QGraphicsSceneHoverEvent *aEvent)
 nsEventStatus
 nsWindow::OnLeaveNotifyEvent(QGraphicsSceneHoverEvent *aEvent)
 {
-    nsMouseEvent event(true, NS_MOUSE_EXIT, this, nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_MOUSE_EXIT, this, WidgetMouseEvent::eReal);
 
     event.refPoint.x = nscoord(aEvent->pos().x());
     event.refPoint.y = nscoord(aEvent->pos().y());
@@ -1294,8 +1265,9 @@ nsWindow::OnMotionNotifyEvent(QPointF aPos,  Qt::KeyboardModifiers aModifiers)
 }
 
 void
-nsWindow::InitButtonEvent(nsMouseEvent &aMoveEvent,
-                          QGraphicsSceneMouseEvent *aEvent, int aClickCount)
+nsWindow::InitButtonEvent(WidgetMouseEvent& aMoveEvent,
+                          QGraphicsSceneMouseEvent* aEvent,
+                          int aClickCount)
 {
     aMoveEvent.refPoint.x = nscoord(aEvent->pos().x());
     aMoveEvent.refPoint.y = nscoord(aEvent->pos().y());
@@ -1328,17 +1300,18 @@ nsWindow::OnButtonPressEvent(QGraphicsSceneMouseEvent *aEvent)
     uint16_t      domButton;
     switch (aEvent->button()) {
     case Qt::MidButton:
-        domButton = nsMouseEvent::eMiddleButton;
+        domButton = WidgetMouseEvent::eMiddleButton;
         break;
     case Qt::RightButton:
-        domButton = nsMouseEvent::eRightButton;
+        domButton = WidgetMouseEvent::eRightButton;
         break;
     default:
-        domButton = nsMouseEvent::eLeftButton;
+        domButton = WidgetMouseEvent::eLeftButton;
         break;
     }
 
-    nsMouseEvent event(true, NS_MOUSE_BUTTON_DOWN, this, nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_MOUSE_BUTTON_DOWN, this,
+                           WidgetMouseEvent::eReal);
     event.button = domButton;
     InitButtonEvent(event, aEvent, 1);
 
@@ -1347,10 +1320,10 @@ nsWindow::OnButtonPressEvent(QGraphicsSceneMouseEvent *aEvent)
     nsEventStatus status = DispatchEvent(&event);
 
     // right menu click on linux should also pop up a context menu
-    if (domButton == nsMouseEvent::eRightButton &&
+    if (domButton == WidgetMouseEvent::eRightButton &&
         MOZ_LIKELY(!mIsDestroyed)) {
-        nsMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
-                                      nsMouseEvent::eReal);
+        WidgetMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
+                                          WidgetMouseEvent::eReal);
         InitButtonEvent(contextMenuEvent, aEvent, 1);
         DispatchEvent(&contextMenuEvent, status);
     }
@@ -1371,19 +1344,20 @@ nsWindow::OnButtonReleaseEvent(QGraphicsSceneMouseEvent *aEvent)
 
     switch (aEvent->button()) {
     case Qt::MidButton:
-        domButton = nsMouseEvent::eMiddleButton;
+        domButton = WidgetMouseEvent::eMiddleButton;
         break;
     case Qt::RightButton:
-        domButton = nsMouseEvent::eRightButton;
+        domButton = WidgetMouseEvent::eRightButton;
         break;
     default:
-        domButton = nsMouseEvent::eLeftButton;
+        domButton = WidgetMouseEvent::eLeftButton;
         break;
     }
 
     LOG(("%s [%p] button: %d\n", __PRETTY_FUNCTION__, (void*)this, domButton));
 
-    nsMouseEvent event(true, NS_MOUSE_BUTTON_UP, this, nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_MOUSE_BUTTON_UP, this,
+                           WidgetMouseEvent::eReal);
     event.button = domButton;
     InitButtonEvent(event, aEvent, 1);
 
@@ -1399,17 +1373,18 @@ nsWindow::OnMouseDoubleClickEvent(QGraphicsSceneMouseEvent *aEvent)
 
     switch (aEvent->button()) {
     case Qt::MidButton:
-        eventType = nsMouseEvent::eMiddleButton;
+        eventType = WidgetMouseEvent::eMiddleButton;
         break;
     case Qt::RightButton:
-        eventType = nsMouseEvent::eRightButton;
+        eventType = WidgetMouseEvent::eRightButton;
         break;
     default:
-        eventType = nsMouseEvent::eLeftButton;
+        eventType = WidgetMouseEvent::eLeftButton;
         break;
     }
 
-    nsMouseEvent event(true, NS_MOUSE_DOUBLECLICK, this, nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_MOUSE_DOUBLECLICK, this,
+                           WidgetMouseEvent::eReal);
     event.button = eventType;
 
     InitButtonEvent(event, aEvent, 2);
@@ -1455,7 +1430,7 @@ is_latin_shortcut_key(quint32 aKeyval)
 nsEventStatus
 nsWindow::DispatchCommandEvent(nsIAtom* aCommand)
 {
-    nsCommandEvent event(true, nsGkAtoms::onAppCommand, aCommand, this);
+    WidgetCommandEvent event(true, nsGkAtoms::onAppCommand, aCommand, this);
 
     nsEventStatus status;
     DispatchEvent(&event, status);
@@ -1466,7 +1441,7 @@ nsWindow::DispatchCommandEvent(nsIAtom* aCommand)
 nsEventStatus
 nsWindow::DispatchContentCommandEvent(int32_t aMsg)
 {
-    nsContentCommandEvent event(true, aMsg, this);
+    WidgetContentCommandEvent event(true, aMsg, this);
 
     nsEventStatus status;
     DispatchEvent(&event, status);
@@ -1490,9 +1465,9 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
     // before we dispatch a key, check if it's the context menu key.
     // If so, send a context menu key event instead.
     if (isContextMenuKeyEvent(aEvent)) {
-        nsMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
-                                      nsMouseEvent::eReal,
-                                      nsMouseEvent::eContextMenuKey);
+        WidgetMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
+                                          WidgetMouseEvent::eReal,
+                                          WidgetMouseEvent::eContextMenuKey);
         //keyEventToContextMenuEvent(&event, &contextMenuEvent);
         return DispatchEvent(&contextMenuEvent);
     }
@@ -1576,7 +1551,7 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
 
         SetKeyDownFlag(domKeyCode);
 
-        nsKeyEvent downEvent(true, NS_KEY_DOWN, this);
+        WidgetKeyboardEvent downEvent(true, NS_KEY_DOWN, this);
         InitKeyEvent(downEvent, aEvent);
 
         downEvent.keyCode = domKeyCode;
@@ -1648,7 +1623,7 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
         return DispatchContentCommandEvent(NS_CONTENT_COMMAND_UNDO);
     }
 
-    nsKeyEvent event(true, NS_KEY_PRESS, this);
+    WidgetKeyboardEvent event(true, NS_KEY_PRESS, this);
     InitKeyEvent(event, aEvent);
 
     // If there is no charcode attainable from the text, try to
@@ -1719,7 +1694,7 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
 
         event.charCode = domCharCode;
         event.keyCode = 0;
-        nsAlternativeCharCode altCharCode(0, 0);
+        AlternativeCharCode altCharCode(0, 0);
         // if character has a lower and upper representation
         if ((unshiftedChar.isUpper() || unshiftedChar.isLower()) &&
             unshiftedChar.toLower() == shiftedChar.toLower()) {
@@ -1795,9 +1770,9 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
     // before we dispatch a key, check if it's the context menu key.
     // If so, send a context menu key event instead.
     if (isContextMenuKeyEvent(aEvent)) {
-        nsMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
-                                      nsMouseEvent::eReal,
-                                      nsMouseEvent::eContextMenuKey);
+        WidgetMouseEvent contextMenuEvent(true, NS_CONTEXTMENU, this,
+                                          WidgetMouseEvent::eReal,
+                                          WidgetMouseEvent::eContextMenuKey);
         //keyEventToContextMenuEvent(&event, &contextMenuEvent);
         return DispatchEvent(&contextMenuEvent);
     }
@@ -1818,7 +1793,7 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
 
         SetKeyDownFlag(domKeyCode);
 
-        nsKeyEvent downEvent(true, NS_KEY_DOWN, this);
+        WidgetKeyboardEvent downEvent(true, NS_KEY_DOWN, this);
         InitKeyEvent(downEvent, aEvent);
 
         downEvent.keyCode = domKeyCode;
@@ -1832,7 +1807,7 @@ nsWindow::OnKeyPressEvent(QKeyEvent *aEvent)
         }
     }
 
-    nsKeyEvent event(true, NS_KEY_PRESS, this);
+    WidgetKeyboardEvent event(true, NS_KEY_PRESS, this);
     InitKeyEvent(event, aEvent);
 
     event.charCode = domCharCode;
@@ -1884,7 +1859,7 @@ nsWindow::OnKeyReleaseEvent(QKeyEvent *aEvent)
 #endif // MOZ_X11
 
     // send the key event as a key up event
-    nsKeyEvent event(true, NS_KEY_UP, this);
+    WidgetKeyboardEvent event(true, NS_KEY_UP, this);
     InitKeyEvent(event, aEvent);
 
     if (aEvent->key() == Qt::Key_AltGr) {
@@ -1907,7 +1882,7 @@ nsEventStatus
 nsWindow::OnScrollEvent(QGraphicsSceneWheelEvent *aEvent)
 {
     // check to see if we should rollup
-    WheelEvent wheelEvent(true, NS_WHEEL_WHEEL, this);
+    WidgetWheelEvent wheelEvent(true, NS_WHEEL_WHEEL, this);
     wheelEvent.deltaMode = nsIDOMWheelEvent::DOM_DELTA_LINE;
 
     // negative values for aEvent->delta indicate downward scrolling;
@@ -1969,7 +1944,8 @@ nsEventStatus nsWindow::OnTouchEvent(QTouchEvent *event, bool &handled)
         handled = true;
         for (int i = touchPoints.count() -1; i >= 0; i--) {
             QPointF fpos = touchPoints[i].pos();
-            nsGestureNotifyEvent gestureNotifyEvent(true, NS_GESTURENOTIFY_EVENT_START, this);
+            WidgetGestureNotifyEvent gestureNotifyEvent(true,
+                                         NS_GESTURENOTIFY_EVENT_START, this);
             gestureNotifyEvent.refPoint = LayoutDeviceIntPoint(fpos.x(), fpos.y());
             DispatchEvent(&gestureNotifyEvent);
         }
@@ -2073,7 +2049,7 @@ nsEventStatus
 nsWindow::DispatchGestureEvent(uint32_t aMsg, uint32_t aDirection,
                                double aDelta, const nsIntPoint& aRefPoint)
 {
-    nsSimpleGestureEvent mozGesture(true, aMsg, this, 0, 0.0);
+    WidgetSimpleGestureEvent mozGesture(true, aMsg, this, 0, 0.0);
     mozGesture.direction = aDirection;
     mozGesture.delta = aDelta;
     mozGesture.refPoint = LayoutDeviceIntPoint::FromUntyped(aRefPoint);
@@ -2114,8 +2090,7 @@ nsWindow::OnDragMotionEvent(QGraphicsSceneDragDropEvent *aEvent)
 {
     LOG(("nsWindow::OnDragMotionSignal\n"));
 
-    nsMouseEvent event(true, NS_DRAGDROP_OVER, 0,
-                       nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_DRAGDROP_OVER, 0, WidgetMouseEvent::eReal);
     return nsEventStatus_eIgnore;
 }
 
@@ -2124,7 +2099,8 @@ nsWindow::OnDragLeaveEvent(QGraphicsSceneDragDropEvent *aEvent)
 {
     // XXX Do we want to pass this on only if the event's subwindow is null?
     LOG(("nsWindow::OnDragLeaveSignal(%p)\n", this));
-    nsMouseEvent event(true, NS_DRAGDROP_EXIT, this, nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_DRAGDROP_EXIT, this,
+                           WidgetMouseEvent::eReal);
 
     return DispatchEvent(&event);
 }
@@ -2139,8 +2115,7 @@ nsWindow::OnDragDropEvent(QGraphicsSceneDragDropEvent *aDropEvent)
     }
 
     LOG(("nsWindow::OnDragDropSignal\n"));
-    nsMouseEvent event(true, NS_DRAGDROP_OVER, 0,
-                       nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_DRAGDROP_OVER, 0, WidgetMouseEvent::eReal);
     return nsEventStatus_eIgnore;
 }
 
@@ -2163,7 +2138,8 @@ nsWindow::OnDragEnter(QGraphicsSceneDragDropEvent *aDragEvent)
 
     LOG(("nsWindow::OnDragEnter(%p)\n", this));
 
-    nsMouseEvent event(true, NS_DRAGDROP_ENTER, this, nsMouseEvent::eReal);
+    WidgetMouseEvent event(true, NS_DRAGDROP_ENTER, this,
+                           WidgetMouseEvent::eReal);
     return DispatchEvent(&event);
 }
 
@@ -2270,7 +2246,7 @@ nsWindow::SetWindowClass(const nsAString &xulWinType)
     XClassHint *class_hint = XAllocClassHint();
     if (!class_hint)
       return NS_ERROR_OUT_OF_MEMORY;
-    const char *role = NULL;
+    const char *role = nullptr;
     class_hint->res_name = ToNewCString(xulWinType);
     if (!class_hint->res_name) {
       XFree(class_hint);
@@ -2510,7 +2486,7 @@ nsWindow::HideWindowChrome(bool aShouldHide)
 // These are all of our drag and drop operations
 
 void
-nsWindow::InitDragEvent(nsMouseEvent &aEvent)
+nsWindow::InitDragEvent(WidgetMouseEvent& aEvent)
 {
     // set the keyboard modifiers
 }
@@ -2527,7 +2503,7 @@ initialize_prefs(void)
 }
 
 inline bool
-is_context_menu_key(const nsKeyEvent& aKeyEvent)
+is_context_menu_key(const WidgetKeyboardEvent& aKeyEvent)
 {
     return ((aKeyEvent.keyCode == NS_VK_F10 && aKeyEvent.IsShift() &&
              !aKeyEvent.IsControl() && !aKeyEvent.IsMeta() &&
@@ -2538,8 +2514,8 @@ is_context_menu_key(const nsKeyEvent& aKeyEvent)
 }
 
 void
-key_event_to_context_menu_event(nsMouseEvent &aEvent,
-                                QKeyEvent *aGdkEvent)
+key_event_to_context_menu_event(WidgetMouseEvent& aEvent,
+                                QKeyEvent* aGdkEvent)
 {
     aEvent.refPoint = LayoutDeviceIntPoint(0, 0);
     aEvent.modifiers = 0;
@@ -2579,7 +2555,7 @@ nsWindow::createQWidget(MozQWidget *parent,
                         nsNativeWidget nativeParent,
                         nsWidgetInitData *aInitData)
 {
-    const char *windowName = NULL;
+    const char *windowName = nullptr;
     Qt::WindowFlags flags = Qt::Widget;
     QWidget *parentWidget = (parent && parent->getReceiver()) ?
             parent->getReceiver()->GetViewWidget() : nullptr;
@@ -2727,7 +2703,9 @@ nsWindow::GetThebesSurface()
 }
 
 NS_IMETHODIMP
-nsWindow::BeginResizeDrag(nsGUIEvent* aEvent, int32_t aHorizontal, int32_t aVertical)
+nsWindow::BeginResizeDrag(WidgetGUIEvent* aEvent,
+                          int32_t aHorizontal,
+                          int32_t aVertical)
 {
     NS_ENSURE_ARG_POINTER(aEvent);
 
@@ -2736,9 +2714,7 @@ nsWindow::BeginResizeDrag(nsGUIEvent* aEvent, int32_t aHorizontal, int32_t aVert
         return NS_ERROR_INVALID_ARG;
     }
 
-    nsMouseEvent* mouse_event = static_cast<nsMouseEvent*>(aEvent);
-
-    if (mouse_event->button != nsMouseEvent::eLeftButton) {
+    if (aEvent->AsMouseEvent()->button != WidgetMouseEvent::eLeftButton) {
         // you can only begin a resize drag with the left mouse button
         return NS_ERROR_INVALID_ARG;
     }
@@ -2758,22 +2734,22 @@ nsWindow::imComposeEvent(QInputMethodEvent *event, bool &handled)
     // XXX Needs to check whether this widget has been destroyed or not after
     //     each DispatchEvent().
 
-    nsCompositionEvent start(true, NS_COMPOSITION_START, this);
+    WidgetCompositionEvent start(true, NS_COMPOSITION_START, this);
     DispatchEvent(&start);
 
     nsAutoString compositionStr(event->commitString().utf16());
 
     if (!compositionStr.IsEmpty()) {
-      nsCompositionEvent update(true, NS_COMPOSITION_UPDATE, this);
+      WidgetCompositionEvent update(true, NS_COMPOSITION_UPDATE, this);
       update.data = compositionStr;
       DispatchEvent(&update);
     }
 
-    nsTextEvent text(true, NS_TEXT_TEXT, this);
+    WidgetTextEvent text(true, NS_TEXT_TEXT, this);
     text.theText = compositionStr;
     DispatchEvent(&text);
 
-    nsCompositionEvent end(true, NS_COMPOSITION_END, this);
+    WidgetCompositionEvent end(true, NS_COMPOSITION_END, this);
     end.data = compositionStr;
     DispatchEvent(&end);
 
@@ -2797,6 +2773,14 @@ nsWindow::GetDPI()
     }
 
     return float(rootWindow->height()/heightInches);
+}
+
+nsEventStatus
+nsWindow::DispatchEvent(WidgetGUIEvent* aEvent)
+{
+    nsEventStatus status;
+    DispatchEvent(aEvent, status);
+    return status;
 }
 
 void
@@ -2839,7 +2823,7 @@ nsWindow::DispatchResizeEvent(nsIntRect &aRect, nsEventStatus &aStatus)
 }
 
 NS_IMETHODIMP
-nsWindow::DispatchEvent(nsGUIEvent *aEvent, nsEventStatus &aStatus)
+nsWindow::DispatchEvent(WidgetGUIEvent* aEvent, nsEventStatus& aStatus)
 {
 #ifdef DEBUG
     debug_DumpEvent(stdout, aEvent->widget, aEvent,
@@ -3159,5 +3143,39 @@ nsWindow::GetGLFrameBufferFormat()
         return MozQGLWidgetWrapper::isRGBAContext() ? LOCAL_GL_RGBA : LOCAL_GL_RGB;
     }
     return LOCAL_GL_NONE;
+}
+
+void
+nsWindow::ProcessMotionEvent()
+{
+    if (mPinchEvent.needDispatch) {
+        double distance = DistanceBetweenPoints(mPinchEvent.centerPoint,
+                                                mPinchEvent.touchPoint);
+        distance *= 2;
+        mPinchEvent.delta = distance - mPinchEvent.prevDistance;
+        nsIntPoint centerPoint(mPinchEvent.centerPoint.x(),
+                               mPinchEvent.centerPoint.y());
+        DispatchGestureEvent(NS_SIMPLE_GESTURE_MAGNIFY_UPDATE,
+                             0, mPinchEvent.delta, centerPoint);
+        mPinchEvent.prevDistance = distance;
+    }
+    if (mMoveEvent.needDispatch) {
+        WidgetMouseEvent event(true, NS_MOUSE_MOVE, this,
+                               WidgetMouseEvent::eReal);
+
+        event.refPoint.x = nscoord(mMoveEvent.pos.x());
+        event.refPoint.y = nscoord(mMoveEvent.pos.y());
+
+        event.InitBasicModifiers(mMoveEvent.modifiers & Qt::ControlModifier,
+                                 mMoveEvent.modifiers & Qt::AltModifier,
+                                 mMoveEvent.modifiers & Qt::ShiftModifier,
+                                 mMoveEvent.modifiers & Qt::MetaModifier);
+        event.clickCount      = 0;
+
+        DispatchEvent(&event);
+        mMoveEvent.needDispatch = false;
+    }
+
+    mTimerStarted = false;
 }
 

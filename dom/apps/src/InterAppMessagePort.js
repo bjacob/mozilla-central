@@ -33,29 +33,6 @@ XPCOMUtils.defineLazyServiceGetter(this, "appsService",
 
 const kMessages = ["InterAppMessagePort:OnMessage"];
 
-
-function InterAppMessageEvent() {
-  this.type = this.data = null;
-};
-
-InterAppMessageEvent.prototype = {
-  classDescription: "MozInterAppMessageEvent",
-
-  classID: Components.ID("{33b4dff4-edf8-11e2-ae9c-77f99f99c3ad}"),
-
-  contractID: "@mozilla.org/dom/inter-app-message-event;1",
-
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports]),
-
-  __init: function(aType, aDict) {
-    this.type = aType;
-    this.__DOM_IMPL__.initEvent(aType, aDict.bubbles || false,
-                                aDict.cancelable || false);
-    this.data = aDict.data;
-  }
-};
-
-
 function InterAppMessagePort() {
   if (DEBUG) debug("InterAppMessagePort()");
 };
@@ -70,7 +47,8 @@ InterAppMessagePort.prototype = {
   contractID: "@mozilla.org/dom/inter-app-message-port;1",
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMGlobalPropertyInitializer,
-                                         Ci.nsISupportsWeakReference]),
+                                         Ci.nsISupportsWeakReference,
+                                         Ci.nsIObserver]),
 
   // Ci.nsIDOMGlobalPropertyInitializer implementation.
   init: function(aWindow) {
@@ -240,6 +218,5 @@ InterAppMessagePort.prototype = {
   }
 };
 
-this.NSGetFactory = XPCOMUtils.generateNSGetFactory([InterAppMessagePort,
-                                                     InterAppMessageEvent]);
+this.NSGetFactory = XPCOMUtils.generateNSGetFactory([InterAppMessagePort]);
 

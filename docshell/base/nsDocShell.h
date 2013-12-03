@@ -18,6 +18,7 @@
 #include "nsIContentViewerContainer.h"
 #include "nsIDOMStorageManager.h"
 #include "nsDocLoader.h"
+#include "mozilla/WeakPtr.h"
 
 // Helper Classes
 #include "nsCOMPtr.h"
@@ -33,13 +34,11 @@
 #include "nsIDocCharset.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIRefreshURI.h"
-#include "nsIScriptGlobalObjectOwner.h"
 #include "nsIWebNavigation.h"
 #include "nsIWebPageDescriptor.h"
 #include "nsIWebProgressListener.h"
 #include "nsIDocShellLoadInfo.h"
 #include "nsIAuthPromptProvider.h"
-#include "nsIObserver.h"
 #include "nsILoadContext.h"
 #include "nsIWebShellServices.h"
 #include "nsILinkHandler.h"
@@ -131,17 +130,16 @@ class nsDocShell : public nsDocLoader,
                    public nsITextScroll, 
                    public nsIDocCharset, 
                    public nsIContentViewerContainer,
-                   public nsIScriptGlobalObjectOwner,
                    public nsIRefreshURI,
                    public nsIWebProgressListener,
                    public nsIWebPageDescriptor,
                    public nsIAuthPromptProvider,
-                   public nsIObserver,
                    public nsILoadContext,
                    public nsIWebShellServices,
                    public nsILinkHandler,
                    public nsIClipboardCommands,
-                   public nsIDOMStorageManager
+                   public nsIDOMStorageManager,
+                   public mozilla::SupportsWeakPtr<nsDocShell>
 {
     friend class nsDSURIContentListener;
 
@@ -169,7 +167,6 @@ public:
     NS_DECL_NSICONTENTVIEWERCONTAINER
     NS_DECL_NSIWEBPAGEDESCRIPTOR
     NS_DECL_NSIAUTHPROMPTPROVIDER
-    NS_DECL_NSIOBSERVER
     NS_DECL_NSICLIPBOARDCOMMANDS
     NS_DECL_NSIWEBSHELLSERVICES
     NS_FORWARD_SAFE_NSIDOMSTORAGEMANAGER(TopSessionStorageManager())
@@ -207,9 +204,6 @@ public:
 
     nsDocShellInfoLoadType ConvertLoadTypeToDocShellLoadInfo(uint32_t aLoadType);
     uint32_t ConvertDocShellLoadInfoToLoadType(nsDocShellInfoLoadType aDocShellLoadType);
-
-    // nsIScriptGlobalObjectOwner methods
-    virtual nsIScriptGlobalObject* GetScriptGlobalObject();
 
     // Don't use NS_DECL_NSILOADCONTEXT because some of nsILoadContext's methods
     // are shared with nsIDocShell (appID, etc.) and can't be declared twice.
@@ -527,6 +521,11 @@ protected:
       return  uint32_t(t_usec /= usec_per_sec);
     }
 
+    inline bool UseErrorPages()
+    {
+      return (mObserveErrorPages ? sUseErrorPages : mUseErrorPages);
+    }
+
     bool IsFrame();
 
     //
@@ -736,7 +735,8 @@ protected:
     nsCOMPtr<nsIChannel>       mFailedChannel;
     uint32_t                   mFailedLoadType;
 
-    // Set in DoURILoad when the LOAD_RELOAD_ALLOW_MIXED_CONTENT flag is set.
+    // Set in DoURILoad when either the LOAD_RELOAD_ALLOW_MIXED_CONTENT flag or
+    // the LOAD_NORMAL_ALLOW_MIXED_CONTENT flag is set.
     // Checked in nsMixedContentBlocker, to see if the channels match.
     nsCOMPtr<nsIChannel>       mMixedContentChannel;
 
@@ -769,6 +769,7 @@ protected:
     int32_t                    mLoadedTransIndex;
 
     uint32_t                   mSandboxFlags;
+    nsWeakPtr                  mOnePermittedSandboxedNavigator;
 
     // mFullscreenAllowed stores how we determine whether fullscreen is allowed
     // when GetFullscreenAllowed() is called. Fullscreen is allowed in a
@@ -788,6 +789,9 @@ protected:
         PARENT_PROHIBITS
     };
     FullscreenAllowedState     mFullscreenAllowed;
+
+    // Cached value of the "browser.xul.error_pages.enabled" preference.
+    static bool                sUseErrorPages;
 
     bool                       mCreated;
     bool                       mAllowSubframes;
@@ -809,6 +813,13 @@ protected:
     bool                       mIsAppTab;
     bool                       mUseGlobalHistory;
     bool                       mInPrivateBrowsing;
+    bool                       mDeviceSizeIsPageSize;
+
+    // Because scriptability depends on the mAllowJavascript values of our
+    // ancestors, we cache the effective scriptability and recompute it when
+    // it might have changed;
+    bool                       mCanExecuteScripts;
+    void RecomputeCanExecuteScripts();
 
     // This boolean is set to true right before we fire pagehide and generally
     // unset when we embed a new content viewer.  While it's true no navigation
@@ -840,6 +851,7 @@ protected:
     bool                       mInEnsureScriptEnv;
 #endif
     bool                       mAffectPrivateSessionLifetime;
+    bool                       mInvisible;
     uint64_t                   mHistoryID;
     uint32_t                   mDefaultLoadFlags;
 
@@ -863,9 +875,10 @@ protected:
 private:
     nsCString         mForcedCharset;
     nsCString         mParentCharset;
+    int32_t           mParentCharsetSource;
+    nsCOMPtr<nsIPrincipal> mParentCharsetPrincipal;
     nsTObserverArray<nsWeakPtr> mPrivacyObservers;
     nsTObserverArray<nsWeakPtr> mReflowObservers;
-    int32_t           mParentCharsetSource;
     nsCString         mOriginalUriString;
 
     // Separate function to do the actual name (i.e. not _top, _self etc.)
@@ -874,6 +887,10 @@ private:
                                 nsISupports* aRequestor,
                                 nsIDocShellTreeItem* aOriginalRequestor,
                                 nsIDocShellTreeItem** _retval);
+
+    // Check whether accessing item is sandboxed from the target item.
+    static bool IsSandboxedFrom(nsIDocShellTreeItem* aTargetItem,
+                                nsIDocShellTreeItem* aAccessingItem);
 
 #ifdef DEBUG
     // We're counting the number of |nsDocShells| to help find leaks

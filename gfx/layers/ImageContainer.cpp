@@ -22,6 +22,7 @@
 
 #ifdef XP_MACOSX
 #include "mozilla/gfx/QuartzSupport.h"
+#include "MacIOSurfaceImage.h"
 #endif
 
 #ifdef XP_WIN
@@ -74,6 +75,12 @@ ImageFactory::CreateImage(const ImageFormat *aFormats,
     img = new SharedTextureImage();
     return img.forget();
   }
+#ifdef XP_MACOSX
+  if (FormatInList(aFormats, aNumFormats, MAC_IOSURFACE)) {
+    img = new MacIOSurfaceImage();
+    return img.forget();
+  }
+#endif
 #ifdef XP_WIN
   if (FormatInList(aFormats, aNumFormats, D3D9_RGB32_TEXTURE)) {
     img = new D3D9SurfaceImage();
@@ -128,7 +135,11 @@ ImageContainer::ImageContainer(int flag)
   if (flag == ENABLE_ASYNC && ImageBridgeChild::IsCreated()) {
     // the refcount of this ImageClient is 1. we don't use a RefPtr here because the refcount
     // of this class must be done on the ImageBridge thread.
-    mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(BUFFER_IMAGE_BUFFERED).drop();
+    if (gfxPlatform::GetPlatform()->UseDeprecatedTextures()) {
+      mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(BUFFER_IMAGE_BUFFERED).drop();
+    } else {
+      mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(BUFFER_IMAGE_SINGLE).drop();
+    }
     MOZ_ASSERT(mImageClient);
   }
 }
@@ -186,9 +197,8 @@ ImageContainer::ClearCurrentImage()
 void
 ImageContainer::SetCurrentImage(Image *aImage)
 {
-  if (IsAsync() && !aImage) {
-    // Let ImageClient to release all TextureClients.
-    ImageBridgeChild::FlushImage(mImageClient, this);
+  if (!aImage) {
+    ClearAllImages();
     return;
   }
 
@@ -197,6 +207,27 @@ ImageContainer::SetCurrentImage(Image *aImage)
     ImageBridgeChild::DispatchImageClientUpdate(mImageClient, this);
   }
   SetCurrentImageInternal(aImage);
+}
+
+ void
+ImageContainer::ClearAllImages()
+{
+  if (IsAsync()) {
+    // Let ImageClient release all TextureClients.
+    ImageBridgeChild::FlushAllImages(mImageClient, this, false);
+    return;
+  }
+  ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+  SetCurrentImageInternal(nullptr);
+}
+
+void
+ImageContainer::ClearAllImagesExceptFront()
+{
+  if (IsAsync()) {
+    // Let ImageClient release all TextureClients except front one.
+    ImageBridgeChild::FlushAllImages(mImageClient, this, true);
+  }
 }
 
 void

@@ -4,8 +4,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'libpixman'
-
 EXPORTS += [
     'pixman-version.h',
     'pixman.h',
@@ -17,19 +15,17 @@ EXPORTS += [
 # viable solution in the future.
 if CONFIG['OS_ARCH'] != 'Darwin' and CONFIG['GNU_CC']:
     if CONFIG['HAVE_ARM_NEON']:
-        SSRCS += [
+        SOURCES += [
             'pixman-arm-neon-asm-bilinear.S',
             'pixman-arm-neon-asm.S',
         ]
     if CONFIG['HAVE_ARM_SIMD']:
-        SSRCS += [
+        SOURCES += [
             'pixman-arm-simd-asm-scaled.S',
             'pixman-arm-simd-asm.S',
         ]
 
-LIBXUL_LIBRARY = True
-
-CSRCS += [
+SOURCES += [
     'pixman-access-accessors.c',
     'pixman-access.c',
     'pixman-arm.c',
@@ -64,5 +60,18 @@ CSRCS += [
 
 MSVC_ENABLE_PGO = True
 
-LIBRARY_NAME = 'mozlibpixman'
+FINAL_LIBRARY = 'gkmedias'
+LOCAL_INCLUDES += [
+    '../../cairo/src',
+]
 
+
+if CONFIG['MOZ_USE_PTHREADS']:
+    DEFINES['HAVE_PTHREAD_SETSPECIFIC'] = True
+
+if CONFIG['_MSC_VER']:
+    DEFINES['PIXMAN_USE_XP_DLL_TLS_WORKAROUND'] = True
+
+DEFINES['PACKAGE'] = 'mozpixman'
+
+DEFINES['_USE_MATH_DEFINES'] = True

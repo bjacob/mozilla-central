@@ -5,15 +5,18 @@
 #include "base/basictypes.h"
 #include "nsCOMPtr.h"
 #include "nsDOMClassInfo.h"
-#include "jsapi.h"
+#include "nsHashPropertyBag.h"
 #include "nsThread.h"
 #include "DeviceStorage.h"
 #include "mozilla/dom/CameraControlBinding.h"
-#include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/TabChild.h"
+#include "mozilla/MediaManager.h"
 #include "mozilla/Services.h"
 #include "mozilla/unused.h"
+#include "nsIAppsService.h"
 #include "nsIObserverService.h"
 #include "nsIDOMDeviceStorage.h"
+#include "nsIScriptSecurityManager.h"
 #include "nsXULAppAPI.h"
 #include "DOMCameraManager.h"
 #include "DOMCameraCapabilities.h"
@@ -24,6 +27,7 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::idl;
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_2(nsDOMCameraControl, mDOMCapabilities, mWindow)
 
@@ -153,6 +157,83 @@ nsDOMCameraControl::SetFocusAreas(JSContext* cx, JS::Handle<JS::Value> aFocusAre
   aRv = mCameraControl->SetFocusAreas(cx, aFocusAreas);
 }
 
+static nsresult
+GetSize(JSContext* aCx, JS::Value* aValue, const CameraSize& aSize)
+{
+  JS::Rooted<JSObject*> o(aCx, JS_NewObject(aCx, nullptr, nullptr, nullptr));
+  if (!o) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  JS::Rooted<JS::Value> v(aCx);
+
+  v = INT_TO_JSVAL(aSize.width);
+  if (!JS_SetProperty(aCx, o, "width", v)) {
+    return NS_ERROR_FAILURE;
+  }
+  v = INT_TO_JSVAL(aSize.height);
+  if (!JS_SetProperty(aCx, o, "height", v)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  *aValue = JS::ObjectValue(*o);
+  return NS_OK;
+}
+
+/* attribute any pictureSize */
+JS::Value
+nsDOMCameraControl::GetPictureSize(JSContext* cx, ErrorResult& aRv)
+{
+  JS::Rooted<JS::Value> value(cx);
+  
+  CameraSize size;
+  aRv = mCameraControl->Get(CAMERA_PARAM_PICTURESIZE, size);
+  if (aRv.Failed()) {
+    return value;
+  }
+
+  aRv = GetSize(cx, value.address(), size);
+  return value;
+}
+void
+nsDOMCameraControl::SetPictureSize(JSContext* cx, JS::Handle<JS::Value> aSize, ErrorResult& aRv)
+{
+  CameraSize size;
+  aRv = size.Init(cx, aSize.address());
+  if (aRv.Failed()) {
+    return;
+  }
+
+  aRv = mCameraControl->Set(CAMERA_PARAM_PICTURESIZE, size);
+}
+
+/* attribute any thumbnailSize */
+JS::Value
+nsDOMCameraControl::GetThumbnailSize(JSContext* cx, ErrorResult& aRv)
+{
+  JS::Rooted<JS::Value> value(cx);
+  
+  CameraSize size;
+  aRv = mCameraControl->Get(CAMERA_PARAM_THUMBNAILSIZE, size);
+  if (aRv.Failed()) {
+    return value;
+  }
+
+  aRv = GetSize(cx, value.address(), size);
+  return value;
+}
+void
+nsDOMCameraControl::SetThumbnailSize(JSContext* cx, JS::Handle<JS::Value> aSize, ErrorResult& aRv)
+{
+  CameraSize size;
+  aRv = size.Init(cx, aSize.address());
+  if (aRv.Failed()) {
+    return;
+  }
+
+  aRv = mCameraControl->Set(CAMERA_PARAM_THUMBNAILSIZE, size);
+}
+
 double
 nsDOMCameraControl::GetFocalLength(ErrorResult& aRv)
 {
@@ -271,21 +352,7 @@ nsDOMCameraControl::StartRecording(JSContext* aCx,
     return;
   }
 
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  if (!obs) {
-    NS_WARNING("Could not get the Observer service for CameraControl::StartRecording.");
-    aRv.Throw(NS_ERROR_FAILURE);
-    return;
-  }
-
-  obs->NotifyObservers(nullptr,
-                       "recording-device-events",
-                       NS_LITERAL_STRING("starting").get());
-  // Forward recording events to parent process.
-  // The events are gathered in chrome process and used for recording indicator
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
-    unused << ContentChild::GetSingleton()->SendRecordingDeviceEvents(NS_LITERAL_STRING("starting"));
-  }
+  aRv = NotifyRecordingStatusChange(NS_LITERAL_STRING("starting"));
 
   #ifdef MOZ_B2G
   if (!mAudioChannelAgent) {
@@ -312,20 +379,7 @@ nsDOMCameraControl::StartRecording(JSContext* aCx,
 void
 nsDOMCameraControl::StopRecording(ErrorResult& aRv)
 {
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  if (!obs) {
-    NS_WARNING("Could not get the Observer service for CameraControl::StopRecording.");
-    aRv.Throw(NS_ERROR_FAILURE);
-  }
-
-  obs->NotifyObservers(nullptr,
-                       "recording-device-events",
-                       NS_LITERAL_STRING("shutdown").get());
-  // Forward recording events to parent process.
-  // The events are gathered in chrome process and used for recording indicator
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
-    unused << ContentChild::GetSingleton()->SendRecordingDeviceEvents(NS_LITERAL_STRING("shutdown"));
-  }
+  aRv = NotifyRecordingStatusChange(NS_LITERAL_STRING("shutdown"));
 
   #ifdef MOZ_B2G
   if (mAudioChannelAgent) {
@@ -524,3 +578,15 @@ nsDOMCameraControl::GetNativeCameraControl()
 {
   return mCameraControl;
 }
+
+nsresult
+nsDOMCameraControl::NotifyRecordingStatusChange(const nsString& aMsg)
+{
+  NS_ENSURE_TRUE(mWindow, NS_ERROR_FAILURE);
+
+  return MediaManager::NotifyRecordingStatusChange(mWindow,
+                                                   aMsg,
+                                                   true /* aIsAudio */,
+                                                   true /* aIsVideo */);
+}
+

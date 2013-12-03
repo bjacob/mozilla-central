@@ -29,6 +29,7 @@
 #include "nsIDOMWakeLock.h"
 #include "nsIPowerManagerService.h"
 #include "mozilla/dom/MobileMessageManager.h"
+#include "mozilla/dom/Telephony.h"
 #include "mozilla/Hal.h"
 #include "nsISiteSpecificUserAgent.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -37,9 +38,9 @@
 #include "nsDOMEvent.h"
 #include "nsGlobalWindow.h"
 #ifdef MOZ_B2G_RIL
-#include "IccManager.h"
-#include "MobileConnection.h"
+#include "mozilla/dom/IccManager.h"
 #include "mozilla/dom/CellBroadcast.h"
+#include "mozilla/dom/network/MobileConnectionArray.h"
 #include "mozilla/dom/Voicemail.h"
 #endif
 #include "nsIIdleObserver.h"
@@ -52,9 +53,6 @@
 
 #ifdef MOZ_MEDIA_NAVIGATOR
 #include "MediaManager.h"
-#endif
-#ifdef MOZ_B2G_RIL
-#include "mozilla/dom/Telephony.h"
 #endif
 #ifdef MOZ_B2G_BT
 #include "BluetoothManager.h"
@@ -70,11 +68,13 @@
 #endif
 
 #include "nsIDOMGlobalPropertyInitializer.h"
+#include "nsIDataStoreService.h"
 #include "nsJSUtils.h"
 
 #include "nsScriptNameSpaceManager.h"
 
 #include "mozilla/dom/NavigatorBinding.h"
+#include "mozilla/dom/Promise.h"
 
 namespace mozilla {
 namespace dom {
@@ -102,8 +102,7 @@ Navigator::Init()
 Navigator::Navigator(nsPIDOMWindow* aWindow)
   : mWindow(aWindow)
 {
-  NS_ASSERTION(aWindow->IsInnerWindow(),
-               "Navigator must get an inner window!");
+  MOZ_ASSERT(aWindow->IsInnerWindow(), "Navigator must get an inner window!");
   SetIsDOMBinding();
 }
 
@@ -138,15 +137,13 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBatteryManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPowerManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMobileMessageManager)
-#ifdef MOZ_B2G_RIL
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTelephony)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVoicemail)
-#endif
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConnection)
 #ifdef MOZ_B2G_RIL
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMobileConnection)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMobileConnections)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCellBroadcast)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mIccManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVoicemail)
 #endif
 #ifdef MOZ_B2G_BT
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBluetooth)
@@ -211,15 +208,9 @@ Navigator::Invalidate()
     mMobileMessageManager = nullptr;
   }
 
-#ifdef MOZ_B2G_RIL
   if (mTelephony) {
     mTelephony = nullptr;
   }
-
-  if (mVoicemail) {
-    mVoicemail = nullptr;
-  }
-#endif
 
   if (mConnection) {
     mConnection->Shutdown();
@@ -227,9 +218,8 @@ Navigator::Invalidate()
   }
 
 #ifdef MOZ_B2G_RIL
-  if (mMobileConnection) {
-    mMobileConnection->Shutdown();
-    mMobileConnection = nullptr;
+  if (mMobileConnections) {
+    mMobileConnections = nullptr;
   }
 
   if (mCellBroadcast) {
@@ -239,6 +229,10 @@ Navigator::Invalidate()
   if (mIccManager) {
     mIccManager->Shutdown();
     mIccManager = nullptr;
+  }
+
+  if (mVoicemail) {
+    mVoicemail = nullptr;
   }
 #endif
 
@@ -660,7 +654,7 @@ VibrateWindowListener::HandleEvent(nsIDOMEvent* aEvent)
     nsCOMPtr<nsIDOMWindow> window = do_QueryReferent(mWindow);
     hal::CancelVibrate(window);
     RemoveListener();
-    gVibrateWindowListener = NULL;
+    gVibrateWindowListener = nullptr;
     // Careful: The line above might have deleted |this|!
   }
 
@@ -709,49 +703,45 @@ Navigator::RemoveIdleObserver(MozIdleObserver& aIdleObserver, ErrorResult& aRv)
   }
 }
 
-void
-Navigator::Vibrate(uint32_t aDuration, ErrorResult& aRv)
+bool
+Navigator::Vibrate(uint32_t aDuration)
 {
   nsAutoTArray<uint32_t, 1> pattern;
   pattern.AppendElement(aDuration);
-  Vibrate(pattern, aRv);
+  return Vibrate(pattern);
 }
 
-void
-Navigator::Vibrate(const nsTArray<uint32_t>& aPattern, ErrorResult& aRv)
+bool
+Navigator::Vibrate(const nsTArray<uint32_t>& aPattern)
 {
   if (!mWindow) {
-    aRv.Throw(NS_ERROR_UNEXPECTED);
-    return;
+    return false;
   }
+
   nsCOMPtr<nsIDocument> doc = mWindow->GetExtantDoc();
   if (!doc) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return;
+    return false;
   }
+
   if (doc->Hidden()) {
     // Hidden documents cannot start or stop a vibration.
-    return;
+    return false;
   }
 
   if (aPattern.Length() > sMaxVibrateListLen) {
-    // XXXbz this should be returning false instead
-    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-    return;
+    return false;
   }
 
   for (size_t i = 0; i < aPattern.Length(); ++i) {
     if (aPattern[i] > sMaxVibrateMS) {
-      // XXXbz this should be returning false instead
-      aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-      return;
+      return false;
     }
   }
 
   // The spec says we check sVibratorEnabled after we've done the sanity
   // checking on the pattern.
-  if (!sVibratorEnabled) {
-    return;
+  if (aPattern.IsEmpty() || !sVibratorEnabled) {
+    return true;
   }
 
   // Add a listener to cancel the vibration if the document becomes hidden,
@@ -769,6 +759,7 @@ Navigator::Vibrate(const nsTArray<uint32_t>& aPattern, ErrorResult& aRv)
   gVibrateWindowListener = new VibrateWindowListener(mWindow, doc);
 
   hal::Vibrate(aPattern, mWindow);
+  return true;
 }
 
 //*****************************************************************************
@@ -1098,6 +1089,28 @@ Navigator::GetBattery(ErrorResult& aRv)
   return mBatteryManager;
 }
 
+already_AddRefed<Promise>
+Navigator::GetDataStores(const nsAString& aName, ErrorResult& aRv)
+{
+  if (!mWindow || !mWindow->GetDocShell()) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
+
+  nsCOMPtr<nsIDataStoreService> service =
+    do_GetService("@mozilla.org/datastore-service;1");
+  if (!service) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsCOMPtr<nsISupports> promise;
+  aRv = service->GetDataStores(mWindow, aName, getter_AddRefs(promise));
+
+  nsRefPtr<Promise> p = static_cast<Promise*>(promise.get());
+  return p.forget();
+}
+
 PowerManager*
 Navigator::GetMozPower(ErrorResult& aRv)
 {
@@ -1150,7 +1163,35 @@ Navigator::GetMozMobileMessage()
   return mMobileMessageManager;
 }
 
+Telephony*
+Navigator::GetMozTelephony(ErrorResult& aRv)
+{
+  if (!mTelephony) {
+    if (!mWindow) {
+      aRv.Throw(NS_ERROR_UNEXPECTED);
+      return nullptr;
+    }
+    mTelephony = Telephony::Create(mWindow, aRv);
+  }
+
+  return mTelephony;
+}
+
 #ifdef MOZ_B2G_RIL
+
+network::MobileConnectionArray*
+Navigator::GetMozMobileConnections(ErrorResult& aRv)
+{
+  if (!mMobileConnections) {
+    if (!mWindow) {
+      aRv.Throw(NS_ERROR_UNEXPECTED);
+      return nullptr;
+    }
+    mMobileConnections = new network::MobileConnectionArray(mWindow);
+  }
+
+  return mMobileConnections;
+}
 
 CellBroadcast*
 Navigator::GetMozCellBroadcast(ErrorResult& aRv)
@@ -1164,20 +1205,6 @@ Navigator::GetMozCellBroadcast(ErrorResult& aRv)
   }
 
   return mCellBroadcast;
-}
-
-Telephony*
-Navigator::GetMozTelephony(ErrorResult& aRv)
-{
-  if (!mTelephony) {
-    if (!mWindow) {
-      aRv.Throw(NS_ERROR_UNEXPECTED);
-      return nullptr;
-    }
-    mTelephony = Telephony::Create(mWindow, aRv);
-  }
-
-  return mTelephony;
 }
 
 Voicemail*
@@ -1208,8 +1235,7 @@ Navigator::GetMozIccManager(ErrorResult& aRv)
     }
     NS_ENSURE_TRUE(mWindow->GetDocShell(), nullptr);
 
-    mIccManager = new icc::IccManager();
-    mIccManager->Init(mWindow);
+    mIccManager = new IccManager(mWindow);
   }
 
   return mIccManager;
@@ -1256,23 +1282,6 @@ Navigator::GetMozConnection()
 
   return mConnection;
 }
-
-#ifdef MOZ_B2G_RIL
-nsIDOMMozMobileConnection*
-Navigator::GetMozMobileConnection(ErrorResult& aRv)
-{
-  if (!mMobileConnection) {
-    if (!mWindow) {
-      aRv.Throw(NS_ERROR_UNEXPECTED);
-      return nullptr;
-    }
-    mMobileConnection = new network::MobileConnection();
-    mMobileConnection->Init(mWindow);
-  }
-
-  return mMobileConnection;
-}
-#endif // MOZ_B2G_RIL
 
 #ifdef MOZ_B2G_BT
 bluetooth::BluetoothManager*
@@ -1527,13 +1536,20 @@ Navigator::DoNewResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
         }
       }
 
+      if (name.EqualsLiteral("mozDownloadManager")) {
+        if (!CheckPermission("downloads")) {
+          aValue.setNull();
+          return true;
+        }
+      }
+
       domObject = construct(aCx, naviObj);
       if (!domObject) {
         return Throw(aCx, NS_ERROR_FAILURE);
       }
     }
 
-    if (!JS_WrapObject(aCx, domObject.address())) {
+    if (!JS_WrapObject(aCx, &domObject)) {
       return false;
     }
 
@@ -1568,7 +1584,7 @@ Navigator::DoNewResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
 
   if (JSVAL_IS_PRIMITIVE(prop_val) && !JSVAL_IS_NULL(prop_val)) {
     nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
-    rv = nsContentUtils::WrapNative(aCx, aObject, native, prop_val.address(),
+    rv = nsContentUtils::WrapNative(aCx, aObject, native, &prop_val,
                                     getter_AddRefs(holder), true);
 
     if (NS_FAILED(rv)) {
@@ -1576,7 +1592,7 @@ Navigator::DoNewResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
     }
   }
 
-  if (!JS_WrapValue(aCx, prop_val.address())) {
+  if (!JS_WrapValue(aCx, &prop_val)) {
     return Throw(aCx, NS_ERROR_UNEXPECTED);
   }
 
@@ -1684,6 +1700,19 @@ Navigator::HasMobileMessageSupport(JSContext* /* unused */, JSObject* aGlobal)
 
 /* static */
 bool
+Navigator::HasTelephonySupport(JSContext* /* unused */, JSObject* aGlobal)
+{
+  // First of all, the general pref has to be turned on.
+  bool enabled = false;
+  Preferences::GetBool("dom.telephony.enabled", &enabled);
+  NS_ENSURE_TRUE(enabled, false);
+
+  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
+  return win && CheckPermission(win, "telephony");
+}
+
+/* static */
+bool
 Navigator::HasCameraSupport(JSContext* /* unused */, JSObject* aGlobal)
 {
   nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
@@ -1693,17 +1722,14 @@ Navigator::HasCameraSupport(JSContext* /* unused */, JSObject* aGlobal)
 #ifdef MOZ_B2G_RIL
 /* static */
 bool
-Navigator::HasTelephonySupport(JSContext* /* unused */, JSObject* aGlobal)
-{
-  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
-  return win && Telephony::CheckPermission(win);
-}
-
-/* static */
-bool
 Navigator::HasMobileConnectionSupport(JSContext* /* unused */,
                                       JSObject* aGlobal)
 {
+  // First of all, the general pref has to be turned on.
+  bool enabled = false;
+  Preferences::GetBool("dom.mobileconnection.enabled", &enabled);
+  NS_ENSURE_TRUE(enabled, false);
+
   nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
   return win && (CheckPermission(win, "mobileconnection") ||
                  CheckPermission(win, "mobilenetwork"));
@@ -1714,6 +1740,11 @@ bool
 Navigator::HasCellBroadcastSupport(JSContext* /* unused */,
                                    JSObject* aGlobal)
 {
+  // First of all, the general pref has to be turned on.
+  bool enabled = false;
+  Preferences::GetBool("dom.cellbroadcast.enabled", &enabled);
+  NS_ENSURE_TRUE(enabled, false);
+
   nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
   return win && CheckPermission(win, "cellbroadcast");
 }
@@ -1723,6 +1754,11 @@ bool
 Navigator::HasVoicemailSupport(JSContext* /* unused */,
                                JSObject* aGlobal)
 {
+  // First of all, the general pref has to be turned on.
+  bool enabled = false;
+  Preferences::GetBool("dom.voicemail.enabled", &enabled);
+  NS_ENSURE_TRUE(enabled, false);
+
   nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
   return win && CheckPermission(win, "voicemail");
 }
@@ -1732,6 +1768,11 @@ bool
 Navigator::HasIccManagerSupport(JSContext* /* unused */,
                                 JSObject* aGlobal)
 {
+  // First of all, the general pref has to be turned on.
+  bool enabled = false;
+  Preferences::GetBool("dom.icc.enabled", &enabled);
+  NS_ENSURE_TRUE(enabled, false);
+
   nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
   return win && CheckPermission(win, "mobileconnection");
 }
@@ -1756,6 +1797,18 @@ Navigator::HasFMRadioSupport(JSContext* /* unused */, JSObject* aGlobal)
   return win && CheckPermission(win, "fmradio");
 }
 #endif // MOZ_B2G_FM
+
+#ifdef MOZ_NFC
+/* static */
+bool
+Navigator::HasNfcSupport(JSContext* /* unused */, JSObject* aGlobal)
+{
+  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
+  return win && (CheckPermission(win, "nfc-read") ||
+                 CheckPermission(win, "nfc-write"));
+}
+#endif // MOZ_NFC
+
 
 #ifdef MOZ_TIME_MANAGER
 /* static */
@@ -1784,6 +1837,16 @@ bool Navigator::HasPushNotificationsSupport(JSContext* /* unused */,
 {
   nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
   return win && Preferences::GetBool("services.push.enabled", false) && CheckPermission(win, "push");
+}
+
+/* static */
+bool Navigator::HasInputMethodSupport(JSContext* /* unused */,
+                                      JSObject* aGlobal)
+{
+  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
+  return Preferences::GetBool("dom.mozInputMethod.testing", false) ||
+         (Preferences::GetBool("dom.mozInputMethod.enabled", false) &&
+          win && CheckPermission(win, "input"));
 }
 
 /* static */
@@ -1903,6 +1966,7 @@ NS_GetNavigatorAppName(nsAString& aAppName)
 
     if (override) {
       aAppName = override;
+      return;
     }
   }
 

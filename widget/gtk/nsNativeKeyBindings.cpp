@@ -4,17 +4,22 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/TextEvents.h"
 #include "mozilla/Util.h"
 
 #include "nsNativeKeyBindings.h"
 #include "nsString.h"
 #include "nsMemory.h"
 #include "nsGtkKeyUtils.h"
-#include "nsGUIEvent.h"
 
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
 #include <gdk/gdk.h>
+
+// X.h defines KeyPress
+#ifdef KeyPress
+#undef KeyPress
+#endif
 
 using namespace mozilla;
 using namespace mozilla::widget;
@@ -236,14 +241,14 @@ nsNativeKeyBindings::~nsNativeKeyBindings()
 NS_IMPL_ISUPPORTS1(nsNativeKeyBindings, nsINativeKeyBindings)
 
 bool
-nsNativeKeyBindings::KeyDown(const nsKeyEvent& aEvent,
+nsNativeKeyBindings::KeyDown(const WidgetKeyboardEvent& aEvent,
                              DoCommandCallback aCallback, void *aCallbackData)
 {
   return false;
 }
 
 bool
-nsNativeKeyBindings::KeyPress(const nsKeyEvent& aEvent,
+nsNativeKeyBindings::KeyPress(const WidgetKeyboardEvent& aEvent,
                               DoCommandCallback aCallback, void *aCallbackData)
 {
   // If the native key event is set, it must be synthesized for tests.
@@ -297,7 +302,7 @@ Code, which should be used after fixing GNOME bug 162726:
 }
 
 bool
-nsNativeKeyBindings::KeyPressInternal(const nsKeyEvent& aEvent,
+nsNativeKeyBindings::KeyPressInternal(const WidgetKeyboardEvent& aEvent,
                                       DoCommandCallback aCallback,
                                       void *aCallbackData,
                                       guint aKeyval)
@@ -324,7 +329,7 @@ nsNativeKeyBindings::KeyPressInternal(const nsKeyEvent& aEvent,
 }
 
 bool
-nsNativeKeyBindings::KeyUp(const nsKeyEvent& aEvent,
+nsNativeKeyBindings::KeyUp(const WidgetKeyboardEvent& aEvent,
                            DoCommandCallback aCallback, void *aCallbackData)
 {
   return false;

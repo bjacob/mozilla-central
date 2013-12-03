@@ -10,7 +10,7 @@ SpecialPowers.addPermission("mobileconnection", true, document);
 let ifr = document.createElement("iframe");
 let mobileConnection;
 ifr.onload = function() {
-  mobileConnection = ifr.contentWindow.navigator.mozMobileConnection;
+  mobileConnection = ifr.contentWindow.navigator.mozMobileConnections[0];
 
   tasks.run();
 };
@@ -76,8 +76,27 @@ tasks.push(function testGettingIMEI() {
     tasks.next();
   }
   request.onerror = function onerror() {
-    ok(false, "request success");
+    ok(false, "request should not error");
     tasks.abort();
+  };
+});
+
+tasks.push(function testInvalidMMICode(){
+  log("Test invalid MMI code ...");
+
+  let request = mobileConnection.sendMMI("InvalidMMICode");
+  ok(request instanceof DOMRequest,
+     "request is instanceof " + request.constructor);
+
+  request.onsuccess = function onsuccess(event) {
+    ok(false, "request should not success");
+    tasks.abort();
+  };
+
+  request.onerror = function onerror() {
+    ok(true, "request error");
+    is(request.error.name, "emMmiError", "MMI error name");
+    tasks.next();
   };
 });
 

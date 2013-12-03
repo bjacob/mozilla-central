@@ -208,8 +208,7 @@ nsXBLPrototypeBinding::SetBindingElement(nsIContent* aElement)
                             nsGkAtoms::_false, eCaseMatters))
     mInheritStyle = false;
 
-  mChromeOnlyContent = IsChrome() &&
-                       mBinding->AttrValueIs(kNameSpaceID_None,
+  mChromeOnlyContent = mBinding->AttrValueIs(kNameSpaceID_None,
                                              nsGkAtoms::chromeOnlyContent,
                                              nsGkAtoms::_true, eCaseMatters);
 }
@@ -595,6 +594,16 @@ nsXBLPrototypeBinding::GetRuleProcessor()
   }
   
   return nullptr;
+}
+
+nsXBLPrototypeResources::sheet_array_type*
+nsXBLPrototypeBinding::GetOrCreateStyleSheets()
+{
+  if (!mResources) {
+    mResources = new nsXBLPrototypeResources(this);
+  }
+
+  return &mResources->mStyleSheetList;
 }
 
 nsXBLPrototypeResources::sheet_array_type*
@@ -999,8 +1008,38 @@ nsXBLPrototypeBinding::Read(nsIObjectInputStream* aStream,
     previousHandler = handler;
   } while (1);
 
+  if (mBinding) {
+    while (true) {
+      XBLBindingSerializeDetails type;
+      rv = aStream->Read8(&type);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      if (type != XBLBinding_Serialize_Attribute) {
+        break;
+      }
+
+      int32_t attrNamespace;
+      rv = ReadNamespace(aStream, attrNamespace);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      nsAutoString attrPrefix, attrName, attrValue;
+      rv = aStream->ReadString(attrPrefix);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = aStream->ReadString(attrName);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = aStream->ReadString(attrValue);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      nsCOMPtr<nsIAtom> atomPrefix = do_GetAtom(attrPrefix);
+      nsCOMPtr<nsIAtom> atomName = do_GetAtom(attrName);
+      mBinding->SetAttr(attrNamespace, atomName, atomPrefix, attrValue, false);
+    }
+  }
+
   // Finally, read in the resources.
-  do {
+  while (true) {
     XBLBindingSerializeDetails type;
     rv = aStream->Read8(&type);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -1017,7 +1056,7 @@ nsXBLPrototypeBinding::Read(nsIObjectInputStream* aStream,
 
     AddResource(type == XBLBinding_Serialize_Stylesheet ? nsGkAtoms::stylesheet :
                                                           nsGkAtoms::image, src);
-  } while (1);
+  }
 
   if (isFirstBinding) {
     aDocInfo->SetFirstPrototypeBinding(this);
@@ -1122,6 +1161,39 @@ nsXBLPrototypeBinding::Write(nsIObjectOutputStream* aStream)
     NS_ENSURE_SUCCESS(rv, rv);
 
     handler = handler->GetNextHandler();
+  }
+
+  aStream->Write8(XBLBinding_Serialize_NoMoreItems);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  if (mBinding) {
+    uint32_t attributes = mBinding->GetAttrCount();
+    nsAutoString attrValue;
+    for (uint32_t i = 0; i < attributes; ++i) {
+      const nsAttrName* attr = mBinding->GetAttrNameAt(i);
+      nsDependentAtomString attrName = attr->LocalName();
+      mBinding->GetAttr(attr->NamespaceID(), attr->LocalName(), attrValue);
+      rv = aStream->Write8(XBLBinding_Serialize_Attribute);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = WriteNamespace(aStream, attr->NamespaceID());
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      nsIAtom* prefix = attr->GetPrefix();
+      nsAutoString prefixString;
+      if (prefix) {
+        prefix->ToString(prefixString);
+      }
+
+      rv = aStream->WriteWStringZ(prefixString.get());
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = aStream->WriteWStringZ(attrName.get());
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = aStream->WriteWStringZ(attrValue.get());
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
   }
 
   aStream->Write8(XBLBinding_Serialize_NoMoreItems);
@@ -1260,7 +1332,9 @@ nsXBLPrototypeBinding::ReadContentNode(nsIObjectInputStream* aStream,
   }
   else {
 #endif
-    NS_NewElement(getter_AddRefs(content), nodeInfo.forget(), NOT_FROM_PARSER);
+    nsCOMPtr<Element> element;
+    NS_NewElement(getter_AddRefs(element), nodeInfo.forget(), NOT_FROM_PARSER);
+    content = element;
 
     for (uint32_t i = 0; i < attrCount; i++) {
       rv = ReadNamespace(aStream, namespaceID);

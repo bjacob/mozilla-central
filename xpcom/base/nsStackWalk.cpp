@@ -16,7 +16,7 @@
 using namespace mozilla;
 
 // The presence of this address is the stack must stop the stack walk. If
-// there is no such address, the structure will be {NULL, true}.
+// there is no such address, the structure will be {nullptr, true}.
 struct CriticalAddress {
   void* mAddr;
   bool mInit;
@@ -60,7 +60,7 @@ stack_callback(void *pc, void *sp, void *closure)
   // correct one is the first that we find on our way up, so the
   // following check for gCriticalAddress.mAddr is critical.
   if (gCriticalAddress.mAddr || dladdr(pc, &info) == 0  ||
-      info.dli_sname == NULL || strcmp(info.dli_sname, name) != 0)
+      info.dli_sname == nullptr || strcmp(info.dli_sname, name) != 0)
     return;
   gCriticalAddress.mAddr = pc;
 }
@@ -140,7 +140,7 @@ StackWalkInitCriticalAddress()
   // On Lion, malloc is no longer called from pthread_cond_*wait*. This prevents
   // us from finding the address, but that is fine, since with no call to malloc
   // there is no critical address.
-  MOZ_ASSERT(OnLionOrLater() || gCriticalAddress.mAddr != NULL);
+  MOZ_ASSERT(OnLionOrLater() || gCriticalAddress.mAddr != nullptr);
   MOZ_ASSERT(r == ETIMEDOUT);
   r = pthread_mutex_unlock(&mutex);
   MOZ_ASSERT(r == 0);
@@ -200,7 +200,7 @@ extern HANDLE hStackWalkMutex;
 
 bool EnsureSymInitialized();
 
-bool EnsureImageHlpInitialized();
+bool EnsureWalkThreadReady();
 
 struct WalkStackData {
   uint32_t skipFrames;
@@ -237,12 +237,12 @@ void PrintError(const char *prefix)
     DWORD lastErr = GetLastError();
     FormatMessageA(
       FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-      NULL,
+      nullptr,
       lastErr,
       MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), // Default language
       (LPSTR) &lpMsgBuf,
       0,
-      NULL
+      nullptr
     );
     fprintf(stderr, "### ERROR: %s: %s",
                     prefix, lpMsgBuf ? lpMsgBuf : "(null)\n");
@@ -251,38 +251,59 @@ void PrintError(const char *prefix)
 }
 
 bool
-EnsureImageHlpInitialized()
+EnsureWalkThreadReady()
 {
-    static bool gInitialized = false;
+    static bool walkThreadReady = false;
+    static HANDLE stackWalkThread = nullptr;
+    static HANDLE readyEvent = nullptr;
 
-    if (gInitialized)
-        return gInitialized;
+    if (walkThreadReady)
+        return walkThreadReady;
 
-    // Hope that our first call doesn't happen during static
-    // initialization.  If it does, this CreateThread call won't
-    // actually start the thread until after the static initialization
-    // is done, which means we'll deadlock while waiting for it to
-    // process a stack.
-    HANDLE readyEvent = ::CreateEvent(NULL, FALSE /* auto-reset*/,
-                            FALSE /* initially non-signaled */, NULL);
-    unsigned int threadID;
-    HANDLE hStackWalkThread = (HANDLE)
-      _beginthreadex(NULL, 0, WalkStackThread, (void*)readyEvent,
-                     0, &threadID);
-    gStackWalkThread = threadID;
-    if (hStackWalkThread == NULL) {
-        PrintError("CreateThread");
+    if (stackWalkThread == nullptr) {
+        readyEvent = ::CreateEvent(nullptr, FALSE /* auto-reset*/,
+                                   FALSE /* initially non-signaled */,
+                                   nullptr);
+        if (readyEvent == nullptr) {
+            PrintError("CreateEvent");
+            return false;
+        }
+
+        unsigned int threadID;
+        stackWalkThread = (HANDLE)
+            _beginthreadex(nullptr, 0, WalkStackThread, (void*)readyEvent,
+                           0, &threadID);
+        if (stackWalkThread == nullptr) {
+            PrintError("CreateThread");
+            ::CloseHandle(readyEvent);
+            readyEvent = nullptr;
+            return false;
+        }
+        gStackWalkThread = threadID;
+        ::CloseHandle(stackWalkThread);
+    }
+
+    MOZ_ASSERT((stackWalkThread != nullptr && readyEvent != nullptr) ||
+               (stackWalkThread == nullptr && readyEvent == nullptr));
+
+    // The thread was created. Try to wait an arbitrary amount of time (1 second
+    // should be enough) for its event loop to start before posting events to it.
+    DWORD waitRet = ::WaitForSingleObject(readyEvent, 1000);
+    if (waitRet == WAIT_TIMEOUT) {
+        // We get a timeout if we're called during static initialization because
+        // the thread will only start executing after we return so it couldn't
+        // have signalled the event. If that is the case, give up for now and
+        // try again next time we're called.
         return false;
     }
-    ::CloseHandle(hStackWalkThread);
-
-    // Wait for the thread's event loop to start before posting events to it.
-    ::WaitForSingleObject(readyEvent, INFINITE);
     ::CloseHandle(readyEvent);
+    stackWalkThread = nullptr;
+    readyEvent = nullptr;
+
 
     ::InitializeCriticalSection(&gDbgHelpCS);
 
-    return gInitialized = true;
+    return walkThreadReady = true;
 }
 
 void
@@ -356,7 +377,7 @@ WalkStackMain64(struct WalkStackData* data)
           myThread,
           &frame64,
           &context,
-          NULL,
+          nullptr,
           SymFunctionTableAccess64, // function table access routine
           SymGetModuleBase64,       // module base routine
           0
@@ -408,7 +429,7 @@ WalkStackThread(void* aData)
 
     // Call PeekMessage to force creation of a message queue so that
     // other threads can safely post events to us.
-    ::PeekMessage(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
+    ::PeekMessage(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 
     // and tell the thread that created us that we're ready.
     HANDLE readyEvent = (HANDLE)aData;
@@ -466,12 +487,12 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              void *aPlatformData)
 {
     StackWalkInitCriticalAddress();
-    static HANDLE myProcess = NULL;
+    static HANDLE myProcess = nullptr;
     HANDLE myThread;
     DWORD walkerReturn;
     struct WalkStackData data;
 
-    if (!EnsureImageHlpInitialized())
+    if (!EnsureWalkThreadReady())
         return NS_ERROR_FAILURE;
 
     HANDLE targetThread = ::GetCurrentThread();
@@ -540,10 +561,10 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
             WalkStackMain64(&data);
         }
     } else {
-        data.eventStart = ::CreateEvent(NULL, FALSE /* auto-reset*/,
-                              FALSE /* initially non-signaled */, NULL);
-        data.eventEnd = ::CreateEvent(NULL, FALSE /* auto-reset*/,
-                            FALSE /* initially non-signaled */, NULL);
+        data.eventStart = ::CreateEvent(nullptr, FALSE /* auto-reset*/,
+                              FALSE /* initially non-signaled */, nullptr);
+        data.eventEnd = ::CreateEvent(nullptr, FALSE /* auto-reset*/,
+                            FALSE /* initially non-signaled */, nullptr);
 
         ::PostThreadMessage(gStackWalkThread, WM_USER, 0, (LPARAM)&data);
 
@@ -601,7 +622,9 @@ static BOOL CALLBACK callbackEspecial64(
        ? (addr >= aModuleBase && addr <= (aModuleBase + aModuleSize))
        : (addr <= aModuleBase && addr >= (aModuleBase - aModuleSize))
         ) {
-        retval = !!SymLoadModule64(GetCurrentProcess(), NULL, (PSTR)aModuleName, NULL, aModuleBase, aModuleSize);
+        retval = !!SymLoadModule64(GetCurrentProcess(), nullptr,
+                                   (PSTR)aModuleName, nullptr,
+                                   aModuleBase, aModuleSize);
         if (!retval)
             PrintError("SymLoadModule64");
     }
@@ -701,11 +724,11 @@ EnsureSymInitialized()
     if (gInitialized)
         return gInitialized;
 
-    if (!EnsureImageHlpInitialized())
+    if (!EnsureWalkThreadReady())
         return false;
 
     SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-    retStat = SymInitialize(GetCurrentProcess(), NULL, TRUE);
+    retStat = SymInitialize(GetCurrentProcess(), nullptr, TRUE);
     if (!retStat)
         PrintError("SymInitialize");
 
@@ -923,7 +946,7 @@ myinit()
         const char *libdem = "libdemangle.so.1";
 
         /* load libdemangle if we can and need to (only try this once) */
-        if ((handle = dlopen(libdem, RTLD_LAZY)) != NULL) {
+        if ((handle = dlopen(libdem, RTLD_LAZY)) != nullptr) {
             demf = (demf_t *)dlsym(handle,
                            "cplus_demangle"); /*lint !e611 */
                 /*
@@ -979,7 +1002,7 @@ newbucket(void * pc)
     static int index; /* protected by lock in caller */
                      
     ptr->index = index++;
-    ptr->next = NULL;
+    ptr->next = nullptr;
     ptr->pc = pc;    
     return (ptr);    
 }
@@ -1010,7 +1033,7 @@ cswalkstack(struct frame *fp, int (*operate_func)(void *, void *, void *),
 
     while (fp != 0 && fp->fr_savpc != 0) {
 
-        if (operate_func((void *)fp->fr_savpc, NULL, usrarg) != 0)
+        if (operate_func((void *)fp->fr_savpc, nullptr, usrarg) != 0)
             break;
         /*
          * watch out - libthread stacks look funny at the top
@@ -1229,7 +1252,7 @@ unwind_callback (struct _Unwind_Context *context, void *closure)
         return _URC_FOREIGN_EXCEPTION_CAUGHT;
     }
     if (--info->skip < 0) {
-        (*info->callback)(pc, NULL, info->closure);
+        (*info->callback)(pc, nullptr, info->closure);
         info->numFrames++;
         if (info->maxFrames != 0 && info->numFrames == info->maxFrames) {
             // Again, any error code that stops the walk will do.

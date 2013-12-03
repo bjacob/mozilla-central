@@ -385,7 +385,7 @@ OutputPin::RequestAllocator(IMemAllocator* aPreferred,
                         CLSCTX_INPROC_SERVER,
                         IID_IMemAllocator,
                         getter_AddRefs(allocator));
-  if(FAILED(hr) || (allocator == NULL)) {
+  if(FAILED(hr) || (allocator == nullptr)) {
     NS_WARNING("Can't create our own DirectShow allocator.");
     return hr;
   }
@@ -451,7 +451,7 @@ OutputPin::WaitForNext(DWORD aTimeout,
   NS_ASSERTION(aTimeout == 0 || aTimeout == INFINITE,
                "Oops, we don't handle this!");
 
-  *aOutSample = NULL;
+  *aOutSample = nullptr;
   *aOutDwUser = 0;
 
   LONGLONG offset = 0;
@@ -657,7 +657,7 @@ SourceFilter::GetPin(int n)
     NS_ASSERTION(mOutputPin != 0, "GetPin with no pin!");
     return static_cast<BasePin*>(mOutputPin);
   } else {
-    return NULL;
+    return nullptr;
   }
 }
 
@@ -668,73 +668,15 @@ SourceFilter::GetMediaType() const
   return &mMediaType;
 }
 
-static uint32_t
-Read(MediaResource* aResource,
-     const int64_t aOffset,
-     char* aBuffer,
-     const uint32_t aBytesToRead)
-{
-  uint32_t totalBytesRead = 0;
-  while (totalBytesRead < aBytesToRead) {
-    uint32_t bytesRead = 0;
-    nsresult rv = aResource->ReadAt(aOffset + totalBytesRead,
-                                    aBuffer+totalBytesRead,
-                                    aBytesToRead-totalBytesRead,
-                                    &bytesRead);
-    if (NS_FAILED(rv) || bytesRead == 0) {
-      // Error or end of stream?
-      break;
-    }
-    totalBytesRead += bytesRead;
-  }
-  return totalBytesRead;
-}
-
-// Parses the MP3 stream and returns the offset of the first MP3
-// sync frame after the ID3v2 headers. This is used to trim off
-// the ID3v2 headers, as DirectShow can't handle large ID3v2 tags.
-static nsresult
-GetMP3DataOffset(MediaResource* aResource, int64_t* aOutOffset)
-{
-  MP3FrameParser parser;
-  int64_t offset = 0;
-  const uint32_t len = 1024;
-  char buffer[len];
-  do {
-    uint32_t bytesRead = Read(aResource, offset, buffer, len);
-    if (bytesRead == 0) {
-      break;
-    }
-    parser.Parse(buffer, bytesRead, offset);
-    offset += bytesRead;
-  } while (parser.GetMP3Offset() == -1 && parser.IsMP3());
-
-  if (!parser.IsMP3() || parser.GetMP3Offset() == -1) {
-    return NS_ERROR_FAILURE;
-  }
-
-  *aOutOffset = parser.GetMP3Offset();
-  return NS_OK;
-}
-
 nsresult
-SourceFilter::Init(MediaResource* aResource)
+SourceFilter::Init(MediaResource* aResource, int64_t aMP3Offset)
 {
   LOG("SourceFilter::Init()");
-
-  // Get the offset of MP3 data in the stream, and pass that into
-  // the output pin so that the stream that we present to DirectShow
-  // does not contain ID3v2 tags. DirectShow can't properly parse some
-  // streams' ID3v2 tags.
-  int64_t mp3DataOffset = 0;
-  nsresult rv = GetMP3DataOffset(aResource, &mp3DataOffset);
-  NS_ENSURE_SUCCESS(rv, rv);
-  LOG("First MP3 sync/data frame lies at offset %lld", mp3DataOffset);
 
   mOutputPin = new OutputPin(aResource,
                              this,
                              mLock,
-                             mp3DataOffset);
+                             aMP3Offset);
   NS_ENSURE_TRUE(mOutputPin != nullptr, NS_ERROR_FAILURE);
 
   return NS_OK;

@@ -437,12 +437,6 @@ XRE_API(bool,
 XRE_API(void,
         XRE_InstallX11ErrorHandler, ())
 
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
-#define XRE_HAS_DLL_BLOCKLIST
-XRE_API(void,
-        XRE_SetupDllBlocklist, ())
-#endif
-
 XRE_API(void,
         XRE_TelemetryAccumulate, (int aID, uint32_t aSample))
 
@@ -453,7 +447,7 @@ XRE_API(void,
         XRE_InitOmnijar, (nsIFile* greOmni,
                           nsIFile* appOmni))
 XRE_API(void,
-        XRE_DisableWritePoisoning, (void))
+        XRE_StopLateWriteChecks, (void))
 
 #ifdef XP_WIN
 /**
@@ -471,5 +465,8 @@ enum WindowsEnvironmentType {
 XRE_API(WindowsEnvironmentType,
         XRE_GetWindowsEnvironment, ())
 #endif // XP_WIN
+
+XRE_API(int,
+        XRE_XPCShellMain, (int argc, char** argv, char** envp))
 
 #endif // _nsXULAppAPI_h__

@@ -503,6 +503,13 @@ SetTimezone(const nsCString& aTimezoneSpec)
   PROXY_IF_SANDBOXED(SetTimezone(aTimezoneSpec));
 }
 
+int32_t
+GetTimezoneOffset()
+{
+  AssertMainThread();
+  RETURN_PROXY_IF_SANDBOXED(GetTimezoneOffset(), 0);
+}
+
 nsCString
 GetTimezone()
 {
@@ -850,11 +857,14 @@ SetAlarm(int32_t aSeconds, int32_t aNanoseconds)
 void
 SetProcessPriority(int aPid,
                    ProcessPriority aPriority,
-                   ProcessCPUPriority aCPUPriority)
+                   ProcessCPUPriority aCPUPriority,
+                   uint32_t aBackgroundLRU)
 {
   // n.b. The sandboxed implementation crashes; SetProcessPriority works only
   // from the main process.
-  PROXY_IF_SANDBOXED(SetProcessPriority(aPid, aPriority, aCPUPriority));
+  MOZ_ASSERT(aBackgroundLRU == 0 || aPriority == PROCESS_PRIORITY_BACKGROUND);
+  PROXY_IF_SANDBOXED(SetProcessPriority(aPid, aPriority, aCPUPriority,
+                                        aBackgroundLRU));
 }
 
 // From HalTypes.h.
@@ -868,6 +878,8 @@ ProcessPriorityToString(ProcessPriority aPriority)
     return "FOREGROUND_HIGH";
   case PROCESS_PRIORITY_FOREGROUND:
     return "FOREGROUND";
+  case PROCESS_PRIORITY_FOREGROUND_KEYBOARD:
+    return "FOREGROUND_KEYBOARD";
   case PROCESS_PRIORITY_BACKGROUND_PERCEIVABLE:
     return "BACKGROUND_PERCEIVABLE";
   case PROCESS_PRIORITY_BACKGROUND_HOMESCREEN:
@@ -913,6 +925,13 @@ ProcessPriorityToString(ProcessPriority aPriority,
     }
     if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
       return "FOREGROUND:CPU_LOW";
+    }
+  case PROCESS_PRIORITY_FOREGROUND_KEYBOARD:
+    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
+      return "FOREGROUND_KEYBOARD:CPU_NORMAL";
+    }
+    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
+      return "FOREGROUND_KEYBOARD:CPU_LOW";
     }
   case PROCESS_PRIORITY_BACKGROUND_PERCEIVABLE:
     if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
@@ -1175,6 +1194,13 @@ StopDiskSpaceWatcher()
   AssertMainThread();
   PROXY_IF_SANDBOXED(StopDiskSpaceWatcher());
 }
+
+uint32_t
+GetTotalSystemMemory()
+{
+  return hal_impl::GetTotalSystemMemory();
+}
+
 
 } // namespace hal
 } // namespace mozilla

@@ -5,6 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsIMEStateManager.h"
+
+#include "HTMLInputElement.h"
 #include "nsCOMPtr.h"
 #include "nsIPresShell.h"
 #include "nsISupports.h"
@@ -29,12 +31,13 @@
 #include "nsIForm.h"
 #include "mozilla/dom/HTMLFormElement.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/TextEvents.h"
 #include "TextComposition.h"
 #include "mozilla/Preferences.h"
 #include "nsAsyncDOMEvent.h"
-#include "nsGUIEvent.h"
 
 using namespace mozilla;
+using namespace mozilla::dom;
 using namespace mozilla::widget;
 
 // nsTextStateManager notifies widget of any text and selection changes
@@ -457,8 +460,22 @@ nsIMEStateManager::SetIMEState(const IMEState &aState,
       (aContent->Tag() == nsGkAtoms::input ||
        aContent->Tag() == nsGkAtoms::textarea)) {
     if (aContent->Tag() != nsGkAtoms::textarea) {
-      aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type,
-                        context.mHTMLInputType);
+      // <input type=number> has an anonymous <input type=text> descendant
+      // that gets focus whenever anyone tries to focus the number control. We
+      // need to check if aContent is one of those anonymous text controls and,
+      // if so, use the number control instead:
+      nsIContent* content = aContent;
+      HTMLInputElement* inputElement =
+        HTMLInputElement::FromContentOrNull(aContent);
+      if (inputElement) {
+        HTMLInputElement* ownerNumberControl =
+          inputElement->GetOwnerNumberControl();
+        if (ownerNumberControl) {
+          content = ownerNumberControl; // an <input type=number>
+        }
+      }
+      content->GetAttr(kNameSpaceID_None, nsGkAtoms::type,
+                       context.mHTMLInputType);
     } else {
       context.mHTMLInputType.Assign(nsGkAtoms::textarea->GetUTF16String());
     }
@@ -483,7 +500,7 @@ nsIMEStateManager::SetIMEState(const IMEState &aState,
           willSubmit = true;
         // is this an html form and does it only have a single text input element?
         } else if (formElement && formElement->Tag() == nsGkAtoms::form && formElement->IsHTML() &&
-                   static_cast<dom::HTMLFormElement*>(formElement)->HasSingleTextControl()) {
+                   !static_cast<dom::HTMLFormElement*>(formElement)->ImplicitSubmissionIsDisabled()) {
           willSubmit = true;
         }
       }
@@ -522,7 +539,7 @@ nsIMEStateManager::EnsureTextCompositionArray()
 void
 nsIMEStateManager::DispatchCompositionEvent(nsINode* aEventTargetNode,
                                             nsPresContext* aPresContext,
-                                            nsEvent* aEvent,
+                                            WidgetEvent* aEvent,
                                             nsEventStatus* aStatus,
                                             nsDispatchingCallback* aCallBack)
 {
@@ -534,7 +551,7 @@ nsIMEStateManager::DispatchCompositionEvent(nsINode* aEventTargetNode,
 
   EnsureTextCompositionArray();
 
-  nsGUIEvent* GUIEvent = static_cast<nsGUIEvent*>(aEvent);
+  WidgetGUIEvent* GUIEvent = aEvent->AsGUIEvent();
 
   TextComposition* composition =
     sTextCompositions->GetCompositionFor(GUIEvent->widget);
@@ -599,7 +616,7 @@ nsIMEStateManager::NotifyIME(NotificationToIME aNotification,
 
       nsEventStatus status = nsEventStatus_eIgnore;
       if (!backup.GetLastData().IsEmpty()) {
-        nsTextEvent textEvent(true, NS_TEXT_TEXT, widget);
+        WidgetTextEvent textEvent(true, NS_TEXT_TEXT, widget);
         textEvent.theText = backup.GetLastData();
         textEvent.mFlags.mIsSynthesizedForTests = true;
         widget->DispatchEvent(&textEvent, status);
@@ -609,7 +626,7 @@ nsIMEStateManager::NotifyIME(NotificationToIME aNotification,
       }
 
       status = nsEventStatus_eIgnore;
-      nsCompositionEvent endEvent(true, NS_COMPOSITION_END, widget);
+      WidgetCompositionEvent endEvent(true, NS_COMPOSITION_END, widget);
       endEvent.data = backup.GetLastData();
       endEvent.mFlags.mIsSynthesizedForTests = true;
       widget->DispatchEvent(&endEvent, status);
@@ -622,7 +639,7 @@ nsIMEStateManager::NotifyIME(NotificationToIME aNotification,
 
       nsEventStatus status = nsEventStatus_eIgnore;
       if (!backup.GetLastData().IsEmpty()) {
-        nsCompositionEvent updateEvent(true, NS_COMPOSITION_UPDATE, widget);
+        WidgetCompositionEvent updateEvent(true, NS_COMPOSITION_UPDATE, widget);
         updateEvent.data = backup.GetLastData();
         updateEvent.mFlags.mIsSynthesizedForTests = true;
         widget->DispatchEvent(&updateEvent, status);
@@ -631,7 +648,7 @@ nsIMEStateManager::NotifyIME(NotificationToIME aNotification,
         }
 
         status = nsEventStatus_eIgnore;
-        nsTextEvent textEvent(true, NS_TEXT_TEXT, widget);
+        WidgetTextEvent textEvent(true, NS_TEXT_TEXT, widget);
         textEvent.theText = backup.GetLastData();
         textEvent.mFlags.mIsSynthesizedForTests = true;
         widget->DispatchEvent(&textEvent, status);
@@ -641,7 +658,7 @@ nsIMEStateManager::NotifyIME(NotificationToIME aNotification,
       }
 
       status = nsEventStatus_eIgnore;
-      nsCompositionEvent endEvent(true, NS_COMPOSITION_END, widget);
+      WidgetCompositionEvent endEvent(true, NS_COMPOSITION_END, widget);
       endEvent.data = backup.GetLastData();
       endEvent.mFlags.mIsSynthesizedForTests = true;
       widget->DispatchEvent(&endEvent, status);

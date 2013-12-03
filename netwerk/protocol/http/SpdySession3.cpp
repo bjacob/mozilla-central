@@ -16,7 +16,7 @@
 #include "SpdyPush3.h"
 #include "SpdySession3.h"
 #include "SpdyStream3.h"
-#include "PSpdyPush3.h"
+#include "PSpdyPush.h"
 
 #include <algorithm>
 
@@ -183,22 +183,6 @@ SpdySession3::LogIO(SpdySession3 *self, SpdyStream3 *stream, const char *label,
     LOG4(("%s", linebuf));
   }
 }
-
-typedef nsresult  (*Control_FX) (SpdySession3 *self);
-static Control_FX sControlFunctions[] =
-{
-  nullptr,
-  SpdySession3::HandleSynStream,
-  SpdySession3::HandleSynReply,
-  SpdySession3::HandleRstStream,
-  SpdySession3::HandleSettings,
-  SpdySession3::HandleNoop,
-  SpdySession3::HandlePing,
-  SpdySession3::HandleGoAway,
-  SpdySession3::HandleHeaders,
-  SpdySession3::HandleWindowUpdate,
-  SpdySession3::HandleCredential
-};
 
 bool
 SpdySession3::RoomForMoreConcurrent()
@@ -988,7 +972,7 @@ SpdySession3::HandleSynStream(SpdySession3 *self)
     self->mShouldGoAway = true;
 
   bool resetStream = true;
-  SpdyPushCache3 *cache = nullptr;
+  SpdyPushCache *cache = nullptr;
 
   if (!(flags & kFlag_Data_UNI)) {
     // pushed streams require UNIDIRECTIONAL flag
@@ -1017,10 +1001,10 @@ SpdySession3::HandleSynStream(SpdySession3 *self)
   } else {
     nsILoadGroupConnectionInfo *loadGroupCI = associatedStream->LoadGroupConnectionInfo();
     if (loadGroupCI) {
-      loadGroupCI->GetSpdyPushCache3(&cache);
+      loadGroupCI->GetSpdyPushCache(&cache);
       if (!cache) {
-        cache = new SpdyPushCache3();
-        if (!cache || NS_FAILED(loadGroupCI->SetSpdyPushCache3(cache))) {
+        cache = new SpdyPushCache();
+        if (!cache || NS_FAILED(loadGroupCI->SetSpdyPushCache(cache))) {
           delete cache;
           cache = nullptr;
         }
@@ -1101,7 +1085,7 @@ SpdySession3::HandleSynStream(SpdySession3 *self)
     return NS_OK;
   }
 
-  if (!cache->RegisterPushedStream(key, pushedStream)) {
+  if (!cache->RegisterPushedStreamSpdy3(key, pushedStream)) {
     LOG(("SpdySession3::HandleSynStream registerPushedStream Failed\n"));
     self->CleanupStream(pushedStream, NS_ERROR_FAILURE, RST_INVALID_STREAM);
     self->ResetDownstreamState();
@@ -1622,20 +1606,7 @@ SpdySession3::HandleWindowUpdate(SpdySession3 *self)
     return NS_OK;
   }
 
-  int64_t oldRemoteWindow = self->mInputFrameDataStream->RemoteWindow();
   self->mInputFrameDataStream->UpdateRemoteWindow(delta);
-
-  LOG3(("SpdySession3::HandleWindowUpdate %p stream 0x%X window "
-        "%d increased by %d.\n", self, streamID, oldRemoteWindow, delta));
-
-  // If the stream had a <=0 window, that has now opened
-  // schedule it for writing again
-  if (oldRemoteWindow <= 0 &&
-      self->mInputFrameDataStream->RemoteWindow() > 0) {
-    self->mReadyForWrite.Push(self->mInputFrameDataStream);
-    self->SetWriteCallbacks();
-  }
-
   self->ResetDownstreamState();
   return NS_OK;
 }
@@ -1825,6 +1796,22 @@ SpdySession3::WriteSegments(nsAHttpSegmentWriter *writer,
                            uint32_t count,
                            uint32_t *countWritten)
 {
+  typedef nsresult  (*Control_FX) (SpdySession3 *self);
+  static const Control_FX sControlFunctions[] =
+  {
+    nullptr,
+    SpdySession3::HandleSynStream,
+    SpdySession3::HandleSynReply,
+    SpdySession3::HandleRstStream,
+    SpdySession3::HandleSettings,
+    SpdySession3::HandleNoop,
+    SpdySession3::HandlePing,
+    SpdySession3::HandleGoAway,
+    SpdySession3::HandleHeaders,
+    SpdySession3::HandleWindowUpdate,
+    SpdySession3::HandleCredential
+  };
+
   MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
 
   nsresult rv;
@@ -2589,6 +2576,11 @@ SpdySession3::Caps()
 {
   MOZ_ASSERT(false, "SpdySession3::Caps()");
   return 0;
+}
+
+void
+SpdySession3::SetDNSWasRefreshed()
+{
 }
 
 uint64_t

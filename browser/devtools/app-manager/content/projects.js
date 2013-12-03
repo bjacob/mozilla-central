@@ -14,9 +14,13 @@ const {AppProjects} = require("devtools/app-manager/app-projects");
 const {AppValidator} = require("devtools/app-manager/app-validator");
 const {Services} = Cu.import("resource://gre/modules/Services.jsm");
 const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm");
-const {installHosted, installPackaged, getTargetForApp} = require("devtools/app-actor-front");
+const {installHosted, installPackaged, getTargetForApp,
+       reloadApp, launchApp, closeApp} = require("devtools/app-actor-front");
+const {EventEmitter} = Cu.import("resource:///modules/devtools/shared/event-emitter.js");
 
 const promise = require("sdk/core/promise");
+
+const MANIFEST_EDITOR_ENABLED = "devtools.appmanager.manifestEditor.enabled";
 
 window.addEventListener("message", function(event) {
   try {
@@ -32,22 +36,40 @@ window.addEventListener("message", function(event) {
       }
     }
   } catch(e) {}
-}, false);
+});
+
+window.addEventListener("unload", function onUnload() {
+  window.removeEventListener("unload", onUnload);
+  UI.destroy();
+});
 
 let UI = {
+  isReady: false,
+
   onload: function() {
+    if (Services.prefs.getBoolPref(MANIFEST_EDITOR_ENABLED)) {
+      document.querySelector("#lense").setAttribute("manifest-editable", "");
+    }
+
     this.template = new Template(document.body, AppProjects.store, Utils.l10n);
     this.template.start();
 
-    AppProjects.store.on("set", (event,path,value) => {
-      if (path == "projects") {
-        AppProjects.store.object.projects.forEach(UI.validate);
-      }
+    AppProjects.load().then(() => {
+      AppProjects.store.object.projects.forEach(UI.validate);
+      this.isReady = true;
+      this.emit("ready");
     });
   },
 
+  destroy: function() {
+    if (this.connection) {
+      this.connection.off(Connection.Events.STATUS_CHANGED, this._onConnectionStatusChange);
+    }
+    this.template.destroy();
+  },
+
   onNewConnection: function() {
-    this.connection.on(Connection.Events.STATUS_CHANGED, () => this._onConnectionStatusChange());
+    this.connection.on(Connection.Events.STATUS_CHANGED, this._onConnectionStatusChange);
     this._onConnectionStatusChange();
   },
 
@@ -63,6 +85,8 @@ let UI = {
     }
   },
 
+  get connected() { return !!this.listTabsResponse; },
+
   _selectFolder: function() {
     let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
     fp.init(window, Utils.l10n("project.filePickerTitle"), Ci.nsIFilePicker.modeGetFolder);
@@ -72,25 +96,31 @@ let UI = {
     return null;
   },
 
-  addPackaged: function() {
-    let folder = this._selectFolder();
+  addPackaged: function(folder) {
+    if (!folder) {
+      folder = this._selectFolder();
+    }
     if (!folder)
       return;
-    AppProjects.addPackaged(folder)
-               .then(function (project) {
-                 UI.validate(project);
-                 UI.selectProject(project.location);
-               });
+    return AppProjects.addPackaged(folder)
+                      .then(function (project) {
+                        UI.validate(project);
+                        UI.selectProject(project.location);
+                      });
   },
 
   addHosted: function() {
+    let form = document.querySelector("#new-hosted-project-wrapper");
+    if (!form.checkValidity())
+      return;
+
     let urlInput = document.querySelector("#url-input");
     let manifestURL = urlInput.value;
-    AppProjects.addHosted(manifestURL)
-               .then(function (project) {
-                 UI.validate(project);
-                 UI.selectProject(project.location);
-               });
+    return AppProjects.addHosted(manifestURL)
+                      .then(function (project) {
+                        UI.validate(project);
+                        UI.selectProject(project.location);
+                      });
   },
 
   _getLocalIconURL: function(project, manifest) {
@@ -119,7 +149,6 @@ let UI = {
     return validation.validate()
       .then(function () {
         if (validation.manifest) {
-          project.name = validation.manifest.name;
           project.icon = UI._getLocalIconURL(project, validation.manifest);
           project.manifest = validation.manifest;
         }
@@ -144,6 +173,10 @@ let UI = {
           project.errorsCount = 0;
         }
 
+        if (project.warningsCount && project.errorsCount) {
+          project.validationStatus = "error warning";
+        }
+
       });
 
   },
@@ -151,24 +184,50 @@ let UI = {
   update: function(button, location) {
     button.disabled = true;
     let project = AppProjects.get(location);
+
+    // Update the manifest editor view, in case the manifest was modified
+    // outside of the app manager.  This can happen in parallel with the other
+    // steps.
+    this._showManifestEditor(project);
+
     this.validate(project)
         .then(() => {
            // Install the app to the device if we are connected,
            // and there is no error
-           if (project.errorsCount == 0 && this.listTabsResponse) {
+           if (project.errorsCount == 0 && this.connected) {
              return this.install(project);
            }
          })
-        .then(
-         () => {
+        .then(() => {
            button.disabled = false;
-         },
-         (res) => {
-           button.disabled = false;
-           let message = res.error + ": " + res.message;
-           alert(message);
-           this.connection.log(message);
-         });
+           // Finally try to reload the app if it is already opened
+           if (this.connected) {
+             this.reload(project);
+           }
+        },
+        (res) => {
+          button.disabled = false;
+          let message = res.error + ": " + res.message;
+          alert(message);
+          this.connection.log(message);
+        });
+  },
+
+  saveManifest: function(button) {
+    button.disabled = true;
+    this.manifestEditor.save().then(() => button.disabled = false);
+  },
+
+  reload: function (project) {
+    if (!this.connected) {
+      return promise.reject();
+    }
+    return reloadApp(this.connection.client,
+              this.listTabsResponse.webappsActor,
+              this._getProjectManifestURL(project)).
+      then(() => {
+        this.connection.log("App reloaded");
+      });
   },
 
   remove: function(location, event) {
@@ -210,9 +269,20 @@ let UI = {
   },
 
   install: function(project) {
-    let install;
+    if (!this.connected) {
+      return promise.reject();
+    }
+    this.connection.log("Installing the " + project.manifest.name + " app...");
+    let installPromise;
     if (project.type == "packaged") {
-      install = installPackaged(this.connection.client, this.listTabsResponse.webappsActor, project.location, project.packagedAppOrigin);
+      installPromise = installPackaged(this.connection.client, this.listTabsResponse.webappsActor, project.location, project.packagedAppOrigin)
+        .then(({ appId }) => {
+          // If the packaged app specified a custom origin override,
+          // we need to update the local project origin
+          project.packagedAppOrigin = appId;
+          // And ensure the indexed db on disk is also updated
+          AppProjects.update(project);
+        });
     } else {
       let manifestURLObject = Services.io.newURI(project.location, null, null);
       let origin = Services.io.newURI(manifestURLObject.prePath, null, null);
@@ -221,42 +291,43 @@ let UI = {
         origin: origin.spec,
         manifestURL: project.location
       };
-      install = installHosted(this.connection.client, this.listTabsResponse.webappsActor, appId, metadata, project.manifest);
+      installPromise = installHosted(this.connection.client, this.listTabsResponse.webappsActor, appId, metadata, project.manifest);
     }
-    return install;
+
+    installPromise.then(() => {
+      this.connection.log("Install completed.");
+    }, () => {
+      this.connection.log("Install failed.");
+    });
+
+    return installPromise;
   },
 
   start: function(project) {
-    let deferred = promise.defer();
-    let request = {
-      to: this.listTabsResponse.webappsActor,
-      type: "launch",
-      manifestURL: this._getProjectManifestURL(project)
-    };
-    this.connection.client.request(request, (res) => {
-      if (res.error)
-        deferred.reject(res.error);
-      else
-        deferred.resolve(res);
-    });
-    return deferred.promise;
+    if (!this.connected) {
+      return promise.reject();
+    }
+    let manifestURL = this._getProjectManifestURL(project);
+    return launchApp(this.connection.client,
+                     this.listTabsResponse.webappsActor,
+                     manifestURL);
   },
 
   stop: function(location) {
+    if (!this.connected) {
+      return promise.reject();
+    }
     let project = AppProjects.get(location);
-    let deferred = promise.defer();
-    let request = {
-      to: this.listTabsResponse.webappsActor,
-      type: "close",
-      manifestURL: this._getProjectManifestURL(project)
-    };
-    this.connection.client.request(request, (res) => {
-      promive.resolve(res);
-    });
-    return deferred.promise;
+    let manifestURL = this._getProjectManifestURL(project);
+    return closeApp(this.connection.client,
+                    this.listTabsResponse.webappsActor,
+                    manifestURL);
   },
 
   debug: function(button, location) {
+    if (!this.connected) {
+      return promise.reject();
+    }
     button.disabled = true;
     let project = AppProjects.get(location);
 
@@ -297,33 +368,24 @@ let UI = {
       loop(0);
       return deferred.promise;
     };
-    let onTargetReady = (target) => {
-      // Finally, when it's finally opened, display the toolbox
-      let deferred = promise.defer();
-      gDevTools.showToolbox(target,
-                            null,
-                            devtools.Toolbox.HostType.WINDOW).then(toolbox => {
-        this.connection.once(Connection.Events.DISCONNECTED, () => {
-          toolbox.destroy();
-        });
-        deferred.resolve(toolbox);
-      });
-      return deferred.promise;
-    };
 
     // First try to open the app
     this.start(project)
         .then(null, onFailedToStart)
         .then(onStarted)
-        .then(onTargetReady)
+        .then((target) =>
+          top.UI.openAndShowToolboxForTarget(target,
+                                             project.manifest.name,
+                                             project.icon))
         .then(() => {
            // And only when the toolbox is opened, release the button
            button.disabled = false;
          },
-         (msg) => {
+         (err) => {
            button.disabled = false;
-           alert(msg);
-           this.connection.log(msg);
+           let message = err.error ? err.error + ": " + err.message : String(err);
+           alert(message);
+           this.connection.log(message);
          });
   },
 
@@ -368,5 +430,23 @@ let UI = {
     let lense = document.querySelector("#lense");
     lense.setAttribute("template-for", template);
     this.template._processFor(lense);
+
+    let project = projects[idx];
+    this._showManifestEditor(project).then(() => this.emit("project-selected"));
   },
-}
+
+  _showManifestEditor: function(project) {
+    if (this.manifestEditor) {
+      this.manifestEditor.destroy();
+    }
+    let editorContainer = document.querySelector("#lense .manifest-editor");
+    this.manifestEditor = new ManifestEditor(project);
+    return this.manifestEditor.show(editorContainer);
+  }
+};
+
+// This must be bound immediately, as it might be used via the message listener
+// before UI.onload() has been called.
+UI._onConnectionStatusChange = UI._onConnectionStatusChange.bind(UI);
+
+EventEmitter.decorate(UI);

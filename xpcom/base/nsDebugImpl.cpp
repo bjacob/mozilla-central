@@ -77,8 +77,7 @@ Break(const char *aMsg);
 
 using namespace mozilla;
 
-static bool sIsMultiprocess = false;
-static const char *sMultiprocessDescription = NULL;
+static const char *sMultiprocessDescription = nullptr;
 
 static Atomic<int32_t> gAssertionCount;
 
@@ -163,7 +162,7 @@ nsDebugImpl::GetIsDebuggerAttached(bool* aResult)
   size_t infoSize = sizeof(info);
   memset(&info, 0, infoSize);
 
-  if (sysctl(mib, mibSize, &info, &infoSize, NULL, 0)) {
+  if (sysctl(mib, mibSize, &info, &infoSize, nullptr, 0)) {
     // if the call fails, default to false
     *aResult = false;
     return NS_OK;
@@ -180,7 +179,6 @@ nsDebugImpl::GetIsDebuggerAttached(bool* aResult)
 /* static */ void
 nsDebugImpl::SetMultiprocessMode(const char *aDesc)
 {
-  sIsMultiprocess = true;
   sMultiprocessDescription = aDesc;
 }
 
@@ -315,15 +313,12 @@ NS_DebugBreak(uint32_t aSeverity, const char *aStr, const char *aExpr,
 
 #  define PrintToBuffer(...) PR_sxprintf(StuffFixedBuffer, &buf, __VA_ARGS__)
 
-   // If we're multiprocess, print "[PID]" or "[Desc PID]" at the beginning of
-   // the message.
-   if (sIsMultiprocess) {
-     PrintToBuffer("[");
-     if (sMultiprocessDescription) {
-       PrintToBuffer("%s ", sMultiprocessDescription);
-     }
-     PrintToBuffer("%d] ", base::GetCurrentProcId());
+   // Print "[PID]" or "[Desc PID]" at the beginning of the message.
+   PrintToBuffer("[");
+   if (sMultiprocessDescription) {
+     PrintToBuffer("%s ", sMultiprocessDescription);
    }
+   PrintToBuffer("%d] ", base::GetCurrentProcId());
 
    PrintToBuffer("%s: ", sevString);
 
@@ -355,9 +350,12 @@ NS_DebugBreak(uint32_t aSeverity, const char *aStr, const char *aExpr,
    __android_log_print(ANDROID_LOG_INFO, "Gecko", "%s", buf.buffer);
 #endif
 
-   // Write the message to stderr
-   fprintf(stderr, "%s\n", buf.buffer);
-   fflush(stderr);
+   // Write the message to stderr unless it's a warning and MOZ_IGNORE_WARNINGS
+   // is set.
+   if (!(PR_GetEnv("MOZ_IGNORE_WARNINGS") && aSeverity == NS_DEBUG_WARNING)) {
+     fprintf(stderr, "%s\n", buf.buffer);
+     fflush(stderr);
+   }
 
    switch (aSeverity) {
    case NS_DEBUG_WARNING:
@@ -494,13 +492,11 @@ Break(const char *aMsg)
     wcscpy(msgCopy  , (PRUnichar*)NS_ConvertUTF8toUTF16(aMsg).get());
 
     if(GetModuleFileNameW(GetModuleHandleW(L"xpcom.dll"), (LPWCH)executable, MAX_PATH) &&
-       NULL != (pName = wcsrchr(executable, '\\')) &&
-       NULL != 
-       wcscpy((WCHAR*)
-       pName+1, L"windbgdlg.exe") &&
-       CreateProcessW((LPCWSTR)executable, (LPWSTR)msgCopy, NULL, NULL, false,
-                     DETACHED_PROCESS | NORMAL_PRIORITY_CLASS,
-                     NULL, NULL, &si, &pi)) {
+       nullptr != (pName = wcsrchr(executable, '\\')) &&
+       nullptr != wcscpy((WCHAR*)pName + 1, L"windbgdlg.exe") &&
+       CreateProcessW((LPCWSTR)executable, (LPWSTR)msgCopy, nullptr, nullptr,
+                      false, DETACHED_PROCESS | NORMAL_PRIORITY_CLASS,
+                      nullptr, nullptr, &si, &pi)) {
       WaitForSingleObject(pi.hProcess, INFINITE);
       GetExitCodeProcess(pi.hProcess, &code);
       CloseHandle(pi.hProcess);
@@ -564,7 +560,8 @@ static const nsDebugImpl kImpl;
 nsresult
 nsDebugImpl::Create(nsISupports* outer, const nsIID& aIID, void* *aInstancePtr)
 {
-  NS_ENSURE_NO_AGGREGATION(outer);
+  if (NS_WARN_IF(outer))
+    return NS_ERROR_NO_AGGREGATION;
 
   return const_cast<nsDebugImpl*>(&kImpl)->
     QueryInterface(aIID, aInstancePtr);
@@ -595,5 +592,12 @@ NS_ErrorAccordingToNSPR()
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
+void
+NS_ABORT_OOM(size_t size)
+{
+#ifdef MOZ_CRASHREPORTER
+  CrashReporter::AnnotateOOMAllocationSize(size);
+#endif
+  MOZ_CRASH();
+}
 

@@ -7,7 +7,6 @@
 #include "SmsService.h"
 #include "SmsSegmentInfo.h"
 #include "AndroidBridge.h"
-#include "jsapi.h"
 
 namespace mozilla {
 namespace dom {
@@ -16,9 +15,10 @@ namespace mobilemessage {
 NS_IMPL_ISUPPORTS1(SmsService, nsISmsService)
 
 NS_IMETHODIMP
-SmsService::HasSupport(bool* aHasSupport)
+SmsService::GetSmsDefaultServiceId(uint32_t* aServiceId)
 {
-  *aHasSupport = true;
+  // Android has no official DSDS support.
+  *aServiceId = 0;
   return NS_OK;
 }
 
@@ -37,7 +37,8 @@ SmsService::GetSegmentInfoForText(const nsAString& aText,
 }
 
 NS_IMETHODIMP
-SmsService::Send(const nsAString& aNumber,
+SmsService::Send(uint32_t         aServiceId,
+                 const nsAString& aNumber,
                  const nsAString& aMessage,
                  const bool       aSilent,
                  nsIMobileMessageCallback* aRequest)
@@ -70,6 +71,14 @@ SmsService::RemoveSilentNumber(const nsAString& aNumber)
 {
   NS_NOTYETIMPLEMENTED("Implement me!");
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+SmsService::GetSmscAddress(uint32_t aServiceId,
+                           nsIMobileMessageCallback *aRequest)
+{
+  // TODO: bug 878016 - Android backend: implement getSMSCAddress/setSMSCAddress
+  return NS_OK;
 }
 
 } // namespace mobilemessage

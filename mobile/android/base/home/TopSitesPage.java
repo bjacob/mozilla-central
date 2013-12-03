@@ -15,11 +15,12 @@ import org.mozilla.gecko.db.BrowserContract.Thumbnails;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.BrowserDB.URLColumns;
 import org.mozilla.gecko.db.BrowserDB.TopSitesCursorWrapper;
+import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
 import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.home.HomeListView.HomeContextMenuInfo;
 import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
 import org.mozilla.gecko.home.PinSiteDialog.OnSiteSelectedListener;
-import org.mozilla.gecko.home.TopSitesGridView.OnPinSiteListener;
+import org.mozilla.gecko.home.TopSitesGridView.OnEditPinnedSiteListener;
 import org.mozilla.gecko.home.TopSitesGridView.TopSitesGridContextMenuInfo;
 import org.mozilla.gecko.util.ThreadUtils;
 
@@ -29,9 +30,9 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.net.Uri;
 import android.os.Bundle;
 import android.support.v4.app.FragmentManager;
-import android.support.v4.app.LoaderManager;
 import android.support.v4.app.LoaderManager.LoaderCallbacks;
 import android.support.v4.content.AsyncTaskLoader;
 import android.support.v4.content.Loader;
@@ -47,11 +48,8 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.View.OnTouchListener;
 import android.view.ViewGroup;
-import android.view.ViewStub;
 import android.widget.AdapterView;
-import android.widget.ImageView;
 import android.widget.ListView;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.EnumSet;
@@ -87,9 +85,6 @@ public class TopSitesPage extends HomeFragment {
     // Grid of top sites
     private TopSitesGridView mGrid;
 
-    // Reference to the View to display when there are no results.
-    private View mEmptyView;
-
     // Banner to show snippets.
     private HomeBanner mBanner;
 
@@ -105,8 +100,8 @@ public class TopSitesPage extends HomeFragment {
     // Callback for thumbnail loader
     private ThumbnailsLoaderCallbacks mThumbnailsLoaderCallbacks;
 
-    // Listener for pinning sites
-    private PinSiteListener mPinSiteListener;
+    // Listener for editing pinned sites.
+    private EditPinnedSiteListener mEditPinnedSiteListener;
 
     // On URL open listener
     private OnUrlOpenListener mUrlOpenListener;
@@ -114,21 +109,8 @@ public class TopSitesPage extends HomeFragment {
     // Max number of entries shown in the grid from the cursor.
     private int mMaxGridEntries;
 
-    /**
-     *  Class to hold the bitmap of cached thumbnails/favicons.
-     */
-    public static class Thumbnail {
-        // Thumbnail or favicon.
-        private final boolean isThumbnail;
-
-        // Bitmap of thumbnail/favicon.
-        private final Bitmap bitmap;
-
-        public Thumbnail(Bitmap bitmap, boolean isThumbnail) {
-            this.bitmap = bitmap;
-            this.isThumbnail = isThumbnail;
-        }
-    }
+    // Time in ms until the Gecko thread is reset to normal priority.
+    private static final long PRIORITY_RESET_TIMEOUT = 10000;
 
     public static TopSitesPage newInstance() {
         return new TopSitesPage();
@@ -136,6 +118,21 @@ public class TopSitesPage extends HomeFragment {
 
     public TopSitesPage() {
         mUrlOpenListener = null;
+    }
+
+    private static boolean logDebug = Log.isLoggable(LOGTAG, Log.DEBUG);
+    private static boolean logVerbose = Log.isLoggable(LOGTAG, Log.VERBOSE);
+
+    private static void debug(final String message) {
+        if (logDebug) {
+            Log.d(LOGTAG, message);
+        }
+    }
+
+    private static void trace(final String message) {
+        if (logVerbose) {
+            Log.v(LOGTAG, message);
+        }
     }
 
     @Override
@@ -173,7 +170,7 @@ public class TopSitesPage extends HomeFragment {
 
     @Override
     public void onViewCreated(View view, Bundle savedInstanceState) {
-        mPinSiteListener = new PinSiteListener();
+        mEditPinnedSiteListener = new EditPinnedSiteListener();
 
         mList.setTag(HomePager.LIST_TAG_TOP_SITES);
         mList.setHeaderDividersEnabled(false);
@@ -204,7 +201,7 @@ public class TopSitesPage extends HomeFragment {
         });
 
         mGrid.setOnUrlOpenListener(mUrlOpenListener);
-        mGrid.setOnPinSiteListener(mPinSiteListener);
+        mGrid.setOnEditPinnedSiteListener(mEditPinnedSiteListener);
 
         registerForContextMenu(mList);
         registerForContextMenu(mGrid);
@@ -224,7 +221,6 @@ public class TopSitesPage extends HomeFragment {
         super.onDestroyView();
         mList = null;
         mGrid = null;
-        mEmptyView = null;
         mListAdapter = null;
         mGridAdapter = null;
     }
@@ -320,7 +316,8 @@ public class TopSitesPage extends HomeFragment {
             if (item.getItemId() == R.id.top_sites_open_private_tab)
                 flags |= Tabs.LOADURL_PRIVATE;
 
-            Tabs.getInstance().loadUrl(info.url, flags);
+            // Decode "user-entered" URLs before loading them.
+            Tabs.getInstance().loadUrl(decodeUserEnteredUrl(info.url), flags);
             Toast.makeText(activity, R.string.new_tab_opened, Toast.LENGTH_SHORT).show();
             return true;
         }
@@ -356,7 +353,8 @@ public class TopSitesPage extends HomeFragment {
         }
 
         if (itemId == R.id.top_sites_edit) {
-            mPinSiteListener.onPinSite(info.position);
+            // Decode "user-entered" URLs before showing them.
+            mEditPinnedSiteListener.onEditPinnedSite(info.position, decodeUserEnteredUrl(info.url));
             return true;
         }
 
@@ -366,13 +364,33 @@ public class TopSitesPage extends HomeFragment {
     @Override
     protected void load() {
         getLoaderManager().initLoader(LOADER_ID_TOP_SITES, null, mCursorLoaderCallbacks);
+
+        // Since this is the primary fragment that loads whenever about:home is
+        // visited, we want to load it as quickly as possible. Heavy load on
+        // the Gecko thread can slow down the time it takes for thumbnails to
+        // appear, especially during startup (bug 897162). By minimizing the
+        // Gecko thread priority, we ensure that the UI appears quickly. The
+        // priority is reset to normal once thumbnails are loaded.
+        ThreadUtils.reduceGeckoPriority(PRIORITY_RESET_TIMEOUT);
+    }
+
+    static String encodeUserEnteredUrl(String url) {
+        return Uri.fromParts("user-entered", url, null).toString();
+    }
+
+    static String decodeUserEnteredUrl(String url) {
+        Uri uri = Uri.parse(url);
+        if ("user-entered".equals(uri.getScheme())) {
+            return uri.getSchemeSpecificPart();
+        }
+        return url;
     }
 
     /**
-     * Listener for pinning sites.
+     * Listener for editing pinned sites.
      */
-    private class PinSiteListener implements OnPinSiteListener,
-                                             OnSiteSelectedListener {
+    private class EditPinnedSiteListener implements OnEditPinnedSiteListener,
+                                                    OnSiteSelectedListener {
         // Tag for the PinSiteDialog fragment.
         private static final String TAG_PIN_SITE = "pin_site";
 
@@ -380,7 +398,7 @@ public class TopSitesPage extends HomeFragment {
         private int mPosition;
 
         @Override
-        public void onPinSite(int position) {
+        public void onEditPinnedSite(int position, String searchTerm) {
             mPosition = position;
 
             final FragmentManager manager = getActivity().getSupportFragmentManager();
@@ -390,6 +408,7 @@ public class TopSitesPage extends HomeFragment {
             }
 
             dialog.setOnSiteSelectedListener(this);
+            dialog.setSearchTerm(searchTerm);
             dialog.show(manager, TAG_PIN_SITE);
         }
 
@@ -462,24 +481,6 @@ public class TopSitesPage extends HomeFragment {
 
     private void updateUiFromCursor(Cursor c) {
         mList.setHeaderDividersEnabled(c != null && c.getCount() > mMaxGridEntries);
-
-        if (c != null && c.getCount() > 0) {
-            return;
-        }
-
-        if (mEmptyView == null) {
-            // Set empty page view. We delay this so that the empty view won't flash.
-            ViewStub emptyViewStub = (ViewStub) getView().findViewById(R.id.home_empty_view_stub);
-            mEmptyView = emptyViewStub.inflate();
-
-            final ImageView emptyIcon = (ImageView) mEmptyView.findViewById(R.id.home_empty_image);
-            emptyIcon.setImageResource(R.drawable.icon_most_visited_empty);
-
-            final TextView emptyText = (TextView) mEmptyView.findViewById(R.id.home_empty_text);
-            emptyText.setText(R.string.home_most_visited_empty);
-
-            mList.setEmptyView(mEmptyView);
-        }
     }
 
     private static class TopSitesLoader extends SimpleCursorLoader {
@@ -494,13 +495,14 @@ public class TopSitesPage extends HomeFragment {
 
         @Override
         public Cursor loadCursor() {
+            trace("TopSitesLoader.loadCursor()");
             return BrowserDB.getTopSites(getContext().getContentResolver(), mMaxGridEntries, SEARCH_LIMIT);
         }
     }
 
     private class VisitedAdapter extends CursorAdapter {
         public VisitedAdapter(Context context, Cursor cursor) {
-            super(context, cursor);
+            super(context, cursor, 0);
         }
 
         @Override
@@ -530,10 +532,11 @@ public class TopSitesPage extends HomeFragment {
 
     public class TopSitesGridAdapter extends CursorAdapter {
         // Cache to store the thumbnails.
-        private Map<String, Thumbnail> mThumbnails;
+        // Ensure that this is only accessed from the UI thread.
+        private Map<String, Bitmap> mThumbnails;
 
         public TopSitesGridAdapter(Context context, Cursor cursor) {
-            super(context, cursor);
+            super(context, cursor, 0);
         }
 
         @Override
@@ -553,8 +556,19 @@ public class TopSitesPage extends HomeFragment {
          *
          * @param thumbnails A map of urls and their thumbnail bitmaps.
          */
-        public void updateThumbnails(Map<String, Thumbnail> thumbnails) {
+        public void updateThumbnails(Map<String, Bitmap> thumbnails) {
             mThumbnails = thumbnails;
+
+            final int count = mGrid.getChildCount();
+            for (int i = 0; i < count; i++) {
+                TopSitesGridItemView gridItem = (TopSitesGridItemView) mGrid.getChildAt(i);
+
+                // All the views have already got their initial state at this point.
+                // This will force each view to load favicons for the missing
+                // thumbnails if necessary.
+                gridItem.markAsDirty();
+            }
+
             notifyDataSetChanged();
         }
 
@@ -571,25 +585,53 @@ public class TopSitesPage extends HomeFragment {
                 pinned = ((TopSitesCursorWrapper) cursor).isPinned();
             }
 
-            TopSitesGridItemView view = (TopSitesGridItemView) bindView;
-            view.setTitle(title);
-            view.setUrl(url);
-            view.setPinned(pinned);
+            final TopSitesGridItemView view = (TopSitesGridItemView) bindView;
 
             // If there is no url, then show "add bookmark".
             if (TextUtils.isEmpty(url)) {
-                view.displayThumbnail(R.drawable.top_site_add);
-            } else {
-                // Show the thumbnail.
-                Thumbnail thumbnail = (mThumbnails != null ? mThumbnails.get(url) : null);
-                if (thumbnail == null) {
-                    view.displayThumbnail(null);
-                } else if (thumbnail.isThumbnail) {
-                    view.displayThumbnail(thumbnail.bitmap);
-                } else {
-                    view.displayFavicon(thumbnail.bitmap);
+                // Wait until thumbnails are loaded before showing anything.
+                if (mThumbnails != null) {
+                    view.blankOut();
                 }
+
+                return;
             }
+
+            // Show the thumbnail, if any.
+            Bitmap thumbnail = (mThumbnails != null ? mThumbnails.get(url) : null);
+
+            // Debounce bindView calls to avoid redundant redraws and favicon
+            // fetches.
+            final boolean updated = view.updateState(title, url, pinned, thumbnail);
+
+            // If thumbnails are still being loaded, don't try to load favicons
+            // just yet. If we sent in a thumbnail, we're done now.
+            if (mThumbnails == null || thumbnail != null) {
+                return;
+            }
+
+            // Thumbnails are delivered late, so we can't short-circuit any
+            // sooner than this. But we can avoid a duplicate favicon
+            // fetch...
+            if (!updated) {
+                debug("bindView called twice for same values; short-circuiting.");
+                return;
+            }
+
+            // If we have no thumbnail, attempt to show a Favicon instead.
+            LoadIDAwareFaviconLoadedListener listener = new LoadIDAwareFaviconLoadedListener(view);
+            final int loadId = Favicons.getSizedFaviconForPageFromLocal(url, listener);
+            if (loadId == Favicons.LOADED) {
+                // Great!
+                return;
+            }
+
+            // Otherwise, do this until the async lookup returns.
+            view.displayThumbnail(R.drawable.favicon);
+
+            // Give each side enough information to shake hands later.
+            listener.setLoadId(loadId);
+            view.setLoadId(loadId);
         }
 
         @Override
@@ -598,32 +640,74 @@ public class TopSitesPage extends HomeFragment {
         }
     }
 
-    private class CursorLoaderCallbacks implements LoaderCallbacks<Cursor> {
-        @Override
-        public Loader<Cursor> onCreateLoader(int id, Bundle args) {
-            return new TopSitesLoader(getActivity());
+    private static class LoadIDAwareFaviconLoadedListener implements OnFaviconLoadedListener {
+        private volatile int loadId = Favicons.NOT_LOADING;
+        private final TopSitesGridItemView view;
+        public LoadIDAwareFaviconLoadedListener(TopSitesGridItemView view) {
+            this.view = view;
+        }
+
+        public void setLoadId(int id) {
+            this.loadId = id;
         }
 
         @Override
+        public void onFaviconLoaded(String url, String faviconURL, Bitmap favicon) {
+            if (TextUtils.equals(this.view.getUrl(), url)) {
+                this.view.displayFavicon(favicon, faviconURL, this.loadId);
+            }
+        }
+    }
+
+    private class CursorLoaderCallbacks implements LoaderCallbacks<Cursor> {
+        @Override
+        public Loader<Cursor> onCreateLoader(int id, Bundle args) {
+            trace("Creating TopSitesLoader: " + id);
+            return new TopSitesLoader(getActivity());
+        }
+
+        /**
+         * This method is called *twice* in some circumstances.
+         *
+         * If you try to avoid that through some kind of boolean flag,
+         * sometimes (e.g., returning to the activity) you'll *not* be called
+         * twice, and thus you'll never draw thumbnails.
+         *
+         * The root cause is TopSitesLoader.loadCursor being called twice.
+         * Why that is... dunno.
+         */
+        @Override
         public void onLoadFinished(Loader<Cursor> loader, Cursor c) {
+            debug("onLoadFinished: " + c.getCount() + " rows.");
+
             mListAdapter.swapCursor(c);
             mGridAdapter.swapCursor(c);
             updateUiFromCursor(c);
 
-            // Load the thumbnails.
-            if (c.getCount() > 0 && c.moveToFirst()) {
-                final ArrayList<String> urls = new ArrayList<String>();
-                do {
-                    final String url = c.getString(c.getColumnIndexOrThrow(URLColumns.URL));
-                    urls.add(url);
-                } while (c.moveToNext());
+            final int col = c.getColumnIndexOrThrow(URLColumns.URL);
 
-                if (urls.size() > 0) {
-                    Bundle bundle = new Bundle();
-                    bundle.putStringArrayList(THUMBNAILS_URLS_KEY, urls);
-                    getLoaderManager().restartLoader(LOADER_ID_THUMBNAILS, bundle, mThumbnailsLoaderCallbacks);
-                }
+            // Load the thumbnails.
+            // Even though the cursor we're given is supposed to be fresh,
+            // we get a bad first value unless we reset its position.
+            // Using move(-1) and moveToNext() doesn't work correctly under
+            // rotation, so we use moveToFirst.
+            if (!c.moveToFirst()) {
+                return;
             }
+            
+            final ArrayList<String> urls = new ArrayList<String>();
+            int i = 1;
+            do {
+                urls.add(c.getString(col));
+            } while (i++ < mMaxGridEntries && c.moveToNext());
+
+            if (urls.isEmpty()) {
+                return;
+            }
+
+            Bundle bundle = new Bundle();
+            bundle.putStringArrayList(THUMBNAILS_URLS_KEY, urls);
+            getLoaderManager().restartLoader(LOADER_ID_THUMBNAILS, bundle, mThumbnailsLoaderCallbacks);
         }
 
         @Override
@@ -641,8 +725,8 @@ public class TopSitesPage extends HomeFragment {
     /**
      * An AsyncTaskLoader to load the thumbnails from a cursor.
      */
-    private static class ThumbnailsLoader extends AsyncTaskLoader<Map<String, Thumbnail>> {
-        private Map<String, Thumbnail> mThumbnails;
+    private static class ThumbnailsLoader extends AsyncTaskLoader<Map<String, Bitmap>> {
+        private Map<String, Bitmap> mThumbnails;
         private ArrayList<String> mUrls;
 
         public ThumbnailsLoader(Context context, ArrayList<String> urls) {
@@ -651,53 +735,55 @@ public class TopSitesPage extends HomeFragment {
         }
 
         @Override
-        public Map<String, Thumbnail> loadInBackground() {
+        public Map<String, Bitmap> loadInBackground() {
             if (mUrls == null || mUrls.size() == 0) {
                 return null;
             }
-
-            final Map<String, Thumbnail> thumbnails = new HashMap<String, Thumbnail>();
 
             // Query the DB for thumbnails.
             final ContentResolver cr = getContext().getContentResolver();
             final Cursor cursor = BrowserDB.getThumbnailsForUrls(cr, mUrls);
 
-            try {
-                if (cursor != null && cursor.moveToFirst()) {
-                    do {
-                        // Try to get the thumbnail, if cursor is valid.
-                        String url = cursor.getString(cursor.getColumnIndexOrThrow(Thumbnails.URL));
-                        final byte[] b = cursor.getBlob(cursor.getColumnIndexOrThrow(Thumbnails.DATA));
-                        final Bitmap bitmap = (b == null ? null : BitmapUtils.decodeByteArray(b));
-
-                        if (bitmap != null) {
-                            thumbnails.put(url, new Thumbnail(bitmap, true));
-                        }
-                    } while (cursor.moveToNext());
-                }
-            } finally {
-                if (cursor != null) {
-                    cursor.close();
-                }
+            if (cursor == null) {
+                return null;
             }
 
-            // Query the DB for favicons for the urls without thumbnails.
-            for (String url : mUrls) {
-                if (!thumbnails.containsKey(url)) {
-                    final Bitmap bitmap = BrowserDB.getFaviconForUrl(cr, url);
-                    if (bitmap != null) {
-                        // Favicons.scaleImage can return several different size favicons,
-                        // but will at least prevent this from being too large.
-                        thumbnails.put(url, new Thumbnail(Favicons.scaleImage(bitmap), false));
+            final Map<String, Bitmap> thumbnails = new HashMap<String, Bitmap>();
+
+            try {
+                final int urlIndex = cursor.getColumnIndexOrThrow(Thumbnails.URL);
+                final int dataIndex = cursor.getColumnIndexOrThrow(Thumbnails.DATA);
+
+                while (cursor.moveToNext()) {
+                    String url = cursor.getString(urlIndex);
+
+                    // This should never be null, but if it is...
+                    final byte[] b = cursor.getBlob(dataIndex);
+                    if (b == null) {
+                        continue;
                     }
+
+                    final Bitmap bitmap = BitmapUtils.decodeByteArray(b);
+
+                    // Our thumbnails are never null, so if we get a null decoded
+                    // bitmap, it's because we hit an OOM or some other disaster.
+                    // Give up immediately rather than hammering on.
+                    if (bitmap == null) {
+                        Log.w(LOGTAG, "Aborting thumbnail load; decode failed.");
+                        break;
+                    }
+
+                    thumbnails.put(url, bitmap);
                 }
+            } finally {
+                cursor.close();
             }
 
             return thumbnails;
         }
 
         @Override
-        public void deliverResult(Map<String, Thumbnail> thumbnails) {
+        public void deliverResult(Map<String, Bitmap> thumbnails) {
             if (isReset()) {
                 mThumbnails = null;
                 return;
@@ -727,7 +813,7 @@ public class TopSitesPage extends HomeFragment {
         }
 
         @Override
-        public void onCanceled(Map<String, Thumbnail> thumbnails) {
+        public void onCanceled(Map<String, Bitmap> thumbnails) {
             mThumbnails = null;
         }
 
@@ -745,21 +831,25 @@ public class TopSitesPage extends HomeFragment {
     /**
      * Loader callbacks for the thumbnails on TopSitesGridView.
      */
-    private class ThumbnailsLoaderCallbacks implements LoaderCallbacks<Map<String, Thumbnail>> {
+    private class ThumbnailsLoaderCallbacks implements LoaderCallbacks<Map<String, Bitmap>> {
         @Override
-        public Loader<Map<String, Thumbnail>> onCreateLoader(int id, Bundle args) {
+        public Loader<Map<String, Bitmap>> onCreateLoader(int id, Bundle args) {
             return new ThumbnailsLoader(getActivity(), args.getStringArrayList(THUMBNAILS_URLS_KEY));
         }
 
         @Override
-        public void onLoadFinished(Loader<Map<String, Thumbnail>> loader, Map<String, Thumbnail> thumbnails) {
+        public void onLoadFinished(Loader<Map<String, Bitmap>> loader, Map<String, Bitmap> thumbnails) {
             if (mGridAdapter != null) {
                 mGridAdapter.updateThumbnails(thumbnails);
             }
+
+            // Once thumbnails have finished loading, the UI is ready. Reset
+            // Gecko to normal priority.
+            ThreadUtils.resetGeckoPriority();
         }
 
         @Override
-        public void onLoaderReset(Loader<Map<String, Thumbnail>> loader) {
+        public void onLoaderReset(Loader<Map<String, Bitmap>> loader) {
             if (mGridAdapter != null) {
                 mGridAdapter.updateThumbnails(null);
             }

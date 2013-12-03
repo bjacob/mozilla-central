@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,6 +13,7 @@
 #include "nsIDOMFile.h"
 #include "nsIDOMMediaStream.h"
 #include "mozilla/dom/MediaSource.h"
+#include "nsIMemoryReporter.h"
 
 // -----------------------------------------------------------------------
 // Hash table
@@ -22,6 +25,37 @@ struct DataInfo
 };
 
 static nsClassHashtable<nsCStringHashKey, DataInfo>* gDataTable;
+
+// Memory reporting for the hash table.
+namespace mozilla {
+
+class HostObjectURLsReporter MOZ_FINAL : public MemoryUniReporter
+{
+ public:
+  HostObjectURLsReporter()
+    : MemoryUniReporter("host-object-urls",
+                        KIND_OTHER, UNITS_COUNT,
+                        "The number of host objects stored for access via URLs "
+                        "(e.g. blobs passed to URL.createObjectURL).")
+    {}
+ private:
+  int64_t Amount() MOZ_OVERRIDE
+  {
+    return gDataTable ? gDataTable->Count() : 0;
+  }
+};
+
+}
+
+nsHostObjectProtocolHandler::nsHostObjectProtocolHandler()
+{
+  static bool initialized = false;
+
+  if (!initialized) {
+    initialized = true;
+    RegisterStrongMemoryReporter(new mozilla::HostObjectURLsReporter());
+  }
+}
 
 nsresult
 nsHostObjectProtocolHandler::AddDataEntry(const nsACString& aScheme,
@@ -49,7 +83,15 @@ void
 nsHostObjectProtocolHandler::RemoveDataEntry(const nsACString& aUri)
 {
   if (gDataTable) {
-    gDataTable->Remove(aUri);
+    nsCString uriIgnoringRef;
+    int32_t hashPos = aUri.FindChar('#');
+    if (hashPos < 0) {
+      uriIgnoringRef = aUri;
+    }
+    else {
+      uriIgnoringRef = StringHead(aUri, hashPos);
+    }
+    gDataTable->Remove(uriIgnoringRef);
     if (gDataTable->Count() == 0) {
       delete gDataTable;
       gDataTable = nullptr;
@@ -80,6 +122,27 @@ nsHostObjectProtocolHandler::GenerateURIString(const nsACString &aScheme,
   return NS_OK;
 }
 
+static DataInfo*
+GetDataInfo(const nsACString& aUri)
+{
+  if (!gDataTable) {
+    return nullptr;
+  }
+
+  DataInfo* res;
+  nsCString uriIgnoringRef;
+  int32_t hashPos = aUri.FindChar('#');
+  if (hashPos < 0) {
+    uriIgnoringRef = aUri;
+  }
+  else {
+    uriIgnoringRef = StringHead(aUri, hashPos);
+  }
+  gDataTable->Get(uriIgnoringRef, &res);
+  
+  return res;
+}
+
 nsIPrincipal*
 nsHostObjectProtocolHandler::GetDataEntryPrincipal(const nsACString& aUri)
 {
@@ -87,8 +150,8 @@ nsHostObjectProtocolHandler::GetDataEntryPrincipal(const nsACString& aUri)
     return nullptr;
   }
 
-  DataInfo* res;
-  gDataTable->Get(aUri, &res);
+  DataInfo* res = GetDataInfo(aUri);
+
   if (!res) {
     return nullptr;
   }
@@ -112,18 +175,6 @@ nsHostObjectProtocolHandler::Traverse(const nsACString& aUri,
 
   NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(aCallback, "HostObjectProtocolHandler DataInfo.mObject");
   aCallback.NoteXPCOMChild(res->mObject);
-}
-
-static DataInfo*
-GetDataInfo(const nsACString& aUri)
-{
-  if (!gDataTable) {
-    return nullptr;
-  }
-
-  DataInfo* res;
-  gDataTable->Get(aUri, &res);
-  return res;
 }
 
 static nsISupports*
@@ -193,8 +244,7 @@ nsHostObjectProtocolHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
     return NS_ERROR_DOM_BAD_URI;
   }
   nsCOMPtr<nsIDOMBlob> blob = do_QueryInterface(info->mObject);
-  nsCOMPtr<mozilla::dom::MediaSource> mediasource = do_QueryInterface(info->mObject);
-  if (!blob && !mediasource) {
+  if (!blob) {
     return NS_ERROR_DOM_BAD_URI;
   }
 
@@ -208,12 +258,7 @@ nsHostObjectProtocolHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
 #endif
 
   nsCOMPtr<nsIInputStream> stream;
-  nsresult rv = NS_OK;
-  if (blob) {
-    rv = blob->GetInternalStream(getter_AddRefs(stream));
-  } else {
-    stream = mediasource->CreateInternalStream();
-  }
+  nsresult rv = blob->GetInternalStream(getter_AddRefs(stream));
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIChannel> channel;
@@ -225,30 +270,25 @@ nsHostObjectProtocolHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
   nsCOMPtr<nsISupports> owner = do_QueryInterface(info->mPrincipal);
 
   nsString type;
-  if (blob) {
-    rv = blob->GetType(type);
+  rv = blob->GetType(type);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIDOMFile> file = do_QueryInterface(info->mObject);
+  if (file) {
+    nsString filename;
+    rv = file->GetName(filename);
     NS_ENSURE_SUCCESS(rv, rv);
-
-    uint64_t size;
-    rv = blob->GetSize(&size);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCOMPtr<nsIDOMFile> file = do_QueryInterface(info->mObject);
-    if (file) {
-      nsString filename;
-      rv = file->GetName(filename);
-      NS_ENSURE_SUCCESS(rv, rv);
-      channel->SetContentDispositionFilename(filename);
-    }
-
-    channel->SetContentLength(size);
-  } else {
-    type = mediasource->GetType();
+    channel->SetContentDispositionFilename(filename);
   }
+
+  uint64_t size;
+  rv = blob->GetSize(&size);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   channel->SetOwner(owner);
   channel->SetOriginalURI(uri);
   channel->SetContentType(NS_ConvertUTF16toUTF8(type));
+  channel->SetContentLength(size);
 
   channel.forget(result);
 

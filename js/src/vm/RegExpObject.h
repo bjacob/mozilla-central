@@ -11,8 +11,10 @@
 #include "mozilla/MemoryReporting.h"
 
 #include "jscntxt.h"
+#include "jsproxy.h"
 
 #include "gc/Marking.h"
+#include "gc/Zone.h"
 #if ENABLE_YARR_JIT
 #include "yarr/YarrJIT.h"
 #else
@@ -73,7 +75,7 @@ class RegExpObjectBuilder
     bool getOrCreateClone(RegExpObject *proto);
 
   public:
-    RegExpObjectBuilder(ExclusiveContext *cx, RegExpObject *reobj = NULL);
+    RegExpObjectBuilder(ExclusiveContext *cx, RegExpObject *reobj = nullptr);
 
     RegExpObject *reobj() { return reobj_; }
 
@@ -188,7 +190,7 @@ class RegExpShared
 
     /* Called when a RegExpShared is installed into a RegExpObject. */
     void prepareForUse(ExclusiveContext *cx) {
-        gcNumberWhenUsed = cx->gcNumber();
+        gcNumberWhenUsed = cx->zone()->gcNumber();
     }
 
     /* Primary interface: run this regular expression on the given string. */
@@ -221,7 +223,7 @@ class RegExpShared
     bool hasCode() const                { return false; }
     bool hasMatchOnlyCode() const       { return false; }
 #endif
-    bool hasBytecode() const            { return bytecode != NULL; }
+    bool hasBytecode() const            { return bytecode != nullptr; }
     bool isCompiled() const             { return hasBytecode() || hasCode() || hasMatchOnlyCode(); }
 };
 
@@ -245,7 +247,7 @@ class RegExpGuard
 
   public:
     RegExpGuard(ExclusiveContext *cx)
-      : re_(NULL), source_(cx)
+      : re_(nullptr), source_(cx)
     {}
 
     RegExpGuard(ExclusiveContext *cx, RegExpShared &re)
@@ -269,8 +271,8 @@ class RegExpGuard
     void release() {
         if (re_) {
             re_->decRef();
-            re_ = NULL;
-            source_ = NULL;
+            re_ = nullptr;
+            source_ = nullptr;
         }
     }
 
@@ -410,13 +412,13 @@ class RegExpObject : public JSObject
         setSlot(STICKY_FLAG_SLOT, BooleanValue(enabled));
     }
 
-    bool ignoreCase() const { return getSlot(IGNORE_CASE_FLAG_SLOT).toBoolean(); }
-    bool global() const     { return getSlot(GLOBAL_FLAG_SLOT).toBoolean(); }
-    bool multiline() const  { return getSlot(MULTILINE_FLAG_SLOT).toBoolean(); }
-    bool sticky() const     { return getSlot(STICKY_FLAG_SLOT).toBoolean(); }
+    bool ignoreCase() const { return getFixedSlot(IGNORE_CASE_FLAG_SLOT).toBoolean(); }
+    bool global() const     { return getFixedSlot(GLOBAL_FLAG_SLOT).toBoolean(); }
+    bool multiline() const  { return getFixedSlot(MULTILINE_FLAG_SLOT).toBoolean(); }
+    bool sticky() const     { return getFixedSlot(STICKY_FLAG_SLOT).toBoolean(); }
 
     void shared(RegExpGuard *g) const {
-        JS_ASSERT(maybeShared() != NULL);
+        JS_ASSERT(maybeShared() != nullptr);
         g->init(*maybeShared());
     }
 

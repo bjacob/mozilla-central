@@ -4,15 +4,13 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'png'
-
 EXPORTS += [
     'mozpngconf.h',
     'png.h',
     'pngconf.h',
 ]
 
-CSRCS += [
+UNIFIED_SOURCES += [
     'png.c',
     'pngerror.c',
     'pngget.c',
@@ -36,12 +34,12 @@ if CONFIG['MOZ_PNG_ARM_NEON']:
     ]
 
 if CONFIG['MOZ_PNG_ARM_NEON']:
-    CSRCS += [
+    SOURCES += [
         'arm/arm_init.c'
     ]
 
 if CONFIG['MOZ_PNG_ARM_NEON']:
-    SSRCS += [
+    SOURCES += [
         'arm/filter_neon.S'
     ]
 
@@ -49,3 +47,7 @@ LIBRARY_NAME = 'mozpng'
 
 MSVC_ENABLE_PGO = True
 
+if CONFIG['GKMEDIAS_SHARED_LIBRARY']:
+    NO_VISIBILITY_FLAGS = True
+
+FINAL_LIBRARY = 'gkmedias'

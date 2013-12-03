@@ -134,13 +134,13 @@ public:
   nsresult
   GetURLWithHeaders(nsNPAPIPluginInstance *pluginInst, 
                     const char* url, 
-                    const char* target = NULL,
-                    nsNPAPIPluginStreamListener* streamListener = NULL,
-                    const char* altHost = NULL,
-                    const char* referrer = NULL,
+                    const char* target = nullptr,
+                    nsNPAPIPluginStreamListener* streamListener = nullptr,
+                    const char* altHost = nullptr,
+                    const char* referrer = nullptr,
                     bool forceJSEnabled = false,
                     uint32_t getHeadersLength = 0, 
-                    const char* getHeaders = NULL);
+                    const char* getHeaders = nullptr);
 
   nsresult
   DoURLLoadSecurityCheck(nsNPAPIPluginInstance *aInstance,
@@ -163,8 +163,6 @@ public:
   // checks whether aTag is a "java" plugin tag (a tag for a plugin
   // that does Java)
   static bool IsJavaMIMEType(const char *aType);
-
-  static nsresult GetPrompt(nsIPluginInstanceOwner *aOwner, nsIPrompt **aPrompt);
 
   static nsresult PostPluginUnloadEvent(PRLibrary* aLibrary);
 
@@ -189,7 +187,7 @@ public:
                                      nsObjectLoadingContent *aContent,
                                      nsPluginInstanceOwner** aOwner);
 
-  // Does not accept NULL and should never fail.
+  // Does not accept nullptr and should never fail.
   nsPluginTag* TagForPlugin(nsNPAPIPlugin* aPlugin);
 
   nsresult GetPlugin(const char *aMimeType, nsNPAPIPlugin** aPlugin);

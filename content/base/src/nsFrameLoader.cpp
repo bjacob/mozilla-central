@@ -19,7 +19,7 @@
 #include "nsIDOMMozBrowserFrame.h"
 #include "nsIDOMWindow.h"
 #include "nsIPresShell.h"
-#include "nsIContent.h"
+#include "nsIContentInlines.h"
 #include "nsIContentViewer.h"
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
@@ -45,7 +45,6 @@
 #include "nsIScrollableFrame.h"
 #include "nsSubDocumentFrame.h"
 #include "nsError.h"
-#include "nsGUIEvent.h"
 #include "nsEventDispatcher.h"
 #include "nsISHistory.h"
 #include "nsISHistoryInternal.h"
@@ -123,12 +122,6 @@ public:
 };
 
 NS_IMPL_ISUPPORTS1(nsContentView, nsIContentView)
-
-bool
-nsContentView::IsRoot() const
-{
-  return mScrollId == FrameMetrics::ROOT_SCROLL_ID;
-}
 
 nsresult
 nsContentView::Update(const ViewConfig& aConfig)
@@ -505,7 +498,8 @@ nsFrameLoader::ReallyStartLoadingInternal()
   // Kick off the load...
   bool tmpState = mNeedsAsyncDestroy;
   mNeedsAsyncDestroy = true;
-  rv = mDocShell->LoadURI(mURIToLoad, loadInfo, flags, false);
+  nsCOMPtr<nsIURI> uriToLoad = mURIToLoad;
+  rv = mDocShell->LoadURI(uriToLoad, loadInfo, flags, false);
   mNeedsAsyncDestroy = tmpState;
   mURIToLoad = nullptr;
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1450,11 +1444,9 @@ nsFrameLoader::GetOwnApp()
   nsCOMPtr<nsIAppsService> appsService = do_GetService(APPS_SERVICE_CONTRACTID);
   NS_ENSURE_TRUE(appsService, nullptr);
 
-  nsCOMPtr<mozIDOMApplication> domApp;
-  appsService->GetAppByManifestURL(manifest, getter_AddRefs(domApp));
+  nsCOMPtr<mozIApplication> app;
+  appsService->GetAppByManifestURL(manifest, getter_AddRefs(app));
 
-  nsCOMPtr<mozIApplication> app = do_QueryInterface(domApp);
-  MOZ_ASSERT_IF(domApp, app);
   return app.forget();
 }
 
@@ -1473,12 +1465,9 @@ nsFrameLoader::GetContainingApp()
   nsCOMPtr<nsIAppsService> appsService = do_GetService(APPS_SERVICE_CONTRACTID);
   NS_ENSURE_TRUE(appsService, nullptr);
 
-  nsCOMPtr<mozIDOMApplication> domApp;
-  appsService->GetAppByLocalId(appId, getter_AddRefs(domApp));
-  MOZ_ASSERT(domApp);
+  nsCOMPtr<mozIApplication> app;
+  appsService->GetAppByLocalId(appId, getter_AddRefs(app));
 
-  nsCOMPtr<mozIApplication> app = do_QueryInterface(domApp);
-  MOZ_ASSERT_IF(domApp, app);
   return app.forget();
 }
 
@@ -2220,8 +2209,10 @@ public:
                         nsFrameLoader* aFrameLoader,
                         const nsAString& aMessage,
                         const StructuredCloneData& aData,
-                        JS::Handle<JSObject *> aCpows)
-    : mRuntime(js::GetRuntime(aCx)), mFrameLoader(aFrameLoader), mMessage(aMessage), mCpows(aCpows)
+                        JS::Handle<JSObject *> aCpows,
+                        nsIPrincipal* aPrincipal)
+    : mRuntime(js::GetRuntime(aCx)), mFrameLoader(aFrameLoader)
+    , mMessage(aMessage), mCpows(aCpows), mPrincipal(aPrincipal)
   {
     if (aData.mDataLength && !mData.copy(aData.mData, aData.mDataLength)) {
       NS_RUNTIMEABORT("OOM");
@@ -2254,7 +2245,7 @@ public:
 
       nsRefPtr<nsFrameMessageManager> mm = tabChild->GetInnerManager();
       mm->ReceiveMessage(static_cast<EventTarget*>(tabChild), mMessage,
-                         false, &data, &cpows, nullptr);
+                         false, &data, &cpows, mPrincipal, nullptr);
     }
     return NS_OK;
   }
@@ -2264,13 +2255,15 @@ public:
   JSAutoStructuredCloneBuffer mData;
   StructuredCloneClosure mClosure;
   JSObject* mCpows;
+  nsCOMPtr<nsIPrincipal> mPrincipal;
 };
 
 bool
 nsFrameLoader::DoSendAsyncMessage(JSContext* aCx,
                                   const nsAString& aMessage,
                                   const StructuredCloneData& aData,
-                                  JS::Handle<JSObject *> aCpows)
+                                  JS::Handle<JSObject *> aCpows,
+                                  nsIPrincipal* aPrincipal)
 {
   TabParent* tabParent = mRemoteBrowser;
   if (tabParent) {
@@ -2283,11 +2276,14 @@ nsFrameLoader::DoSendAsyncMessage(JSContext* aCx,
     if (aCpows && !cp->GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
       return false;
     }
-    return tabParent->SendAsyncMessage(nsString(aMessage), data, cpows);
+    return tabParent->SendAsyncMessage(nsString(aMessage), data, cpows,
+                                       aPrincipal);
   }
 
   if (mChildMessageManager) {
-    nsRefPtr<nsIRunnable> ev = new nsAsyncMessageToChild(aCx, this, aMessage, aData, aCpows);
+    nsRefPtr<nsIRunnable> ev = new nsAsyncMessageToChild(aCx, this, aMessage,
+                                                         aData, aCpows,
+                                                         aPrincipal);
     NS_DispatchToCurrentThread(ev);
     return true;
   }
@@ -2374,7 +2370,7 @@ nsFrameLoader::GetRootContentView(nsIContentView** aContentView)
     return NS_OK;
   }
 
-  nsContentView* view = rfp->GetContentView();
+  nsContentView* view = rfp->GetRootContentView();
   NS_ABORT_IF_FALSE(view, "Should always be able to create root scrollable!");
   nsRefPtr<nsIContentView>(view).forget(aContentView);
 

@@ -13,12 +13,9 @@ function test() {
   registerCleanupFunction(function() {
     clearAllPluginPermissions();
     Services.prefs.clearUserPref("plugins.click_to_play");
-    let plugin = getTestPlugin();
-    plugin.enabledState = Ci.nsIPluginTag.STATE_ENABLED;
   });
   Services.prefs.setBoolPref("plugins.click_to_play", true);
-  let plugin = getTestPlugin();
-  plugin.enabledState = Ci.nsIPluginTag.STATE_CLICKTOPLAY;
+  setTestPluginEnabledState(Ci.nsIPluginTag.STATE_CLICKTOPLAY);
 
   gBrowser.selectedTab = gBrowser.addTab();
   gBrowser.selectedBrowser.addEventListener("PluginBindingAttached", handleEvent, true, true);
@@ -67,13 +64,11 @@ function part5() {
   gBrowser.selectedBrowser.removeEventListener("PluginBindingAttached", handleEvent);
   ok(PopupNotifications.getNotification("click-to-play-plugins", gBrowser.selectedBrowser), "Should have a click-to-play notification in the initial tab");
 
-  gNextTest = part6;
   gNewWindow = gBrowser.replaceTabWithWindow(gBrowser.selectedTab);
-  gNewWindow.addEventListener("load", handleEvent, true);
+  waitForFocus(part6, gNewWindow);
 }
 
 function part6() {
-  gNewWindow.removeEventListener("load", handleEvent);
   let condition = function() PopupNotifications.getNotification("click-to-play-plugins", gNewWindow.gBrowser.selectedBrowser);
   waitForCondition(condition, part7, "Waited too long for click-to-play notification");
 }
@@ -100,5 +95,6 @@ function part8() {
   ok(objLoadingContent.activated, "plugin should be activated now");
 
   gNewWindow.close();
+  gNewWindow = null;
   finish();
 }

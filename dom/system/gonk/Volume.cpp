@@ -60,7 +60,9 @@ Volume::Volume(const nsCSubstring& aName)
     mMountLocked(true),  // Needs to agree with nsVolume::nsVolume
     mSharingEnabled(false),
     mCanBeShared(true),
-    mIsSharing(false)
+    mIsSharing(false),
+    mFormatRequested(false),
+    mIsFormatting(false)
 {
   DBG("Volume %s: created", NameStr());
 }
@@ -68,7 +70,29 @@ Volume::Volume(const nsCSubstring& aName)
 void
 Volume::SetIsSharing(bool aIsSharing)
 {
+  if (aIsSharing == mIsSharing) {
+    return;
+  }
   mIsSharing = aIsSharing;
+  LOG("Volume %s: IsSharing set to %d state %s",
+      NameStr(), (int)mIsSharing, StateStr(mState));
+  if (mIsSharing) {
+    mEventObserverList.Broadcast(this);
+  }
+}
+
+void
+Volume::SetIsFormatting(bool aIsFormatting)
+{
+  if (aIsFormatting == mIsFormatting) {
+    return;
+  }
+  mIsFormatting = aIsFormatting;
+  LOG("Volume %s: IsFormatting set to %d state %s",
+      NameStr(), (int)mIsFormatting, StateStr(mState));
+  if (mIsFormatting) {
+    mEventObserverList.Broadcast(this);
+  }
 }
 
 void
@@ -119,11 +143,19 @@ Volume::SetSharingEnabled(bool aSharingEnabled)
 }
 
 void
+Volume::SetFormatRequested(bool aFormatRequested)
+{
+  mFormatRequested = aFormatRequested;
+
+  LOG("SetFormatRequested for volume %s to %d CanBeFormatted = %d",
+      NameStr(), (int)mFormatRequested, (int)CanBeFormatted());
+}
+
+void
 Volume::SetState(Volume::STATE aNewState)
 {
   MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
   MOZ_ASSERT(MessageLoop::current() == XRE_GetIOMessageLoop());
-
   if (aNewState == mState) {
     return;
   }
@@ -148,7 +180,12 @@ Volume::SetState(Volume::STATE aNewState)
        break;
 
      case nsIVolume::STATE_MOUNTED:
+       mIsFormatting = false;
+       mIsSharing = false;
+       break;
      case nsIVolume::STATE_FORMATTING:
+       mFormatRequested = false;
+       mIsFormatting = true;
        mIsSharing = false;
        break;
 
@@ -197,6 +234,15 @@ Volume::StartUnmount(VolumeResponseCallback* aCallback)
   MOZ_ASSERT(MessageLoop::current() == XRE_GetIOMessageLoop());
 
   StartCommand(new VolumeActionCommand(this, "unmount", "force", aCallback));
+}
+
+void
+Volume::StartFormat(VolumeResponseCallback* aCallback)
+{
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(MessageLoop::current() == XRE_GetIOMessageLoop());
+
+  StartCommand(new VolumeActionCommand(this, "format", "", aCallback));
 }
 
 void

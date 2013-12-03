@@ -11,6 +11,11 @@
 
 /* Typography & General Styling -------------------------------------------- */
 
+::-moz-selection {
+  color: white;
+  background-color: @metro_orange@;
+}
+
 :root {
   font-family: "Segoe UI", sans-serif !important;
   font-size: @font_normal@;
@@ -78,14 +83,14 @@ button:not([disabled]):hover {
 
 /* Default button colors */
 
-.button-default,
+button[default],
 .notification-button-default {
   background: linear-gradient(to bottom, hsl(35, 100%, 50%), hsl(30, 100%, 50%));
   border-color: hsl(30, 100%, 48%);
   color: white;
 }
 
-.button-default:not([disabled]):hover,
+button[default]:not([disabled]):hover,
 .notification-button-default:not([disabled]):hover {
   background: linear-gradient(to bottom, hsl(25, 100%, 47%), hsl(25, 100%, 45%));
   border-color: hsl(25, 100%, 43%);
@@ -97,7 +102,7 @@ button:not([disabled]):hover {
 /* Note: these need enough specificity to override all the :hover rules above. */
 button:not([disabled]):hover:active,
 button:not([disabled])[checked="true"],
-.button-default:not([disabled])[checked="true"],
+button[default]:not([disabled])[checked="true"],
 .notification-button-default:not([disabled])[checked="true"] {
   background: linear-gradient(to bottom, hsl(210, 5%, 28%), hsl(210, 5%, 25%));
   border-color: hsl(216, 4%, 27%);
@@ -197,21 +202,7 @@ menulist {
   font-weight: 600;
 }
 
-.menu-popup richlistitem:not([disabled]):hover {
-  background-color: #ccc;
-  color: black;
-}
-
-.menu-popup richlistitem:not([disabled]):active {
-  background-color: black;
-  color: white;
-}
-
-.menu-popup > richlistbox[left-hand="true"] > richlistitem {
-  padding-left: 50px;
-}
-
-.menu-popup > richlistbox[left-hand="false"] > richlistitem {
+.menu-popup > richlistbox > richlistitem {
   padding-right: 50px;
 }
 
@@ -231,6 +222,11 @@ menulist {
   -moz-user-focus: ignore;
   -moz-box-align: stretch;
   width: 100%;
+}
+
+/* ensure click events are dispatched targetting the select option not the label */
+#select-commands > .option-command > label {
+  pointer-events: none;
 }
 
 /* listcell element doesn't have flex="1" so we need to force it */
@@ -253,16 +249,6 @@ menulist {
   font-weight: bold;
   font-style: italic;
   pointer-events: none;
-}
-
-.option-command:not([disabled]):hover {
-  background-color: #f0f0f0;
-  color: black;
-}
-
-.option-command:not([disabled]):active {
-  background-color: #d3d3d3;
-  color: black;
 }
 
 .select-popup > richlistbox > scrollbox {
@@ -408,13 +394,14 @@ richlistitem description.normal-bold {
   font-weight: bold;
 }
 
-richlistitem[selected] {
-  color: black;
-  background-color: white;
+richlistitem[selected],
+richlistitem:not([disabled]):not([selected]):active {
+  background-color: @metro_orange@;
+  color: #fff;
 }
 
-richlistitem:hover:active:not([selected]) {
-  background-color: #8db8d8;
+richlistitem:not([disabled]):not([selected]):hover {
+  background-color: #ccc;
 }
 
 richlistitem.section-header,
@@ -569,63 +556,80 @@ notificationbox[count="3"] .notification-layer[anonid="layer2"] {
 /* Prompts ----------------------------------------------------------------- */
 
 .mainContainer {
-/* TODO: These values should probably come from somewhere. Maybe the same as the width of our overlay buttons? */
-  padding-left: 60px;
-  padding-right: 60px;
+  padding: 5vh 10vw;
 }
 
 .info\.title {
   font-size: @metro_font_large@;
+  border-bottom: 1px solid #C7C7C7;
+  padding-bottom: @metro_spacing_normal@;
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .info\.body {
   font-size: @metro_font_normal@;
+  padding-bottom: @metro_spacing_normal@;
+  height: 100%;
+  max-height: 30vh;
+  max-width: 55vw;
 }
 
 .buttonContainer {
   background-color: transparent;
-  padding: 0;
   border: none;
 }
 
-/* Arrowbox ---------------------------------------------------------------- */
-
-arrowbox {
-  -moz-appearance: none;
-  background: transparent;
-  border: none;
+.buttonContainer > button {
+  min-width: @touch_action_minwidth@;
+  margin: 5px 0 5px @metro_spacing_xnormal@;
 }
 
-.arrowbox-dark .panel-arrowcontent {
-  color: white;
-  background: @panel_dark_color@;
+/* set all the things to display block to allow body to grow with content and
+  obey overflow auto. Except on authentication prompts because a grid is used to
+  align labels and textboxes. */
+tabmodalprompt:not([promptType="promptUserAndPass"]) .info\.body,
+tabmodalprompt:not([promptType="promptUserAndPass"]) .infoContainer,
+tabmodalprompt:not([promptType="promptUserAndPass"]) .topContainer,
+tabmodalprompt:not([promptType="promptUserAndPass"]) .topContainer > rows > row:not([hidden]),
+tabmodalprompt:not([promptType="promptUserAndPass"]) .topContainer > rows {
+  display: block;
 }
 
-.arrowbox-dark .panel-arrowcontent {
-  border: @border_width_large@ solid white;
-  border-radius: @border_radius_normal@;
-  box-shadow: black 0 @shadow_width_small@ @shadow_width_small@;
+tabmodalprompt:not([promptType="promptUserAndPass"]) .infoContainer {
+  overflow: auto;
 }
 
-.panel-arrow[side="top"] {
-  list-style-image: url("chrome://browser/skin/images/arrowbox-up.png");
-  margin-bottom: -@margin_normal@;
+.topContainer > rows > row > label {
+  margin-left: 0;
 }
 
-.panel-arrow[side="bottom"] {
-  list-style-image: url("chrome://browser/skin/images/arrowbox-down.png");
-  margin-top: -@margin_normal@;
+.topContainer > rows > row > checkbox {
+  -moz-margin-start: 0;
+  -moz-padding-start: 0;
 }
 
-.panel-arrow[side="left"] {
-  list-style-image: url("chrome://browser/skin/images/arrowbox-horiz.png");
-  margin-right: -@margin_normal@;
-  transform: scaleX(-1);
+.topContainer > rows > row > textbox {
+  font-size: @metro_font_normal@;
+  height: 40px;
+  margin: 5px 0;
+  width: 100%;
 }
 
-.panel-arrow[side="right"] {
-  list-style-image: url("chrome://browser/skin/images/arrowbox-horiz.png");
-  margin-left: -@margin_normal@;
+.topContainer > rows > row > textbox[focused] {
+  border-color: @metro_orange@ !important;
+}
+
+@media (max-width: 600px) {
+  .mainContainer {
+    padding: 5vh 5vw;
+    width: 90vw;
+  }
+
+  .buttonContainer > button {
+    min-width: @touch_action_snapped_minwidth@;
+  }
 }
 
 /*.meta -------------------------------------------------------------------- */
@@ -688,6 +692,34 @@ arrowbox {
   margin-top: @metro_spacing_xnormal@;
   padding: 0;
 }
+
+.meta-section > richgrid {
+  opacity: 1;
+  transform: translateX(0) translateY(0);
+  transition-duration: 367ms;
+  transition-delay: 500ms;
+  transition-timing-function: @metro_animation_easing@;
+}
+
+.meta-section:nth-child(2) > richgrid {
+  transition-delay: 600ms;
+}
+.meta-section:nth-child(3) > richgrid {
+  transition-delay: 700ms;
+}
+.meta-section:nth-child(4) > richgrid {
+  transition-delay: 800ms;
+}
+
+.meta-section > richgrid[fade] {
+  opacity: 0;
+  transform: translateX(150px) translateY(25px);
+}
+
+#start-container[viewstate="snapped"] .meta-section > richgrid {
+  transition-property: none;
+}
+
 
 /* App bars ----------------------------------------------------------------- */
 
@@ -756,8 +788,8 @@ appbar toolbar[labelled] toolbarbutton > .toolbarbutton-text {
 
 /* Sprites */
 
-.appbar-primary > .toolbarbutton-icon,
-.appbar-secondary > .toolbarbutton-icon {
+.appbar-primary .toolbarbutton-icon,
+.appbar-secondary .toolbarbutton-icon {
   width: 40px;
   height: 40px;
 }
@@ -840,7 +872,14 @@ appbar toolbar[labelled] toolbarbutton > .toolbarbutton-text {
   list-style-image: url(chrome://browser/skin/images/appbar-icons.png);
 }
 
-.flyout-narrow description,
-.flyout-narrow label {
-  max-width: 266px; /* Accounts for a 40px padding on each side of the flyout */
+/* Flyout panels (sidebars) ------------------------------------------------- */
+
+.flyout-narrow {
+  width: 346px;
+}
+
+/* Some elements don't resize to fit their container properly for some reason.
+ * Setting max-width on the element or a child fixes it. */
+.flyout-narrow .flyoutpanel-hack {
+  max-width: calc(346px - 2 * 40px);
 }

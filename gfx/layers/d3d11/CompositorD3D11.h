@@ -6,6 +6,7 @@
 #ifndef MOZILLA_GFX_COMPOSITORD3D11_H
 #define MOZILLA_GFX_COMPOSITORD3D11_H
 
+#include "mozilla/gfx/2D.h"
 #include "mozilla/layers/Compositor.h"
 #include "TextureD3D11.h"
 #include <d3d11.h>
@@ -50,10 +51,10 @@ public:
   virtual TemporaryRef<DataTextureSource>
     CreateDataTextureSource(TextureFlags aFlags = 0) MOZ_OVERRIDE { return nullptr; }
 
-  virtual bool CanUseCanvasLayerForSize(const gfxIntSize& aSize) MOZ_OVERRIDE;
+  virtual bool CanUseCanvasLayerForSize(const gfx::IntSize& aSize) MOZ_OVERRIDE;
   virtual int32_t GetMaxTextureSize() const MOZ_FINAL;
 
-  virtual void SetTargetContext(gfxContext* aTarget)  MOZ_OVERRIDE
+  virtual void SetTargetContext(gfx::DrawTarget* aTarget)  MOZ_OVERRIDE
   {
     mTarget = aTarget;
   }
@@ -66,7 +67,8 @@ public:
 
   virtual TemporaryRef<CompositingRenderTarget>
     CreateRenderTargetFromSource(const gfx::IntRect& aRect,
-                                 const CompositingRenderTarget* aSource) MOZ_OVERRIDE;
+                                 const CompositingRenderTarget* aSource,
+                                 const gfx::IntPoint& aSourcePoint) MOZ_OVERRIDE;
 
   virtual void SetRenderTarget(CompositingRenderTarget* aSurface) MOZ_OVERRIDE;
   virtual CompositingRenderTarget* GetCurrentRenderTarget() MOZ_OVERRIDE
@@ -92,14 +94,14 @@ public:
                         const gfx::Rect &aClipRect,
                         const EffectChain &aEffectChain,
                         gfx::Float aOpacity,
-                        const gfx::Matrix4x4 &aTransform,
-                        const gfx::Point &aOffset) MOZ_OVERRIDE;
+                        const gfx::Matrix4x4 &aTransform) MOZ_OVERRIDE;
 
   /**
    * Start a new frame. If aClipRectIn is null, sets *aClipRectOut to the
    * screen dimensions. 
    */
-  virtual void BeginFrame(const gfx::Rect *aClipRectIn,
+  virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
+                          const gfx::Rect *aClipRectIn,
                           const gfxMatrix& aTransform,
                           const gfx::Rect& aRenderBounds,
                           gfx::Rect *aClipRectOut = nullptr,
@@ -167,7 +169,7 @@ private:
 
   DeviceAttachmentsD3D11* mAttachments;
 
-  nsRefPtr<gfxContext> mTarget;
+  RefPtr<gfx::DrawTarget> mTarget;
 
   nsIWidget* mWidget;
 

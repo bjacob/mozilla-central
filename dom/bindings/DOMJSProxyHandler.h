@@ -34,7 +34,7 @@ inline const void* ProxyFamily() { return &HandlerFamily; }
 inline bool IsDOMProxy(JSObject *obj, const js::Class* clasp)
 {
     MOZ_ASSERT(js::GetObjectClass(obj) == clasp);
-    return (js::IsObjectProxyClass(clasp) || js::IsFunctionProxyClass(clasp)) &&
+    return js::IsProxyClass(clasp) &&
            js::GetProxyHandler(obj)->family() == ProxyFamily();
 }
 
@@ -58,6 +58,11 @@ public:
                              JS::Handle<jsid> id,
                              JS::MutableHandle<JSPropertyDescriptor> desc,
                              unsigned flags) MOZ_OVERRIDE;
+
+  bool watch(JSContext* cx, JS::Handle<JSObject*> proxy, JS::Handle<jsid> id,
+             JS::Handle<JSObject*> callable) MOZ_OVERRIDE;
+  bool unwatch(JSContext* cx, JS::Handle<JSObject*> proxy,
+               JS::Handle<jsid> id) MOZ_OVERRIDE;
 };
 
 class DOMProxyHandler : public BaseDOMProxyHandler

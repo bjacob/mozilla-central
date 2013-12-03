@@ -52,7 +52,6 @@ template <js::AllowGC allowGC>
 extern JSString *
 NumberToString(js::ThreadSafeContext *cx, double d);
 
-template <js::AllowGC allowGC>
 extern JSAtom *
 NumberToAtom(js::ExclusiveContext *cx, double d);
 
@@ -60,7 +59,6 @@ template <AllowGC allowGC>
 extern JSFlatString *
 Int32ToString(ThreadSafeContext *cx, int32_t i);
 
-template <AllowGC allowGC>
 extern JSAtom *
 Int32ToAtom(ExclusiveContext *cx, int32_t si);
 
@@ -101,7 +99,7 @@ struct ToCStringBuf
 /*
  * Convert a number to a C string.  When base==10, this function implements
  * ToString() as specified by ECMA-262-5 section 9.8.1.  It handles integral
- * values cheaply.  Return NULL if we ran out of memory.  See also
+ * values cheaply.  Return nullptr if we ran out of memory.  See also
  * js_NumberToCString().
  */
 extern char *
@@ -260,7 +258,9 @@ ToInteger(JSContext *cx, HandleValue v, double *dp)
 inline bool
 SafeAdd(int32_t one, int32_t two, int32_t *res)
 {
-    *res = one + two;
+    // Use unsigned for the 32-bit operation since signed overflow gets
+    // undefined behavior.
+    *res = uint32_t(one) + uint32_t(two);
     int64_t ores = (int64_t)one + (int64_t)two;
     return ores == (int64_t)*res;
 }
@@ -268,7 +268,7 @@ SafeAdd(int32_t one, int32_t two, int32_t *res)
 inline bool
 SafeSub(int32_t one, int32_t two, int32_t *res)
 {
-    *res = one - two;
+    *res = uint32_t(one) - uint32_t(two);
     int64_t ores = (int64_t)one - (int64_t)two;
     return ores == (int64_t)*res;
 }
@@ -276,7 +276,7 @@ SafeSub(int32_t one, int32_t two, int32_t *res)
 inline bool
 SafeMul(int32_t one, int32_t two, int32_t *res)
 {
-    *res = one * two;
+    *res = uint32_t(one) * uint32_t(two);
     int64_t ores = (int64_t)one * (int64_t)two;
     return ores == (int64_t)*res;
 }

@@ -55,19 +55,40 @@
                         android:layout_alignParentBottom="true">
         </RelativeLayout>
 
-        <org.mozilla.gecko.BrowserToolbar android:id="@+id/browser_toolbar"
-                style="@style/BrowserToolbar"
-                android:layout_width="fill_parent"
-                android:layout_height="@dimen/browser_toolbar_height"
-                android:clickable="true"
-                android:focusable="true"/>
-
         <FrameLayout android:id="@+id/search_container"
                      android:layout_width="fill_parent"
                      android:layout_height="fill_parent"
-                     android:layout_below="@id/browser_toolbar"
+                     android:layout_below="@+id/browser_toolbar"
                      android:background="@android:color/white"
                      android:visibility="invisible"/>
+
+        <!-- When focus is cleared from from BrowserToolbar's EditText to
+             lower the virtual keyboard, focus will be returned to the root
+             view. To make sure the EditText is not the first focusable view in
+             the root view, BrowserToolbar should be specified as low in the
+             view hierarchy as possible. -->
+
+        <ViewFlipper android:id="@+id/browser_actionbar"
+                android:layout_width="fill_parent"
+                android:layout_height="@dimen/browser_toolbar_height"
+                android:clickable="true"
+                android:focusable="true">
+
+            <org.mozilla.gecko.toolbar.BrowserToolbar
+                android:id="@id/browser_toolbar"
+                    style="@style/BrowserToolbar"
+                    android:layout_width="fill_parent"
+                    android:layout_height="@dimen/browser_toolbar_height"
+                    android:clickable="true"
+                    android:focusable="true"
+                android:background="@drawable/url_bar_bg"/>
+
+            <org.mozilla.gecko.ActionModeCompatView android:id="@+id/actionbar"
+                                                    android:layout_height="fill_parent"
+                                                    android:layout_width="fill_parent"
+                                                    style="@style/GeckoActionBar"/>
+
+        </ViewFlipper>
 
     </view>
 

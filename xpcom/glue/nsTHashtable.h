@@ -162,14 +162,14 @@ public:
   {
     EntryType* e = PutEntry(aKey, fallible_t());
     if (!e)
-      NS_RUNTIMEABORT("OOM");
+      NS_ABORT_OOM(mTable.entrySize * mTable.entryCount);
     return e;
   }
 
   EntryType* PutEntry(KeyType aKey, const fallible_t&) NS_WARN_UNUSED_RESULT
   {
     NS_ASSERTION(mTable.entrySize, "nsTHashtable was not initialized properly.");
-    
+
     return static_cast<EntryType*>
                       (PL_DHashTableOperate(
                             &mTable,
@@ -254,8 +254,8 @@ public:
 
   /**
    * Measure the size of the table's entry storage, and if
-   * |sizeOfEntryExcludingThis| is non-NULL, measure the size of things pointed
-   * to by entries.
+   * |sizeOfEntryExcludingThis| is non-nullptr, measure the size of things
+   * pointed to by entries.
    * 
    * @param     sizeOfEntryExcludingThis the
    *            <code>SizeOfEntryExcludingThisFun</code> function to call
@@ -265,13 +265,14 @@ public:
    * @return    the summed size of all the entries
    */
   size_t SizeOfExcludingThis(SizeOfEntryExcludingThisFun sizeOfEntryExcludingThis,
-                             mozilla::MallocSizeOf mallocSizeOf, void *userArg = NULL) const
+                             mozilla::MallocSizeOf mallocSizeOf,
+                             void *userArg = nullptr) const
   {
     if (sizeOfEntryExcludingThis) {
       s_SizeOfArgs args = { sizeOfEntryExcludingThis, userArg };
       return PL_DHashTableSizeOfExcludingThis(&mTable, s_SizeOfStub, mallocSizeOf, &args);
     }
-    return PL_DHashTableSizeOfExcludingThis(&mTable, NULL, mallocSizeOf);
+    return PL_DHashTableSizeOfExcludingThis(&mTable, nullptr, mallocSizeOf);
   }
 
 #ifdef DEBUG
@@ -391,24 +392,20 @@ template<class EntryType>
 void
 nsTHashtable<EntryType>::Init(uint32_t aInitSize)
 {
-  static PLDHashTableOps sOps = 
+  static const PLDHashTableOps sOps =
   {
     ::PL_DHashAllocTable,
     ::PL_DHashFreeTable,
     s_HashKey,
     s_MatchEntry,
-    ::PL_DHashMoveEntryStub,
+    EntryType::ALLOW_MEMMOVE ? ::PL_DHashMoveEntryStub : s_CopyEntry,
     s_ClearEntry,
     ::PL_DHashFinalizeStub,
     s_InitEntry
   };
 
-  if (!EntryType::ALLOW_MEMMOVE) {
-    sOps.moveEntry = s_CopyEntry;
-  }
-  
   if (!PL_DHashTableInit(&mTable, &sOps, nullptr, sizeof(EntryType), aInitSize)) {
-    NS_RUNTIMEABORT("OOM");
+    NS_ABORT_OOM(sizeof(EntryType) * aInitSize);
   }
 }
 

@@ -252,11 +252,6 @@ documenttab[selected] .documenttab-selection {
   transition-delay:    0s;
   transition-property: padding-bottom;
 }
-#browsers[findbar] browser {
-  /* delay setting padding-bottom until the findbar has transitioned in */
-  transition-delay:    @metro_animation_duration@;
-  padding-bottom: @findbar_height@;
-}
 /* Selection overlay and monocles */
 #page,
 .selection-overlay {
@@ -325,10 +320,6 @@ documenttab[selected] .documenttab-selection {
   min-height: @scroller_thickness@;
   height: @scroller_thickness@;
   min-width: @scroller_minimum@;
-}
-
-#browsers[input="imprecise"] browser {
-  overflow: hidden;
 }
 
 /* overlay buttons */
@@ -448,28 +439,6 @@ documenttab[selected] .documenttab-selection {
   visibility: hidden;
 }
 
-.circularprogressindicator-progressRing {
-  visibility: visible;
-  margin: 0 @toolbar_horizontal_spacing@;
-  pointer-events:none;
-  position: absolute;
-}
-.circularprogressindicator-progressTrack {
-  visibility: visible;
-  margin: 0 @toolbar_horizontal_spacing@;
-  pointer-events: none;
-  position: absolute;
-  width: 40px;
-  height: 40px;
-  background-repeat: no-repeat;
-  background-size: 40px 40px;
-  background-image: url(chrome://browser/skin/images/progresscircle-bg.png);
-}
-.circularprogressindicator-progressRing:not([progress]),
-.circularprogressindicator-progressTrack:not([progress]) {
-  visibility: hidden;
-}
-
 /* Progress meter ---------------------------------------------------------- */
 
 #progress-container {
@@ -481,6 +450,9 @@ documenttab[selected] .documenttab-selection {
   background-color: hsla(210,5%,80%,1);
   box-shadow: 0 1px 0 hsla(210,5%,50%,.1) inset;
   -moz-user-focus: ignore;
+}
+#progress-container[startpage] {
+  visibility: collapse;
 }
 
 #progress-control {
@@ -601,6 +573,14 @@ documenttab[selected] .documenttab-selection {
   list-style-image: url("chrome://browser/skin/images/identity-icons-https-ev.png");
 }
 
+#toolbar[startpage] > #urlbar:not([autocomplete]) > #identity-box > #identity-icon {
+  list-style-image: url("chrome://browser/skin/images/icons-identity-firefox.png");
+}
+
+#urlbar[autocomplete] > #identity-box > #identity-icon {
+  list-style-image: url("chrome://browser/skin/images/icon-autocomplete-search.png");
+}
+
 /* Main URL textbox */
 #urlbar-edit {
   margin: 0 !important;
@@ -609,11 +589,6 @@ documenttab[selected] .documenttab-selection {
   border-radius: 0;
   border: 0 none !important;
   padding: 0 !important;
-}
-
-#urlbar-edit > hbox > .textbox-input-box > .textbox-input::-moz-selection {
-  color: white;
-  background-color: @metro_orange@;
 }
 
 #urlbar-edit > hbox > .textbox-input-box > .textbox-input:invalid {
@@ -679,6 +654,14 @@ documenttab[selected] .documenttab-selection {
   #stop-button {
     list-style-image: url(chrome://browser/skin/images/urlbar-stop@1.4x.png);
   }
+
+  #toolbar[startpage] > #urlbar:not([autocomplete]) > #identity-box > #identity-icon {
+    list-style-image: url("chrome://browser/skin/images/icons-identity-firefox@1.4x.png");
+  }
+
+  #urlbar[autocomplete] > #identity-box > #identity-icon {
+    list-style-image: url("chrome://browser/skin/images/icon-autocomplete-search@1.4x.png");
+  }
 }
 
 @media (min-resolution: @min_res_180pc@) {
@@ -704,6 +687,14 @@ documenttab[selected] .documenttab-selection {
 
   #stop-button {
     list-style-image: url(chrome://browser/skin/images/urlbar-stop@1.8x.png);
+  }
+
+  #toolbar[startpage] > #urlbar:not([autocomplete]) > #identity-box > #identity-icon {
+    list-style-image: url("chrome://browser/skin/images/icons-identity-firefox@1.8x.png");
+  }
+
+  #urlbar[autocomplete] > #identity-box > #identity-icon {
+    list-style-image: url("chrome://browser/skin/images/icon-autocomplete-search@1.8x.png");
   }
 }
 
@@ -741,15 +732,12 @@ documenttab[selected] .documenttab-selection {
   visibility: collapse;
 }
 
-.circularprogressindicator-progressButton {
-  margin: 0 @toolbar_horizontal_spacing@;
-  -moz-image-region: rect(0px, 40px, 40px, 0px) !important;
+#download-progress:not([progress]) {
+  visibility: collapse;
 }
-.circularprogressindicator-progressButton:hover {
-  -moz-image-region: rect(40px, 40px, 80px, 0px) !important;
-}
-.circularprogressindicator-progressButton:active {
-  -moz-image-region: rect(80px, 40px, 120px, 0px) !important;
+
+#download-progress {
+  list-style-image: url(chrome://browser/skin/images/navbar-download.png);
 }
 
 #pin-button {
@@ -765,6 +753,10 @@ documenttab[selected] .documenttab-selection {
 }
 
 @media (min-resolution: @min_res_140pc@) {
+  #download-progress {
+    list-style-image: url(chrome://browser/skin/images/navbar-download@1.4x.png);
+  }
+
   #pin-button {
     list-style-image: url(chrome://browser/skin/images/navbar-pin@1.4x.png);
   }
@@ -779,6 +771,10 @@ documenttab[selected] .documenttab-selection {
 }
 
 @media (min-resolution: @min_res_180pc@) {
+  #download-progress {
+    list-style-image: url(chrome://browser/skin/images/navbar-download@1.8x.png);
+  }
+
   #pin-button {
     list-style-image: url(chrome://browser/skin/images/navbar-pin@1.8x.png);
   }

@@ -10,7 +10,6 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Util.h"
 #include "nsDOMBlobBuilder.h"
-#include "nsICharsetConverterManager.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMProgressEvent.h"
 #include "nsIJARChannel.h"
@@ -26,7 +25,6 @@
 #include "nsIUploadChannel2.h"
 #include "nsIDOMSerializer.h"
 #include "nsXPCOM.h"
-#include "nsGUIEvent.h"
 #include "nsIDOMEventListener.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIDOMWindow.h"
@@ -59,6 +57,7 @@
 #include "jsfriendapi.h"
 #include "GeckoProfiler.h"
 #include "mozilla/dom/EncodingUtils.h"
+#include "nsIUnicodeDecoder.h"
 #include "mozilla/dom/XMLHttpRequestBinding.h"
 #include "mozilla/Attributes.h"
 #include "nsIPermissionManager.h"
@@ -247,14 +246,6 @@ NS_INTERFACE_MAP_END_INHERITING(nsDOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(nsXHREventTarget, nsDOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(nsXHREventTarget, nsDOMEventTargetHelper)
-
-NS_IMPL_EVENT_HANDLER(nsXHREventTarget, loadstart)
-NS_IMPL_EVENT_HANDLER(nsXHREventTarget, progress)
-NS_IMPL_EVENT_HANDLER(nsXHREventTarget, abort)
-NS_IMPL_EVENT_HANDLER(nsXHREventTarget, error)
-NS_IMPL_EVENT_HANDLER(nsXHREventTarget, load)
-NS_IMPL_EVENT_HANDLER(nsXHREventTarget, timeout)
-NS_IMPL_EVENT_HANDLER(nsXHREventTarget, loadend)
 
 void
 nsXHREventTarget::DisconnectFromOwner()
@@ -642,13 +633,9 @@ nsXMLHttpRequest::DetectCharset()
     mResponseCharset.AssignLiteral("UTF-8");
   }
 
-  nsresult rv;
-  nsCOMPtr<nsICharsetConverterManager> ccm =
-    do_GetService(NS_CHARSETCONVERTERMANAGER_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
+  mDecoder = EncodingUtils::DecoderForEncoding(mResponseCharset);
 
-  return ccm->GetUnicodeDecoderRaw(mResponseCharset.get(),
-                                   getter_AddRefs(mDecoder));
+  return NS_OK;
 }
 
 nsresult
@@ -733,20 +720,7 @@ nsXMLHttpRequest::GetResponseText(nsString& aResponseText, ErrorResult& aRv)
     mResponseCharset = mResponseXML->GetDocumentCharacterSet();
     mResponseText.Truncate();
     mResponseBodyDecodedPos = 0;
-
-    nsresult rv;
-    nsCOMPtr<nsICharsetConverterManager> ccm =
-      do_GetService(NS_CHARSETCONVERTERMANAGER_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) {
-      aRv.Throw(rv);
-      return;
-    }
-
-    aRv = ccm->GetUnicodeDecoderRaw(mResponseCharset.get(),
-                                    getter_AddRefs(mDecoder));
-    if (aRv.Failed()) {
-      return;
-    }
+    mDecoder = EncodingUtils::DecoderForEncoding(mResponseCharset);
   }
 
   NS_ASSERTION(mResponseBodyDecodedPos < mResponseBody.Length(),
@@ -967,7 +941,7 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx, ErrorResult& aRv)
     if (aRv.Failed()) {
       return JSVAL_NULL;
     }
-    JS::Value result;
+    JS::Rooted<JS::Value> result(aCx);
     if (!xpc::StringToJsval(aCx, str, &result)) {
       aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
       return JSVAL_NULL;
@@ -1015,7 +989,7 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx, ErrorResult& aRv)
 
     JS::Rooted<JS::Value> result(aCx, JSVAL_NULL);
     JS::Rooted<JSObject*> scope(aCx, JS::CurrentGlobalOrNull(aCx));
-    aRv = nsContentUtils::WrapNative(aCx, scope, mResponseBlob, result.address(),
+    aRv = nsContentUtils::WrapNative(aCx, scope, mResponseBlob, &result,
                                      nullptr, true);
     return result;
   }
@@ -1027,7 +1001,7 @@ nsXMLHttpRequest::GetResponse(JSContext* aCx, ErrorResult& aRv)
 
     JS::Rooted<JSObject*> scope(aCx, JS::CurrentGlobalOrNull(aCx));
     JS::Rooted<JS::Value> result(aCx, JSVAL_NULL);
-    aRv = nsContentUtils::WrapNative(aCx, scope, mResponseXML, result.address(),
+    aRv = nsContentUtils::WrapNative(aCx, scope, mResponseXML, &result,
                                      nullptr, true);
     return result;
   }
@@ -2173,7 +2147,8 @@ nsXMLHttpRequest::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult
     NS_ASSERTION(!(mState & XML_HTTP_REQUEST_SYNCLOOPING),
       "We weren't supposed to support HTML parsing with XHR!");
     nsCOMPtr<EventTarget> eventTarget = do_QueryInterface(mResponseXML);
-    nsEventListenerManager* manager = eventTarget->GetListenerManager(true);
+    nsEventListenerManager* manager =
+      eventTarget->GetOrCreateListenerManager();
     manager->AddEventListenerByType(new nsXHRParseEndListener(this),
                                     NS_LITERAL_STRING("DOMContentLoaded"),
                                     dom::TrustedEventsAtSystemGroupBubble());
@@ -3660,7 +3635,7 @@ nsXMLHttpRequest::GetInterface(JSContext* aCx, nsIJSID* aIID, ErrorResult& aRv)
   JS::Rooted<JSObject*> wrapper(aCx, GetWrapper());
   JSAutoCompartment ac(aCx, wrapper);
   JS::Rooted<JSObject*> global(aCx, JS_GetGlobalForObject(aCx, wrapper));
-  aRv = nsContentUtils::WrapNative(aCx, global, result, iid, v.address());
+  aRv = nsContentUtils::WrapNative(aCx, global, result, iid, &v);
   return aRv.Failed() ? JSVAL_NULL : v;
 }
 

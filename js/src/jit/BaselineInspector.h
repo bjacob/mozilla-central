@@ -46,12 +46,12 @@ class SetElemICInspector : public ICInspector
 class BaselineInspector
 {
   private:
-    RootedScript script;
+    JSScript *script;
     ICEntry *prevLookedUpEntry;
 
   public:
-    BaselineInspector(JSContext *cx, JSScript *rawScript)
-      : script(cx, rawScript), prevLookedUpEntry(NULL)
+    BaselineInspector(JSScript *script)
+      : script(script), prevLookedUpEntry(nullptr)
     {
         JS_ASSERT(script);
     }
@@ -67,14 +67,14 @@ class BaselineInspector
   private:
 #ifdef DEBUG
     bool isValidPC(jsbytecode *pc) {
-        return (pc >= script->code) && (pc < script->code + script->length);
+        return script->containsPC(pc);
     }
 #endif
 
     ICEntry &icEntryFromPC(jsbytecode *pc) {
         JS_ASSERT(hasBaselineScript());
         JS_ASSERT(isValidPC(pc));
-        ICEntry &ent = baselineScript()->icEntryFromPCOffset(pc - script->code, prevLookedUpEntry);
+        ICEntry &ent = baselineScript()->icEntryFromPCOffset(script->pcToOffset(pc), prevLookedUpEntry);
         JS_ASSERT(ent.isForOp());
         prevLookedUpEntry = &ent;
         return ent;
@@ -82,7 +82,7 @@ class BaselineInspector
 
     template <typename ICInspectorType>
     ICInspectorType makeICInspector(jsbytecode *pc, ICStub::Kind expectedFallbackKind) {
-        ICEntry *ent = NULL;
+        ICEntry *ent = nullptr;
         if (hasBaselineScript()) {
             ent = &icEntryFromPC(pc);
             JS_ASSERT(ent->fallbackStub()->kind() == expectedFallbackKind);
@@ -109,6 +109,16 @@ class BaselineInspector
     bool hasSeenNegativeIndexGetElement(jsbytecode *pc);
     bool hasSeenAccessedGetter(jsbytecode *pc);
     bool hasSeenDoubleResult(jsbytecode *pc);
+    bool hasSeenNonStringIterNext(jsbytecode *pc);
+
+    JSObject *getTemplateObject(jsbytecode *pc);
+    JSObject *getTemplateObjectForNative(jsbytecode *pc, Native native);
+
+    DeclEnvObject *templateDeclEnvObject();
+    CallObject *templateCallObject();
+
+    JSObject *commonGetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonGetter);
+    JSObject *commonSetPropFunction(jsbytecode *pc, Shape **lastProperty, JSFunction **commonSetter);
 };
 
 } // namespace jit

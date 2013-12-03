@@ -38,6 +38,7 @@ const { loadSubScript } = Cc['@mozilla.org/moz/jssubscript-loader;1'].
                      getService(Ci.mozIJSSubScriptLoader);
 const { notifyObservers } = Cc['@mozilla.org/observer-service;1'].
                         getService(Ci.nsIObserverService);
+const { NetUtil } = Cu.import("resource://gre/modules/NetUtil.jsm", {});
 
 // Define some shortcuts.
 const bind = Function.call.bind(Function.bind);
@@ -157,6 +158,18 @@ var serializeStack = iced(function serializeStack(frames) {
 })
 exports.serializeStack = serializeStack
 
+function readURI(uri) {
+  let stream = NetUtil.newChannel(uri, 'UTF-8', null).open();
+  let count = stream.available();
+  let data = NetUtil.readInputStreamToString(stream, count, {
+    charset: 'UTF-8'
+  });
+
+  stream.close();
+
+  return data;
+}
+
 // Function takes set of options and returns a JS sandbox. Function may be
 // passed set of options:
 //  - `name`: A string value which identifies the sandbox in about:memory. Will
@@ -170,6 +183,8 @@ exports.serializeStack = serializeStack
 //    to `true`.
 // - `sandbox`: A sandbox to share JS compartment with. If omitted new
 //    compartment will be created.
+// - `metadata`: A metadata object associated with the sandbox. It should
+//    be JSON-serializable.
 // For more details see:
 // https://developer.mozilla.org/en/Components.utils.Sandbox
 const Sandbox = iced(function Sandbox(options) {
@@ -181,8 +196,11 @@ const Sandbox = iced(function Sandbox(options) {
     sandboxName: options.name,
     principal: 'principal' in options ? options.principal : systemPrincipal,
     wantXrays: 'wantXrays' in options ? options.wantXrays : true,
+    wantGlobalProperties: 'wantGlobalProperties' in options ?
+                          options.wantGlobalProperties : [],
     sandboxPrototype: 'prototype' in options ? options.prototype : {},
-    sameGroupAs: 'sandbox' in options ? options.sandbox : null
+    sameGroupAs: 'sandbox' in options ? options.sandbox : null,
+    metadata: 'metadata' in options ? options.metadata : {}
   };
 
   // Make `options.sameGroupAs` only if `sandbox` property is passed,
@@ -250,7 +268,12 @@ const load = iced(function load(loader, module) {
     // when creating the new one to reduce memory consumption.
     sandbox: sandboxes[keys(sandboxes).shift()],
     prototype: create(globals, descriptors),
-    wantXrays: false
+    wantXrays: false,
+    wantGlobalProperties: module.id == "sdk/indexed-db" ? ["indexedDB"] : [],
+    metadata: {
+      addonID: loader.id,
+      URI: module.uri
+    }
   });
 
   try {
@@ -303,7 +326,11 @@ exports.load = load;
 // Utility function to check if id is relative.
 function isRelative(id) { return id[0] === '.'; }
 // Utility function to normalize module `uri`s so they have `.js` extension.
-function normalize(uri) { return uri.substr(-3) === '.js' ? uri : uri + '.js'; }
+function normalize(uri) {
+  return isJSURI(uri) ? uri :
+         isJSONURI(uri) ? uri :
+         uri + '.js';
+}
 // Utility function to join paths. In common case `base` is a
 // `requirer.uri` but in some cases it may be `baseURI`. In order to
 // avoid complexity we require `baseURI` with a trailing `/`.
@@ -330,6 +357,7 @@ const resolveURI = iced(function resolveURI(id, mapping) {
     if (id.indexOf(path) === 0)
       return normalize(id.replace(path, uri));
   }
+  return void 0; // otherwise we raise a warning, see bug 910304
 });
 exports.resolveURI = resolveURI;
 
@@ -360,9 +388,31 @@ const Require = iced(function Require(loader, requirer) {
     if (uri in modules) {
       module = modules[uri];
     }
-    // Otherwise load and cache it. We also freeze module to prevent it from
-    // further changes at runtime.
-    else {
+    else if (isJSONURI(uri)) {
+      let data;
+
+      // First attempt to load and parse json uri
+      // ex: `test.json`
+      // If that doesn't exist, check for `test.json.js`
+      // for node parity
+      try {
+        data = JSON.parse(readURI(uri));
+        module = modules[uri] = Module(requirement, uri);
+        module.exports = data;
+        freeze(module);
+      }
+      catch (err) {
+        // If error thrown from JSON parsing, throw that, do not
+        // attempt to find .json.js file
+        if (err && /JSON\.parse/.test(err.message))
+          throw err;
+        uri = uri + '.js';
+      }
+    }
+    // If not yet cached, load and cache it.
+    // We also freeze module to prevent it from further changes
+    // at runtime.
+    if (!(uri in modules)) {
       module = modules[uri] = Module(requirement, uri);
       freeze(load(loader, module));
     }
@@ -475,6 +525,8 @@ const Loader = iced(function Loader(options) {
     // Map of module sandboxes indexed by module URIs.
     sandboxes: { enumerable: false, value: {} },
     resolve: { enumerable: false, value: resolve },
+    // ID of the addon, if provided.
+    id: { enumerable: false, value: options.id },
     load: { enumerable: false, value: options.load || load },
     // Main (entry point) module, it can be set only once, since loader
     // instance can have only one main module.
@@ -490,6 +542,9 @@ const Loader = iced(function Loader(options) {
   }));
 });
 exports.Loader = Loader;
+
+let isJSONURI = uri => uri.substr(-5) === '.json';
+let isJSURI = uri => uri.substr(-3) === '.js';
 
 });
 

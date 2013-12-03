@@ -10,7 +10,8 @@
 #include "Tools.h"
 #include <vector>
 #include <algorithm>
-#include "QuartzSupport.h"
+#include "MacIOSurface.h"
+#include "FilterNodeSoftware.h"
 
 using namespace std;
 
@@ -152,7 +153,6 @@ DrawTargetCG::~DrawTargetCG()
     CGColorSpaceRelease(mColorSpace);
   if (mCg)
     CGContextRelease(mCg);
-  free(mData);
 }
 
 BackendType
@@ -209,16 +209,24 @@ DrawTargetCG::CreateSourceSurfaceFromData(unsigned char *aData,
   return newSurf;
 }
 
+// This function returns a retained CGImage that needs to be released after
+// use. The reason for this is that we want to either reuse an existing CGImage
+// or create a new one.
 static CGImageRef
-GetImageFromSourceSurface(SourceSurface *aSurface)
+GetRetainedImageFromSourceSurface(SourceSurface *aSurface)
 {
   if (aSurface->GetType() == SURFACE_COREGRAPHICS_IMAGE)
-    return static_cast<SourceSurfaceCG*>(aSurface)->GetImage();
+    return CGImageRetain(static_cast<SourceSurfaceCG*>(aSurface)->GetImage());
   else if (aSurface->GetType() == SURFACE_COREGRAPHICS_CGCONTEXT)
-    return static_cast<SourceSurfaceCGContext*>(aSurface)->GetImage();
-  else if (aSurface->GetType() == SURFACE_DATA)
-    return static_cast<DataSourceSurfaceCG*>(aSurface)->GetImage();
-  abort();
+    return CGImageRetain(static_cast<SourceSurfaceCGContext*>(aSurface)->GetImage());
+
+  if (aSurface->GetType() == SURFACE_DATA) {
+    DataSourceSurface* dataSource = static_cast<DataSourceSurface*>(aSurface);
+    return CreateCGImage(nullptr, dataSource->GetData(), dataSource->GetSize(),
+                         dataSource->Stride(), dataSource->GetFormat());
+  }
+
+  MOZ_CRASH("unsupported source surface");
 }
 
 TemporaryRef<SourceSurface>
@@ -280,8 +288,6 @@ DrawTargetCG::DrawSurface(SourceSurface *aSurface,
 {
   MarkChanged();
 
-  CGImageRef image;
-  CGImageRef subimage = nullptr;
   CGContextSaveGState(mCg);
 
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
@@ -291,14 +297,13 @@ DrawTargetCG::DrawSurface(SourceSurface *aSurface,
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AA_NONE);
 
   CGContextConcatCTM(cg, GfxMatrixToCGAffineTransform(mTransform));
-  image = GetImageFromSourceSurface(aSurface);
+  CGImageRef image = GetRetainedImageFromSourceSurface(aSurface);
+
   /* we have two options here:
    *  - create a subimage -- this is slower
    *  - fancy things with clip and different dest rects */
-  {
-    subimage = CGImageCreateWithImageInRect(image, RectToCGRect(aSource));
-    image = subimage;
-  }
+  CGImageRef subimage = CGImageCreateWithImageInRect(image, RectToCGRect(aSource));
+  CGImageRelease(image);
 
   CGContextScaleCTM(cg, 1, -1);
 
@@ -307,13 +312,29 @@ DrawTargetCG::DrawSurface(SourceSurface *aSurface,
 
   CGContextSetInterpolationQuality(cg, InterpolationQualityFromFilter(aSurfOptions.mFilter));
 
-  CGContextDrawImage(cg, flippedRect, image);
+  CGContextDrawImage(cg, flippedRect, subimage);
 
   fixer.Fix(mCg);
 
   CGContextRestoreGState(mCg);
 
   CGImageRelease(subimage);
+}
+
+TemporaryRef<FilterNode>
+DrawTargetCG::CreateFilter(FilterType aType)
+{
+  return FilterNodeSoftware::Create(aType);
+}
+
+void
+DrawTargetCG::DrawFilter(FilterNode *aNode,
+                         const Rect &aSourceRect,
+                         const Point &aDestPoint,
+                         const DrawOptions &aOptions)
+{
+  FilterNodeSoftware* filter = static_cast<FilterNodeSoftware*>(aNode);
+  filter->Draw(this, aSourceRect, aDestPoint, aOptions);
 }
 
 static CGColorRef ColorToCGColor(CGColorSpaceRef aColorSpace, const Color& aColor)
@@ -382,6 +403,83 @@ DrawTargetCG::CreateGradientStops(GradientStop *aStops, uint32_t aNumStops,
   return new GradientStopsCG(aStops, aNumStops, aExtendMode);
 }
 
+static void
+UpdateLinearParametersToIncludePoint(double *min_t, double *max_t,
+                                     CGPoint *start,
+                                     double dx, double dy,
+                                     double x, double y)
+{
+  /**
+   * Compute a parameter t such that a line perpendicular to the (dx,dy)
+   * vector, passing through (start->x + dx*t, start->y + dy*t), also
+   * passes through (x,y).
+   *
+   * Let px = x - start->x, py = y - start->y.
+   * t is given by
+   *   (px - dx*t)*dx + (py - dy*t)*dy = 0
+   *
+   * Solving for t we get
+   *   numerator = dx*px + dy*py
+   *   denominator = dx^2 + dy^2
+   *   t = numerator/denominator
+   *
+   * In CalculateRepeatingGradientParams we know the length of (dx,dy)
+   * is not zero. (This is checked in DrawLinearRepeatingGradient.)
+   */
+  double px = x - start->x;
+  double py = y - start->y;
+  double numerator = dx * px + dy * py;
+  double denominator = dx * dx + dy * dy;
+  double t = numerator / denominator;
+
+  if (*min_t > t) {
+    *min_t = t;
+  }
+  if (*max_t < t) {
+    *max_t = t;
+  }
+}
+
+/**
+ * Repeat the gradient line such that lines extended perpendicular to the
+ * gradient line at both start and end would completely enclose the drawing
+ * extents.
+ */
+static void
+CalculateRepeatingGradientParams(CGPoint *aStart, CGPoint *aEnd,
+                                 CGRect aExtents, int *aRepeatCount)
+{
+  double t_min = 0.;
+  double t_max = 0.;
+  double dx = aEnd->x - aStart->x;
+  double dy = aEnd->y - aStart->y;
+
+  double bounds_x1 = aExtents.origin.x;
+  double bounds_y1 = aExtents.origin.y;
+  double bounds_x2 = aExtents.origin.x + aExtents.size.width;
+  double bounds_y2 = aExtents.origin.y + aExtents.size.height;
+
+  UpdateLinearParametersToIncludePoint(&t_min, &t_max, aStart, dx, dy,
+                                       bounds_x1, bounds_y1);
+  UpdateLinearParametersToIncludePoint(&t_min, &t_max, aStart, dx, dy,
+                                       bounds_x2, bounds_y1);
+  UpdateLinearParametersToIncludePoint(&t_min, &t_max, aStart, dx, dy,
+                                       bounds_x2, bounds_y2);
+  UpdateLinearParametersToIncludePoint(&t_min, &t_max, aStart, dx, dy,
+                                       bounds_x1, bounds_y2);
+
+  // Move t_min and t_max to the nearest usable integer to try to avoid
+  // subtle variations due to numerical instability, especially accidentally
+  // cutting off a pixel. Extending the gradient repetitions is always safe.
+  t_min = floor (t_min);
+  t_max = ceil (t_max);
+  aEnd->x = aStart->x + dx * t_max;
+  aEnd->y = aStart->y + dy * t_max;
+  aStart->x = aStart->x + dx * t_min;
+  aStart->y = aStart->y + dy * t_min;
+
+  *aRepeatCount = t_max - t_min;
+}
 
 static void
 DrawLinearRepeatingGradient(CGContextRef cg, const LinearGradientPattern &aPattern, const CGRect &aExtents)
@@ -390,32 +488,12 @@ DrawLinearRepeatingGradient(CGContextRef cg, const LinearGradientPattern &aPatte
   CGPoint startPoint = { aPattern.mBegin.x, aPattern.mBegin.y };
   CGPoint endPoint = { aPattern.mEnd.x, aPattern.mEnd.y };
 
-  // extend the gradient line in multiples of the existing length in both
-  // directions until it crosses an edge of the extents box.
-  double xDiff = aPattern.mEnd.x - aPattern.mBegin.x;
-  double yDiff = aPattern.mEnd.y - aPattern.mBegin.y;
-
   int repeatCount = 1;
   // if we don't have a line then we can't extend it
-  if (xDiff || yDiff) {
-    while (startPoint.x > aExtents.origin.x
-           && startPoint.y > aExtents.origin.y
-           && startPoint.x < (aExtents.origin.x+aExtents.size.width)
-           && startPoint.y < (aExtents.origin.y+aExtents.size.height))
-    {
-      startPoint.x -= xDiff;
-      startPoint.y -= yDiff;
-      repeatCount++;
-    }
-    while (endPoint.x > aExtents.origin.x
-           && endPoint.y > aExtents.origin.y
-           && endPoint.x < (aExtents.origin.x+aExtents.size.width)
-           && endPoint.y < (aExtents.origin.y+aExtents.size.height))
-    {
-      endPoint.x += xDiff;
-      endPoint.y += yDiff;
-      repeatCount++;
-    }
+  if (aPattern.mEnd.x != aPattern.mBegin.x ||
+      aPattern.mEnd.y != aPattern.mBegin.y) {
+    CalculateRepeatingGradientParams(&startPoint, &endPoint, aExtents,
+                                     &repeatCount);
   }
 
   double scale = 1./repeatCount;
@@ -603,7 +681,7 @@ CreateCGPattern(const Pattern &aPattern, CGAffineTransform aUserSpace)
 {
   const SurfacePattern& pat = static_cast<const SurfacePattern&>(aPattern);
   // XXX: is .get correct here?
-  CGImageRef image = GetImageFromSourceSurface(pat.mSurface.get());
+  CGImageRef image = GetRetainedImageFromSourceSurface(pat.mSurface.get());
   CGFloat xStep, yStep;
   switch (pat.mExtendMode) {
     case EXTEND_CLAMP:
@@ -640,7 +718,7 @@ CreateCGPattern(const Pattern &aPattern, CGAffineTransform aUserSpace)
                                                       GfxMatrixToCGAffineTransform(pat.mMatrix)),
                               aUserSpace);
   transform = CGAffineTransformTranslate(transform, 0, -static_cast<float>(CGImageGetHeight(image)));
-  return CGPatternCreate(CGImageRetain(image), bounds, transform, xStep, yStep, kCGPatternTilingConstantSpacing,
+  return CGPatternCreate(image, bounds, transform, xStep, yStep, kCGPatternTilingConstantSpacing,
                          true, &patternCallbacks);
 }
 
@@ -705,7 +783,6 @@ DrawTargetCG::MaskSurface(const Pattern &aSource,
 {
   MarkChanged();
 
-  CGImageRef image;
   CGContextSaveGState(mCg);
 
   CGContextSetBlendMode(mCg, ToBlendMode(aDrawOptions.mCompositionOp));
@@ -715,7 +792,7 @@ DrawTargetCG::MaskSurface(const Pattern &aSource,
   CGContextSetShouldAntialias(cg, aDrawOptions.mAntialiasMode != AA_NONE);
 
   CGContextConcatCTM(cg, GfxMatrixToCGAffineTransform(mTransform));
-  image = GetImageFromSourceSurface(aMask);
+  CGImageRef image = GetRetainedImageFromSourceSurface(aMask);
 
   // use a negative-y so that the mask image draws right ways up
   CGContextScaleCTM(cg, 1, -1);
@@ -733,6 +810,8 @@ DrawTargetCG::MaskSurface(const Pattern &aSource,
     SetFillFromPattern(cg, mColorSpace, aSource);
     CGContextFillRect(cg, CGRectMake(aOffset.x, aOffset.y, size.width, size.height));
   }
+
+  CGImageRelease(image);
 
   fixer.Fix(mCg);
 
@@ -767,7 +846,7 @@ DrawTargetCG::FillRect(const Rect &aRect,
       // should give us better performance, better output, smaller PDF and
       // matches what cairo does.
       const SurfacePattern& pat = static_cast<const SurfacePattern&>(aPattern);
-      CGImageRef image = GetImageFromSourceSurface(pat.mSurface.get());
+      CGImageRef image = GetRetainedImageFromSourceSurface(pat.mSurface.get());
       CGContextClipToRect(cg, RectToCGRect(aRect));
       CGContextConcatCTM(cg, GfxMatrixToCGAffineTransform(pat.mMatrix));
       CGContextTranslateCTM(cg, 0, CGImageGetHeight(image));
@@ -778,6 +857,7 @@ DrawTargetCG::FillRect(const Rect &aRect,
       CGContextSetInterpolationQuality(cg, InterpolationQualityFromFilter(pat.mFilter));
 
       CGContextDrawImage(cg, imageRect, image);
+      CGImageRelease(image);
     } else {
       SetFillFromPattern(cg, mColorSpace, aPattern);
       CGContextFillRect(cg, RectToCGRect(aRect));
@@ -1110,18 +1190,15 @@ DrawTargetCG::CopySurface(SourceSurface *aSurface,
 {
   MarkChanged();
 
-  CGImageRef image;
-  CGImageRef subimage = nullptr;
   if (aSurface->GetType() == SURFACE_COREGRAPHICS_IMAGE ||
       aSurface->GetType() == SURFACE_COREGRAPHICS_CGCONTEXT) {
-    image = GetImageFromSourceSurface(aSurface);
+    CGImageRef image = GetRetainedImageFromSourceSurface(aSurface);
+
     /* we have two options here:
      *  - create a subimage -- this is slower
      *  - fancy things with clip and different dest rects */
-    {
-      subimage = CGImageCreateWithImageInRect(image, IntRectToCGRect(aSourceRect));
-      image = subimage;
-    }
+    CGImageRef subimage = CGImageCreateWithImageInRect(image, IntRectToCGRect(aSourceRect));
+    CGImageRelease(image);
     // XXX: it might be more efficient for us to do the copy directly if we have access to the bits
 
     CGContextSaveGState(mCg);
@@ -1135,7 +1212,12 @@ DrawTargetCG::CopySurface(SourceSurface *aSurface,
     CGRect flippedRect = CGRectMake(aDestination.x, -(aDestination.y + aSourceRect.height),
                                     aSourceRect.width, aSourceRect.height);
 
-    CGContextDrawImage(mCg, flippedRect, image);
+    // Quartz seems to copy A8 surfaces incorrectly if we don't initialize them
+    // to transparent first.
+    if (mFormat == FORMAT_A8) {
+      CGContextClearRect(mCg, flippedRect);
+    }
+    CGContextDrawImage(mCg, flippedRect, subimage);
 
     CGContextRestoreGState(mCg);
 
@@ -1148,8 +1230,7 @@ DrawTargetCG::DrawSurfaceWithShadow(SourceSurface *aSurface, const Point &aDest,
 {
   MarkChanged();
 
-  CGImageRef image;
-  image = GetImageFromSourceSurface(aSurface);
+  CGImageRef image = GetRetainedImageFromSourceSurface(aSurface);
 
   IntSize size = aSurface->GetSize();
   CGContextSaveGState(mCg);
@@ -1169,6 +1250,7 @@ DrawTargetCG::DrawSurfaceWithShadow(SourceSurface *aSurface, const Point &aDest,
 
   CGContextDrawImage(mCg, flippedRect, image);
 
+  CGImageRelease(image);
   CGContextRestoreGState(mCg);
 
 }
@@ -1188,7 +1270,6 @@ DrawTargetCG::Init(BackendType aType,
       aSize.width > 32767 || aSize.height > 32767) {
     mColorSpace = nullptr;
     mCg = nullptr;
-    mData = nullptr;
     return false;
   }
 
@@ -1199,12 +1280,9 @@ DrawTargetCG::Init(BackendType aType,
 
   if (aData == nullptr && aType != BACKEND_COREGRAPHICS_ACCELERATED) {
     // XXX: Currently, Init implicitly clears, that can often be a waste of time
-    mData = calloc(aSize.height * aStride, 1);
-    aData = static_cast<unsigned char*>(mData);  
-  } else {
-    // mData == nullptr means DrawTargetCG doesn't own the image data and will not
-    // delete it in the destructor
-    mData = nullptr;
+    mData.Realloc(aStride * aSize.height);
+    aData = static_cast<unsigned char*>(mData);
+    memset(aData, 0, aStride * aSize.height);
   }
 
   mSize = aSize;
@@ -1214,7 +1292,6 @@ DrawTargetCG::Init(BackendType aType,
     mCg = ioSurface->CreateIOSurfaceContext();
     // If we don't have the symbol for 'CreateIOSurfaceContext' mCg will be null
     // and we will fallback to software below
-    mData = nullptr;
   }
 
   mFormat = FORMAT_B8G8R8A8;
@@ -1276,7 +1353,9 @@ DrawTargetCG::Init(BackendType aType,
 void
 DrawTargetCG::Flush()
 {
-  CGContextFlush(mCg);
+  if (GetContextType(mCg) == CG_CONTEXT_TYPE_IOSURFACE) {
+    CGContextFlush(mCg);
+  }
 }
 
 bool
@@ -1287,7 +1366,6 @@ DrawTargetCG::Init(CGContextRef cgContext, const IntSize &aSize)
   if (aSize.width == 0 || aSize.height == 0) {
     mColorSpace = nullptr;
     mCg = nullptr;
-    mData = nullptr;
     return false;
   }
 
@@ -1300,8 +1378,6 @@ DrawTargetCG::Init(CGContextRef cgContext, const IntSize &aSize)
 
   mCg = cgContext;
   CGContextRetain(mCg);
-
-  mData = nullptr;
 
   assert(mCg);
 
@@ -1331,7 +1407,7 @@ DrawTargetCG::Init(CGContextRef cgContext, const IntSize &aSize)
 bool
 DrawTargetCG::Init(BackendType aType, const IntSize &aSize, SurfaceFormat &aFormat)
 {
-  int stride = aSize.width*4;
+  int32_t stride = GetAlignedStride<16>(aSize.width * BytesPerPixel(aFormat));
   
   // Calling Init with aData == nullptr will allocate.
   return Init(aType, nullptr, aSize, stride, aFormat);
@@ -1377,11 +1453,12 @@ DrawTargetCG::Mask(const Pattern &aSource,
       //FillRect(rect, aSource, drawOptions);
     } else if (aMask.GetType() == PATTERN_SURFACE) {
       const SurfacePattern& pat = static_cast<const SurfacePattern&>(aMask);
-      CGImageRef mask = GetImageFromSourceSurface(pat.mSurface.get());
+      CGImageRef mask = GetRetainedImageFromSourceSurface(pat.mSurface.get());
       Rect rect(0,0, CGImageGetWidth(mask), CGImageGetHeight(mask));
       // XXX: probably we need to do some flipping of the image or something
       CGContextClipToMask(mCg, RectToCGRect(rect), mask);
       FillRect(rect, aSource, aDrawOptions);
+      CGImageRelease(mask);
     }
   }
 

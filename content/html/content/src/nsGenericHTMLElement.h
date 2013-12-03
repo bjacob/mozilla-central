@@ -15,7 +15,9 @@
 #include "nsContentCreatorFunctions.h"
 #include "mozilla/ErrorResult.h"
 #include "nsIDOMHTMLMenuElement.h"
+#include "mozilla/dom/DOMRect.h"
 #include "mozilla/dom/ValidityState.h"
+#include "mozilla/dom/ElementInlines.h"
 
 class nsIDOMAttr;
 class nsIDOMEventListener;
@@ -38,7 +40,7 @@ class nsIDOMHTMLCollection;
 class nsDOMSettableTokenList;
 
 namespace mozilla {
-namespace dom{
+namespace dom {
 class HTMLFormElement;
 class HTMLPropertiesCollection;
 class HTMLMenuElement;
@@ -55,7 +57,8 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase,
 {
 public:
   nsGenericHTMLElement(already_AddRefed<nsINodeInfo> aNodeInfo)
-    : nsGenericHTMLElementBase(aNodeInfo)
+    : nsGenericHTMLElementBase(aNodeInfo),
+      mScrollgrab(false)
   {
     NS_ASSERTION(mNodeInfo->NamespaceID() == kNameSpaceID_XHTML,
                  "Unexpected namespace");
@@ -156,7 +159,7 @@ public:
     SetHTMLIntAttr(nsGkAtoms::tabindex, aTabIndex, aError);
   }
   virtual void Focus(mozilla::ErrorResult& aError);
-  void Blur(mozilla::ErrorResult& aError);
+  virtual void Blur(mozilla::ErrorResult& aError);
   void GetAccessKey(nsString& aAccessKey)
   {
     GetHTMLAttr(nsGkAtoms::accesskey, aAccessKey);
@@ -223,6 +226,14 @@ public:
                 aSpellcheck ? NS_LITERAL_STRING("true")
                             : NS_LITERAL_STRING("false"),
                 aError);
+  }
+  bool Scrollgrab() const
+  {
+    return mScrollgrab;
+  }
+  void SetScrollgrab(bool aValue)
+  {
+    mScrollgrab = aValue;
   }
 
   /**
@@ -462,9 +473,8 @@ public:
     return rv.ErrorCode();
   }
   NS_IMETHOD GetOuterHTML(nsAString& aOuterHTML) MOZ_FINAL {
-    mozilla::ErrorResult rv;
-    mozilla::dom::Element::GetOuterHTML(aOuterHTML, rv);
-    return rv.ErrorCode();
+    mozilla::dom::Element::GetOuterHTML(aOuterHTML);
+    return NS_OK;
   }
   NS_IMETHOD SetOuterHTML(const nsAString& aOuterHTML) MOZ_FINAL {
     mozilla::ErrorResult rv;
@@ -526,11 +536,8 @@ public:
     *aDraggable = Draggable();
     return NS_OK;
   }
-  using mozilla::dom::Element::GetInnerHTML;
-  NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML) MOZ_FINAL {
-    mozilla::ErrorResult rv;
-    GetInnerHTML(aInnerHTML, rv);
-    return rv.ErrorCode();
+  NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML) MOZ_OVERRIDE {
+    return mozilla::dom::Element::GetInnerHTML(aInnerHTML);
   }
   using mozilla::dom::Element::SetInnerHTML;
   NS_IMETHOD SetInnerHTML(const nsAString& aInnerHTML) MOZ_FINAL {
@@ -560,7 +567,7 @@ public:
                            bool aNotify) MOZ_OVERRIDE;
   virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                              bool aNotify) MOZ_OVERRIDE;
-  virtual bool IsFocusable(int32_t *aTabIndex = nullptr, bool aWithMouse = false) MOZ_OVERRIDE
+  virtual bool IsFocusableInternal(int32_t *aTabIndex, bool aWithMouse) MOZ_OVERRIDE
   {
     bool isFocusable = false;
     IsHTMLFocusable(aWithMouse, &isFocusable, aTabIndex);
@@ -932,6 +939,9 @@ public:
            tag == nsGkAtoms::object;
   }
 
+  static bool
+  IsScrollGrabAllowed(JSContext*, JSObject*);
+
 protected:
   /**
    * Add/remove this element to the documents name cache
@@ -1228,6 +1238,8 @@ protected:
 
 private:
   void ChangeEditableState(int32_t aChange);
+
+  bool mScrollgrab;
 };
 
 namespace mozilla {
@@ -1739,6 +1751,7 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(BR)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Body)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Button)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Canvas)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(Content)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Mod)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Data)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(DataList)

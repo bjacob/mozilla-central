@@ -42,11 +42,11 @@ CanvasClient::CreateCanvasClient(CanvasClientType aType,
 {
   if (aType == CanvasClientGLContext &&
       aForwarder->GetCompositorBackendType() == LAYERS_OPENGL) {
-    aFlags &= ~TEXTURE_DEALLOCATE_HOST;
+    aFlags |= TEXTURE_DEALLOCATE_CLIENT;
     return new DeprecatedCanvasClientSurfaceStream(aForwarder, aFlags);
   }
   if (gfxPlatform::GetPlatform()->UseDeprecatedTextures()) {
-    aFlags &= ~TEXTURE_DEALLOCATE_HOST;
+    aFlags |= TEXTURE_DEALLOCATE_CLIENT;
     return new DeprecatedCanvasClient2D(aForwarder, aFlags);
   }
   return new CanvasClient2D(aForwarder, aFlags);
@@ -87,8 +87,9 @@ CanvasClient2D::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
 
   mBuffer->Unlock();
 
-  if (bufferCreated) {
-    AddTextureClient(mBuffer);
+  if (bufferCreated && !AddTextureClient(mBuffer)) {
+    mBuffer = nullptr;
+    return;
   }
 
   if (surface) {
@@ -98,10 +99,18 @@ CanvasClient2D::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
 }
 
 TemporaryRef<BufferTextureClient>
-CanvasClient2D::CreateBufferTextureClient(gfx::SurfaceFormat aFormat)
+CanvasClient2D::CreateBufferTextureClient(gfx::SurfaceFormat aFormat, TextureFlags aFlags)
 {
   return CompositableClient::CreateBufferTextureClient(aFormat,
-                                                       mTextureInfo.mTextureFlags);
+                                                       mTextureInfo.mTextureFlags | aFlags);
+}
+
+void
+CanvasClient2D::OnActorDestroy()
+{
+  if (mBuffer) {
+    mBuffer->OnActorDestroy();
+  }
 }
 
 void
@@ -153,6 +162,14 @@ DeprecatedCanvasClient2D::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
   gfxASurface* surface = mDeprecatedTextureClient->LockSurface();
   aLayer->UpdateSurface(surface);
   mDeprecatedTextureClient->Unlock();
+}
+
+void
+DeprecatedCanvasClient2D::OnActorDestroy()
+{
+  if (mDeprecatedTextureClient) {
+    mDeprecatedTextureClient->OnActorDestroy();
+  }
 }
 
 void
@@ -221,6 +238,14 @@ DeprecatedCanvasClientSurfaceStream::Update(gfx::IntSize aSize, ClientCanvasLaye
   }
 
   aLayer->Painted();
+}
+
+void
+DeprecatedCanvasClientSurfaceStream::OnActorDestroy()
+{
+  if (mDeprecatedTextureClient) {
+    mDeprecatedTextureClient->OnActorDestroy();
+  }
 }
 
 }

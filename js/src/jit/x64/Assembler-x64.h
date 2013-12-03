@@ -9,7 +9,6 @@
 
 #include "mozilla/Util.h"
 
-#include "jit/CompactBuffer.h"
 #include "jit/IonCode.h"
 #include "jit/shared/Assembler-shared.h"
 
@@ -196,15 +195,16 @@ class Assembler : public AssemblerX86Shared
     // The start of the relocation table contains the offset from the code
     // buffer to the start of the extended jump table.
     //
-    // Each entry in this table is a jmp [rip], where the next eight bytes
-    // contain an immediate address. This comes out to 14 bytes, which we pad
-    // to 16.
+    // Each entry in this table is a jmp [rip], followed by a ud2 to hint to the
+    // hardware branch predictor that there is no fallthrough, followed by the
+    // eight bytes containing an immediate address. This comes out to 16 bytes.
     //    +1 byte for opcode
     //    +1 byte for mod r/m
-    //    +4 bytes for rip-relative offset (0)
+    //    +4 bytes for rip-relative offset (2)
+    //    +2 bytes for ud2 instruction
     //    +8 bytes for 64-bit address
     //
-    static const uint32_t SizeOfExtendedJump = 1 + 1 + 4 + 8;
+    static const uint32_t SizeOfExtendedJump = 1 + 1 + 4 + 2 + 8;
     static const uint32_t SizeOfJumpTableEntry = 16;
 
     uint32_t extendedJumpTable_;
@@ -263,7 +263,7 @@ class Assembler : public AssemblerX86Shared
     }
     void push(const FloatRegister &src) {
         subq(Imm32(sizeof(double)), StackPointer);
-        movsd(src, Operand(StackPointer, 0));
+        movsd(src, Address(StackPointer, 0));
     }
     CodeOffsetLabel pushWithPatch(const ImmWord &word) {
         CodeOffsetLabel label = movWithPatch(word, ScratchReg);
@@ -272,7 +272,7 @@ class Assembler : public AssemblerX86Shared
     }
 
     void pop(const FloatRegister &src) {
-        movsd(Operand(StackPointer, 0), src);
+        movsd(Address(StackPointer, 0), src);
         addq(Imm32(sizeof(double)), StackPointer);
     }
 
@@ -480,7 +480,15 @@ class Assembler : public AssemblerX86Shared
     }
 
     void mov(ImmWord word, const Register &dest) {
-        movq(word, dest);
+        // Use xor for setting registers to zero, as it is specially optimized
+        // for this purpose on modern hardware. Note that it does clobber FLAGS
+        // though. Use xorl instead of xorq since they are functionally
+        // equivalent (32-bit instructions zero-extend their results to 64 bits)
+        // and xorl has a smaller encoding.
+        if (word.value == 0)
+            xorl(dest, dest);
+        else
+            movq(word, dest);
     }
     void mov(ImmPtr imm, const Register &dest) {
         movq(imm, dest);
@@ -489,9 +497,6 @@ class Assembler : public AssemblerX86Shared
         masm.movq_i64r(-1, dest.code());
         AsmJSAbsoluteLink link(masm.currentOffset(), imm.kind());
         enoughMemory_ &= asmJSAbsoluteLinks_.append(link);
-    }
-    void mov(const Imm32 &imm32, const Register &dest) {
-        movl(imm32, dest);
     }
     void mov(const Operand &src, const Register &dest) {
         movq(src, dest);
@@ -661,8 +666,14 @@ class Assembler : public AssemblerX86Shared
     void cvttsd2sq(const FloatRegister &src, const Register &dest) {
         masm.cvttsd2sq_rr(src.code(), dest.code());
     }
+    void cvttss2sq(const FloatRegister &src, const Register &dest) {
+        masm.cvttss2sq_rr(src.code(), dest.code());
+    }
     void cvtsq2sd(const Register &src, const FloatRegister &dest) {
         masm.cvtsq2sd_rr(src.code(), dest.code());
+    }
+    void cvtsq2ss(const Register &src, const FloatRegister &dest) {
+        masm.cvtsq2ss_rr(src.code(), dest.code());
     }
 };
 

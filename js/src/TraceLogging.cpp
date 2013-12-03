@@ -13,7 +13,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "jsapi.h"
 #include "jsscript.h"
 
 using namespace js;
@@ -90,17 +89,17 @@ const char* const TraceLogging::typeName[] = {
     "e,b",  // engine baseline
     "e,o"   // engine ionmonkey
 };
-TraceLogging* TraceLogging::loggers[] = {NULL, NULL, NULL};
+TraceLogging* TraceLogging::loggers[] = {nullptr, nullptr, nullptr};
 bool TraceLogging::atexitSet = false;
 uint64_t TraceLogging::startupTime = 0;
 
 TraceLogging::TraceLogging(Logger id)
   : nextTextId(1),
-    entries(NULL),
+    entries(nullptr),
     curEntry(0),
     numEntries(1000000),
     fileno(0),
-    out(NULL),
+    out(nullptr),
     id(id)
 {
     textMap.init();
@@ -110,20 +109,20 @@ TraceLogging::~TraceLogging()
 {
     if (entries) {
         flush();
-        free(entries);
-        entries = NULL;
+        js_free(entries);
+        entries = nullptr;
     }
 
     if (out) {
         fclose(out);
-        out = NULL;
+        out = nullptr;
     }
 }
 
 void
 TraceLogging::grow()
 {
-    Entry* nentries = (Entry*) realloc(entries, numEntries*2*sizeof(Entry));
+    Entry* nentries = (Entry*) js_realloc(entries, numEntries*2*sizeof(Entry));
 
     // Allocating a bigger array failed.
     // Keep using the current storage, but remove all entries by flushing them.
@@ -137,19 +136,19 @@ TraceLogging::grow()
 }
 
 void
-TraceLogging::log(Type type, const char* text /* = NULL */, unsigned int number /* = 0 */)
+TraceLogging::log(Type type, const char* text /* = nullptr */, unsigned int number /* = 0 */)
 {
     uint64_t now = rdtsc() - startupTime;
 
     // Create array containing the entries if not existing.
     if (!entries) {
-        entries = (Entry*) malloc(numEntries*sizeof(Entry));
+        entries = (Entry*) js_malloc(numEntries*sizeof(Entry));
         if (!entries)
             return;
     }
 
     uint32_t textId = 0;
-    char *text_ = NULL;
+    char *text_ = nullptr;
 
     if (text) {
         TextHashMap::AddPtr p = textMap.lookupForAdd(text);
@@ -174,9 +173,9 @@ TraceLogging::log(Type type, const char* text /* = NULL */, unsigned int number 
 }
 
 void
-TraceLogging::log(Type type, const JS::CompileOptions &options)
+TraceLogging::log(Type type, const JS::ReadOnlyCompileOptions &options)
 {
-    this->log(type, options.filename, options.lineno);
+    this->log(type, options.filename(), options.lineno);
 }
 
 void
@@ -248,9 +247,9 @@ TraceLogging::flush()
             exit(-1);
         }
 
-        if (entries[i].text() != NULL) {
-            free(entries[i].text());
-            entries[i].text_ = NULL;
+        if (entries[i].text() != nullptr) {
+            js_free(entries[i].text());
+            entries[i].text_ = nullptr;
         }
     }
     curEntry = 0;
@@ -279,7 +278,7 @@ TraceLogging::releaseLoggers()
             continue;
 
         delete loggers[i];
-        loggers[i] = NULL;
+        loggers[i] = nullptr;
     }
 }
 

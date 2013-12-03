@@ -15,35 +15,30 @@ namespace js {
 namespace jit {
 
 inline unsigned
-StartArgSlot(JSScript *script, JSFunction *fun)
+StartArgSlot(JSScript *script)
 {
-    // First slot is for scope chain.
-    // Second one may be for arguments object.
-    return 1 + (script->argumentsHasVarBinding() ? 1 : 0);
+    // Reserved slots:
+    // Slot 0: Scope chain.
+    // Slot 1: Return value.
+
+    // When needed:
+    // Slot 2: Argumentsobject.
+
+    // Note: when updating this, please also update the assert in SnapshotWriter::startFrame
+    return 2 + (script->argumentsHasVarBinding() ? 1 : 0);
 }
 
 inline unsigned
 CountArgSlots(JSScript *script, JSFunction *fun)
 {
-    return StartArgSlot(script, fun) + (fun ? fun->nargs + 1 : 0);
+    // Slot x + 0: This value.
+    // Slot x + 1: Argument 1.
+    // ...
+    // Slot x + n: Argument n.
+
+    // Note: when updating this, please also update the assert in SnapshotWriter::startFrame
+    return StartArgSlot(script) + (fun ? fun->nargs + 1 : 0);
 }
-
-enum ExecutionMode {
-    // Normal JavaScript execution
-    SequentialExecution,
-
-    // JavaScript code to be executed in parallel worker threads,
-    // e.g. by ParallelArray
-    ParallelExecution,
-
-    // MIR analysis performed when invoking 'new' on a script, to determine
-    // definite properties
-    DefinitePropertiesAnalysis
-};
-
-// Not as part of the enum so we don't get warnings about unhandled enum
-// values.
-static const unsigned NumExecutionModes = ParallelExecution + 1;
 
 // Contains information about the compilation source for IR being generated.
 class CompileInfo
@@ -63,7 +58,7 @@ class CompileInfo
             JS_ASSERT(fun_->isTenured());
         }
 
-        nimplicit_ = StartArgSlot(script, fun)              /* scope chain and argument obj */
+        nimplicit_ = StartArgSlot(script)                   /* scope chain and argument obj */
                    + (fun ? 1 : 0);                         /* this */
         nargs_ = fun ? fun->nargs : 0;
         nlocals_ = script->nfixed;
@@ -72,7 +67,7 @@ class CompileInfo
     }
 
     CompileInfo(unsigned nlocals, ExecutionMode executionMode)
-      : script_(NULL), fun_(NULL), osrPc_(NULL), constructing_(false),
+      : script_(nullptr), fun_(nullptr), osrPc_(nullptr), constructing_(false),
         executionMode_(executionMode)
     {
         nimplicit_ = 0;
@@ -101,10 +96,10 @@ class CompileInfo
     }
 
     jsbytecode *startPC() const {
-        return script_->code;
+        return script_->code();
     }
     jsbytecode *limitPC() const {
-        return script_->code + script_->length;
+        return script_->codeEnd();
     }
 
     const char *filename() const {
@@ -149,9 +144,16 @@ class CompileInfo
         return nslots_;
     }
 
+    // Number of slots needed for Scope chain, return value,
+    // maybe argumentsobject and this value.
+    unsigned nimplicit() const {
+        return nimplicit_;
+    }
+    // Number of arguments (without counting this value).
     unsigned nargs() const {
         return nargs_;
     }
+    // Number of slots needed for local variables.
     unsigned nlocals() const {
         return nlocals_;
     }
@@ -163,13 +165,18 @@ class CompileInfo
         JS_ASSERT(script());
         return 0;
     }
+    uint32_t returnValueSlot() const {
+        JS_ASSERT(script());
+        return 1;
+    }
     uint32_t argsObjSlot() const {
         JS_ASSERT(hasArguments());
-        return 1;
+        return 2;
     }
     uint32_t thisSlot() const {
         JS_ASSERT(fun());
-        return hasArguments() ? 2 : 1;
+        JS_ASSERT(nimplicit_ > 0);
+        return nimplicit_ - 1;
     }
     uint32_t firstArgSlot() const {
         return nimplicit_;
@@ -201,16 +208,17 @@ class CompileInfo
     }
 
     uint32_t startArgSlot() const {
-        JS_ASSERT(scopeChainSlot() == 0);
-        return StartArgSlot(script(), fun());
+        JS_ASSERT(script());
+        return StartArgSlot(script());
     }
     uint32_t endArgSlot() const {
-        JS_ASSERT(scopeChainSlot() == 0);
+        JS_ASSERT(script());
         return CountArgSlots(script(), fun());
     }
 
     uint32_t totalSlots() const {
-        return 2 + (hasArguments() ? 1 : 0) + nargs() + nlocals();
+        JS_ASSERT(script() && fun());
+        return nimplicit() + nargs() + nlocals();
     }
 
     bool isSlotAliased(uint32_t index) const {
@@ -237,6 +245,9 @@ class CompileInfo
 
     bool hasArguments() const {
         return script()->argumentsHasVarBinding();
+    }
+    bool argumentsAliasesFormals() const {
+        return script()->argumentsAliasesFormals();
     }
     bool needsArgsObj() const {
         return script()->needsArgsObj();

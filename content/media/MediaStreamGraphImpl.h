@@ -12,18 +12,12 @@
 #include "mozilla/TimeStamp.h"
 #include "nsIThread.h"
 #include "nsIRunnable.h"
+#include "Latency.h"
 
 namespace mozilla {
 
 template <typename T>
 class LinkedList;
-
-#ifdef PR_LOGGING
-extern PRLogModuleInfo* gMediaStreamGraphLog;
-#define LOG(type, msg) PR_LOG(gMediaStreamGraphLog, type, msg)
-#else
-#define LOG(type, msg)
-#endif
 
 /**
  * Assume we can run an iteration of the MediaStreamGraph loop in this much time
@@ -71,11 +65,11 @@ struct StreamUpdate {
 
 /**
  * This represents a message passed from the main thread to the graph thread.
- * A ControlMessage always references a particular affected stream.
+ * A ControlMessage always has a weak reference a particular affected stream.
  */
 class ControlMessage {
 public:
-  ControlMessage(MediaStream* aStream) : mStream(aStream)
+  explicit ControlMessage(MediaStream* aStream) : mStream(aStream)
   {
     MOZ_COUNT_CTOR(ControlMessage);
   }
@@ -119,12 +113,7 @@ public:
    * implement OfflineAudioContext.  They do not support MediaStream inputs.
    */
   explicit MediaStreamGraphImpl(bool aRealtime);
-  ~MediaStreamGraphImpl()
-  {
-    NS_ASSERTION(IsEmpty(),
-                 "All streams should have been destroyed by messages from the main thread");
-    LOG(PR_LOG_DEBUG, ("MediaStreamGraph %p destroyed", this));
-  }
+  virtual ~MediaStreamGraphImpl();
 
   // Main thread only.
   /**
@@ -566,6 +555,10 @@ public:
    * blocking order.
    */
   bool mStreamOrderDirty;
+  /**
+   * Hold a ref to the Latency logger
+   */
+  nsRefPtr<AsyncLatencyLogger> mLatencyLog;
 };
 
 }

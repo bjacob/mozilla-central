@@ -10,6 +10,7 @@
 #include "mozilla/dom/TabChild.h"
 #include "nsIAppsService.h"
 #include "nsIScriptSecurityManager.h"
+#include "nsServiceManagerUtils.h"
 
 #define NO_APP_ID (nsIScriptSecurityManager::NO_APP_ID)
 
@@ -226,10 +227,9 @@ GetAppForId(uint32_t aAppId)
   nsCOMPtr<nsIAppsService> appsService = do_GetService(APPS_SERVICE_CONTRACTID);
   NS_ENSURE_TRUE(appsService, nullptr);
 
-  nsCOMPtr<mozIDOMApplication> domApp;
-  appsService->GetAppByLocalId(aAppId, getter_AddRefs(domApp));
+  nsCOMPtr<mozIApplication> app;
+  appsService->GetAppByLocalId(aAppId, getter_AddRefs(app));
 
-  nsCOMPtr<mozIApplication> app = do_QueryInterface(domApp);
   return app.forget();
 }
 

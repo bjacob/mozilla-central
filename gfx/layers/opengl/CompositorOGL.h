@@ -8,13 +8,12 @@
 
 #include "GLContextTypes.h"             // for GLContext, etc
 #include "GLDefs.h"                     // for GLuint, LOCAL_GL_TEXTURE_2D, etc
-#include "LayerManagerOGLProgram.h"     // for ShaderProgramOGL, etc
+#include "OGLShaderProgram.h"           // for ShaderProgramOGL, etc
 #include "Units.h"                      // for ScreenPoint
-#include "gfxContext.h"                 // for gfxContext
-#include "gfxPoint.h"                   // for gfxIntSize
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/Attributes.h"         // for MOZ_OVERRIDE, MOZ_FINAL
 #include "mozilla/RefPtr.h"             // for TemporaryRef, RefPtr
+#include "mozilla/gfx/2D.h"             // for DrawTarget
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Point.h"          // for IntSize, Point
 #include "mozilla/gfx/Rect.h"           // for Rect, IntRect
@@ -25,7 +24,6 @@
 #include "nsAutoPtr.h"                  // for nsRefPtr, nsAutoPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_ASSERTION, NS_WARNING
-#include "nsISupportsImpl.h"            // for gfxContext::AddRef, etc
 #include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsAutoTArray, nsTArray, etc
 #include "nsThreadUtils.h"              // for nsRunnable
@@ -90,15 +88,28 @@ public:
 
   virtual TemporaryRef<CompositingRenderTarget>
   CreateRenderTargetFromSource(const gfx::IntRect &aRect,
-                               const CompositingRenderTarget *aSource) MOZ_OVERRIDE;
+                               const CompositingRenderTarget *aSource,
+                               const gfx::IntPoint &aSourcePoint) MOZ_OVERRIDE;
 
   virtual void SetRenderTarget(CompositingRenderTarget *aSurface) MOZ_OVERRIDE;
   virtual CompositingRenderTarget* GetCurrentRenderTarget() MOZ_OVERRIDE;
 
-  virtual void DrawQuad(const gfx::Rect& aRect, const gfx::Rect& aClipRect,
+  virtual void DrawQuad(const gfx::Rect& aRect,
+                        const gfx::Rect& aClipRect,
                         const EffectChain &aEffectChain,
-                        gfx::Float aOpacity, const gfx::Matrix4x4 &aTransform,
-                        const gfx::Point& aOffset) MOZ_OVERRIDE;
+                        gfx::Float aOpacity,
+                        const gfx::Matrix4x4 &aTransform) MOZ_OVERRIDE
+  {
+    DrawQuadInternal(aRect, aClipRect, aEffectChain,
+                     aOpacity, aTransform, LOCAL_GL_TRIANGLE_STRIP);
+  }
+
+  virtual void DrawLines(const std::vector<gfx::Point>& aLines,
+                         const gfx::Rect& aClipRect,
+                         const gfx::Color& aColor,
+                         gfx::Float aOpacity,
+                         const gfx::Matrix4x4 &aTransform) MOZ_OVERRIDE;
+
 
   virtual void EndFrame() MOZ_OVERRIDE;
   virtual void EndFrameForExternalComposition(const gfxMatrix& aTransform) MOZ_OVERRIDE;
@@ -106,12 +117,12 @@ public:
 
   virtual bool SupportsPartialTextureUpdate() MOZ_OVERRIDE;
 
-  virtual bool CanUseCanvasLayerForSize(const gfxIntSize &aSize) MOZ_OVERRIDE
+  virtual bool CanUseCanvasLayerForSize(const gfx::IntSize &aSize) MOZ_OVERRIDE
   {
     if (!mGLContext)
       return false;
     int32_t maxSize = GetMaxTextureSize();
-    return aSize <= gfxIntSize(maxSize, maxSize);
+    return aSize <= gfx::IntSize(maxSize, maxSize);
   }
 
   virtual int32_t GetMaxTextureSize() const MOZ_OVERRIDE;
@@ -128,7 +139,7 @@ public:
 
   virtual void MakeCurrent(MakeCurrentFlags aFlags = 0) MOZ_OVERRIDE;
 
-  virtual void SetTargetContext(gfxContext* aTarget) MOZ_OVERRIDE
+  virtual void SetTargetContext(gfx::DrawTarget* aTarget) MOZ_OVERRIDE
   {
     mTarget = aTarget;
   }
@@ -160,6 +171,9 @@ public:
     return gfx::FORMAT_R8G8B8A8;
   }
 
+  virtual void SaveState() MOZ_OVERRIDE;
+  virtual void RestoreState() MOZ_OVERRIDE;
+
   /**
    * The compositor provides with temporary textures for use with direct
    * textruing like gralloc texture.
@@ -168,10 +182,17 @@ public:
    */
   GLuint GetTemporaryTexture(GLenum aUnit);
 private:
+  virtual void DrawQuadInternal(const gfx::Rect& aRect,
+                                const gfx::Rect& aClipRect,
+                                const EffectChain &aEffectChain,
+                                gfx::Float aOpacity,
+                                const gfx::Matrix4x4 &aTransformi,
+                                GLuint aDrawMode);
+
   /** 
    * Context target, nullptr when drawing directly to our swap chain.
    */
-  nsRefPtr<gfxContext> mTarget;
+  RefPtr<gfx::DrawTarget> mTarget;
 
   /** Widget associated with this compositor */
   nsIWidget *mWidget;
@@ -240,7 +261,8 @@ private:
   /* Start a new frame. If aClipRectIn is null and aClipRectOut is non-null,
    * sets *aClipRectOut to the screen dimensions.
    */
-  virtual void BeginFrame(const gfx::Rect *aClipRectIn,
+  virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
+                          const gfx::Rect *aClipRectIn,
                           const gfxMatrix& aTransform,
                           const gfx::Rect& aRenderBounds, 
                           gfx::Rect *aClipRectOut = nullptr,
@@ -273,7 +295,7 @@ private:
    * shaders are required to sample from the different
    * texture types.
    */
-  void CreateFBOWithTexture(const gfx::IntRect& aRect, SurfaceInitMode aInit,
+  void CreateFBOWithTexture(const gfx::IntRect& aRect, bool aCopyFromSource,
                             GLuint aSourceFrameBuffer,
                             GLuint *aFBO, GLuint *aTexture);
 
@@ -287,9 +309,11 @@ private:
   void QuadVBOFlippedTexCoordsAttrib(GLuint aAttribIndex);
   void BindAndDrawQuad(GLuint aVertAttribIndex,
                        GLuint aTexCoordAttribIndex,
-                       bool aFlipped = false);
+                       bool aFlipped = false,
+                       GLuint aDrawMode = LOCAL_GL_TRIANGLE_STRIP);
   void BindAndDrawQuad(ShaderProgramOGL *aProg,
-                       bool aFlipped = false);
+                       bool aFlipped = false,
+                       GLuint aDrawMode = LOCAL_GL_TRIANGLE_STRIP);
   void BindAndDrawQuadWithTextureRect(ShaderProgramOGL *aProg,
                                       const gfx::Rect& aTexCoordRect,
                                       TextureSource *aTexture);
@@ -300,7 +324,7 @@ private:
    * Copies the content of our backbuffer to the set transaction target.
    * Does not restore the target FBO, so only call from EndFrame.
    */
-  void CopyToTarget(gfxContext *aTarget, const gfxMatrix& aWorldMatrix);
+  void CopyToTarget(gfx::DrawTarget* aTarget, const gfxMatrix& aWorldMatrix);
 
   /**
    * Records the passed frame timestamp and returns the current estimated FPS.

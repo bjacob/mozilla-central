@@ -17,7 +17,6 @@
 #include <gdk/gdkkeysyms-compat.h>
 #endif
 #include <X11/XKBlib.h>
-#include "nsGUIEvent.h"
 #include "WidgetUtils.h"
 #include "keysym2ucs.h"
 #include "nsIBidiKeyboard.h"
@@ -27,6 +26,8 @@
 PRLogModuleInfo* gKeymapWrapperLog = nullptr;
 #endif // PR_LOGGING
 
+#include "mozilla/MouseEvents.h"
+#include "mozilla/TextEvents.h"
 #include "mozilla/Util.h"
 
 namespace mozilla {
@@ -38,6 +39,9 @@ namespace widget {
 #define MOZ_MODIFIER_KEYS "MozKeymapWrapper"
 
 KeymapWrapper* KeymapWrapper::sInstance = nullptr;
+guint KeymapWrapper::sLastRepeatableHardwareKeyCode = 0;
+KeymapWrapper::RepeatState KeymapWrapper::sRepeatState =
+    KeymapWrapper::NOT_PRESSED;
 nsIBidiKeyboard* sBidiKeyboard = nullptr;
 
 #ifdef PR_LOGGING
@@ -193,6 +197,8 @@ KeymapWrapper::Init()
 
     InitBySystemSettings();
 
+    gdk_window_add_filter(nullptr, FilterEvents, this);
+
     PR_LOG(gKeymapWrapperLog, PR_LOG_ALWAYS,
         ("KeymapWrapper(%p): Init, CapsLock=0x%X, NumLock=0x%X, "
          "ScrollLock=0x%X, Level3=0x%X, Level5=0x%X, "
@@ -209,6 +215,8 @@ KeymapWrapper::Init()
 void
 KeymapWrapper::InitXKBExtension()
 {
+    PodZero(&mKeyboardState);
+
     int xkbMajorVer = XkbMajorVersion;
     int xkbMinorVer = XkbMinorVersion;
     if (!XkbLibraryVersion(&xkbMajorVer, &xkbMinorVer)) {
@@ -240,7 +248,25 @@ KeymapWrapper::InitXKBExtension()
                                XkbModifierStateMask, XkbModifierStateMask)) {
         PR_LOG(gKeymapWrapperLog, PR_LOG_ALWAYS,
                ("KeymapWrapper(%p): InitXKBExtension failed due to failure of "
-                "XkbSelectEventDetails(), display=0x%p", this, display));
+                "XkbSelectEventDetails() for XModifierStateMask, display=0x%p",
+                this, display));
+        return;
+    }
+
+    if (!XkbSelectEventDetails(display, XkbUseCoreKbd, XkbControlsNotify,
+                               XkbPerKeyRepeatMask, XkbPerKeyRepeatMask)) {
+        PR_LOG(gKeymapWrapperLog, PR_LOG_ALWAYS,
+               ("KeymapWrapper(%p): InitXKBExtension failed due to failure of "
+                "XkbSelectEventDetails() for XkbControlsNotify, display=0x%p",
+                this, display));
+        return;
+    }
+
+    if (!XGetKeyboardControl(display, &mKeyboardState)) {
+        PR_LOG(gKeymapWrapperLog, PR_LOG_ALWAYS,
+               ("KeymapWrapper(%p): InitXKBExtension failed due to failure of "
+                "XGetKeyboardControl(), display=0x%p",
+                this, display));
         return;
     }
 
@@ -415,9 +441,81 @@ KeymapWrapper::InitBySystemSettings()
 
 KeymapWrapper::~KeymapWrapper()
 {
+    gdk_window_remove_filter(nullptr, FilterEvents, this);
     NS_IF_RELEASE(sBidiKeyboard);
     PR_LOG(gKeymapWrapperLog, PR_LOG_ALWAYS,
         ("KeymapWrapper(%p): Destructor", this));
+}
+
+/* static */ GdkFilterReturn
+KeymapWrapper::FilterEvents(GdkXEvent* aXEvent,
+                            GdkEvent* aGdkEvent,
+                            gpointer aData)
+{
+    XEvent* xEvent = static_cast<XEvent*>(aXEvent);
+    switch (xEvent->type) {
+        case KeyPress: {
+            // If the key doesn't support auto repeat, ignore the event because
+            // even if such key (e.g., Shift) is pressed during auto repeat of
+            // anoter key, it doesn't stop the auto repeat.
+            KeymapWrapper* self = static_cast<KeymapWrapper*>(aData);
+            if (!self->IsAutoRepeatableKey(xEvent->xkey.keycode)) {
+                break;
+            }
+            if (sRepeatState == NOT_PRESSED) {
+                sRepeatState = FIRST_PRESS;
+            } else if (sLastRepeatableHardwareKeyCode == xEvent->xkey.keycode) {
+                sRepeatState = REPEATING;
+            } else {
+                // If a different key is pressed while another key is pressed,
+                // auto repeat system repeats only the last pressed key.
+                // So, setting new keycode and setting repeat state as first key
+                // press should work fine.
+                sRepeatState = FIRST_PRESS;
+            }
+            sLastRepeatableHardwareKeyCode = xEvent->xkey.keycode;
+            break;
+        }
+        case KeyRelease: {
+            if (sLastRepeatableHardwareKeyCode != xEvent->xkey.keycode) {
+                // This case means the key release event is caused by
+                // a non-repeatable key such as Shift or a repeatable key that
+                // was pressed before sLastRepeatableHardwareKeyCode was
+                // pressed.
+                break;
+            }
+            sRepeatState = NOT_PRESSED;
+            break;
+        }
+        case FocusOut: {
+            // At moving focus, we should reset keyboard repeat state.
+            // Strictly, this causes incorrect behavior.  However, this
+            // correctness must be enough for web applications.
+            sRepeatState = NOT_PRESSED;
+            break;
+        }
+        default: {
+            KeymapWrapper* self = static_cast<KeymapWrapper*>(aData);
+            if (xEvent->type != self->mXKBBaseEventCode) {
+                break;
+            }
+            XkbEvent* xkbEvent = (XkbEvent*)xEvent;
+            if (xkbEvent->any.xkb_type != XkbControlsNotify ||
+                !(xkbEvent->ctrls.changed_ctrls & XkbPerKeyRepeatMask)) {
+                break;
+            }
+            if (!XGetKeyboardControl(xkbEvent->any.display,
+                                     &self->mKeyboardState)) {
+                PR_LOG(gKeymapWrapperLog, PR_LOG_ALWAYS,
+                       ("KeymapWrapper(%p): FilterEvents failed due to failure "
+                        "of XGetKeyboardControl(), display=0x%p",
+                        self, xkbEvent->any.display));
+            }
+            break;
+        }
+    }
+
+    return GDK_FILTER_CONTINUE;
 }
 
 /* static */ void
@@ -462,7 +560,7 @@ KeymapWrapper::GetCurrentModifierState()
 {
     GdkModifierType modifiers;
     gdk_display_get_pointer(gdk_display_get_default(),
-                            NULL, NULL, NULL, &modifiers);
+                            nullptr, nullptr, nullptr, &modifiers);
     return static_cast<guint>(modifiers);
 }
 
@@ -494,7 +592,7 @@ KeymapWrapper::AreModifiersActive(Modifiers aModifiers,
 }
 
 /* static */ void
-KeymapWrapper::InitInputEvent(nsInputEvent& aInputEvent,
+KeymapWrapper::InitInputEvent(WidgetInputEvent& aInputEvent,
                               guint aModifierState)
 {
     KeymapWrapper* keymapWrapper = GetInstance();
@@ -559,16 +657,16 @@ KeymapWrapper::InitInputEvent(nsInputEvent& aInputEvent,
             return;
     }
 
-    nsMouseEvent_base& mouseEvent = static_cast<nsMouseEvent_base&>(aInputEvent);
+    WidgetMouseEventBase& mouseEvent = *aInputEvent.AsMouseEventBase();
     mouseEvent.buttons = 0;
     if (aModifierState & GDK_BUTTON1_MASK) {
-        mouseEvent.buttons |= nsMouseEvent::eLeftButtonFlag;
+        mouseEvent.buttons |= WidgetMouseEvent::eLeftButtonFlag;
     }
     if (aModifierState & GDK_BUTTON3_MASK) {
-        mouseEvent.buttons |= nsMouseEvent::eRightButtonFlag;
+        mouseEvent.buttons |= WidgetMouseEvent::eRightButtonFlag;
     }
     if (aModifierState & GDK_BUTTON2_MASK) {
-        mouseEvent.buttons |= nsMouseEvent::eMiddleButtonFlag;
+        mouseEvent.buttons |= WidgetMouseEvent::eMiddleButtonFlag;
     }
 
     PR_LOG(gKeymapWrapperLog, PR_LOG_DEBUG,
@@ -576,11 +674,11 @@ KeymapWrapper::InitInputEvent(nsInputEvent& aInputEvent,
          "aInputEvent.buttons=0x%04X (Left: %s, Right: %s, Middle: %s, "
          "4th (BACK): %s, 5th (FORWARD): %s)",
          keymapWrapper, mouseEvent.buttons,
-         GetBoolName(mouseEvent.buttons & nsMouseEvent::eLeftButtonFlag),
-         GetBoolName(mouseEvent.buttons & nsMouseEvent::eRightButtonFlag),
-         GetBoolName(mouseEvent.buttons & nsMouseEvent::eMiddleButtonFlag),
-         GetBoolName(mouseEvent.buttons & nsMouseEvent::e4thButtonFlag),
-         GetBoolName(mouseEvent.buttons & nsMouseEvent::e5thButtonFlag)));
+         GetBoolName(mouseEvent.buttons & WidgetMouseEvent::eLeftButtonFlag),
+         GetBoolName(mouseEvent.buttons & WidgetMouseEvent::eRightButtonFlag),
+         GetBoolName(mouseEvent.buttons & WidgetMouseEvent::eMiddleButtonFlag),
+         GetBoolName(mouseEvent.buttons & WidgetMouseEvent::e4thButtonFlag),
+         GetBoolName(mouseEvent.buttons & WidgetMouseEvent::e5thButtonFlag)));
 }
 
 /* static */ uint32_t
@@ -750,7 +848,7 @@ KeymapWrapper::ComputeDOMKeyNameIndex(const GdkEventKey* aGdkKeyEvent)
 }
 
 /* static */ void
-KeymapWrapper::InitKeyEvent(nsKeyEvent& aKeyEvent,
+KeymapWrapper::InitKeyEvent(WidgetKeyboardEvent& aKeyEvent,
                             GdkEventKey* aGdkKeyEvent)
 {
     KeymapWrapper* keymapWrapper = GetInstance();
@@ -878,6 +976,8 @@ KeymapWrapper::InitKeyEvent(nsKeyEvent& aKeyEvent,
     aKeyEvent.pluginEvent = (void *)aGdkKeyEvent;
     aKeyEvent.time = aGdkKeyEvent->time;
     aKeyEvent.mNativeKeyEvent = static_cast<void*>(aGdkKeyEvent);
+    aKeyEvent.mIsRepeat = sRepeatState == REPEATING &&
+        aGdkKeyEvent->hardware_keycode == sLastRepeatableHardwareKeyCode;
 }
 
 /* static */ uint32_t
@@ -933,7 +1033,7 @@ KeymapWrapper::GetCharCodeFor(const GdkEventKey *aGdkKeyEvent,
     if (!gdk_keymap_translate_keyboard_state(mGdkKeymap,
              aGdkKeyEvent->hardware_keycode,
              GdkModifierType(aModifierState),
-             aGroup, &keyval, NULL, NULL, NULL)) {
+             aGroup, &keyval, nullptr, nullptr, nullptr)) {
         return 0;
     }
     GdkEventKey tmpEvent = *aGdkKeyEvent;
@@ -951,7 +1051,7 @@ KeymapWrapper::GetKeyLevel(GdkEventKey *aGdkKeyEvent)
     if (!gdk_keymap_translate_keyboard_state(mGdkKeymap,
              aGdkKeyEvent->hardware_keycode,
              GdkModifierType(aGdkKeyEvent->state),
-             aGdkKeyEvent->group, NULL, NULL, &level, NULL)) {
+             aGdkKeyEvent->group, nullptr, nullptr, &level, nullptr)) {
         return -1;
     }
     return level;
@@ -1000,6 +1100,16 @@ KeymapWrapper::IsLatinGroup(guint8 aGroup)
     return result;
 }
 
+bool
+KeymapWrapper::IsAutoRepeatableKey(guint aHardwareKeyCode)
+{
+    uint8_t indexOfArray = aHardwareKeyCode / 8;
+    MOZ_ASSERT(indexOfArray < ArrayLength(mKeyboardState.auto_repeats),
+               "invalid index");
+    char bitMask = 1 << (aHardwareKeyCode % 8);
+    return (mKeyboardState.auto_repeats[indexOfArray] & bitMask) != 0;
+}
+
 /* static */ bool
 KeymapWrapper::IsBasicLatinLetterOrNumeral(uint32_t aCharCode)
 {
@@ -1017,7 +1127,7 @@ KeymapWrapper::GetGDKKeyvalWithoutModifier(const GdkEventKey *aGdkKeyEvent)
     guint keyval;
     if (!gdk_keymap_translate_keyboard_state(keymapWrapper->mGdkKeymap,
              aGdkKeyEvent->hardware_keycode, GdkModifierType(state),
-             aGdkKeyEvent->group, &keyval, NULL, NULL, NULL)) {
+             aGdkKeyEvent->group, &keyval, nullptr, nullptr, nullptr)) {
         return 0;
     }
     return keyval;
@@ -1164,7 +1274,7 @@ KeymapWrapper::GetDOMKeyCodeFromKeyPairs(guint aGdkKeyval)
 }
 
 void
-KeymapWrapper::InitKeypressEvent(nsKeyEvent& aKeyEvent,
+KeymapWrapper::InitKeypressEvent(WidgetKeyboardEvent& aKeyEvent,
                                  GdkEventKey* aGdkKeyEvent)
 {
     NS_ENSURE_TRUE_VOID(aKeyEvent.message == NS_KEY_PRESS);
@@ -1210,7 +1320,7 @@ KeymapWrapper::InitKeypressEvent(nsKeyEvent& aKeyEvent,
     // We shold send both shifted char and unshifted char, all keyboard layout
     // users can use all keys.  Don't change event.charCode. On some keyboard
     // layouts, Ctrl/Alt/Meta keys are used for inputting some characters.
-    nsAlternativeCharCode altCharCodes(0, 0);
+    AlternativeCharCode altCharCodes(0, 0);
     // unshifted charcode of current keyboard layout.
     altCharCodes.mUnshiftedCharCode =
         GetCharCodeFor(aGdkKeyEvent, baseState, aGdkKeyEvent->group);
@@ -1258,7 +1368,7 @@ KeymapWrapper::InitKeypressEvent(nsKeyEvent& aKeyEvent,
         return;
     }
 
-    nsAlternativeCharCode altLatinCharCodes(0, 0);
+    AlternativeCharCode altLatinCharCodes(0, 0);
     uint32_t unmodifiedCh =
         aKeyEvent.IsShift() ? altCharCodes.mShiftedCharCode :
                               altCharCodes.mUnshiftedCharCode;

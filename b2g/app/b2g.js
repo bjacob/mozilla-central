@@ -42,6 +42,12 @@ pref("network.protocol-handler.warn-external.tel", false);
 pref("network.protocol-handler.warn-external.mailto", false);
 pref("network.protocol-handler.warn-external.vnd.youtube", false);
 
+/* protocol expose prefs */
+// By default, all protocol handlers are exposed. This means that the browser
+// will response to openURL commands for all URL types. It will also try to open
+// link clicks inside the browser before failing over to the system handlers.
+pref("network.protocol-handler.expose.rtsp", false);
+
 /* http prefs */
 pref("network.http.pipelining", true);
 pref("network.http.pipelining.ssl", true);
@@ -96,7 +102,6 @@ pref("browser.helperApps.deleteTempFileOnExit", false);
 /* password manager */
 pref("signon.rememberSignons", true);
 pref("signon.expireMasterPassword", false);
-pref("signon.SignonFileName", "signons.txt");
 
 /* autocomplete */
 pref("browser.formfill.enable", true);
@@ -184,9 +189,13 @@ pref("content.sink.perf_deflect_count", 1000000);
 pref("content.sink.perf_parse_time", 50000000);
 
 // Maximum scripts runtime before showing an alert
-pref("dom.max_chrome_script_run_time", 0); // disable slow script dialog for chrome
 // Disable the watchdog thread for B2G. See bug 870043 comment 31.
 pref("dom.use_watchdog", false);
+
+// The slow script dialog can be triggered from inside the JS engine as well,
+// ensure that those calls don't accidentally trigger the dialog.
+pref("dom.max_script_run_time", 0);
+pref("dom.max_chrome_script_run_time", 0);
 
 // plugins
 pref("plugin.disable", true);
@@ -247,19 +256,17 @@ pref("ui.dragThresholdY", 25);
 
 // Layers Acceleration.  We can only have nice things on gonk, because
 // they're not maintained anywhere else.
+pref("layers.offmainthreadcomposition.enabled", true);
 #ifndef MOZ_WIDGET_GONK
 pref("dom.ipc.tabs.disabled", true);
-pref("layers.offmainthreadcomposition.enabled", false);
 pref("layers.offmainthreadcomposition.async-animations", false);
 pref("layers.async-video.enabled", false);
 #else
 pref("dom.ipc.tabs.disabled", false);
-pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.acceleration.disabled", false);
 pref("layers.offmainthreadcomposition.async-animations", true);
 pref("layers.async-video.enabled", true);
 pref("layers.async-pan-zoom.enabled", true);
-pref("gfx.content.azure.enabled", true);
 pref("gfx.content.azure.backends", "cairo");
 #endif
 
@@ -280,7 +287,7 @@ pref("media.video-queue.default-size", 3);
 
 // optimize images' memory usage
 pref("image.mem.decodeondraw", true);
-pref("content.image.allow_locking", false); /* don't allow image locking */
+pref("image.mem.allow_locking_in_content_processes", false); /* don't allow image locking */
 pref("image.mem.min_discard_timeout_ms", 86400000); /* 24h, we rely on the out of memory hook */
 pref("image.mem.max_decoded_image_kb", 30000); /* 30MB seems reasonable */
 pref("image.onload.decode.limit", 24); /* don't decode more than 24 images eagerly */
@@ -320,7 +327,6 @@ pref("browser.safebrowsing.provider.0.reportMalwareURL", "http://{moz:locale}.ma
 pref("browser.safebrowsing.provider.0.reportMalwareErrorURL", "http://{moz:locale}.malware-error.mozilla.com/?hl={moz:locale}");
 
 // FAQ URLs
-pref("browser.safebrowsing.warning.infoURL", "http://www.mozilla.com/%LOCALE%/%APP%/phishing-protection/");
 pref("browser.geolocation.warning.infoURL", "http://www.mozilla.com/%LOCALE%/%APP%/geolocation/");
 
 // Name of the about: page contributed by safebrowsing to handle display of error
@@ -329,9 +335,6 @@ pref("urlclassifier.alternate_error_page", "blocked");
 
 // The number of random entries to send with a gethash request.
 pref("urlclassifier.gethashnoise", 4);
-
-// The list of tables that use the gethash request to confirm partial results.
-pref("urlclassifier.gethashtables", "goog-phish-shavar,goog-malware-shavar");
 
 // If an urlclassifier table has not been updated in this number of seconds,
 // a gethash request will be forced to check that the result is still in
@@ -361,6 +364,7 @@ pref("browser.dom.window.dump.enabled", false);
 
 // Default Content Security Policy to apply to privileged and certified apps
 pref("security.apps.privileged.CSP.default", "default-src *; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline'");
+// If you change this CSP, make sure to update the fast path in nsCSPService.cpp
 pref("security.apps.certified.CSP.default", "default-src *; script-src 'self'; object-src 'none'; style-src 'self'");
 
 // Temporarily force-enable GL compositing.  This is default-disabled
@@ -389,9 +393,6 @@ pref("dom.ipc.browser_frames.oop_by_default", false);
 
 // SMS/MMS
 pref("dom.sms.enabled", true);
-pref("dom.sms.strict7BitEncoding", false); // Disabled by default.
-pref("dom.sms.requestStatusReport", true); // Enabled by default.
-pref("dom.mms.requestStatusReport", true); // Enabled by default.
 
 //The waiting time in network manager.
 pref("network.gonk.ms-release-mms-connection", 30000);
@@ -431,14 +432,16 @@ pref("services.push.pingInterval", 1800000); // 30 minutes
 pref("services.push.requestTimeout", 10000);
 // enable udp wakeup support
 pref("services.push.udp.wakeupEnabled", true);
-// port on which UDP server socket is bound
-pref("services.push.udp.port", 2442);
 
 // NetworkStats
-#ifdef MOZ_B2G_RIL
+#ifdef MOZ_WIDGET_GONK
 pref("dom.mozNetworkStats.enabled", true);
-pref("ril.cellbroadcast.disabled", false);
-pref("dom.webapps.firstRunWithSIM", false);
+pref("dom.webapps.firstRunWithSIM", true);
+#endif
+
+#ifdef MOZ_B2G_RIL
+// SingleVariant
+pref("dom.mozApps.single_variant_sourcedir", "/persist/svoperapps");
 #endif
 
 // WebSettings
@@ -452,6 +455,9 @@ pref("media.realtime_decoder.enabled", true);
 
 // TCPSocket
 pref("dom.mozTCPSocket.enabled", true);
+
+// WebPayment
+pref("dom.mozPay.enabled", true);
 
 // "Preview" landing of bug 710563, which is bogged down in analysis
 // of talos regression.  This is a needed change for higher-framerate
@@ -559,6 +565,7 @@ pref("dom.webapps.useCurrentProfile", true);
 pref("dom.sysmsg.enabled", true);
 pref("media.plugins.enabled", false);
 pref("media.omx.enabled", true);
+pref("media.rtsp.enabled", true);
 
 // Disable printing (particularly, window.print())
 pref("dom.disable_window_print", true);
@@ -569,6 +576,10 @@ pref("dom.disable_window_showModalDialog", true);
 // Enable new experimental html forms
 pref("dom.experimental_forms", true);
 pref("dom.forms.number", true);
+
+// Don't enable <input type=color> yet as we don't have a color picker
+// implemented for b2g (bug 875751)
+pref("dom.forms.color", false);
 
 // Turns on gralloc-based direct texturing for Gonk
 pref("gfx.gralloc.enabled", false);
@@ -593,6 +604,7 @@ pref("javascript.options.mem.gc_decommit_threshold_mb", 1);
 
 // Show/Hide scrollbars when active/inactive
 pref("ui.showHideScrollbars", 1);
+pref("ui.useOverlayScrollbars", 1);
 
 // Enable the ProcessPriorityManager, and give processes with no visible
 // documents a 1s grace period before they're eligible to be marked as
@@ -600,6 +612,11 @@ pref("ui.showHideScrollbars", 1);
 pref("dom.ipc.processPriorityManager.enabled", true);
 pref("dom.ipc.processPriorityManager.backgroundGracePeriodMS", 1000);
 pref("dom.ipc.processPriorityManager.temporaryPriorityLockMS", 5000);
+
+// Number of different background levels for background processes.  We use
+// these different levels to force the low-memory killer to kill processes in
+// a LRU order.
+pref("dom.ipc.processPriorityManager.backgroundLRUPoolLevels", 5);
 
 // Kernel parameters for process priorities.  These affect how processes are
 // killed on low-memory and their relative CPU priorities.
@@ -612,6 +629,10 @@ pref("dom.ipc.processPriorityManager.temporaryPriorityLockMS", 5000);
 // /still/ have the same niceness; we'd effectively have erased NSPR's thread
 // priorities.
 
+// The kernel can only accept 6 (OomScoreAdjust, KillUnderMB) pairs. But it is
+// okay, kernel will still kill processes with larger OomScoreAdjust first even
+// its OomScoreAdjust don't have a corresponding KillUnderMB.
+
 pref("hal.processPriorityManager.gonk.MASTER.OomScoreAdjust", 0);
 pref("hal.processPriorityManager.gonk.MASTER.KillUnderMB", 4);
 pref("hal.processPriorityManager.gonk.MASTER.Nice", 0);
@@ -623,6 +644,9 @@ pref("hal.processPriorityManager.gonk.FOREGROUND_HIGH.Nice", 0);
 pref("hal.processPriorityManager.gonk.FOREGROUND.OomScoreAdjust", 134);
 pref("hal.processPriorityManager.gonk.FOREGROUND.KillUnderMB", 6);
 pref("hal.processPriorityManager.gonk.FOREGROUND.Nice", 1);
+
+pref("hal.processPriorityManager.gonk.FOREGROUND_KEYBOARD.OomScoreAdjust", 200);
+pref("hal.processPriorityManager.gonk.FOREGROUND_KEYBOARD.Nice", 1);
 
 pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.OomScoreAdjust", 400);
 pref("hal.processPriorityManager.gonk.BACKGROUND_PERCEIVABLE.KillUnderMB", 7);
@@ -717,11 +741,7 @@ pref("font.size.inflation.disabledInMasterProcess", true);
 // consumption when applications are sent to the background.
 pref("memory.free_dirty_pages", true);
 
-// UAProfile settings
-pref("wap.UAProf.url", "");
-pref("wap.UAProf.tagname", "x-wap-profile");
-
-pref("layout.imagevisibility.enabled", false);
+pref("layout.imagevisibility.enabled", true);
 pref("layout.imagevisibility.numscrollportwidths", 1);
 pref("layout.imagevisibility.numscrollportheights", 1);
 
@@ -740,10 +760,9 @@ pref("webgl.can-lose-context-in-foreground", false);
 pref("memory_info_dumper.watch_fifo.enabled", true);
 pref("memory_info_dumper.watch_fifo.directory", "/data/local");
 
-pref("general.useragent.enable_overrides", true);
 // See ua-update.json.in for the packaged UA override list
 pref("general.useragent.updates.enabled", true);
-pref("general.useragent.updates.url", "");
+pref("general.useragent.updates.url", "https://dynamicua.cdn.mozilla.net/0/%APP_ID%");
 pref("general.useragent.updates.interval", 604800); // 1 week
 pref("general.useragent.updates.retry", 86400); // 1 day
 
@@ -781,16 +800,23 @@ pref("network.sntp.timeout", 30); // In seconds.
 // Enable promise
 pref("dom.promise.enabled", false);
 
-// DOM Inter-App Communication API.
-#ifdef MOZ_WIDGET_GONK
-// Enable this only for gonk-specific build but not for desktop build.
-pref("dom.inter-app-communication-api.enabled", true);
+// Enable dataStore
+#ifdef RELEASE_BUILD
+pref("dom.datastore.enabled", false);
+#else
+pref("dom.datastore.enabled", true);
 #endif
+
+// DOM Inter-App Communication API.
+pref("dom.inter-app-communication-api.enabled", true);
 
 // Allow ADB to run for this many hours before disabling
 // (only applies when marionette is disabled)
 // 0 disables the timer.
 pref("b2g.adb.timeout-hours", 12);
+
+// InputMethod so we can do soft keyboards
+pref("dom.mozInputMethod.enabled", true);
 
 // Absolute path to the devtool unix domain socket file used
 // to communicate with a usb cable via adb forward
@@ -798,11 +824,32 @@ pref("devtools.debugger.unix-domain-socket", "/data/local/debugger-socket");
 
 // enable Skia/GL (OpenGL-accelerated 2D drawing) for large enough 2d canvases,
 // falling back to Skia/software for smaller canvases
+#ifdef MOZ_WIDGET_GONK
 pref("gfx.canvas.azure.backends", "skia");
 pref("gfx.canvas.azure.accelerated", true);
+#endif
 
-// Enable Telephony API
-pref("dom.telephony.enabled", true);
+// Turn on dynamic cache size for Skia
+pref("gfx.canvas.skiagl.dynamic-cache", true);
+
+// enable fence with readpixels for SurfaceStream
+pref("gfx.gralloc.fence-with-readpixels", true);
+
+// Cell Broadcast API
+pref("ril.cellbroadcast.disabled", false);
 
 // The url of the page used to display network error details.
 pref("b2g.neterror.url", "app://system.gaiamobile.org/net_error.html");
+
+// Enable Web Speech synthesis API
+pref("media.webspeech.synth.enabled", true);
+
+// Downloads API
+pref("dom.mozDownloads.enabled", true);
+pref("dom.downloads.max_retention_days", 7);
+
+// Inactivity time in milliseconds after which we shut down the OS.File worker.
+pref("osfile.reset_worker_delay", 5000);
+
+// The URL of the Firefox Accounts auth server backend
+pref("identity.fxaccounts.auth.uri", "https://api-accounts.dev.lcip.org/v1");

@@ -21,6 +21,9 @@
         windowtype="devtools:webconsole"
         width="900" height="350"
         persist="screenX screenY width height sizemode">
+
+  <script type="application/javascript;version=1.8"
+          src="chrome://browser/content/devtools/theme-switching.js"/>
   <script type="text/javascript" src="chrome://global/content/globalOverlay.js"/>
   <script type="text/javascript"><![CDATA[
 function goUpdateConsoleCommands() {
@@ -48,17 +51,16 @@ function goUpdateConsoleCommands() {
     <command id="cmd_close" oncommand="goDoCommand('cmd_close');" disabled="true"/>
   </commandset>
   <keyset id="consoleKeys">
-    <key id="key_fullZoomReduce"  key="&fullZoomReduceCmd.commandkey;" command="cmd_fullZoomReduce"  modifiers="accel"/>
-    <key key="&fullZoomReduceCmd.commandkey2;"  command="cmd_fullZoomReduce" modifiers="accel"/>
+    <key id="key_fullZoomReduce" key="&fullZoomReduceCmd.commandkey;" command="cmd_fullZoomReduce" modifiers="accel"/>
+    <key key="&fullZoomReduceCmd.commandkey2;" command="cmd_fullZoomReduce" modifiers="accel"/>
     <key id="key_fullZoomEnlarge" key="&fullZoomEnlargeCmd.commandkey;" command="cmd_fullZoomEnlarge" modifiers="accel"/>
     <key key="&fullZoomEnlargeCmd.commandkey2;" command="cmd_fullZoomEnlarge" modifiers="accel"/>
     <key key="&fullZoomEnlargeCmd.commandkey3;" command="cmd_fullZoomEnlarge" modifiers="accel"/>
     <key id="key_fullZoomReset" key="&fullZoomResetCmd.commandkey;" command="cmd_fullZoomReset" modifiers="accel"/>
     <key key="&fullZoomResetCmd.commandkey2;" command="cmd_fullZoomReset" modifiers="accel"/>
     <key key="&findCmd.key;" command="cmd_find" modifiers="accel"/>
-    <key key="&clearOutputCmd.key;" command="consoleCmd_clearOutput" modifiers="accel"/>
     <key key="&closeCmd.key;" command="cmd_close" modifiers="accel"/>
-    <key id="key_clearOutput" key="&clearOutputCtrl.key;" command="consoleCmd_clearOutput" modifiers="accel"/>
+    <key key="&clearOutputCtrl.key;" command="consoleCmd_clearOutput" modifiers="control"/>
   </keyset>
   <keyset id="editMenuKeys"/>
 
@@ -79,7 +81,7 @@ function goUpdateConsoleCommands() {
 
   <tooltip id="aHTMLTooltip" page="true"/>
 
-  <box class="hud-outer-wrapper devtools-responsive-container" flex="1">
+  <box class="hud-outer-wrapper devtools-responsive-container theme-body" flex="1">
     <vbox class="hud-console-wrapper" flex="1">
       <toolbar class="hud-console-filter-toolbar devtools-toolbar" mode="full">
         <toolbarbutton label="&btnPageNet.label;" type="menu-button"
@@ -110,6 +112,8 @@ function goUpdateConsoleCommands() {
                       prefKey="csserror"/>
             <menuitem label="&btnConsoleWarnings;" type="checkbox"
                       autocheck="false" prefKey="cssparser"/>
+            <menuitem label="&btnConsoleLog;" type="checkbox"
+                      autocheck="false" prefKey="csslog"/>
           </menupopup>
         </toolbarbutton>
         <toolbarbutton label="&btnPageJS.label;" type="menu-button"
@@ -141,7 +145,7 @@ function goUpdateConsoleCommands() {
         <toolbarbutton label="&btnPageLogging.label;" type="menu-button"
                        category="logging" class="devtools-toolbarbutton webconsole-filter-button"
                        tooltiptext="&btnPageLogging.tooltip;"
-                       accesskey="&btnPageLogging.accesskey2;"
+                       accesskey="&btnPageLogging.accesskey3;"
                        tabindex="7">
           <menupopup>
             <menuitem label="&btnConsoleErrors;" type="checkbox"
@@ -157,6 +161,7 @@ function goUpdateConsoleCommands() {
 
         <toolbarbutton class="webconsole-clear-console-button devtools-toolbarbutton"
                        label="&btnClear.label;" tooltiptext="&btnClear.tooltip;"
+                       accesskey="&btnClear.accesskey;"
                        tabindex="8"/>
 
         <spacer flex="1"/>

@@ -31,7 +31,6 @@
 
 #include "nsIPresShell.h"
 #include "nsEventStates.h"
-#include "nsGUIEvent.h"
 
 #include "nsIChannel.h"
 #include "nsIStreamListener.h"
@@ -48,6 +47,11 @@
 
 #include "mozAutoDocUpdate.h"
 #include "mozilla/dom/Element.h"
+
+#if defined(XP_WIN)
+// Undefine LoadImage to prevent naming conflict with Windows.
+#undef LoadImage
+#endif
 
 using namespace mozilla;
 

@@ -405,7 +405,7 @@ ViewHelpers.Prefs.prototype = {
 /**
  * A generic Item is used to describe children present in a Widget.
  * The label, value and description properties are necessarily strings.
- * Iterable via "for (let childItem in parentItem) { }".
+ * Iterable via "for (let childItem of parentItem) { }".
  *
  * @param object aOwnerView
  *        The owner view creating this item.
@@ -513,7 +513,7 @@ Item.prototype = {
     if (aItem.finalize) {
       aItem.finalize(aItem);
     }
-    for (let childItem in aItem) {
+    for (let childItem of aItem) {
       aItem.remove(childItem);
     }
 
@@ -557,7 +557,7 @@ Item.prototype = {
 
 /**
  * Some generic Widget methods handling Item instances.
- * Iterable via "for (let childItem in wrappedView) { }".
+ * Iterable via "for (let childItem of wrappedView) { }".
  *
  * Usage:
  *   function MyView() {
@@ -974,6 +974,18 @@ this.WidgetMethods = {
   },
 
   /**
+   * Retrieves the attachment of the selected element.
+   * @return string
+   */
+  get selectedAttachment() {
+    let selectedElement = this._widget.selectedItem;
+    if (selectedElement) {
+      return this._itemsByElement.get(selectedElement).attachment;
+    }
+    return null;
+  },
+
+  /**
    * Selects the element with the entangled item in this container.
    * @param Item | function aItem
    */
@@ -1271,6 +1283,7 @@ this.WidgetMethods = {
    *         The matched item, or null if nothing is found.
    */
   getItemForPredicate: function(aPredicate, aOwner = this) {
+    // Recursively check the items in this widget for a predicate match.
     for (let [element, item] of aOwner._itemsByElement) {
       let match;
       if (aPredicate(item) && !element.hidden) {
@@ -1280,6 +1293,13 @@ this.WidgetMethods = {
       }
       if (match) {
         return match;
+      }
+    }
+    // Also check the staged items. No need to do this recursively since
+    // they're not even appended to the view yet.
+    for (let { item } of this._stagedItems) {
+      if (aPredicate(item)) {
+        return item;
       }
     }
     return null;
@@ -1347,6 +1367,14 @@ this.WidgetMethods = {
    */
   get values() {
     return this.items.map(e => e._value);
+  },
+
+  /**
+   * Returns a list of attachments in this container, in the displayed order.
+   * @return array
+   */
+  get attachments() {
+    return this.items.map(e => e.attachment);
   },
 
   /**
@@ -1501,7 +1529,7 @@ this.WidgetMethods = {
     if (aItem.finalize) {
       aItem.finalize(aItem);
     }
-    for (let childItem in aItem) {
+    for (let childItem of aItem) {
       aItem.remove(childItem);
     }
 
@@ -1626,9 +1654,7 @@ this.WidgetMethods = {
 /**
  * A generator-iterator over all the items in this container.
  */
-Item.prototype.__iterator__ =
-WidgetMethods.__iterator__ = function() {
-  for (let [, item] of this._itemsByElement) {
-    yield item;
-  }
+Item.prototype["@@iterator"] =
+WidgetMethods["@@iterator"] = function*() {
+  yield* this._itemsByElement.values();
 };

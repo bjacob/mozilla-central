@@ -60,12 +60,15 @@ protected:
   int32_t mPhoneState;
   int mCurrentStreamVolumeTbl[AUDIO_STREAM_CNT];
 
-  android::status_t SetStreamVolumeIndex(int32_t aStream, int32_t aIndex);
-  android::status_t GetStreamVolumeIndex(int32_t aStream, int32_t *aIndex);
+  nsresult SetStreamVolumeIndex(int32_t aStream, int32_t aIndex);
+  nsresult GetStreamVolumeIndex(int32_t aStream, int32_t *aIndex);
 
 private:
   nsAutoPtr<mozilla::hal::SwitchObserver> mObserver;
   nsCOMPtr<AudioChannelAgent>             mPhoneAudioAgent;
+  bool                                    mMuteCallToRIL;
+  // mIsMicMuted is only used for toggling mute call to RIL.
+  bool                                    mIsMicMuted;
 
   void HandleBluetoothStatusChanged(nsISupports* aSubject,
                                     const char* aTopic,

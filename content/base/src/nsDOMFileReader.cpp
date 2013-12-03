@@ -10,7 +10,6 @@
 #include "nsDOMClassInfoID.h"
 #include "nsDOMFile.h"
 #include "nsError.h"
-#include "nsICharsetConverterManager.h"
 #include "nsIConverterInputStream.h"
 #include "nsIDocument.h"
 #include "nsIFile.h"
@@ -184,7 +183,7 @@ nsDOMFileReader::GetReadyState(uint16_t *aReadyState)
 JS::Value
 nsDOMFileReader::GetResult(JSContext* aCx, ErrorResult& aRv)
 {
-  JS::Rooted<JS::Value> result(aCx, JS::UndefinedValue());
+  JS::Rooted<JS::Value> result(aCx);
   aRv = GetResult(aCx, result.address());
   return result;
 }
@@ -192,23 +191,25 @@ nsDOMFileReader::GetResult(JSContext* aCx, ErrorResult& aRv)
 NS_IMETHODIMP
 nsDOMFileReader::GetResult(JSContext* aCx, JS::Value* aResult)
 {
+  JS::Rooted<JS::Value> result(aCx);
   if (mDataFormat == FILE_AS_ARRAYBUFFER) {
     if (mReadyState == nsIDOMFileReader::DONE && mResultArrayBuffer) {
-      JSObject* tmp = mResultArrayBuffer;
-      *aResult = OBJECT_TO_JSVAL(tmp);
+      result.setObject(*mResultArrayBuffer);
     } else {
-      *aResult = JSVAL_NULL;
+      result.setNull();
     }
-    if (!JS_WrapValue(aCx, aResult)) {
+    if (!JS_WrapValue(aCx, &result)) {
       return NS_ERROR_FAILURE;
     }
+    *aResult = result;
     return NS_OK;
   }
- 
+
   nsString tmpResult = mResult;
-  if (!xpc::StringToJsval(aCx, tmpResult, aResult)) {
+  if (!xpc::StringToJsval(aCx, tmpResult, &result)) {
     return NS_ERROR_FAILURE;
   }
+  *aResult = result;
   return NS_OK;
 }
 
@@ -533,13 +534,9 @@ nsDOMFileReader::ConvertStream(const char *aFileData,
                                nsAString &aResult)
 {
   nsresult rv;
-  nsCOMPtr<nsICharsetConverterManager> charsetConverter = 
-    do_GetService(NS_CHARSETCONVERTERMANAGER_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIUnicodeDecoder> unicodeDecoder;
-  rv = charsetConverter->GetUnicodeDecoder(aCharset, getter_AddRefs(unicodeDecoder));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIUnicodeDecoder> unicodeDecoder =
+    EncodingUtils::DecoderForEncoding(aCharset);
 
   int32_t destLength;
   rv = unicodeDecoder->GetMaxLength(aFileData, aDataLen, &destLength);

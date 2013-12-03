@@ -65,7 +65,7 @@ ns_if_addref( T expr )
 } /* extern "C++" */
 
 /**
- * Macro for adding a reference to an interface that checks for NULL.
+ * Macro for adding a reference to an interface that checks for nullptr.
  * @param _expr The interface pointer.
  */
 #define NS_IF_ADDREF(_expr) ns_if_addref(_expr)
@@ -111,7 +111,7 @@ ns_if_addref( T expr )
   } while (0)
 
 /**
- * Macro for releasing a reference to an interface that checks for NULL;
+ * Macro for releasing a reference to an interface that checks for nullptr;
  * @param _ptr The interface pointer.
  */
 #define NS_IF_RELEASE(_ptr)                                                   \

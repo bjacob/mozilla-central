@@ -24,9 +24,15 @@ docShell.setFullscreenAllowed(infos.fullscreenAllowed);
 
 
 if (!('BrowserElementIsPreloaded' in this)) {
-  // This is a produc-specific file that's sometimes unavailable.
   try {
-    Services.scriptloader.loadSubScript("chrome://browser/content/forms.js");
+    if (Services.prefs.getBoolPref("dom.mozInputMethod.enabled")) {
+      Services.scriptloader.loadSubScript("chrome://global/content/forms.js");
+    }
+  } catch (e) {
+  }
+  // Those are produc-specific files that's sometimes unavailable.
+  try {
+    Services.scriptloader.loadSubScript("chrome://browser/content/ErrorPage.js");
   } catch (e) {
   }
   Services.scriptloader.loadSubScript("chrome://global/content/BrowserElementPanning.js");

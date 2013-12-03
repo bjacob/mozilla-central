@@ -147,7 +147,6 @@ static const char *kPluginRegistryVersion = "0.16";
 // The minimum registry version we know how to read
 static const char *kMinimumRegistryVersion = "0.9";
 
-static NS_DEFINE_IID(kIPluginTagInfoIID, NS_IPLUGINTAGINFO_IID);
 static const char kDirectoryServiceContractID[] = "@mozilla.org/file/directory_service;1";
 
 #define kPluginRegistryFilename NS_LITERAL_CSTRING("pluginreg.dat")
@@ -420,32 +419,6 @@ nsresult nsPluginHost::UserAgent(const char **retstring)
   PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("nsPluginHost::UserAgent return=%s\n", *retstring));
 
   return res;
-}
-
-nsresult nsPluginHost::GetPrompt(nsIPluginInstanceOwner *aOwner, nsIPrompt **aPrompt)
-{
-  nsresult rv;
-  nsCOMPtr<nsIPrompt> prompt;
-  nsCOMPtr<nsIWindowWatcher> wwatch = do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
-
-  if (wwatch) {
-    nsCOMPtr<nsIDOMWindow> domWindow;
-    if (aOwner) {
-      nsCOMPtr<nsIDocument> document;
-      aOwner->GetDocument(getter_AddRefs(document));
-      if (document) {
-        domWindow = document->GetWindow();
-      }
-    }
-
-    if (!domWindow) {
-      wwatch->GetWindowByName(NS_LITERAL_STRING("_content").get(), nullptr, getter_AddRefs(domWindow));
-    }
-    rv = wwatch->GetNewPrompter(domWindow, getter_AddRefs(prompt));
-  }
-
-  NS_IF_ADDREF(*aPrompt = prompt);
-  return rv;
 }
 
 nsresult nsPluginHost::GetURL(nsISupports* pluginInst,
@@ -814,14 +787,8 @@ nsPluginHost::InstantiatePluginInstance(const char *aMimeType, nsIURI* aURL,
     return rv;
   }
 
-  nsCOMPtr<nsIPluginTagInfo> pti;
-  rv = instanceOwner->QueryInterface(kIPluginTagInfoIID, getter_AddRefs(pti));
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
   nsPluginTagType tagType;
-  rv = pti->GetTagType(&tagType);
+  rv = instanceOwner->GetTagType(&tagType);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -1267,7 +1234,7 @@ static nsresult CreateNPAPIPlugin(nsPluginTag *aPluginTag,
     nsCOMPtr<nsIFile> file = do_CreateInstance("@mozilla.org/file/local;1");
     file->InitWithPath(NS_ConvertUTF8toUTF16(aPluginTag->mFullPath));
     nsPluginFile pluginFile(file);
-    PRLibrary* pluginLibrary = NULL;
+    PRLibrary* pluginLibrary = nullptr;
 
     if (NS_FAILED(pluginFile.LoadPlugin(&pluginLibrary)) || !pluginLibrary)
       return NS_ERROR_FAILURE;
@@ -1297,7 +1264,7 @@ nsresult nsPluginHost::EnsurePluginLoaded(nsPluginTag* aPluginTag)
 nsresult nsPluginHost::GetPlugin(const char *aMimeType, nsNPAPIPlugin** aPlugin)
 {
   nsresult rv = NS_ERROR_FAILURE;
-  *aPlugin = NULL;
+  *aPlugin = nullptr;
 
   if (!aMimeType)
     return NS_ERROR_ILLEGAL_VALUE;
@@ -1510,7 +1477,7 @@ nsPluginHost::ClearSiteData(nsIPluginTag* plugin, const nsACString& domain,
 
   // If 'domain' is the null string, clear everything.
   if (domain.IsVoid()) {
-    return library->NPP_ClearSiteData(NULL, flags, maxAge);
+    return library->NPP_ClearSiteData(nullptr, flags, maxAge);
   }
 
   // Get the list of sites from the plugin.
@@ -2108,8 +2075,8 @@ nsresult nsPluginHost::FindPlugins(bool aCreatePluginList, bool * aPluginsChange
 
       invalidPlugins = invalidPlugin->mNext;
 
-      invalidPlugin->mPrev = NULL;
-      invalidPlugin->mNext = NULL;
+      invalidPlugin->mPrev = nullptr;
+      invalidPlugin->mNext = nullptr;
     }
     else {
       invalidPlugins->mSeen = false;
@@ -2534,7 +2501,7 @@ nsPluginHost::ReadPluginInfo()
         file->GetNativeLeafName(derivedFileName);
         filename = derivedFileName.get();
       } else {
-        filename = NULL;
+        filename = nullptr;
       }
 
       // skip the next line, useless in this version

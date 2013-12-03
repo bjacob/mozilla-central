@@ -45,12 +45,25 @@
     var isRE = query.match(/^\/(.*)\/([a-z]*)$/);
     return isRE ? new RegExp(isRE[1], isRE[2].indexOf("i") == -1 ? "" : "i") : query;
   }
-  var queryDialog =
-    'Search: <input type="text" style="width: 10em"/> <span style="color: #888">(Use /re/ syntax for regexp search)</span>';
+  var queryDialog;
   function doSearch(cm, rev) {
+    if (!queryDialog) {
+      let doc = cm.getWrapperElement().ownerDocument;
+      let inp = doc.createElement("input");
+      let txt = doc.createTextNode(cm.l10n("findCmd.promptMessage"));
+
+      inp.type = "text";
+      inp.style.width = "10em";
+      inp.style.MozMarginStart = "1em";
+
+      queryDialog = doc.createElement("div");
+      queryDialog.appendChild(txt);
+      queryDialog.appendChild(inp);
+    }
+
     var state = getSearchState(cm);
     if (state.query) return findNext(cm, rev);
-    dialog(cm, queryDialog, "Search for:", function(query) {
+    dialog(cm, queryDialog, cm.l10n('findCmd.promptMessage'), function(query) {
       cm.operation(function() {
         if (!query || state.query) return;
         state.query = parseQuery(query);
@@ -70,6 +83,7 @@
       if (!cursor.find(rev)) return;
     }
     cm.setSelection(cursor.from(), cursor.to());
+    cm.scrollIntoView({from: cursor.from(), to: cursor.to()});
     state.posFrom = cursor.from(); state.posTo = cursor.to();
   });}
   function clearSearch(cm) {cm.operation(function() {
@@ -108,6 +122,7 @@
                   (start && cursor.from().line == start.line && cursor.from().ch == start.ch)) return;
             }
             cm.setSelection(cursor.from(), cursor.to());
+            cm.scrollIntoView({from: cursor.from(), to: cursor.to()});
             confirmDialog(cm, doReplaceConfirm, "Replace?",
                           [function() {doReplace(match);}, advance]);
           };

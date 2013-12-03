@@ -22,7 +22,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPIStorage",
 
 for (let name of ["WebConsoleUtils", "ConsoleServiceListener",
                   "ConsoleAPIListener", "ConsoleProgressListener",
-                  "JSTermHelpers", "JSPropertyProvider", "NetworkMonitor"]) {
+                  "JSTermHelpers", "JSPropertyProvider", "NetworkMonitor",
+                  "ConsoleReflowListener"]) {
   Object.defineProperty(this, name, {
     get: function(prop) {
       if (prop == "WebConsoleUtils") {
@@ -67,6 +68,8 @@ function WebConsoleActor(aConnection, aParentActor)
                              "last-pb-context-exited", false);
   }
 }
+
+WebConsoleActor.l10n = new WebConsoleUtils.l10n("chrome://global/locale/console.properties");
 
 WebConsoleActor.prototype =
 {
@@ -123,13 +126,80 @@ WebConsoleActor.prototype =
    */
   get window() {
     if (this.parentActor.isRootActor) {
-      // Try to find the Browser Console window, otherwise use the window of
-      // the root actor.
-      let window = Services.wm.getMostRecentWindow("devtools:webconsole");
-      return window || this.parentActor.window;
+      return this._getWindowForBrowserConsole();
     }
     return this.parentActor.window;
   },
+
+  /**
+   * Get a window to use for the browser console.
+   *
+   * @private
+   * @return nsIDOMWindow
+   *         The window to use, or null if no window could be found.
+   */
+  _getWindowForBrowserConsole: function WCA__getWindowForBrowserConsole()
+  {
+    // Check if our last used chrome window is still live.
+    let window = this._lastChromeWindow && this._lastChromeWindow.get();
+    // If not, look for a new one.
+    if (!window || window.closed) {
+      window = this.parentActor.window;
+      if (!window) {
+        // Try to find the Browser Console window to use instead.
+        window = Services.wm.getMostRecentWindow("devtools:webconsole");
+        // We prefer the normal chrome window over the console window,
+        // so we'll look for those windows in order to replace our reference.
+        let onChromeWindowOpened = () => {
+          // We'll look for this window when someone next requests window()
+          Services.obs.removeObserver(onChromeWindowOpened, "domwindowopened");
+          this._lastChromeWindow = null;
+        };
+        Services.obs.addObserver(onChromeWindowOpened, "domwindowopened", false);
+      }
+
+      this._handleNewWindow(window);
+    }
+
+    return window;
+  },
+
+  /**
+   * Store a newly found window on the actor to be used in the future.
+   *
+   * @private
+   * @param nsIDOMWindow window
+   *        The window to store on the actor (can be null).
+   */
+  _handleNewWindow: function WCA__handleNewWindow(window)
+  {
+    if (window) {
+      if (this._hadChromeWindow) {
+        let contextChangedMsg = WebConsoleActor.l10n.getStr("evaluationContextChanged");
+        Services.console.logStringMessage(contextChangedMsg);
+      }
+      this._lastChromeWindow = Cu.getWeakReference(window);
+      this._hadChromeWindow = true;
+    } else {
+      this._lastChromeWindow = null;
+    }
+  },
+
+  /**
+   * Whether we've been using a window before.
+   *
+   * @private
+   * @type boolean
+   */
+  _hadChromeWindow: false,
+
+  /**
+   * A weak reference to the last chrome window we used to work with.
+   *
+   * @private
+   * @type nsIWeakReference
+   */
+  _lastChromeWindow: null,
 
   /**
    * The ConsoleServiceListener instance.
@@ -151,6 +221,18 @@ WebConsoleActor.prototype =
    * The ConsoleProgressListener instance.
    */
   consoleProgressListener: null,
+
+  /**
+   * The ConsoleReflowListener instance.
+   */
+  consoleReflowListener: null,
+
+  /**
+   * The JSTerm Helpers names cache.
+   * @private
+   * @type array
+   */
+  _jstermHelpersCache: null,
 
   /**
    * Getter for the NetworkMonitor.saveRequestAndResponseBodies preference.
@@ -194,6 +276,10 @@ WebConsoleActor.prototype =
       this.consoleProgressListener.destroy();
       this.consoleProgressListener = null;
     }
+    if (this.consoleReflowListener) {
+      this.consoleReflowListener.destroy();
+      this.consoleReflowListener = null;
+    }
     this.conn.removeActorPool(this._actorPool);
     if (this.parentActor.isRootActor) {
       Services.obs.removeObserver(this._onObserverNotification,
@@ -206,6 +292,33 @@ WebConsoleActor.prototype =
     this.dbg.enabled = false;
     this.dbg = null;
     this.conn = null;
+  },
+
+  /**
+   * Create and return an environment actor that corresponds to the provided
+   * Debugger.Environment. This is a straightforward clone of the ThreadActor's
+   * method except that it stores the environment actor in the web console
+   * actor's pool.
+   *
+   * @param Debugger.Environment aEnvironment
+   *        The lexical environment we want to extract.
+   * @return The EnvironmentActor for aEnvironment or undefined for host
+   *         functions or functions scoped to a non-debuggee global.
+   */
+  createEnvironmentActor: function WCA_createEnvironmentActor(aEnvironment) {
+    if (!aEnvironment) {
+      return undefined;
+    }
+
+    if (aEnvironment.actor) {
+      return aEnvironment.actor;
+    }
+
+    let actor = new EnvironmentActor(aEnvironment, this);
+    this._actorPool.addActor(actor);
+    aEnvironment.actor = actor;
+
+    return actor;
   },
 
   /**
@@ -372,6 +485,13 @@ WebConsoleActor.prototype =
                                                     MONITOR_FILE_ACTIVITY);
           startedListeners.push(listener);
           break;
+        case "ReflowActivity":
+          if (!this.consoleReflowListener) {
+            this.consoleReflowListener =
+              new ConsoleReflowListener(this.window, this);
+          }
+          startedListeners.push(listener);
+          break;
       }
     }
     return {
@@ -428,6 +548,13 @@ WebConsoleActor.prototype =
             this.consoleProgressListener.stopMonitor(this.consoleProgressListener.
                                                      MONITOR_FILE_ACTIVITY);
             this.consoleProgressListener = null;
+          }
+          stoppedListeners.push(listener);
+          break;
+        case "ReflowActivity":
+          if (this.consoleReflowListener) {
+            this.consoleReflowListener.destroy();
+            this.consoleReflowListener = null;
           }
           stoppedListeners.push(listener);
           break;
@@ -532,7 +659,7 @@ WebConsoleActor.prototype =
     let evalResult = evalInfo.result;
     let helperResult = evalInfo.helperResult;
 
-    let result, error, errorMessage;
+    let result, errorMessage, errorGrip = null;
     if (evalResult) {
       if ("return" in evalResult) {
         result = evalResult.return;
@@ -541,7 +668,8 @@ WebConsoleActor.prototype =
         result = evalResult.yield;
       }
       else if ("throw" in evalResult) {
-        error = evalResult.throw;
+        let error = evalResult.throw;
+        errorGrip = this.createValueGrip(error);
         let errorToString = evalInfo.window
                             .evalInGlobalWithBindings("ex + ''", {ex: error});
         if (errorToString && typeof errorToString.return == "string") {
@@ -555,7 +683,7 @@ WebConsoleActor.prototype =
       input: input,
       result: this.createValueGrip(result),
       timestamp: timestamp,
-      exception: error ? this.createValueGrip(error) : null,
+      exception: errorGrip,
       exceptionMessage: errorMessage,
       helperResult: helperResult,
     };
@@ -571,12 +699,29 @@ WebConsoleActor.prototype =
    */
   onAutocomplete: function WCA_onAutocomplete(aRequest)
   {
-    // TODO: Bug 842682 - use the debugger API for autocomplete in the Web
-    // Console, and provide suggestions from the selected debugger stack frame.
-    // Also, properly reuse _getJSTermHelpers instead of re-implementing it
-    // here.
-    let result = JSPropertyProvider(this.window, aRequest.text,
-                                    aRequest.cursor) || {};
+    let frameActorId = aRequest.frameActor;
+    let dbgObject = null;
+    let environment = null;
+
+    // This is the case of the paused debugger
+    if (frameActorId) {
+      let frameActor = this.conn.getActor(frameActorId);
+      if (frameActor) {
+        let frame = frameActor.frame;
+        environment = frame.environment;
+      }
+      else {
+        Cu.reportError("Web Console Actor: the frame actor was not found: " +
+                       frameActorId);
+      }
+    }
+    // This is the general case (non-paused debugger)
+    else {
+      dbgObject = this.dbg.makeGlobalObjectReference(this.window);
+    }
+
+    let result = JSPropertyProvider(dbgObject, environment, aRequest.text,
+                                    aRequest.cursor, frameActorId) || {};
     let matches = result.matches || [];
     let reqText = aRequest.text.substr(0, aRequest.cursor);
 
@@ -584,13 +729,14 @@ WebConsoleActor.prototype =
     // helper functions.
     let lastNonAlphaIsDot = /[.][a-zA-Z0-9$]*$/.test(reqText);
     if (!lastNonAlphaIsDot) {
-      let helpers = {
-        sandbox: Object.create(null)
-      };
-      JSTermHelpers(helpers);
-
-      let helperNames = Object.getOwnPropertyNames(helpers.sandbox);
-      matches = matches.concat(helperNames.filter(n => n.startsWith(result.matchProp)));
+      if (!this._jstermHelpersCache) {
+        let helpers = {
+          sandbox: Object.create(null)
+        };
+        JSTermHelpers(helpers);
+        this._jstermHelpersCache = Object.getOwnPropertyNames(helpers.sandbox);
+      }
+      matches = matches.concat(this._jstermHelpersCache.filter(n => n.startsWith(result.matchProp)));
     }
 
     return {
@@ -1038,6 +1184,29 @@ WebConsoleActor.prototype =
       type: "fileActivity",
       uri: aFileURI,
     };
+    this.conn.send(packet);
+  },
+
+  /**
+   * Handler for reflow activity. This method forwards reflow events to the
+   * remote Web Console client.
+   *
+   * @see ConsoleReflowListener
+   * @param Object aReflowInfo
+   */
+  onReflowActivity: function WCA_onReflowActivity(aReflowInfo)
+  {
+    let packet = {
+      from: this.actorID,
+      type: "reflowActivity",
+      interruptible: aReflowInfo.interruptible,
+      start: aReflowInfo.start,
+      end: aReflowInfo.end,
+      sourceURL: aReflowInfo.sourceURL,
+      sourceLine: aReflowInfo.sourceLine,
+      functionName: aReflowInfo.functionName
+    };
+
     this.conn.send(packet);
   },
 

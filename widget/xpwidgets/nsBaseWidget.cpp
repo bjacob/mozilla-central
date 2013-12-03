@@ -18,11 +18,11 @@
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsISimpleEnumerator.h"
 #include "nsIContent.h"
+#include "nsIDocument.h"
 #include "nsIServiceManager.h"
 #include "mozilla/Preferences.h"
 #include "BasicLayers.h"
 #include "ClientLayerManager.h"
-#include "LayerManagerOGL.h"
 #include "mozilla/layers/Compositor.h"
 #include "nsIXULRuntime.h"
 #include "nsIXULWindow.h"
@@ -39,6 +39,9 @@
 #include "nsContentUtils.h"
 #include "gfxPlatform.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/MouseEvents.h"
+#include "GLConsts.h"
+#include "LayerScope.h"
 
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
@@ -58,9 +61,9 @@ static int32_t gNumWidgets;
 nsIRollupListener* nsBaseWidget::gRollupListener = nullptr;
 
 using namespace mozilla::layers;
+using namespace mozilla::ipc;
 using namespace mozilla;
 using base::Thread;
-using mozilla::ipc::AsyncChannel;
 
 nsIContent* nsBaseWidget::mLastRollup = nullptr;
 // Global user preference for disabling native theme. Used
@@ -159,6 +162,8 @@ static void DeferredDestroyCompositor(CompositorParent* aCompositorParent,
 
 void nsBaseWidget::DestroyCompositor()
 {
+  LayerScope::DestroyServerSocket();
+
   if (mCompositorChild) {
     mCompositorChild->SendWillStop();
     mCompositorChild->Destroy();
@@ -747,7 +752,7 @@ NS_IMETHODIMP nsBaseWidget::MakeFullScreen(bool aFullScreen)
     if (!mOriginalBounds)
       mOriginalBounds = new nsIntRect();
     GetScreenBounds(*mOriginalBounds);
-    // convert dev pix to display pix for window manipulation 
+    // convert dev pix to display pix for window manipulation
     CSSToLayoutDeviceScale scale = GetDefaultScale();
     mOriginalBounds->x = NSToIntRound(mOriginalBounds->x / scale.scale);
     mOriginalBounds->y = NSToIntRound(mOriginalBounds->y / scale.scale);
@@ -849,7 +854,7 @@ nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
 #endif
 
   // we should use AddBoolPrefVarCache
-  bool disableAcceleration = IsSmallPopup() || gfxPlatform::GetPrefLayersAccelerationDisabled();
+  bool disableAcceleration = gfxPlatform::GetPrefLayersAccelerationDisabled();
   mForceLayersAcceleration = gfxPlatform::GetPrefLayersAccelerationForceEnabled();
 
   const char *acceleratedEnv = PR_GetEnv("MOZ_ACCELERATED");
@@ -948,13 +953,15 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
     return;
   }
 
+  // The server socket has to be created on the main thread.
+  LayerScope::CreateServerSocket();
+
   mCompositorParent = NewCompositorParent(aWidth, aHeight);
-  AsyncChannel *parentChannel = mCompositorParent->GetIPCChannel();
-  LayerManager* lm = new ClientLayerManager(this);
+  MessageChannel *parentChannel = mCompositorParent->GetIPCChannel();
+  ClientLayerManager* lm = new ClientLayerManager(this);
   MessageLoop *childMessageLoop = CompositorParent::CompositorLoop();
   mCompositorChild = new CompositorChild(lm);
-  AsyncChannel::Side childSide = mozilla::ipc::AsyncChannel::Child;
-  mCompositorChild->Open(parentChannel, childMessageLoop, childSide);
+  mCompositorChild->Open(parentChannel, childMessageLoop, ipc::ChildSide);
 
   TextureFactoryIdentifier textureFactoryIdentifier;
   PLayerTransactionChild* shadowManager;
@@ -991,15 +998,9 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   // deallocated it when being freed.
 }
 
-bool nsBaseWidget::IsSmallPopup()
-{
-  return mWindowType == eWindowType_popup &&
-         mPopupType != ePopupTypePanel;
-}
-
 bool nsBaseWidget::ShouldUseOffMainThreadCompositing()
 {
-  return CompositorParent::CompositorLoop() && !IsSmallPopup();
+  return CompositorParent::CompositorLoop();
 }
 
 LayerManager* nsBaseWidget::GetLayerManager(PLayerTransactionChild* aShadowManager,
@@ -1019,22 +1020,6 @@ LayerManager* nsBaseWidget::GetLayerManager(PLayerTransactionChild* aShadowManag
       CreateCompositor();
     }
 
-    if (mUseLayersAcceleration) {
-      if (!mLayerManager) {
-        nsRefPtr<LayerManagerOGL> layerManager = new LayerManagerOGL(this);
-        /**
-         * XXX - On several OSes initialization is expected to fail for now.
-         * If we'd get a non-basic layer manager they'd crash. This is ok though
-         * since on those platforms it will fail. Anyone implementing new
-         * platforms on LayerManagerOGL should ensure their widget is able to
-         * deal with it though!
-         */
-
-        if (layerManager->Initialize(mForceLayersAcceleration)) {
-          mLayerManager = layerManager;
-        }
-      }
-    }
     if (!mLayerManager) {
       mLayerManager = CreateBasicLayerManager();
     }
@@ -1404,13 +1389,15 @@ nsBaseWidget::ResolveIconName(const nsAString &aIconName,
 }
 
 NS_IMETHODIMP
-nsBaseWidget::BeginResizeDrag(nsGUIEvent* aEvent, int32_t aHorizontal, int32_t aVertical)
+nsBaseWidget::BeginResizeDrag(WidgetGUIEvent* aEvent,
+                              int32_t aHorizontal,
+                              int32_t aVertical)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
-nsBaseWidget::BeginMoveDrag(nsMouseEvent* aEvent)
+nsBaseWidget::BeginMoveDrag(WidgetMouseEvent* aEvent)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -1418,13 +1405,7 @@ nsBaseWidget::BeginMoveDrag(nsMouseEvent* aEvent)
 uint32_t
 nsBaseWidget::GetGLFrameBufferFormat()
 {
-  if (mLayerManager &&
-      mLayerManager->GetBackendType() == LAYERS_OPENGL) {
-    // Assume that the default framebuffer has RGBA format.  Specific
-    // backends that know differently will override this method.
-    return LOCAL_GL_RGBA;
-  }
-  return LOCAL_GL_NONE;
+  return LOCAL_GL_RGBA;
 }
 
 void nsBaseWidget::SetSizeConstraints(const SizeConstraints& aConstraints)
@@ -1560,7 +1541,7 @@ nsBaseWidget::GetRootAccessible()
 //
 //////////////////////////////////////////////////////////////
 /* static */ nsAutoString
-nsBaseWidget::debug_GuiEventToString(nsGUIEvent * aGuiEvent)
+nsBaseWidget::debug_GuiEventToString(WidgetGUIEvent* aGuiEvent)
 {
   NS_ASSERTION(nullptr != aGuiEvent,"cmon, null gui event.");
 
@@ -1737,7 +1718,7 @@ nsBaseWidget::debug_WantPaintFlashing()
 /* static */ void
 nsBaseWidget::debug_DumpEvent(FILE *                aFileOut,
                               nsIWidget *           aWidget,
-                              nsGUIEvent *          aGuiEvent,
+                              WidgetGUIEvent*       aGuiEvent,
                               const nsAutoCString & aWidgetName,
                               int32_t               aWindowID)
 {

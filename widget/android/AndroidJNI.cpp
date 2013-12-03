@@ -41,8 +41,7 @@
 #include "nsPluginInstanceOwner.h"
 #include "nsSurfaceTexture.h"
 #include "GeckoProfiler.h"
-
-#include "GeckoProfiler.h"
+#include "nsMemoryPressure.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -813,7 +812,7 @@ Java_org_mozilla_gecko_GeckoAppShell_getNextMessageFromQueue(JNIEnv* jenv, jclas
     }
 
     if (!jMessageQueueCls || !jNextMethod)
-        return NULL;
+        return nullptr;
 
     if (jMessagesField) {
         jobject msg = jenv->GetObjectField(queue, jMessagesField);
@@ -821,7 +820,7 @@ Java_org_mozilla_gecko_GeckoAppShell_getNextMessageFromQueue(JNIEnv* jenv, jclas
         // It turns out to be an order of magnitude more performant to do this extra check here and
         // block less vs. one fewer checks here and more blocking.
         if (!msg) {
-            return NULL;
+            return nullptr;
         }
     }
     return jenv->CallObjectMethod(queue, jNextMethod);
@@ -839,6 +838,12 @@ Java_org_mozilla_gecko_GeckoAppShell_onSurfaceTextureFrameAvailable(JNIEnv* jenv
   st->NotifyFrameAvailable();
 }
 
+NS_EXPORT void JNICALL
+Java_org_mozilla_gecko_GeckoAppShell_dispatchMemoryPressure(JNIEnv* jenv, jclass)
+{
+    NS_DispatchMemoryPressure(MemPressure_New);
+}
+
 NS_EXPORT jdouble JNICALL
 Java_org_mozilla_gecko_GeckoJavaSampler_getProfilerTime(JNIEnv *jenv, jclass jc)
 {
@@ -850,7 +855,8 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_abortAnimation(JNIEnv* env, j
 {
     APZCTreeManager *controller = nsWindow::GetAPZCTreeManager();
     if (controller) {
-        controller->CancelAnimation(ScrollableLayerGuid(nsWindow::RootLayerTreeId()));
+        // TODO: Pass in correct values for presShellId and viewId.
+        controller->CancelAnimation(ScrollableLayerGuid(nsWindow::RootLayerTreeId(), 0, 0));
     }
 }
 
@@ -861,10 +867,10 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_init(JNIEnv* env, jobject ins
         return;
     }
 
-    jobject oldRef = AndroidBridge::Bridge()->SetNativePanZoomController(env->NewGlobalRef(instance));
-    if (oldRef) {
+    NativePanZoomController* oldRef = AndroidBridge::Bridge()->SetNativePanZoomController(instance);
+    if (oldRef && !oldRef->isNull()) {
         MOZ_ASSERT(false, "Registering a new NPZC when we already have one");
-        env->DeleteGlobalRef(oldRef);
+        delete oldRef;
     }
 }
 
@@ -877,7 +883,7 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_handleTouchEvent(JNIEnv* env,
         const MultiTouchInput& input = wrapper->MakeMultiTouchInput(nsWindow::TopWindow());
         delete wrapper;
         if (input.mType >= 0) {
-            controller->ReceiveInputEvent(input);
+            controller->ReceiveInputEvent(input, nullptr);
         }
     }
 }
@@ -905,11 +911,11 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_destroy(JNIEnv* env, jobject 
         return;
     }
 
-    jobject oldRef = AndroidBridge::Bridge()->SetNativePanZoomController(NULL);
-    if (!oldRef) {
+    NativePanZoomController* oldRef = AndroidBridge::Bridge()->SetNativePanZoomController(NULL);
+    if (!oldRef || oldRef->isNull()) {
         MOZ_ASSERT(false, "Clearing a non-existent NPZC");
     } else {
-        env->DeleteGlobalRef(oldRef);
+        delete oldRef;
     }
 }
 
@@ -918,7 +924,8 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_notifyDefaultActionPrevented(
 {
     APZCTreeManager *controller = nsWindow::GetAPZCTreeManager();
     if (controller) {
-        controller->ContentReceivedTouch(ScrollableLayerGuid(nsWindow::RootLayerTreeId()), prevented);
+        // TODO: Pass in correct values for presShellId and viewId.
+        controller->ContentReceivedTouch(ScrollableLayerGuid(nsWindow::RootLayerTreeId(), 0, 0), prevented);
     }
 }
 
@@ -947,7 +954,8 @@ Java_org_mozilla_gecko_gfx_NativePanZoomController_updateScrollOffset(JNIEnv* en
 {
     APZCTreeManager *controller = nsWindow::GetAPZCTreeManager();
     if (controller) {
-        controller->UpdateScrollOffset(ScrollableLayerGuid(nsWindow::RootLayerTreeId()), CSSPoint(cssX, cssY));
+        // TODO: Pass in correct values for presShellId and viewId.
+        controller->UpdateScrollOffset(ScrollableLayerGuid(nsWindow::RootLayerTreeId(), 0, 0), CSSPoint(cssX, cssY));
     }
 }
 
@@ -966,7 +974,7 @@ Java_org_mozilla_gecko_ANRReporter_requestNativeStack(JNIEnv*, jclass)
     // Buffer one sample and let the profiler wait a long time
     profiler_start(100, 10000, NATIVE_STACK_FEATURES,
         sizeof(NATIVE_STACK_FEATURES) / sizeof(char*),
-        NULL, 0);
+        nullptr, 0);
     return JNI_TRUE;
 }
 
@@ -975,7 +983,7 @@ Java_org_mozilla_gecko_ANRReporter_getNativeStack(JNIEnv* jenv, jclass)
 {
     if (!profiler_is_active()) {
         // Maybe profiler support is disabled?
-        return NULL;
+        return nullptr;
     }
     char *profile = profiler_get_profile();
     while (profile && !strlen(profile)) {
@@ -983,7 +991,7 @@ Java_org_mozilla_gecko_ANRReporter_getNativeStack(JNIEnv* jenv, jclass)
         sched_yield();
         profile = profiler_get_profile();
     }
-    jstring result = NULL;
+    jstring result = nullptr;
     if (profile) {
         result = jenv->NewStringUTF(profile);
         free(profile);

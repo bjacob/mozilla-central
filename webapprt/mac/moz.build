@@ -6,7 +6,8 @@
 
 PROGRAM = 'webapprt-stub'
 
-CMMSRCS += [
+SOURCES += [
     'webapprt.mm',
 ]
 
+DEFINES['XPCOM_GLUE'] = True

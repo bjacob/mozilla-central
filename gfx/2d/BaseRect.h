@@ -7,8 +7,9 @@
 #define MOZILLA_GFX_BASERECT_H_
 
 #include <cmath>
+#include <mozilla/Assertions.h>
+#include <mozilla/FloatingPoint.h>
 #include <algorithm>
-#include "nsDebug.h"
 
 namespace mozilla {
 namespace gfx {
@@ -59,10 +60,10 @@ struct BaseRect {
   // "Finite" means not inf and not NaN
   bool IsFinite() const
   {
-    return (std::isfinite(x) &&
-            std::isfinite(y) &&
-            std::isfinite(width) &&
-            std::isfinite(height));
+    return (mozilla::IsFinite(x) &&
+            mozilla::IsFinite(y) &&
+            mozilla::IsFinite(width) &&
+            mozilla::IsFinite(height));
   }
 
   // Returns true if this rectangle contains the interior of aRect. Always
@@ -277,21 +278,21 @@ struct BaseRect {
 
   // Moves one edge of the rect without moving the opposite edge.
   void SetLeftEdge(T aX) {
-    NS_ASSERTION(aX <= XMost(), "Bad rect edge");
+    MOZ_ASSERT(aX <= XMost());
     width = XMost() - aX;
     x = aX;
   }
   void SetRightEdge(T aXMost) { 
-    NS_ASSERTION(aXMost >= x, "Bad rect edge");
+    MOZ_ASSERT(aXMost >= x);
     width = aXMost - x; 
   }
   void SetTopEdge(T aY) {
-    NS_ASSERTION(aY <= YMost(), "Bad rect edge");
+    MOZ_ASSERT(aY <= YMost());
     height = YMost() - aY;
     y = aY;
   }
   void SetBottomEdge(T aYMost) { 
-    NS_ASSERTION(aYMost >= y, "Bad rect edge");
+    MOZ_ASSERT(aYMost >= y);
     height = aYMost - y; 
   }
 

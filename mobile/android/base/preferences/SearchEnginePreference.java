@@ -16,8 +16,10 @@ import android.util.Log;
 import android.view.View;
 import android.widget.TextView;
 import android.widget.Toast;
+
 import org.json.JSONException;
 import org.json.JSONObject;
+
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.util.ThreadUtils;
@@ -26,7 +28,7 @@ import org.mozilla.gecko.widget.FaviconView;
 /**
  * Represents an element in the list of search engines on the preferences menu.
  */
-public class SearchEnginePreference extends Preference {
+public class SearchEnginePreference extends Preference implements View.OnLongClickListener {
     private static final String LOGTAG = "SearchEnginePreference";
 
     // Indices in button array of the AlertDialog of the three buttons.
@@ -104,6 +106,13 @@ public class SearchEnginePreference extends Preference {
         mFaviconView.updateAndScaleImage(mIconBitmap, getTitle().toString());
     }
 
+    @Override
+    public boolean onLongClick(View view) {
+        // Show the preference dialog on long-press.
+        showDialog();
+        return true;
+    }
+
     /**
      * Configure this Preference object from the Gecko search engine JSON object.
      * @param geckoEngineJSON The Gecko-formatted JSON object representing the search engine.
@@ -132,7 +141,8 @@ public class SearchEnginePreference extends Preference {
     }
 
     /**
-     * Set if this object's UI should show that this is the default engine.
+     * Set if this object's UI should show that this is the default engine. To ensure proper ordering,
+     * this method should only be called after this Preference is added to the PreferenceCategory.
      * @param isDefault Flag indicating if this represents the default engine.
      */
     public void setIsDefaultEngine(boolean isDefault) {
@@ -197,7 +207,9 @@ public class SearchEnginePreference extends Preference {
         if (mPromptIcon == null && mIconBitmap != null) {
             mPromptIcon = new BitmapDrawable(mFaviconView.getBitmap());
         }
-        builder.setIcon(mPromptIcon);
+
+        // Icons are hidden until Bug 926711 is fixed.
+        //builder.setIcon(mPromptIcon);
 
         // We have to construct the dialog itself on the UI thread.
         ThreadUtils.postToUiThread(new Runnable() {

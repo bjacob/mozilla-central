@@ -9,6 +9,7 @@
 
 #include "mozilla/dom/indexedDB/IndexedDatabase.h"
 
+#include "js/TypeDecls.h"
 #include "mozilla/dom/IDBCursorBinding.h"
 #include "mozilla/dom/IDBIndexBinding.h"
 #include "mozilla/dom/IDBObjectStoreBinding.h"
@@ -59,7 +60,7 @@ public:
   static already_AddRefed<IDBObjectStore>
   Create(IDBTransaction* aTransaction,
          ObjectStoreInfo* aInfo,
-         nsIAtom* aDatabaseId,
+         const nsACString& aDatabaseId,
          bool aCreating);
 
   static nsresult
@@ -221,6 +222,11 @@ public:
                  ErrorResult& aRv);
 
   already_AddRefed<IDBRequest>
+  GetAllKeysInternal(IDBKeyRange* aKeyRange,
+                     uint32_t aLimit,
+                     ErrorResult& aRv);
+
+  already_AddRefed<IDBRequest>
   DeleteInternal(IDBKeyRange* aKeyRange,
                  ErrorResult& aRv);
 
@@ -233,13 +239,25 @@ public:
                      size_t aDirection,
                      ErrorResult& aRv);
 
-  nsresult OpenCursorFromChildProcess(
+  already_AddRefed<IDBRequest>
+  OpenKeyCursorInternal(IDBKeyRange* aKeyRange,
+                        size_t aDirection,
+                        ErrorResult& aRv);
+
+  nsresult
+  OpenCursorFromChildProcess(
                             IDBRequest* aRequest,
                             size_t aDirection,
                             const Key& aKey,
                             const SerializedStructuredCloneReadInfo& aCloneInfo,
                             nsTArray<StructuredCloneFile>& aBlobs,
                             IDBCursor** _retval);
+
+  nsresult
+  OpenCursorFromChildProcess(IDBRequest* aRequest,
+                             size_t aDirection,
+                             const Key& aKey,
+                             IDBCursor** _retval);
 
   void
   SetInfo(ObjectStoreInfo* aInfo);
@@ -319,7 +337,7 @@ public:
 
   already_AddRefed<IDBIndex>
   CreateIndex(JSContext* aCx, const nsAString& aName,
-              const Sequence<nsString >& aKeyPath,
+              const Sequence<nsString>& aKeyPath,
               const IDBIndexParameters& aOptionalParameters, ErrorResult& aRv);
 
   already_AddRefed<IDBIndex>
@@ -334,7 +352,15 @@ public:
 
   already_AddRefed<IDBRequest>
   GetAll(JSContext* aCx, const Optional<JS::Handle<JS::Value> >& aKey,
-         const Optional<uint32_t >& aLimit, ErrorResult& aRv);
+         const Optional<uint32_t>& aLimit, ErrorResult& aRv);
+
+  already_AddRefed<IDBRequest>
+  GetAllKeys(JSContext* aCx, const Optional<JS::Handle<JS::Value>>& aKey,
+             const Optional<uint32_t>& aLimit, ErrorResult& aRv);
+
+  already_AddRefed<IDBRequest>
+  OpenKeyCursor(JSContext* aCx, const Optional<JS::Handle<JS::Value>>& aRange,
+                IDBCursorDirection aDirection, ErrorResult& aRv);
 
 protected:
   IDBObjectStore();
@@ -376,7 +402,7 @@ private:
   JS::Heap<JS::Value> mCachedKeyPath;
   bool mRooted;
   bool mAutoIncrement;
-  nsCOMPtr<nsIAtom> mDatabaseId;
+  nsCString mDatabaseId;
   nsRefPtr<ObjectStoreInfo> mInfo;
 
   nsTArray<nsRefPtr<IDBIndex> > mCreatedIndexes;

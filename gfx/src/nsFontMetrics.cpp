@@ -96,7 +96,8 @@ nsFontMetrics::~nsFontMetrics()
 nsresult
 nsFontMetrics::Init(const nsFont& aFont, nsIAtom* aLanguage,
                     nsDeviceContext *aContext,
-                    gfxUserFontSet *aUserFontSet)
+                    gfxUserFontSet *aUserFontSet,
+                    gfxTextPerfMetrics *aTextPerf)
 {
     NS_ABORT_IF_FALSE(mP2A == 0, "already initialized");
 
@@ -119,6 +120,7 @@ nsFontMetrics::Init(const nsFont& aFont, nsIAtom* aLanguage,
 
     mFontGroup = gfxPlatform::GetPlatform()->
         CreateFontGroup(aFont.name, &style, aUserFontSet);
+    mFontGroup->SetTextPerfMetrics(aTextPerf);
     if (mFontGroup->FontListLength() < 1)
         return NS_ERROR_UNEXPECTED;
 
@@ -318,7 +320,7 @@ nsFontMetrics::DrawString(const char *aString, uint32_t aLength,
     if (mTextRunRTL) {
         pt.x += textRun->GetAdvanceWidth(0, aLength, &provider);
     }
-    textRun->Draw(aContext->ThebesContext(), pt, gfxFont::GLYPH_FILL, 0, aLength,
+    textRun->Draw(aContext->ThebesContext(), pt, DrawMode::GLYPH_FILL, 0, aLength,
                   &provider, nullptr, nullptr);
 }
 
@@ -340,7 +342,7 @@ nsFontMetrics::DrawString(const PRUnichar* aString, uint32_t aLength,
     if (mTextRunRTL) {
         pt.x += textRun->GetAdvanceWidth(0, aLength, &provider);
     }
-    textRun->Draw(aContext->ThebesContext(), pt, gfxFont::GLYPH_FILL, 0, aLength,
+    textRun->Draw(aContext->ThebesContext(), pt, DrawMode::GLYPH_FILL, 0, aLength,
                   &provider, nullptr, nullptr);
 }
 

@@ -11,15 +11,17 @@ from mozunit import main
 
 from mozbuild.frontend.data import (
     ConfigFileSubstitution,
-    DirectoryTraversal,
-    ReaderSummary,
-    VariablePassthru,
     Defines,
+    DirectoryTraversal,
     Exports,
-    Program,
+    GeneratedInclude,
     IPDLFile,
     LocalInclude,
+    Program,
+    ReaderSummary,
+    SimpleProgram,
     TestManifest,
+    VariablePassthru,
 )
 from mozbuild.frontend.emitter import TreeMetadataEmitter
 from mozbuild.frontend.reader import (
@@ -45,8 +47,11 @@ class TestEmitterBasic(unittest.TestCase):
 
     def read_topsrcdir(self, reader):
         emitter = TreeMetadataEmitter(reader.config)
+        def ack(obj):
+            obj.ack()
+            return obj
 
-        objs = list(emitter.emit(reader.read_topsrcdir()))
+        objs = list(ack(o) for o in emitter.emit(reader.read_topsrcdir()))
         self.assertGreater(len(objs), 0)
         self.assertIsInstance(objs[-1], ReaderSummary)
 
@@ -143,34 +148,25 @@ class TestEmitterBasic(unittest.TestCase):
             EXTRA_PP_JS_MODULES=['bar.pp.jsm', 'foo.pp.jsm'],
             FAIL_ON_WARNINGS=True,
             FORCE_SHARED_LIB=True,
-            FORCE_STATIC_LIB=True,
-            GTEST_CSRCS=['test1.c', 'test2.c'],
-            GTEST_CMMSRCS=['test1.mm', 'test2.mm'],
-            GTEST_CPPSRCS=['test1.cpp', 'test2.cpp'],
             HOST_CPPSRCS=['fans.cpp', 'tans.cpp'],
             HOST_CSRCS=['fans.c', 'tans.c'],
             HOST_LIBRARY_NAME='host_fans',
             IS_COMPONENT=True,
-            LIBRARY_NAME='lib_name',
             LIBS=['fans.lib', 'tans.lib'],
             LIBXUL_LIBRARY=True,
             MSVC_ENABLE_PGO=True,
             NO_DIST_INSTALL=True,
-            MODULE='module_name',
             OS_LIBS=['foo.so', '-l123', 'aaa.a'],
             SDK_LIBRARY=['fans.sdk', 'tans.sdk'],
-            SHARED_LIBRARY_LIBS=['fans.sll', 'tans.sll'],
-            SIMPLE_PROGRAMS=['fans.x', 'tans.x'],
-            SSRCS=['fans.S', 'tans.S'],
+            SSRCS=['bans.S', 'fans.S'],
+            VISIBILITY_FLAGS='',
         )
 
         variables = objs[1].variables
-        self.assertEqual(len(variables), len(wanted))
-
-        for var, val in wanted.items():
-            # print("test_variable_passthru[%s]" % var)
-            self.assertIn(var, variables)
-            self.assertEqual(variables[var], val)
+        maxDiff = self.maxDiff
+        self.maxDiff = None
+        self.assertEqual(wanted, variables)
+        self.maxDiff = maxDiff
 
     def test_exports(self):
         reader = self.reader('exports')
@@ -213,12 +209,15 @@ class TestEmitterBasic(unittest.TestCase):
         reader = self.reader('program')
         objs = self.read_topsrcdir(reader)
 
-        self.assertEqual(len(objs), 2)
+        self.assertEqual(len(objs), 4)
         self.assertIsInstance(objs[0], DirectoryTraversal)
         self.assertIsInstance(objs[1], Program)
+        self.assertIsInstance(objs[2], SimpleProgram)
+        self.assertIsInstance(objs[3], SimpleProgram)
 
-        program = objs[1].program
-        self.assertEqual(program, 'test_program.prog')
+        self.assertEqual(objs[1].program, 'test_program.prog')
+        self.assertEqual(objs[2].program, 'test_program1.prog')
+        self.assertEqual(objs[3].program, 'test_program2.prog')
 
     def test_test_manifest_missing_manifest(self):
         """A missing manifest file should result in an error."""
@@ -241,7 +240,7 @@ class TestEmitterBasic(unittest.TestCase):
         objs = [o for o in self.read_topsrcdir(reader)
                 if isinstance(o, TestManifest)]
 
-        self.assertEqual(len(objs), 5)
+        self.assertEqual(len(objs), 6)
 
         metadata = {
             'a11y.ini': {
@@ -261,6 +260,13 @@ class TestEmitterBasic(unittest.TestCase):
                     'test_browser.js',
                     'support1',
                     'support2',
+                },
+            },
+            'metro.ini': {
+                'flavor': 'metro-chrome',
+                'installs': {
+                    'metro.ini',
+                    'test_metro.js',
                 },
             },
             'mochitest.ini': {
@@ -320,6 +326,23 @@ class TestEmitterBasic(unittest.TestCase):
             'entry in generated-files not present elsewhere'):
             self.read_topsrcdir(reader),
 
+    # This test is only needed until all harnesses support filtering from
+    # manifests.
+    def test_test_manifest_inactive_ignored(self):
+        """Inactive tests should not be installed."""
+        reader = self.reader('test-manifest-inactive-ignored')
+
+        objs = [o for o in self.read_topsrcdir(reader)
+               if isinstance(o, TestManifest)]
+
+        self.assertEqual(len(objs), 1)
+
+        o = objs[0]
+
+        self.assertEqual(o.flavor, 'mochitest')
+        basenames = set(os.path.basename(k) for k in o.installs.keys())
+        self.assertEqual(basenames, {'mochitest.ini', 'test_active.html'})
+
     def test_ipdl_sources(self):
         reader = self.reader('ipdl_sources')
         objs = self.read_topsrcdir(reader)
@@ -350,6 +373,19 @@ class TestEmitterBasic(unittest.TestCase):
         ]
 
         self.assertEqual(local_includes, expected)
+
+    def test_generated_includes(self):
+        """Test that GENERATED_INCLUDES is emitted correctly."""
+        reader = self.reader('generated_includes')
+        objs = self.read_topsrcdir(reader)
+
+        generated_includes = [o.path for o in objs if isinstance(o, GeneratedInclude)]
+        expected = [
+            '/bar/baz',
+            'foo',
+        ]
+
+        self.assertEqual(generated_includes, expected)
 
     def test_defines(self):
         reader = self.reader('defines')

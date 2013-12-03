@@ -19,6 +19,7 @@
 #include "nsIScriptError.h"
 #include "nsMimeTypes.h"
 #include "nsCxPusher.h"
+#include "WebAudioUtils.h"
 
 namespace mozilla {
 
@@ -268,9 +269,9 @@ MediaDecodeTask::Decode()
 
   mDecoderReader->OnDecodeThreadStart();
 
-  VideoInfo videoInfo;
+  MediaInfo mediaInfo;
   nsAutoPtr<MetadataTags> tags;
-  nsresult rv = mDecoderReader->ReadMetadata(&videoInfo, getter_Transfers(tags));
+  nsresult rv = mDecoderReader->ReadMetadata(&mediaInfo, getter_Transfers(tags));
   if (NS_FAILED(rv)) {
     ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
     return;
@@ -290,8 +291,8 @@ MediaDecodeTask::Decode()
 
   MediaQueue<AudioData>& audioQueue = mDecoderReader->AudioQueue();
   uint32_t frameCount = audioQueue.FrameCount();
-  uint32_t channelCount = videoInfo.mAudioChannels;
-  uint32_t sampleRate = videoInfo.mAudioRate;
+  uint32_t channelCount = mediaInfo.mAudio.mChannels;
+  uint32_t sampleRate = mediaInfo.mAudio.mRate;
 
   if (!frameCount || !channelCount || !sampleRate) {
     ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
@@ -345,42 +346,23 @@ MediaDecodeTask::Decode()
       (audioData->mAudioBuffer->Data());
 
     if (sampleRate != destSampleRate) {
-      const uint32_t expectedOutSamples = static_cast<uint32_t>(
-          static_cast<uint64_t>(destSampleRate) *
-          static_cast<uint64_t>(audioData->mFrames) /
-          static_cast<uint64_t>(sampleRate)
-        );
-#ifdef MOZ_SAMPLE_TYPE_S16
-      AudioDataValue* resampledBuffer = new(fallible) AudioDataValue[channelCount * expectedOutSamples];
-#endif
+      const uint32_t maxOutSamples = resampledFrames - mDecodeJob.mWriteIndex;
 
       for (uint32_t i = 0; i < audioData->mChannels; ++i) {
         uint32_t inSamples = audioData->mFrames;
-        uint32_t outSamples = expectedOutSamples;
+        uint32_t outSamples = maxOutSamples;
 
-#ifdef MOZ_SAMPLE_TYPE_S16
-        speex_resampler_process_int(resampler, i, &bufferData[i * audioData->mFrames], &inSamples,
-                                    &resampledBuffer[i * expectedOutSamples],
-                                    &outSamples);
-
-        ConvertAudioSamples(&resampledBuffer[i * expectedOutSamples],
-                            mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
-                            outSamples);
-#else
-        speex_resampler_process_float(resampler, i, &bufferData[i * audioData->mFrames], &inSamples,
-                                      mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
-                                      &outSamples);
-#endif
+        WebAudioUtils::SpeexResamplerProcess(
+            resampler, i, &bufferData[i * audioData->mFrames], &inSamples,
+            mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
+            &outSamples);
 
         if (i == audioData->mChannels - 1) {
           mDecodeJob.mWriteIndex += outSamples;
           MOZ_ASSERT(mDecodeJob.mWriteIndex <= resampledFrames);
+          MOZ_ASSERT(inSamples == audioData->mFrames);
         }
       }
-
-#ifdef MOZ_SAMPLE_TYPE_S16
-      delete[] resampledBuffer;
-#endif
     } else {
       for (uint32_t i = 0; i < audioData->mChannels; ++i) {
         ConvertAudioSamples(&bufferData[i * audioData->mFrames],
@@ -395,50 +377,23 @@ MediaDecodeTask::Decode()
   }
 
   if (sampleRate != destSampleRate) {
-    int inputLatency = speex_resampler_get_input_latency(resampler);
-    int outputLatency = speex_resampler_get_output_latency(resampler);
-    AudioDataValue* zero = (AudioDataValue*)calloc(inputLatency, sizeof(AudioDataValue));
-
-#ifdef MOZ_SAMPLE_TYPE_S16
-    AudioDataValue* resampledBuffer = new(fallible) AudioDataValue[channelCount * outputLatency];
-    if (!resampledBuffer || !zero) {
-#else
-    if (!zero) {
-#endif
-      // Out of memory!
-      ReportFailureOnMainThread(WebAudioDecodeJob::UnknownError);
-      return;
-    }
-
+    uint32_t inputLatency = speex_resampler_get_input_latency(resampler);
+    const uint32_t maxOutSamples = resampledFrames - mDecodeJob.mWriteIndex;
     for (uint32_t i = 0; i < channelCount; ++i) {
       uint32_t inSamples = inputLatency;
-      uint32_t outSamples = outputLatency;
+      uint32_t outSamples = maxOutSamples;
 
-#ifdef MOZ_SAMPLE_TYPE_S16
-      speex_resampler_process_int(resampler, i, zero, &inSamples,
-                                  &resampledBuffer[i * outputLatency],
-                                  &outSamples);
-
-      ConvertAudioSamples(&resampledBuffer[i * outputLatency],
-                          mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
-                          outSamples);
-#else
-      speex_resampler_process_float(resampler, i, zero, &inSamples,
-                                    mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
-                                    &outSamples);
-#endif
+      WebAudioUtils::SpeexResamplerProcess(
+          resampler, i, (AudioDataValue*)nullptr, &inSamples,
+          mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
+          &outSamples);
 
       if (i == channelCount - 1) {
         mDecodeJob.mWriteIndex += outSamples;
         MOZ_ASSERT(mDecodeJob.mWriteIndex <= resampledFrames);
+        MOZ_ASSERT(inSamples == inputLatency);
       }
     }
-
-    free(zero);
-
-#ifdef MOZ_SAMPLE_TYPE_S16
-    delete[] resampledBuffer;
-#endif
   }
 
   mPhase = PhaseEnum::AllocateBuffer;
@@ -570,6 +525,17 @@ MediaBufferDecoder::EnsureThreadPoolInitialized()
     mThreadPool->SetName(NS_LITERAL_CSTRING("MediaBufferDecoder"));
   }
   return true;
+}
+
+void
+MediaBufferDecoder::Shutdown() {
+  if (mThreadPool) {
+    // Setting threadLimit to 0 causes threads to exit when all events have
+    // been run, like nsIThreadPool::Shutdown(), but doesn't run a nested event
+    // loop nor wait until this has happened.
+    mThreadPool->SetThreadLimit(0);
+    mThreadPool = nullptr;
+  }
 }
 
 WebAudioDecodeJob::WebAudioDecodeJob(const nsACString& aContentType,

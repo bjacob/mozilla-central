@@ -6,6 +6,7 @@
 #include "gfxGDIFont.h"
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/WindowsVersion.h"
 
 #include "gfxGDIShaper.h"
 #include "gfxUniscribeShaper.h"
@@ -16,6 +17,7 @@
 #include "gfxContext.h"
 #include "mozilla/Preferences.h"
 #include "nsUnicodeProperties.h"
+#include "gfxFontConstants.h"
 
 #include "cairo-win32.h"
 
@@ -94,8 +96,7 @@ UseUniscribe(gfxShapedText *aShapedText,
     uint32_t flags = aShapedText->Flags();
     bool useGDI;
 
-    bool isXP = (gfxWindowsPlatform::WindowsOSVersion() 
-                       < gfxWindowsPlatform::kWindowsVista);
+    bool isXP = !IsVistaOrLater();
 
     // bug 561304 - Uniscribe bug produces bad positioning at certain
     // font sizes on XP, so default to GDI on XP using logic of 3.6
@@ -145,8 +146,7 @@ gfxGDIFont::ShapeText(gfxContext      *aContext,
 
     if (!ok && mHarfBuzzShaper) {
         if (gfxPlatform::GetPlatform()->UseHarfBuzzForScript(aScript) ||
-            (gfxWindowsPlatform::WindowsOSVersion() <
-                 gfxWindowsPlatform::kWindowsVista &&
+            (!IsVistaOrLater() &&
              ScriptShapingType(aScript) == SHAPING_INDIC &&
              !Preferences::GetBool("gfx.font_rendering.winxp-indic-uniscribe",
                                    false))) {
@@ -564,10 +564,10 @@ gfxGDIFont::GetGlyphWidth(gfxContext *aCtx, uint16_t aGID)
 }
 
 void
-gfxGDIFont::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
-                                FontCacheSizes*   aSizes) const
+gfxGDIFont::AddSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
+                                   FontCacheSizes* aSizes) const
 {
-    gfxFont::SizeOfExcludingThis(aMallocSizeOf, aSizes);
+    gfxFont::AddSizeOfExcludingThis(aMallocSizeOf, aSizes);
     aSizes->mFontInstances += aMallocSizeOf(mMetrics);
     if (mGlyphWidths) {
         aSizes->mFontInstances +=
@@ -576,9 +576,9 @@ gfxGDIFont::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
 }
 
 void
-gfxGDIFont::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
-                                FontCacheSizes*   aSizes) const
+gfxGDIFont::AddSizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
+                                   FontCacheSizes* aSizes) const
 {
     aSizes->mFontInstances += aMallocSizeOf(this);
-    SizeOfExcludingThis(aMallocSizeOf, aSizes);
+    AddSizeOfExcludingThis(aMallocSizeOf, aSizes);
 }

@@ -6,74 +6,43 @@
 #include "nsSVGNumber2.h"
 #include "mozilla/Attributes.h"
 #include "nsContentUtils.h" // NS_ENSURE_FINITE
-#include "nsError.h"
 #include "nsIDOMSVGNumber.h"
 #include "nsSMILFloatType.h"
 #include "nsSMILValue.h"
 #include "nsSVGAttrTearoffTable.h"
-#include "prdtoa.h"
 #include "SVGContentUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-
-class DOMSVGNumber MOZ_FINAL : public nsIDOMSVGNumber
-{
-public:
-  NS_DECL_ISUPPORTS
-
-  DOMSVGNumber() 
-    : mVal(0) {}
-    
-  NS_IMETHOD GetValue(float* aResult)
-    { *aResult = mVal; return NS_OK; }
-  NS_IMETHOD SetValue(float aValue)
-    { NS_ENSURE_FINITE(aValue, NS_ERROR_ILLEGAL_VALUE);
-      mVal = aValue;
-      return NS_OK; }
-
-private:
-  float mVal;
-};
-
-NS_IMPL_ADDREF(DOMSVGNumber)
-NS_IMPL_RELEASE(DOMSVGNumber)
-
-NS_INTERFACE_MAP_BEGIN(DOMSVGNumber)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMSVGNumber)
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
-  NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(SVGNumber)
-NS_INTERFACE_MAP_END
 
 /* Implementation */
 
 static nsSVGAttrTearoffTable<nsSVGNumber2, nsSVGNumber2::DOMAnimatedNumber>
   sSVGAnimatedNumberTearoffTable;
 
-static nsresult
-GetValueFromString(const nsAString &aValueAsString,
+static bool
+GetValueFromString(const nsAString& aString,
                    bool aPercentagesAllowed,
-                   float *aValue)
+                   float& aValue)
 {
-  NS_ConvertUTF16toUTF8 value(aValueAsString);
-  const char *str = value.get();
+  RangedPtr<const PRUnichar> iter =
+    SVGContentUtils::GetStartRangedPtr(aString);
+  const RangedPtr<const PRUnichar> end =
+    SVGContentUtils::GetEndRangedPtr(aString);
 
-  if (IsSVGWhitespace(*str))
-    return NS_ERROR_DOM_SYNTAX_ERR;
-  
-  char *rest;
-  *aValue = float(PR_strtod(str, &rest));
-  if (rest == str || !NS_finite(*aValue)) {
-    return NS_ERROR_DOM_SYNTAX_ERR;
+  if (!SVGContentUtils::ParseNumber(iter, end, aValue)) {
+    return false;
   }
-  if (*rest == '%' && aPercentagesAllowed) {
-    *aValue /= 100;
-    ++rest;
+
+  if (aPercentagesAllowed) {
+    const nsAString& units = Substring(iter.get(), end.get());
+    if (units.EqualsLiteral("%")) {
+      aValue /= 100;
+      return true;
+    }
   }
-  if (*rest == '\0') {
-    return NS_OK;
-  }
-  return NS_ERROR_DOM_SYNTAX_ERR;
+
+  return iter == end;
 }
 
 nsresult
@@ -82,11 +51,10 @@ nsSVGNumber2::SetBaseValueString(const nsAString &aValueAsString,
 {
   float val;
 
-  nsresult rv = GetValueFromString(
-    aValueAsString, aSVGElement->NumberAttrAllowsPercentage(mAttrEnum), &val);
-
-  if (NS_FAILED(rv)) {
-    return rv;
+  if (!GetValueFromString(aValueAsString,
+                          aSVGElement->NumberAttrAllowsPercentage(mAttrEnum),
+                          val)) {
+    return NS_ERROR_DOM_SYNTAX_ERR;
   }
 
   mBaseVal = val;
@@ -172,11 +140,10 @@ nsSVGNumber2::SMILNumber::ValueFromString(const nsAString& aStr,
 {
   float value;
 
-  nsresult rv = GetValueFromString(
-    aStr, mSVGElement->NumberAttrAllowsPercentage(mVal->mAttrEnum), &value);
-
-  if (NS_FAILED(rv)) {
-    return rv;
+  if (!GetValueFromString(aStr,
+                          mSVGElement->NumberAttrAllowsPercentage(mVal->mAttrEnum),
+                          value)) {
+    return NS_ERROR_DOM_SYNTAX_ERR;
   }
 
   nsSMILValue val(nsSMILFloatType::Singleton());

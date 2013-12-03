@@ -13,7 +13,6 @@
 #include "jit/FixedList.h"
 #include "jit/IonAllocPolicy.h"
 #include "jit/MIR.h"
-#include "jit/MIRGenerator.h"
 
 namespace js {
 namespace jit {
@@ -47,7 +46,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     MBasicBlock(MIRGraph &graph, CompileInfo &info, jsbytecode *pc, Kind kind);
     bool init();
     void copySlots(MBasicBlock *from);
-    bool inherit(BytecodeAnalysis *analysis, MBasicBlock *pred, uint32_t popped);
+    bool inherit(TempAllocator &alloc, BytecodeAnalysis *analysis, MBasicBlock *pred, uint32_t popped);
     bool inheritResumePoint(MBasicBlock *pred);
     void assertUsesAreNotWithin(MUseIterator use, MUseIterator end);
 
@@ -66,7 +65,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     ////////// BEGIN GRAPH BUILDING INSTRUCTIONS //////////
     ///////////////////////////////////////////////////////
 
-    // Creates a new basic block for a MIR generator. If |pred| is not NULL,
+    // Creates a new basic block for a MIR generator. If |pred| is not nullptr,
     // its slots and stack depth are initialized from |pred|.
     static MBasicBlock *New(MIRGraph &graph, BytecodeAnalysis *analysis, CompileInfo &info,
                             MBasicBlock *pred, jsbytecode *entryPc, Kind kind);
@@ -150,8 +149,8 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     MDefinition *pop();
     void popn(uint32_t n);
 
-    // Adds an instruction to this block's instruction list. |ins| may be NULL
-    // to simplify OOM checking.
+    // Adds an instruction to this block's instruction list. |ins| may be
+    // nullptr to simplify OOM checking.
     void add(MInstruction *ins);
 
     // Marks the last instruction of the block; no further instructions
@@ -169,13 +168,13 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     // Adds a predecessor. Every predecessor must have the same exit stack
     // depth as the entry state to this block. Adding a predecessor
     // automatically creates phi nodes and rewrites uses as needed.
-    bool addPredecessor(MBasicBlock *pred);
-    bool addPredecessorPopN(MBasicBlock *pred, uint32_t popped);
+    bool addPredecessor(TempAllocator &alloc, MBasicBlock *pred);
+    bool addPredecessorPopN(TempAllocator &alloc, MBasicBlock *pred, uint32_t popped);
 
     // Stranger utilities used for inlining.
     bool addPredecessorWithoutPhis(MBasicBlock *pred);
     void inheritSlots(MBasicBlock *parent);
-    bool initEntrySlots();
+    bool initEntrySlots(TempAllocator &alloc);
 
     // Replaces an edge for a given block with a new block. This is
     // used for critical edge splitting and also for inserting
@@ -475,6 +474,7 @@ class MBasicBlock : public TempObject, public InlineListNode<MBasicBlock>
     void dumpStack(FILE *fp);
 
     void dump(FILE *fp);
+    void dump();
 
     // Track bailouts by storing the current pc in MIR instruction added at this
     // cycle. This is also used for tracking calls when profiling.
@@ -533,13 +533,13 @@ typedef InlineListIterator<MBasicBlock> MBasicBlockIterator;
 typedef InlineListIterator<MBasicBlock> ReversePostorderIterator;
 typedef InlineListReverseIterator<MBasicBlock> PostorderIterator;
 
-typedef Vector<MBasicBlock *, 1, IonAllocPolicy> MIRGraphExits;
+typedef Vector<MBasicBlock *, 1, IonAllocPolicy> MIRGraphReturns;
 
 class MIRGraph
 {
     InlineList<MBasicBlock> blocks_;
     TempAllocator *alloc_;
-    MIRGraphExits *exitAccumulator_;
+    MIRGraphReturns *returnAccumulator_;
     uint32_t blockIdGen_;
     uint32_t idGen_;
     MBasicBlock *osrBlock_;
@@ -551,14 +551,18 @@ class MIRGraph
   public:
     MIRGraph(TempAllocator *alloc)
       : alloc_(alloc),
-        exitAccumulator_(NULL),
+        returnAccumulator_(nullptr),
         blockIdGen_(0),
         idGen_(0),
-        osrBlock_(NULL),
-        osrStart_(NULL),
+        osrBlock_(nullptr),
+        osrStart_(nullptr),
         numBlocks_(0),
         hasTryBlock_(false)
     { }
+
+    TempAllocator &alloc() const {
+        return *alloc_;
+    }
 
     template <typename T>
     T * allocate(size_t count = 1) {
@@ -570,18 +574,18 @@ class MIRGraph
 
     void unmarkBlocks();
 
-    void setExitAccumulator(MIRGraphExits *accum) {
-        exitAccumulator_ = accum;
+    void setReturnAccumulator(MIRGraphReturns *accum) {
+        returnAccumulator_ = accum;
     }
-    MIRGraphExits *exitAccumulator() const {
-        return exitAccumulator_;
+    MIRGraphReturns *returnAccumulator() const {
+        return returnAccumulator_;
     }
 
-    bool addExit(MBasicBlock *exitBlock) {
-        if (!exitAccumulator_)
+    bool addReturn(MBasicBlock *returnBlock) {
+        if (!returnAccumulator_)
             return true;
 
-        return exitAccumulator_->append(exitBlock);
+        return returnAccumulator_->append(returnBlock);
     }
 
     MBasicBlock *entryBlock() {
@@ -680,6 +684,7 @@ class MIRGraph
     MDefinition *forkJoinSlice();
 
     void dump(FILE *fp);
+    void dump();
 };
 
 class MDefinitionIterator

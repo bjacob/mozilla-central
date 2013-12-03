@@ -325,6 +325,12 @@ CreateDIBSectionHook(HDC aDC,
   return result;
 }
 
+static int64_t
+LowMemoryEventsVirtualDistinguishedAmount()
+{
+  return sNumLowVirtualMemEvents;
+}
+
 class LowMemoryEventsVirtualReporter MOZ_FINAL : public MemoryUniReporter
 {
 public:
@@ -345,7 +351,7 @@ private:
     // force-disable virtual-memory tracking there.
     MOZ_ASSERT(sizeof(void*) == 4);
 
-    return sNumLowVirtualMemEvents;
+    return LowMemoryEventsVirtualDistinguishedAmount();
   }
 };
 
@@ -366,6 +372,12 @@ private:
   int64_t Amount() MOZ_OVERRIDE { return sNumLowCommitSpaceEvents; }
 };
 
+static int64_t
+LowMemoryEventsPhysicalDistinguishedAmount()
+{
+  return sNumLowPhysicalMemEvents;
+}
+
 class LowMemoryEventsPhysicalReporter MOZ_FINAL : public MemoryUniReporter
 {
 public:
@@ -380,7 +392,7 @@ public:
   {}
 
 private:
-  int64_t Amount() MOZ_OVERRIDE { return sNumLowPhysicalMemEvents; }
+  int64_t Amount() MOZ_OVERRIDE { return LowMemoryEventsPhysicalDistinguishedAmount(); }
 };
 
 #endif // defined(XP_WIN)
@@ -498,11 +510,13 @@ void Activate()
   Preferences::AddUintVarCache(&sLowMemoryNotificationIntervalMS,
       "memory.low_memory_notification_interval_ms", 10000);
 
-  NS_RegisterMemoryReporter(new LowCommitSpaceEventsReporter());
-  NS_RegisterMemoryReporter(new LowMemoryEventsPhysicalReporter());
+  RegisterStrongMemoryReporter(new LowCommitSpaceEventsReporter());
+  RegisterStrongMemoryReporter(new LowMemoryEventsPhysicalReporter());
   if (sizeof(void*) == 4) {
-    NS_RegisterMemoryReporter(new LowMemoryEventsVirtualReporter());
+    RegisterStrongMemoryReporter(new LowMemoryEventsVirtualReporter());
   }
+  RegisterLowMemoryEventsVirtualDistinguishedAmount(LowMemoryEventsVirtualDistinguishedAmount);
+  RegisterLowMemoryEventsPhysicalDistinguishedAmount(LowMemoryEventsPhysicalDistinguishedAmount);
   sHooksActive = true;
 #endif
 

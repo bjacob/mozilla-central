@@ -8,59 +8,11 @@ var gPluginHost = Components.classes["@mozilla.org/plugin/host;1"].getService(Co
 
 Components.utils.import("resource://gre/modules/Services.jsm");
 
-// This listens for the next opened tab and checks it is of the right url.
-// opencallback is called when the new tab is fully loaded
-// closecallback is called when the tab is closed
-function TabOpenListener(url, opencallback, closecallback) {
-  this.url = url;
-  this.opencallback = opencallback;
-  this.closecallback = closecallback;
-
-  gBrowser.tabContainer.addEventListener("TabOpen", this, false);
-}
-
-TabOpenListener.prototype = {
-  url: null,
-  opencallback: null,
-  closecallback: null,
-  tab: null,
-  browser: null,
-
-  handleEvent: function(event) {
-    if (event.type == "TabOpen") {
-      gBrowser.tabContainer.removeEventListener("TabOpen", this, false);
-      this.tab = event.originalTarget;
-      this.browser = this.tab.linkedBrowser;
-      gBrowser.addEventListener("pageshow", this, false);
-    } else if (event.type == "pageshow") {
-      if (event.target.location.href != this.url)
-        return;
-      gBrowser.removeEventListener("pageshow", this, false);
-      this.tab.addEventListener("TabClose", this, false);
-      var url = this.browser.contentDocument.location.href;
-      is(url, this.url, "Should have opened the correct tab");
-      this.opencallback(this.tab, this.browser.contentWindow);
-    } else if (event.type == "TabClose") {
-      if (event.originalTarget != this.tab)
-        return;
-      this.tab.removeEventListener("TabClose", this, false);
-      this.opencallback = null;
-      this.tab = null;
-      this.browser = null;
-      // Let the window close complete
-      executeSoon(this.closecallback);
-      this.closecallback = null;
-    }
-  }
-};
-
 function test() {
   waitForExplicitFinish();
   registerCleanupFunction(function() {
     clearAllPluginPermissions();
     Services.prefs.clearUserPref("extensions.blocklist.suppressUI");
-    getTestPlugin().enabledState = Ci.nsIPluginTag.STATE_ENABLED;
-    getTestPlugin("Second Test Plug-in").enabledState = Ci.nsIPluginTag.STATE_ENABLED;
   });
   Services.prefs.setBoolPref("extensions.blocklist.suppressUI", true);
 
@@ -70,8 +22,8 @@ function test() {
   gTestBrowser.addEventListener("load", pageLoad, true);
 
   Services.prefs.setBoolPref("plugins.click_to_play", true);
-  getTestPlugin().enabledState = Ci.nsIPluginTag.STATE_CLICKTOPLAY;
-  getTestPlugin("Second Test Plug-in").enabledState = Ci.nsIPluginTag.STATE_CLICKTOPLAY;
+  setTestPluginEnabledState(Ci.nsIPluginTag.STATE_CLICKTOPLAY);
+  setTestPluginEnabledState(Ci.nsIPluginTag.STATE_CLICKTOPLAY, "Second Test Plug-in");
 
   prepareTest(test1a, gHttpTestRoot + "plugin_data_url.html");
 }
@@ -163,10 +115,10 @@ function test2b() {
 
   // Simulate choosing "Allow now" for the test plugin
   notification.reshow();
-  is(notification.options.centerActions.length, 2, "Test 2b, Should have two types of plugin in the notification");
+  is(notification.options.centerActions.size, 2, "Test 2b, Should have two types of plugin in the notification");
 
   var centerAction = null;
-  for (var action of notification.options.centerActions) {
+  for (var action of notification.options.centerActions.values()) {
     if (action.pluginName == "Test") {
       centerAction = action;
       break;

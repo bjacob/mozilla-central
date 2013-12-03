@@ -23,6 +23,7 @@
 #include "ipc/ShadowLayersManager.h"    // for ShadowLayersManager
 #include "mozilla/AutoRestore.h"        // for AutoRestore
 #include "mozilla/DebugOnly.h"          // for DebugOnly
+#include "mozilla/gfx/2D.h"          // for DrawTarget
 #include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/ipc/Transport.h"      // for Transport
 #include "mozilla/layers/APZCTreeManager.h"  // for APZCTreeManager
@@ -48,10 +49,12 @@
 #include "mozilla/layers/CompositorD3D9.h"
 #endif
 #include "GeckoProfiler.h"
+#include "mozilla/ipc/ProtocolTypes.h"
 
 using namespace base;
 using namespace mozilla;
 using namespace mozilla::ipc;
+using namespace mozilla::gfx;
 using namespace std;
 
 namespace mozilla {
@@ -295,7 +298,13 @@ CompositorParent::RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
                                    SurfaceDescriptor* aOutSnapshot)
 {
   AutoOpenSurface opener(OPEN_READ_WRITE, aInSnapshot);
-  nsRefPtr<gfxContext> target = new gfxContext(opener.Get());
+  gfxIntSize size = opener.Size();
+  // XXX CreateDrawTargetForSurface will always give us a Cairo surface, we can
+  // do better if AutoOpenSurface uses Moz2D directly.
+  RefPtr<DrawTarget> target =
+    gfxPlatform::GetPlatform()->CreateDrawTargetForSurface(opener.Get(),
+                                                           IntSize(size.width,
+                                                                   size.height));
   ComposeToTarget(target);
   *aOutSnapshot = aInSnapshot;
   return true;
@@ -309,6 +318,36 @@ CompositorParent::RecvFlushRendering()
   if (mCurrentCompositeTask) {
     mCurrentCompositeTask->Cancel();
     ComposeToTarget(nullptr);
+  }
+  return true;
+}
+
+bool
+CompositorParent::RecvNotifyRegionInvalidated(const nsIntRegion& aRegion)
+{
+  if (mLayerManager) {
+    mLayerManager->AddInvalidRegion(aRegion);
+  }
+  return true;
+}
+
+bool
+CompositorParent::RecvStartFrameTimeRecording(const int32_t& aBufferSize, uint32_t* aOutStartIndex)
+{
+  if (mLayerManager) {
+    *aOutStartIndex = mLayerManager->StartFrameTimeRecording(aBufferSize);
+  } else {
+    *aOutStartIndex = 0;
+  }
+  return true;
+}
+
+bool
+CompositorParent::RecvStopFrameTimeRecording(const uint32_t& aStartIndex,
+                                             InfallibleTArray<float>* intervals)
+{
+  if (mLayerManager) {
+    mLayerManager->StopFrameTimeRecording(aStartIndex, *intervals);
   }
   return true;
 }
@@ -459,6 +498,10 @@ CompositorParent::NotifyShadowTreeTransaction(uint64_t aId, bool aIsFirstPaint)
   ScheduleComposition();
 }
 
+// Used when layout.frame_rate is -1. Needs to be kept in sync with
+// DEFAULT_FRAME_RATE in nsRefreshDriver.cpp.
+static const int32_t kDefaultFrameRate = 60;
+
 void
 CompositorParent::ScheduleComposition()
 {
@@ -471,19 +514,29 @@ CompositorParent::ScheduleComposition()
   if (!initialComposition)
     delta = TimeStamp::Now() - mLastCompose;
 
+  int32_t rate = gfxPlatform::GetPrefLayoutFrameRate();
+  if (rate < 0) {
+    // TODO: The main thread frame scheduling code consults the actual monitor
+    // refresh rate in this case. We should do the same.
+    rate = kDefaultFrameRate;
+  }
+
+  // If rate == 0 (ASAP mode), minFrameDelta must be 0 so there's no delay.
+  TimeDuration minFrameDelta = TimeDuration::FromMilliseconds(
+    rate == 0 ? 0.0 : std::max(0.0, 1000.0 / rate));
+
 #ifdef COMPOSITOR_PERFORMANCE_WARNING
-  mExpectedComposeTime = TimeStamp::Now() + TimeDuration::FromMilliseconds(15);
+  mExpectedComposeTime = TimeStamp::Now() + minFrameDelta;
 #endif
 
   mCurrentCompositeTask = NewRunnableMethod(this, &CompositorParent::Composite);
 
-  // Since 60 fps is the maximum frame rate we can acheive, scheduling composition
-  // events less than 15 ms apart wastes computation..
-  if (!initialComposition && delta.ToMilliseconds() < 15) {
+  if (!initialComposition && delta < minFrameDelta) {
+    TimeDuration delay = minFrameDelta - delta;
 #ifdef COMPOSITOR_PERFORMANCE_WARNING
-    mExpectedComposeTime = TimeStamp::Now() + TimeDuration::FromMilliseconds(15 - delta.ToMilliseconds());
+    mExpectedComposeTime = TimeStamp::Now() + delay;
 #endif
-    ScheduleTask(mCurrentCompositeTask, 15 - delta.ToMilliseconds());
+    ScheduleTask(mCurrentCompositeTask, delay.ToMilliseconds());
   } else {
     ScheduleTask(mCurrentCompositeTask, 0);
   }
@@ -492,6 +545,16 @@ CompositorParent::ScheduleComposition()
 void
 CompositorParent::Composite()
 {
+  if (CanComposite()) {
+    mLayerManager->BeginTransaction();
+  }
+  CompositeInTransaction();
+}
+
+void
+CompositorParent::CompositeInTransaction()
+{
+  profiler_tracing("Paint", "Composite", TRACING_INTERVAL_START);
   PROFILER_LABEL("CompositorParent", "Composite");
   NS_ABORT_IF_FALSE(CompositorThreadID() == PlatformThread::CurrentId(),
                     "Composite can only be called on the compositor thread");
@@ -526,8 +589,8 @@ CompositorParent::Composite()
 #ifdef MOZ_DUMP_PAINTING
   static bool gDumpCompositorTree = false;
   if (gDumpCompositorTree) {
-    fprintf(stdout, "Painting --- compositing layer tree:\n");
-    mLayerManager->Dump(stdout, "", false);
+    printf_stderr("Painting --- compositing layer tree:\n");
+    mLayerManager->Dump();
   }
 #endif
   mLayerManager->EndEmptyTransaction();
@@ -538,10 +601,11 @@ CompositorParent::Composite()
                   15 + (int)(TimeStamp::Now() - mExpectedComposeTime).ToMilliseconds());
   }
 #endif
+  profiler_tracing("Paint", "Composite", TRACING_INTERVAL_END);
 }
 
 void
-CompositorParent::ComposeToTarget(gfxContext* aTarget)
+CompositorParent::ComposeToTarget(DrawTarget* aTarget)
 {
   PROFILER_LABEL("CompositorParent", "ComposeToTarget");
   AutoRestore<bool> override(mOverrideComposeReadiness);
@@ -550,10 +614,10 @@ CompositorParent::ComposeToTarget(gfxContext* aTarget)
   if (!CanComposite()) {
     return;
   }
-  mLayerManager->BeginTransactionWithTarget(aTarget);
+  mLayerManager->BeginTransactionWithDrawTarget(aTarget);
   // Since CanComposite() is true, Composite() must end the layers txn
   // we opened above.
-  Composite();
+  CompositeInTransaction();
 }
 
 bool
@@ -618,10 +682,7 @@ CompositorParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
     }
   }
   ScheduleComposition();
-  LayerManagerComposite *layerComposite = mLayerManager->AsLayerManagerComposite();
-  if (layerComposite) {
-    layerComposite->NotifyShadowTreeTransaction();
-  }
+  mLayerManager->NotifyShadowTreeTransaction();
 }
 
 void
@@ -646,7 +707,7 @@ CompositorParent::InitializeLayerManager(const nsTArray<LayersBackend>& aBackend
         new LayerManagerComposite(new CompositorD3D11(mWidget));
     } else if (aBackendHints[i] == LAYERS_D3D9) {
       layerManager =
-        new LayerManagerComposite(new CompositorD3D9(mWidget));
+        new LayerManagerComposite(new CompositorD3D9(this, mWidget));
 #endif
     }
 
@@ -681,20 +742,24 @@ CompositorParent::AllocPLayerTransactionParent(const nsTArray<LayersBackend>& aB
   if (!mLayerManager) {
     NS_WARNING("Failed to initialise Compositor");
     *aSuccess = false;
-    return new LayerTransactionParent(nullptr, this, 0);
+    LayerTransactionParent* p = new LayerTransactionParent(nullptr, this, 0);
+    p->AddIPDLReference();
+    return p;
   }
 
   mCompositionManager = new AsyncCompositionManager(mLayerManager);
+  *aSuccess = true;
 
   *aTextureFactoryIdentifier = mLayerManager->GetTextureFactoryIdentifier();
-  *aSuccess = true;
-  return new LayerTransactionParent(mLayerManager, this, 0);
+  LayerTransactionParent* p = new LayerTransactionParent(mLayerManager, this, 0);
+  p->AddIPDLReference();
+  return p;
 }
 
 bool
 CompositorParent::DeallocPLayerTransactionParent(PLayerTransactionParent* actor)
 {
-  delete actor;
+  static_cast<LayerTransactionParent*>(actor)->ReleaseIPDLReference();
   return true;
 }
 
@@ -861,6 +926,12 @@ public:
   {}
   virtual ~CrossProcessCompositorParent();
 
+  // IToplevelProtocol::CloneToplevel()
+  virtual IToplevelProtocol*
+  CloneToplevel(const InfallibleTArray<mozilla::ipc::ProtocolFdMapping>& aFds,
+                base::ProcessHandle aPeerProcess,
+                mozilla::ipc::ProtocolCloneContext* aCtx) MOZ_OVERRIDE;
+
   virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
 
   // FIXME/bug 774388: work out what shutdown protocol we need.
@@ -873,6 +944,9 @@ public:
                                 SurfaceDescriptor* aOutSnapshot)
   { return true; }
   virtual bool RecvFlushRendering() MOZ_OVERRIDE { return true; }
+  virtual bool RecvNotifyRegionInvalidated(const nsIntRegion& aRegion) { return true; }
+  virtual bool RecvStartFrameTimeRecording(const int32_t& aBufferSize, uint32_t* aOutStartIndex) MOZ_OVERRIDE { return true; }
+  virtual bool RecvStopFrameTimeRecording(const uint32_t& aStartIndex, InfallibleTArray<float>* intervals) MOZ_OVERRIDE  { return true; }
 
   virtual PLayerTransactionParent*
     AllocPLayerTransactionParent(const nsTArray<LayersBackend>& aBackendHints,
@@ -905,7 +979,7 @@ OpenCompositor(CrossProcessCompositorParent* aCompositor,
   MOZ_ASSERT(ok);
 }
 
-/*static*/ bool
+/*static*/ PCompositorParent*
 CompositorParent::Create(Transport* aTransport, ProcessId aOtherProcess)
 {
   nsRefPtr<CrossProcessCompositorParent> cpcp =
@@ -913,14 +987,34 @@ CompositorParent::Create(Transport* aTransport, ProcessId aOtherProcess)
   ProcessHandle handle;
   if (!base::OpenProcessHandle(aOtherProcess, &handle)) {
     // XXX need to kill |aOtherProcess|, it's boned
-    return false;
+    return nullptr;
   }
   cpcp->mSelfRef = cpcp;
   CompositorLoop()->PostTask(
     FROM_HERE,
     NewRunnableFunction(OpenCompositor, cpcp.get(),
                         aTransport, handle, XRE_GetIOMessageLoop()));
-  return true;
+  // The return value is just compared to null for success checking,
+  // we're not sharing a ref.
+  return cpcp.get();
+}
+
+IToplevelProtocol*
+CompositorParent::CloneToplevel(const InfallibleTArray<mozilla::ipc::ProtocolFdMapping>& aFds,
+                                base::ProcessHandle aPeerProcess,
+                                mozilla::ipc::ProtocolCloneContext* aCtx)
+{
+  for (unsigned int i = 0; i < aFds.Length(); i++) {
+    if (aFds[i].protocolId() == (unsigned)GetProtocolId()) {
+      Transport* transport = OpenDescriptor(aFds[i].fd(),
+                                            Transport::MODE_SERVER);
+      PCompositorParent* compositor = Create(transport, base::GetProcId(aPeerProcess));
+      compositor->CloneManagees(this, aCtx);
+      compositor->IToplevelProtocol::SetTransport(transport);
+      return compositor;
+    }
+  }
+  return nullptr;
 }
 
 static void
@@ -966,14 +1060,18 @@ CrossProcessCompositorParent::AllocPLayerTransactionParent(const nsTArray<Layers
     LayerManagerComposite* lm = sIndirectLayerTrees[aId].mParent->GetLayerManager();
     *aTextureFactoryIdentifier = lm->GetTextureFactoryIdentifier();
     *aSuccess = true;
-    return new LayerTransactionParent(lm, this, aId);
+    LayerTransactionParent* p = new LayerTransactionParent(lm, this, aId);
+    p->AddIPDLReference();
+    return p;
   }
 
   NS_WARNING("Created child without a matching parent?");
   // XXX: should be false, but that causes us to fail some tests on Mac w/ OMTC.
   // Bug 900745. change *aSuccess to false to see test failures.
   *aSuccess = true;
-  return new LayerTransactionParent(nullptr, this, aId);
+  LayerTransactionParent* p = new LayerTransactionParent(nullptr, this, aId);
+  p->AddIPDLReference();
+  return p;
 }
 
 bool
@@ -981,7 +1079,7 @@ CrossProcessCompositorParent::DeallocPLayerTransactionParent(PLayerTransactionPa
 {
   LayerTransactionParent* slp = static_cast<LayerTransactionParent*>(aLayers);
   RemoveIndirectTree(slp->GetId());
-  delete aLayers;
+  static_cast<LayerTransactionParent*>(aLayers)->ReleaseIPDLReference();
   return true;
 }
 
@@ -1020,6 +1118,25 @@ CrossProcessCompositorParent::~CrossProcessCompositorParent()
 {
   XRE_GetIOMessageLoop()->PostTask(FROM_HERE,
                                    new DeleteTask<Transport>(mTransport));
+}
+
+IToplevelProtocol*
+CrossProcessCompositorParent::CloneToplevel(const InfallibleTArray<mozilla::ipc::ProtocolFdMapping>& aFds,
+                                            base::ProcessHandle aPeerProcess,
+                                            mozilla::ipc::ProtocolCloneContext* aCtx)
+{
+  for (unsigned int i = 0; i < aFds.Length(); i++) {
+    if (aFds[i].protocolId() == (unsigned)GetProtocolId()) {
+      Transport* transport = OpenDescriptor(aFds[i].fd(),
+                                            Transport::MODE_SERVER);
+      PCompositorParent* compositor =
+        CompositorParent::Create(transport, base::GetProcId(aPeerProcess));
+      compositor->CloneManagees(this, aCtx);
+      compositor->IToplevelProtocol::SetTransport(transport);
+      return compositor;
+    }
+  }
+  return nullptr;
 }
 
 } // namespace layers

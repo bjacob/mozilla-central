@@ -43,7 +43,7 @@ interface nsIDOMEventTarget;
 interface nsIRunnable;
 interface nsICompositionStringSynthesizer;
 
-[scriptable, uuid(a1383ae5-e828-4c9a-929d-5293e61beb64)]
+[scriptable, uuid(3772df78-905f-40cf-952f-e4954c63d0ec)]
 interface nsIDOMWindowUtils : nsISupports {
 
   /**
@@ -653,6 +653,14 @@ interface nsIDOMWindowUtils : nsISupports {
   void getScrollXY(in boolean aFlushLayout, out long aScrollX, out long aScrollY);
 
   /**
+   * Returns the scroll position of the window's currently loaded document.
+   *
+   * @param aFlushLayout flushes layout if true. Otherwise, no flush occurs.
+   * @see nsIDOMWindow::scrollX/Y
+   */
+  void getScrollXYFloat(in boolean aFlushLayout, out float aScrollX, out float aScrollY);
+
+  /**
    * Sets the scroll position of the root scroll frame of the window.
    * Returns true on success, false on error (if the window didn't have a root
    * scroll frame).
@@ -749,7 +757,7 @@ interface nsIDOMWindowUtils : nsISupports {
                                        in boolean aTrusted);
 
   /**
-   * Sets nsEvent::mFlags::mOnlyChromeDispatch to true to ensure that
+   * Sets WidgetEvent::mFlags::mOnlyChromeDispatch to true to ensure that
    * the event is propagated only to chrome.
    * Event's .target property will be aTarget.
    * Returns the same value as what EventTarget.dispatchEvent does.
@@ -815,7 +823,7 @@ interface nsIDOMWindowUtils : nsISupports {
                                                    in long aX,
                                                    in long aY);
 
-  // NOTE: following values are same as NS_QUERY_* in nsGUIEvent.h
+  // NOTE: following values are same as NS_QUERY_* in BasicEvents.h
 
   /**
    * QUERY_SELECTED_TEXT queries the first selection range's information.
@@ -1044,7 +1052,7 @@ interface nsIDOMWindowUtils : nsISupports {
   readonly attribute boolean layerManagerRemote;
 
   /**
-   * Record (and return) frame-intervals and paint-times for frames which were presented
+   * Record (and return) frame-intervals for frames which were presented
    *   between calling StartFrameTimeRecording and StopFrameTimeRecording.
    *
    * - Uses a cyclic buffer and serves concurrent consumers, so if Stop is called too late
@@ -1066,7 +1074,6 @@ interface nsIDOMWindowUtils : nsISupports {
    * - Allocation is infallible. Should be released even if size is 0.
    */
    void stopFrameTimeRecording(in unsigned long startIndex,
-                              [optional, array, size_is(frameCount)] out float paintTimes,
                               [optional] out unsigned long frameCount,
                               [retval, array, size_is(frameCount)] out float frameIntervals);
 
@@ -1086,6 +1093,12 @@ interface nsIDOMWindowUtils : nsISupports {
    * @deprecated Use nsIWindowMediator.getOuterWindowWithId.  See bug 865664.
    */
   nsIDOMWindow getOuterWindowWithId(in unsigned long long aOuterWindowID);
+
+  /**
+   * Return this window's frame element.
+   * Ignores all chrome/content or mozbrowser boundaries.
+   */
+  readonly attribute nsIDOMElement containerElement;
 
   [noscript] void RenderDocument(in nsConstRect aRect,
                                  in uint32_t aFlags,
@@ -1297,10 +1310,12 @@ interface nsIDOMWindowUtils : nsISupports {
                                               in float aBottom, in float aLeft);
 
   /**
-   * Prevent this window (and any child windows) from displaying any further
-   * dialogs (e.g. window.alert()).
+   * These are used to control whether dialogs (alert, prompt, confirm) are
+   * allowed.
    */
-  void preventFurtherDialogs();
+  void disableDialogs();
+  void enableDialogs();
+  bool areDialogsEnabled();
 
   const unsigned long AGENT_SHEET = 0;
   const unsigned long USER_SHEET = 1;

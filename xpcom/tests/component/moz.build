@@ -6,7 +6,7 @@
 
 NO_DIST_INSTALL = True
 
-CPP_SOURCES += [
+SOURCES += [
     'TestComponent.cpp',
 ]
 
@@ -14,3 +14,10 @@ LIBRARY_NAME = 'testcomponent'
 
 IS_COMPONENT = True
 
+FORCE_SHARED_LIB = True
+
+DEFINES['LIBRARY_FILENAME'] = '%s%s%s' % (
+    CONFIG['DLL_PREFIX'],
+    LIBRARY_NAME,
+    CONFIG['DLL_SUFFIX']
+)

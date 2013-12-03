@@ -99,7 +99,7 @@ var ContentAreaObserver = {
     Services.obs.addObserver(this, "metro_softkeyboard_hidden", false);
 
     // setup initial values for browser form repositioning
-    this._shiftBrowserDeck(0);
+    this.shiftBrowserDeck(0);
 
     // initialize our custom width and height styles
     this._initStyles();
@@ -132,7 +132,7 @@ var ContentAreaObserver = {
     this._updateViewState();
 
     this.updateContentArea(newWidth, this._getContentHeightForWindow(newHeight));
-    this._disatchBrowserEvent("SizeChanged");
+    this._dispatchBrowserEvent("SizeChanged");
   },
 
   updateContentArea: function cao_updateContentArea (width, height) {
@@ -162,7 +162,7 @@ var ContentAreaObserver = {
     this.styles["content-width"].maxWidth = newWidth + "px";
 
     this.updateViewableArea(newWidth, this._getViewableHeightForContent(newHeight));
-    this._disatchBrowserEvent("ContentSizeChanged");
+    this._dispatchBrowserEvent("ContentSizeChanged");
   },
 
   updateViewableArea: function cao_updateViewableArea (width, height) {
@@ -186,7 +186,7 @@ var ContentAreaObserver = {
     // these are hidden.
     BrowserUI._updateButtons();
 
-    this._disatchBrowserEvent("ViewableSizeChanged");
+    this._dispatchBrowserEvent("ViewableSizeChanged");
   },
 
   updateAppBarPosition: function updateAppBarPosition(aForceDown) {
@@ -226,23 +226,25 @@ var ContentAreaObserver = {
     this.updateViewableArea();
 
     if (!aNewState) {
-      this._shiftBrowserDeck(0);
+      this.shiftBrowserDeck(0);
       return;
     }
 
     // Request info about the target form element to see if we
     // need to reposition the browser above the keyboard.
-    Browser.selectedBrowser.messageManager.sendAsyncMessage("Browser:RepositionInfoRequest", {
-      viewHeight: this.viewableHeight,
-    });
+    if (SelectionHelperUI.layerMode === 2 /*kContentLayer*/) {
+      Browser.selectedBrowser.messageManager.sendAsyncMessage("Browser:RepositionInfoRequest", {
+        viewHeight: this.viewableHeight,
+      });
+    }
   },
 
   _onRepositionResponse: function _onRepositionResponse(aJsonMsg) {
     if (!aJsonMsg.reposition || !this.isKeyboardOpened) {
-      this._shiftBrowserDeck(0);
+      this.shiftBrowserDeck(0);
       return;
     }
-    this._shiftBrowserDeck(aJsonMsg.raiseContent);
+    this.shiftBrowserDeck(aJsonMsg.raiseContent);
   },
 
   observe: function cao_observe(aSubject, aTopic, aData) {
@@ -298,7 +300,7 @@ var ContentAreaObserver = {
     }
   },
 
-  _shiftBrowserDeck: function _shiftBrowserDeck(aAmount) {
+  shiftBrowserDeck: function (aAmount) {
     if (aAmount == 0) {
       this._deckTransitioning = false;
       this._dispatchWindowEvent("KeyboardChanged", this.isKeyboardOpened);
@@ -330,7 +332,7 @@ var ContentAreaObserver = {
     window.dispatchEvent(event);
   },
 
-  _disatchBrowserEvent: function (aName, aDetail) {
+  _dispatchBrowserEvent: function (aName, aDetail) {
     setTimeout(function() {
       let event = document.createEvent("Events");
       event.initEvent(aName, true, false);

@@ -9,6 +9,7 @@
 #include "gfxPlatform.h"
 #include "gfxUtils.h"
 #include "gfx2DGlue.h"
+#include "ScopedGLHelpers.h"
 
 namespace mozilla {
 namespace gl {
@@ -72,9 +73,8 @@ BasicTextureImage::~BasicTextureImage()
     // if we don't have a context (either real or shared),
     // then they went away when the contex was deleted, because it
     // was the only one that had access to it.
-    if (ctx && !ctx->IsDestroyed()) {
-        mGLContext->MakeCurrent();
-        mGLContext->fDeleteTextures(1, &mTexture);
+    if (ctx && ctx->MakeCurrent()) {
+        ctx->fDeleteTextures(1, &mTexture);
     }
 }
 
@@ -242,7 +242,7 @@ TextureImage::TextureImage(const gfx::IntSize& aSize,
     : mSize(ThebesIntSize(aSize))
     , mWrapMode(aWrapMode)
     , mContentType(aContentType)
-    , mFilter(gfxPattern::FILTER_GOOD)
+    , mFilter(GraphicsFilter::FILTER_GOOD)
     , mFlags(aFlags)
 {}
 
@@ -698,7 +698,9 @@ CreateBasicTextureImage(GLContext* aGL,
                         TextureImage::ImageFormat aImageFormat)
 {
     bool useNearestFilter = aFlags & TextureImage::UseNearestFilter;
-    aGL->MakeCurrent();
+    if (!aGL->MakeCurrent()) {
+      return nullptr;
+    }
 
     GLuint texture = 0;
     aGL->fGenTextures(1, &texture);

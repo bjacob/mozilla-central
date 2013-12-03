@@ -10,6 +10,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
 #include "nsTraceRefcnt.h"
+#include "mozilla/gfx/2D.h"
 
 #include "gfxASurface.h"
 #include "gfxContext.h"
@@ -47,12 +48,12 @@
 #include "nsComponentManagerUtils.h"
 #include "nsISupportsUtils.h"
 #include "nsCOMPtr.h"
-#include "nsIConsoleService.h"
 #include "nsServiceManagerUtils.h"
 #include "nsString.h"
 #include "nsIClipboardHelper.h"
 
 using namespace mozilla;
+using namespace mozilla::gfx;
 
 static cairo_user_data_key_t gfxasurface_pointer_key;
 
@@ -360,10 +361,17 @@ gfxASurface::CopyToARGB32ImageSurface()
     nsRefPtr<gfxImageSurface> imgSurface =
         new gfxImageSurface(size, gfxImageFormatARGB32);
 
-    gfxContext ctx(imgSurface);
-    ctx.SetOperator(gfxContext::OPERATOR_SOURCE);
-    ctx.SetSource(this);
-    ctx.Paint();
+    if (gfxPlatform::GetPlatform()->SupportsAzureContent()) {
+        RefPtr<DrawTarget> dt = gfxPlatform::GetPlatform()->CreateDrawTargetForSurface(imgSurface, IntSize(size.width, size.height));
+        RefPtr<SourceSurface> source = gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(dt, this);
+
+        dt->CopySurface(source, IntRect(0, 0, size.width, size.height), IntPoint());
+    } else {
+        gfxContext ctx(imgSurface);
+        ctx.SetOperator(gfxContext::OPERATOR_SOURCE);
+        ctx.SetSource(this);
+        ctx.Paint();
+    }
 
     return imgSurface.forget();
 }
@@ -623,20 +631,12 @@ PR_STATIC_ASSERT(uint32_t(CAIRO_SURFACE_TYPE_SKIA) ==
 
 static int64_t gSurfaceMemoryUsed[gfxSurfaceTypeMax] = { 0 };
 
-class SurfaceMemoryReporter MOZ_FINAL :
-    public nsIMemoryReporter
+class SurfaceMemoryReporter MOZ_FINAL : public MemoryMultiReporter
 {
 public:
     SurfaceMemoryReporter()
+        : MemoryMultiReporter("gfx-surface")
     { }
-
-    NS_DECL_ISUPPORTS
-
-    NS_IMETHOD GetName(nsACString &name)
-    {
-        name.AssignLiteral("gfx-surface");
-        return NS_OK;
-    }
 
     NS_IMETHOD CollectReports(nsIMemoryReporterCallback *aCb,
                               nsISupports *aClosure)
@@ -665,8 +665,6 @@ public:
     }
 };
 
-NS_IMPL_ISUPPORTS1(SurfaceMemoryReporter, nsIMemoryReporter)
-
 void
 gfxASurface::RecordMemoryUsedForSurfaceType(gfxSurfaceType aType,
                                             int32_t aBytes)
@@ -678,7 +676,7 @@ gfxASurface::RecordMemoryUsedForSurfaceType(gfxSurfaceType aType,
 
     static bool registered = false;
     if (!registered) {
-        NS_RegisterMemoryReporter(new SurfaceMemoryReporter());
+        RegisterStrongMemoryReporter(new SurfaceMemoryReporter());
         registered = true;
     }
 

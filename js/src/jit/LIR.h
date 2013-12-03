@@ -20,8 +20,6 @@
 #include "jit/MIRGraph.h"
 #include "jit/Registers.h"
 #include "jit/Safepoints.h"
-#include "jit/shared/Assembler-shared.h"
-#include "jit/VMFunctions.h"
 
 namespace js {
 namespace jit {
@@ -205,6 +203,8 @@ class LAllocation : public TempObject
 #else
     const char *toString() const { return "???"; }
 #endif
+
+    void dump() const;
 };
 
 class LUse : public LAllocation
@@ -587,9 +587,9 @@ class LInstruction
 
     LInstruction()
       : id_(0),
-        snapshot_(NULL),
-        safepoint_(NULL),
-        mir_(NULL)
+        snapshot_(nullptr),
+        safepoint_(nullptr),
+        mir_(nullptr)
     { }
 
   public:
@@ -615,7 +615,7 @@ class LInstruction
     // Hook for opcodes to add extra high level detail about what code will be
     // emitted for the op.
     virtual const char *extraName() const {
-        return NULL;
+        return nullptr;
     }
 
   public:
@@ -669,7 +669,7 @@ class LInstruction
         return mir_;
     }
     void assignSnapshot(LSnapshot *snapshot);
-    void initSafepoint();
+    void initSafepoint(TempAllocator &alloc);
 
     // For an instruction which has a MUST_REUSE_INPUT output, whether that
     // output register will be restored to its original value when bailing out.
@@ -677,7 +677,8 @@ class LInstruction
         return false;
     }
 
-    virtual void print(FILE *fp);
+    virtual void dump(FILE *fp);
+    void dump();
     static void printName(FILE *fp, Opcode op);
     virtual void printName(FILE *fp);
     virtual void printOperands(FILE *fp);
@@ -715,8 +716,8 @@ class LInstructionVisitor
     }
 
     LInstructionVisitor()
-      : ins_(NULL),
-        lastPC_(NULL)
+      : ins_(nullptr),
+        lastPC_(nullptr)
     {}
 
   public:
@@ -737,16 +738,18 @@ class LBlock : public TempObject
     InlineList<LInstruction> instructions_;
     LMoveGroup *entryMoveGroup_;
     LMoveGroup *exitMoveGroup_;
+    Label label_;
 
-    LBlock(MBasicBlock *block)
+    LBlock(TempAllocator &alloc, MBasicBlock *block)
       : block_(block),
-        entryMoveGroup_(NULL),
-        exitMoveGroup_(NULL)
+        phis_(alloc),
+        entryMoveGroup_(nullptr),
+        exitMoveGroup_(nullptr)
     { }
 
   public:
-    static LBlock *New(MBasicBlock *from) {
-        return new LBlock(from);
+    static LBlock *New(TempAllocator &alloc, MBasicBlock *from) {
+        return new(alloc) LBlock(alloc, from);
     }
     void add(LInstruction *ins) {
         instructions_.pushBack(ins);
@@ -799,9 +802,11 @@ class LBlock : public TempObject
     }
     uint32_t firstId();
     uint32_t lastId();
-    Label *label();
-    LMoveGroup *getEntryMoveGroup();
-    LMoveGroup *getExitMoveGroup();
+    Label *label() {
+        return &label_;
+    }
+    LMoveGroup *getEntryMoveGroup(TempAllocator &alloc);
+    LMoveGroup *getExitMoveGroup(TempAllocator &alloc);
 };
 
 template <size_t Defs, size_t Operands, size_t Temps>
@@ -846,7 +851,7 @@ class LInstructionHelper : public LInstruction
     }
     MBasicBlock *getSuccessor(size_t i) const {
         JS_ASSERT(false);
-        return NULL;
+        return nullptr;
     }
     void setSuccessor(size_t i, MBasicBlock *successor) {
         JS_ASSERT(false);
@@ -1023,12 +1028,16 @@ class LSafepoint : public TempObject
     SlotList slotsOrElementsSlots_;
 
   public:
-    LSafepoint()
+    LSafepoint(TempAllocator &alloc)
       : safepointOffset_(INVALID_SAFEPOINT_OFFSET)
       , osiCallPointOffset_(0)
+      , gcSlots_(alloc)
+      , valueSlots_(alloc)
 #ifdef JS_NUNBOX32
+      , nunboxParts_(alloc)
       , partialNunboxes_(0)
 #endif
+      , slotsOrElementsSlots_(alloc)
     { }
     void addLiveRegister(AnyRegister reg) {
         liveRegs_.addUnchecked(reg);
@@ -1345,7 +1354,7 @@ class LIRGraph
     // Snapshot taken before any LIR has been lowered.
     LSnapshot *entrySnapshot_;
 
-    // LBlock containing LOsrEntry, or NULL.
+    // LBlock containing LOsrEntry, or nullptr.
     LBlock *osrBlock_;
 
     MIRGraph &mir_;

@@ -28,19 +28,16 @@ namespace mozilla {
 class JSGCThingParticipant: public nsCycleCollectionParticipant
 {
 public:
-  NS_IMETHOD Root(void *n)
+  NS_IMETHOD_(void) Root(void *n)
   {
-    return NS_OK;
   }
 
-  NS_IMETHOD Unlink(void *n)
+  NS_IMETHOD_(void) Unlink(void *n)
   {
-    return NS_OK;
   }
 
-  NS_IMETHOD Unroot(void *n)
+  NS_IMETHOD_(void) Unroot(void *n)
   {
-    return NS_OK;
   }
 
   NS_IMETHOD_(void) DeleteCycleCollectable(void *n)
@@ -55,19 +52,16 @@ class JSZoneParticipant : public nsCycleCollectionParticipant
 public:
   MOZ_CONSTEXPR JSZoneParticipant(): nsCycleCollectionParticipant() {}
 
-  NS_IMETHOD Root(void *p)
+  NS_IMETHOD_(void) Root(void *p)
   {
-    return NS_OK;
   }
 
-  NS_IMETHOD Unlink(void *p)
+  NS_IMETHOD_(void) Unlink(void *p)
   {
-    return NS_OK;
   }
 
-  NS_IMETHOD Unroot(void *p)
+  NS_IMETHOD_(void) Unroot(void *p)
   {
-    return NS_OK;
   }
 
   NS_IMETHOD_(void) DeleteCycleCollectable(void *n)
@@ -79,6 +73,27 @@ public:
 
 class IncrementalFinalizeRunnable;
 
+// Contains various stats about the cycle collection.
+struct CycleCollectorResults
+{
+  void Init()
+  {
+    mForcedGC = false;
+    mMergedZones = false;
+    mVisitedRefCounted = 0;
+    mVisitedGCed = 0;
+    mFreedRefCounted = 0;
+    mFreedGCed = 0;
+  }
+
+  bool mForcedGC;
+  bool mMergedZones;
+  uint32_t mVisitedRefCounted;
+  uint32_t mVisitedGCed;
+  uint32_t mFreedRefCounted;
+  uint32_t mFreedGCed;
+};
+
 class CycleCollectedJSRuntime
 {
   friend class JSGCThingParticipant;
@@ -88,10 +103,6 @@ protected:
   CycleCollectedJSRuntime(uint32_t aMaxbytes,
                           JSUseHelperThreads aUseHelperThreads);
   virtual ~CycleCollectedJSRuntime();
-
-  // Idempotent. Subclasses may destroy their runtimes earlier in execution if
-  // they so desire.
-  void DestroyRuntime();
 
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
   void UnmarkSkippableJSHolders();
@@ -174,7 +185,6 @@ public:
   void RemoveJSHolder(void* aHolder);
 #ifdef DEBUG
   bool IsJSHolder(void* aHolder);
-  void SetObjectToUnlink(void* aObject) { mObjectToUnlink = aObject; }
   void AssertNoObjectsToTrace(void* aPossibleJSHolder);
 #endif
 
@@ -190,16 +200,16 @@ public:
   bool NeedCollect() const;
   void Collect(uint32_t reason) const;
 
-  virtual void PrepareForForgetSkippable() {}
-  virtual void PrepareForCollection() {}
-
   void DeferredFinalize(DeferredFinalizeAppendFunction aAppendFunc,
                         DeferredFinalizeFunction aFunc,
                         void* aThing);
   void DeferredFinalize(nsISupports* aSupports);
 
   void DumpJSHeap(FILE* aFile);
-  
+
+  virtual void PrepareForForgetSkippable() = 0;
+  virtual void BeginCycleCollectionCallback() = 0;
+  virtual void EndCycleCollectionCallback(CycleCollectorResults &aResults) = 0;
   virtual void DispatchDeferredDeletion(bool aContinuation) = 0;
 
   JSRuntime* Runtime() const
@@ -229,10 +239,6 @@ private:
   nsRefPtr<IncrementalFinalizeRunnable> mFinalizeRunnable;
 
   nsCOMPtr<nsIException> mPendingException;
-
-#ifdef DEBUG
-  void* mObjectToUnlink;
-#endif
 };
 
 } // namespace mozilla

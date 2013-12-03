@@ -14,12 +14,15 @@ const COLLAPSE_ATTRIBUTE_LENGTH = 120;
 const COLLAPSE_DATA_URL_REGEX = /^data.+base64/;
 const COLLAPSE_DATA_URL_LENGTH = 60;
 const CONTAINER_FLASHING_DURATION = 500;
+const IMAGE_PREVIEW_MAX_DIM = 400;
 
 const {UndoStack} = require("devtools/shared/undo");
 const {editableField, InplaceEditor} = require("devtools/shared/inplace-editor");
 const {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
-const {colorUtils} = require("devtools/css-color");
+const {HTMLEditor} = require("devtools/markupview/html-editor");
+const {OutputParser} = require("devtools/output-parser");
 const promise = require("sdk/core/promise");
+const {Tooltip} = require("devtools/shared/widgets/Tooltip");
 
 Cu.import("resource://gre/modules/devtools/LayoutHelpers.jsm");
 Cu.import("resource://gre/modules/devtools/Templater.jsm");
@@ -28,7 +31,9 @@ Cu.import("resource://gre/modules/Services.jsm");
 loader.lazyGetter(this, "DOMParser", function() {
  return Cc["@mozilla.org/xmlextras/domparser;1"].createInstance(Ci.nsIDOMParser);
 });
-loader.lazyGetter(this, "AutocompletePopup", () => require("devtools/shared/autocomplete-popup").AutocompletePopup);
+loader.lazyGetter(this, "AutocompletePopup", () => {
+  return require("devtools/shared/autocomplete-popup").AutocompletePopup
+});
 
 /**
  * Vocabulary for the purposes of this file:
@@ -48,13 +53,14 @@ loader.lazyGetter(this, "AutocompletePopup", () => require("devtools/shared/auto
  * @param iframe aFrame
  *        An iframe in which the caller has kindly loaded markup-view.xhtml.
  */
-function MarkupView(aInspector, aFrame, aControllerWindow)
-{
+function MarkupView(aInspector, aFrame, aControllerWindow) {
   this._inspector = aInspector;
   this.walker = this._inspector.walker;
   this._frame = aFrame;
   this.doc = this._frame.contentDocument;
   this._elt = this.doc.querySelector("#root");
+  this._outputParser = new OutputParser();
+  this.htmlEditor = new HTMLEditor(this.doc);
 
   this.layoutHelpers = new LayoutHelpers(this.doc.defaultView);
 
@@ -75,7 +81,7 @@ function MarkupView(aInspector, aFrame, aControllerWindow)
   this.undo = new UndoStack();
   this.undo.installController(aControllerWindow);
 
-  this._containers = new WeakMap();
+  this._containers = new Map();
 
   this._boundMutationObserver = this._mutationObserver.bind(this);
   this.walker.on("mutations", this._boundMutationObserver);
@@ -94,6 +100,10 @@ function MarkupView(aInspector, aFrame, aControllerWindow)
   gDevTools.on("pref-changed", this._handlePrefChange);
 
   this._initPreview();
+
+  this.tooltip = new Tooltip(this._inspector.panelDoc);
+  this.tooltip.startTogglingOnHover(this._elt,
+    this._buildTooltipContent.bind(this));
 }
 
 exports.MarkupView = MarkupView;
@@ -101,8 +111,7 @@ exports.MarkupView = MarkupView;
 MarkupView.prototype = {
   _selectedContainer: null,
 
-  template: function MT_template(aName, aDest, aOptions={stack: "markup-view.xhtml"})
-  {
+  template: function(aName, aDest, aOptions={stack: "markup-view.xhtml"}) {
     let node = this.doc.getElementById("template-" + aName).cloneNode(true);
     node.removeAttribute("id");
     template(node, aDest, aOptions);
@@ -113,8 +122,7 @@ MarkupView.prototype = {
    * Get the MarkupContainer object for a given node, or undefined if
    * none exists.
    */
-  getContainer: function MT_getContainer(aNode)
-  {
+  getContainer: function(aNode) {
     return this._containers.get(aNode);
   },
 
@@ -145,11 +153,30 @@ MarkupView.prototype = {
     updateChildren(documentElement);
   },
 
+  _buildTooltipContent: function(target) {
+    // From the target passed here, let's find the parent MarkupContainer
+    // and ask it if the tooltip should be shown
+    let parent = target, container;
+    while (parent !== this.doc.body) {
+      if (parent.container) {
+        container = parent.container;
+        break;
+      }
+      parent = parent.parentNode;
+    }
+
+    if (container) {
+      // With the newly found container, delegate the tooltip content creation
+      // and decision to show or not the tooltip
+      return container._buildTooltipContent(target, this.tooltip);
+    }
+  },
+
   /**
    * Highlight the inspector selected node.
    */
-  _onNewSelection: function MT__onNewSelection()
-  {
+  _onNewSelection: function() {
+    this.htmlEditor.hide();
     let done = this._inspector.updating("markup-view");
     if (this._inspector.selection.isNode()) {
       this.showNode(this._inspector.selection.nodeFront, true).then(() => {
@@ -166,8 +193,7 @@ MarkupView.prototype = {
    * Create a TreeWalker to find the next/previous
    * node for selection.
    */
-  _selectionWalker: function MT__seletionWalker(aStart)
-  {
+  _selectionWalker: function(aStart) {
     let walker = this.doc.createTreeWalker(
       aStart || this._elt,
       Ci.nsIDOMNodeFilter.SHOW_ELEMENT,
@@ -187,8 +213,7 @@ MarkupView.prototype = {
   /**
    * Key handling.
    */
-  _onKeyDown: function MT__KeyDown(aEvent)
-  {
+  _onKeyDown: function(aEvent) {
     let handled = true;
 
     // Ignore keystrokes that originated in editors.
@@ -273,6 +298,10 @@ MarkupView.prototype = {
         this.navigate(selection);
         break;
       }
+      case Ci.nsIDOMKeyEvent.DOM_VK_F2: {
+        this.beginEditingOuterHTML(this._selectedContainer.node);
+        break;
+      }
       default:
         handled = false;
     }
@@ -286,8 +315,7 @@ MarkupView.prototype = {
    * Delete a node from the DOM.
    * This is an undoable action.
    */
-  deleteNode: function MC__deleteNode(aNode)
-  {
+  deleteNode: function(aNode) {
     if (aNode.isDocumentElement ||
         aNode.nodeType == Ci.nsIDOMNode.DOCUMENT_TYPE_NODE) {
       return;
@@ -315,7 +343,7 @@ MarkupView.prototype = {
   /**
    * If an editable item is focused, select its container.
    */
-  _onFocus: function MC__onFocus(aEvent) {
+  _onFocus: function(aEvent) {
     let parent = aEvent.target;
     while (!parent.container) {
       parent = parent.parentNode;
@@ -334,15 +362,14 @@ MarkupView.prototype = {
    * @param aIgnoreFocus aIgnoreFocus
    *        If falsy, keyboard focus will be moved to the container too.
    */
-  navigate: function MT__navigate(aContainer, aIgnoreFocus)
-  {
+  navigate: function(aContainer, aIgnoreFocus) {
     if (!aContainer) {
       return;
     }
 
     let node = aContainer.node;
-    this.markNodeAsSelected(node);
-    this._inspector.selection.setNodeFront(node, "treepanel");
+    this.markNodeAsSelected(node, "treepanel");
+
     // This event won't be fired if the node is the same. But the highlighter
     // need to lock the node if it wasn't.
     this._inspector.selection.emit("new-node");
@@ -362,8 +389,7 @@ MarkupView.prototype = {
    *        Whether the newly imported node should be flashed
    * @returns MarkupContainer The MarkupContainer object for this element.
    */
-  importNode: function MT_importNode(aNode, aFlashNode)
-  {
+  importNode: function(aNode, aFlashNode) {
     if (!aNode) {
       return null;
     }
@@ -377,7 +403,7 @@ MarkupView.prototype = {
       this._elt.appendChild(container.elt);
       this._rootNode = aNode;
     } else {
-      var container = new MarkupContainer(this, aNode);
+      var container = new MarkupContainer(this, aNode, this._inspector);
       if (aFlashNode) {
         container.flashMutation();
       }
@@ -391,12 +417,14 @@ MarkupView.prototype = {
     return container;
   },
 
-
   /**
    * Mutation observer used for included nodes.
    */
-  _mutationObserver: function MT__mutationObserver(aMutations)
-  {
+  _mutationObserver: function(aMutations) {
+    let requiresLayoutChange = false;
+    let reselectParent;
+    let reselectChildIndex;
+
     for (let mutation of aMutations) {
       let type = mutation.type;
       let target = mutation.target;
@@ -418,18 +446,58 @@ MarkupView.prototype = {
         continue;
       }
       if (type === "attributes" || type === "characterData") {
-        container.update(false);
+        container.update();
+
+        // Auto refresh style properties on selected node when they change.
+        if (type === "attributes" && container.selected) {
+          requiresLayoutChange = true;
+        }
       } else if (type === "childList") {
+        let isFromOuterHTML = mutation.removed.some((n) => {
+          return n === this._outerHTMLNode;
+        });
+
+        // Keep track of which node should be reselected after mutations.
+        if (isFromOuterHTML) {
+          reselectParent = target;
+          reselectChildIndex = this._outerHTMLChildIndex;
+
+          delete this._outerHTMLNode;
+          delete this._outerHTMLChildIndex;
+        }
+
         container.childrenDirty = true;
-        // Update the children to take care of changes in the DOM
-        // Passing true as the last parameter asks for mutation flashing of the
-        // new nodes
-        this._updateChildren(container, {flash: true});
+        // Update the children to take care of changes in the markup view DOM.
+        this._updateChildren(container, {flash: !isFromOuterHTML});
       }
     }
-    this._waitForChildren().then(() => {
+
+    if (requiresLayoutChange) {
+      this._inspector.immediateLayoutChange();
+    }
+    this._waitForChildren().then((nodes) => {
       this._flashMutatedNodes(aMutations);
-      this._inspector.emit("markupmutation");
+      this._inspector.emit("markupmutation", aMutations);
+
+      // Since the htmlEditor is absolutely positioned, a mutation may change
+      // the location in which it should be shown.
+      this.htmlEditor.refresh();
+
+      // If a node has had its outerHTML set, the parent node will be selected.
+      // Reselect the original node immediately.
+      if (this._inspector.selection.nodeFront === reselectParent) {
+        this.walker.children(reselectParent).then((o) => {
+          let node = o.nodes[reselectChildIndex];
+          let container = this._containers.get(node);
+          if (node && container) {
+            this.markNodeAsSelected(node, "outerhtml");
+            if (container.hasChildren) {
+              this.expandNode(node);
+            }
+          }
+        });
+
+      }
     });
   },
 
@@ -437,8 +505,7 @@ MarkupView.prototype = {
    * Given a list of mutations returned by the mutation observer, flash the
    * corresponding containers to attract attention.
    */
-  _flashMutatedNodes: function MT_flashMutatedNodes(aMutations)
-  {
+  _flashMutatedNodes: function(aMutations) {
     let addedOrEditedContainers = new Set();
     let removedContainers = new Set();
 
@@ -481,8 +548,7 @@ MarkupView.prototype = {
    * Make sure the given node's parents are expanded and the
    * node is scrolled on to screen.
    */
-  showNode: function MT_showNode(aNode, centered)
-  {
+  showNode: function(aNode, centered) {
     let container = this.importNode(aNode);
     let parent = aNode;
     while ((parent = parent.parentNode())) {
@@ -501,8 +567,7 @@ MarkupView.prototype = {
   /**
    * Expand the container's children.
    */
-  _expandContainer: function MT__expandContainer(aContainer)
-  {
+  _expandContainer: function(aContainer) {
     return this._updateChildren(aContainer, {expand: true}).then(() => {
       aContainer.expanded = true;
     });
@@ -511,8 +576,7 @@ MarkupView.prototype = {
   /**
    * Expand the node's children.
    */
-  expandNode: function MT_expandNode(aNode)
-  {
+  expandNode: function(aNode) {
     let container = this._containers.get(aNode);
     this._expandContainer(container);
   },
@@ -522,8 +586,7 @@ MarkupView.prototype = {
    *
    * @param aContainer The container to expand.
    */
-  _expandAll: function MT_expandAll(aContainer)
-  {
+  _expandAll: function(aContainer) {
     return this._expandContainer(aContainer).then(() => {
       let child = aContainer.children.firstChild;
       let promises = [];
@@ -541,8 +604,7 @@ MarkupView.prototype = {
    * @param aContainer The node to expand, or null
    *        to start from the top.
    */
-  expandAll: function MT_expandAll(aNode)
-  {
+  expandAll: function(aNode) {
     aNode = aNode || this._rootNode;
     return this._expandAll(this._containers.get(aNode));
   },
@@ -550,14 +612,104 @@ MarkupView.prototype = {
   /**
    * Collapse the node's children.
    */
-  collapseNode: function MT_collapseNode(aNode)
-  {
+  collapseNode: function(aNode) {
     let container = this._containers.get(aNode);
     container.expanded = false;
   },
 
-  setNodeExpanded: function(aNode, aExpanded)
-  {
+  /**
+   * Retrieve the outerHTML for a remote node.
+   * @param aNode The NodeFront to get the outerHTML for.
+   * @returns A promise that will be resolved with the outerHTML.
+   */
+  getNodeOuterHTML: function(aNode) {
+    let def = promise.defer();
+    this.walker.outerHTML(aNode).then(longstr => {
+      longstr.string().then(outerHTML => {
+        longstr.release().then(null, console.error);
+        def.resolve(outerHTML);
+      });
+    });
+    return def.promise;
+  },
+
+  /**
+   * Retrieve the index of a child within its parent's children list.
+   * @param aNode The NodeFront to find the index of.
+   * @returns A promise that will be resolved with the integer index.
+   *          If the child cannot be found, returns -1
+   */
+  getNodeChildIndex: function(aNode) {
+    let def = promise.defer();
+    let parentNode = aNode.parentNode();
+
+    // Node may have been removed from the DOM, instead of throwing an error,
+    // return -1 indicating that it isn't inside of its parent children list.
+    if (!parentNode) {
+      def.resolve(-1);
+    } else {
+      this.walker.children(parentNode).then(children => {
+        def.resolve(children.nodes.indexOf(aNode));
+      });
+    }
+
+    return def.promise;
+  },
+
+  /**
+   * Retrieve the index of a child within its parent's children collection.
+   * @param aNode The NodeFront to find the index of.
+   * @param newValue The new outerHTML to set on the node.
+   * @param oldValue The old outerHTML that will be reverted to find the index of.
+   * @returns A promise that will be resolved with the integer index.
+   *          If the child cannot be found, returns -1
+   */
+  updateNodeOuterHTML: function(aNode, newValue, oldValue) {
+    let container = this._containers.get(aNode);
+    if (!container) {
+      return;
+    }
+
+    this.getNodeChildIndex(aNode).then((i) => {
+      this._outerHTMLChildIndex = i;
+      this._outerHTMLNode = aNode;
+
+      container.undo.do(() => {
+        this.walker.setOuterHTML(aNode, newValue);
+      }, () => {
+        this.walker.setOuterHTML(aNode, oldValue);
+      });
+    });
+  },
+
+  /**
+   * Open an editor in the UI to allow editing of a node's outerHTML.
+   * @param aNode The NodeFront to edit.
+   */
+  beginEditingOuterHTML: function(aNode) {
+    this.getNodeOuterHTML(aNode).then((oldValue)=> {
+      let container = this._containers.get(aNode);
+      if (!container) {
+        return;
+      }
+      this.htmlEditor.show(container.tagLine, oldValue);
+      this.htmlEditor.once("popuphidden", (e, aCommit, aValue) => {
+        // Need to focus the <html> element instead of the frame / window
+        // in order to give keyboard focus back to doc (from editor).
+        this._frame.contentDocument.documentElement.focus();
+
+        if (aCommit) {
+          this.updateNodeOuterHTML(aNode, aValue, oldValue);
+        }
+      });
+    });
+  },
+
+  /**
+   * Mark the given node expanded.
+   * @param aNode The NodeFront to mark as expanded.
+   */
+  setNodeExpanded: function(aNode, aExpanded) {
     if (aExpanded) {
       this.expandNode(aNode);
     } else {
@@ -566,10 +718,11 @@ MarkupView.prototype = {
   },
 
   /**
-   * Mark the given node selected.
+   * Mark the given node selected, and update the inspector.selection
+   * object's NodeFront to keep consistent state between UI and selection.
+   * @param aNode The NodeFront to mark as selected.
    */
-  markNodeAsSelected: function MT_markNodeAsSelected(aNode)
-  {
+  markNodeAsSelected: function(aNode, reason) {
     let container = this._containers.get(aNode);
     if (this._selectedContainer === container) {
       return false;
@@ -582,6 +735,7 @@ MarkupView.prototype = {
       this._selectedContainer.selected = true;
     }
 
+    this._inspector.selection.setNodeFront(aNode, reason || "nodeselected");
     return true;
   },
 
@@ -589,8 +743,7 @@ MarkupView.prototype = {
    * Make sure that every ancestor of the selection are updated
    * and included in the list of visible children.
    */
-  _ensureVisible: function(node)
-  {
+  _ensureVisible: function(node) {
     while (node) {
       let container = this._containers.get(node);
       let parent = node.parentNode();
@@ -608,8 +761,7 @@ MarkupView.prototype = {
   /**
    * Unmark selected node (no node selected).
    */
-  unmarkSelectedNode: function MT_unmarkSelectedNode()
-  {
+  unmarkSelectedNode: function() {
     if (this._selectedContainer) {
       this._selectedContainer.selected = false;
       this._selectedContainer = null;
@@ -619,8 +771,7 @@ MarkupView.prototype = {
   /**
    * Called when the markup panel initiates a change on a node.
    */
-  nodeChanged: function MT_nodeChanged(aNode)
-  {
+  nodeChanged: function(aNode) {
     if (aNode === this._inspector.selection.nodeFront) {
       this._inspector.change("markupview");
     }
@@ -667,8 +818,7 @@ MarkupView.prototype = {
    * @return a promise that will be resolved when the children are ready
    * (which may be immediately).
    */
-  _updateChildren: function(aContainer, options)
-  {
+  _updateChildren: function(aContainer, options) {
     let expand = options && options.expand;
     let flash = options && options.flash;
 
@@ -772,8 +922,7 @@ MarkupView.prototype = {
   /**
    * Return a list of the children to display for this container.
    */
-  _getVisibleChildren: function MV__getVisibleChildren(aContainer, aCentered)
-  {
+  _getVisibleChildren: function(aContainer, aCentered) {
     let maxChildren = aContainer.maxChildren || this.maxChildren;
     if (maxChildren == -1) {
       maxChildren = undefined;
@@ -788,9 +937,13 @@ MarkupView.prototype = {
   /**
    * Tear down the markup panel.
    */
-  destroy: function MT_destroy()
-  {
+  destroy: function() {
     gDevTools.off("pref-changed", this._handlePrefChange);
+
+    delete this._outputParser;
+
+    this.htmlEditor.destroy();
+    delete this.htmlEditor;
 
     this.undo.destroy();
     delete this.undo;
@@ -802,18 +955,23 @@ MarkupView.prototype = {
     delete this._boundFocus;
 
     if (this._boundUpdatePreview) {
-      this._frame.contentWindow.removeEventListener("scroll", this._boundUpdatePreview, true);
+      this._frame.contentWindow.removeEventListener("scroll",
+        this._boundUpdatePreview, true);
       delete this._boundUpdatePreview;
     }
 
     if (this._boundResizePreview) {
-      this._frame.contentWindow.removeEventListener("resize", this._boundResizePreview, true);
-      this._frame.contentWindow.removeEventListener("overflow", this._boundResizePreview, true);
-      this._frame.contentWindow.removeEventListener("underflow", this._boundResizePreview, true);
+      this._frame.contentWindow.removeEventListener("resize",
+        this._boundResizePreview, true);
+      this._frame.contentWindow.removeEventListener("overflow",
+        this._boundResizePreview, true);
+      this._frame.contentWindow.removeEventListener("underflow",
+        this._boundResizePreview, true);
       delete this._boundResizePreview;
     }
 
-    this._frame.contentWindow.removeEventListener("keydown", this._boundKeyDown, false);
+    this._frame.contentWindow.removeEventListener("keydown",
+      this._boundKeyDown, false);
     delete this._boundKeyDown;
 
     this._inspector.selection.off("new-node-front", this._boundOnNewSelection);
@@ -824,15 +982,21 @@ MarkupView.prototype = {
 
     delete this._elt;
 
+    for (let [key, container] of this._containers) {
+      container.destroy();
+    }
     delete this._containers;
+
+    this.tooltip.destroy();
+    delete this.tooltip;
   },
 
   /**
    * Initialize the preview panel.
    */
-  _initPreview: function MT_initPreview()
-  {
-    if (!Services.prefs.getBoolPref("devtools.inspector.markupPreview")) {
+  _initPreview: function() {
+    this._previewEnabled = Services.prefs.getBoolPref("devtools.inspector.markupPreview");
+    if (!this._previewEnabled) {
       return;
     }
 
@@ -845,21 +1009,26 @@ MarkupView.prototype = {
     this._previewWidth = this._preview.getBoundingClientRect().width;
 
     this._boundResizePreview = this._resizePreview.bind(this);
-    this._frame.contentWindow.addEventListener("resize", this._boundResizePreview, true);
-    this._frame.contentWindow.addEventListener("overflow", this._boundResizePreview, true);
-    this._frame.contentWindow.addEventListener("underflow", this._boundResizePreview, true);
+    this._frame.contentWindow.addEventListener("resize",
+      this._boundResizePreview, true);
+    this._frame.contentWindow.addEventListener("overflow",
+      this._boundResizePreview, true);
+    this._frame.contentWindow.addEventListener("underflow",
+      this._boundResizePreview, true);
 
     this._boundUpdatePreview = this._updatePreview.bind(this);
-    this._frame.contentWindow.addEventListener("scroll", this._boundUpdatePreview, true);
+    this._frame.contentWindow.addEventListener("scroll",
+      this._boundUpdatePreview, true);
     this._updatePreview();
   },
-
 
   /**
    * Move the preview viewbox.
    */
-  _updatePreview: function MT_updatePreview()
-  {
+  _updatePreview: function() {
+    if (!this._previewEnabled) {
+      return;
+    }
     let win = this._frame.contentWindow;
 
     if (win.scrollMaxY == 0) {
@@ -876,7 +1045,8 @@ MarkupView.prototype = {
     let scrollTo
     if (height >= win.innerHeight) {
       scrollTo = -(height - win.innerHeight) * (win.scrollY / win.scrollMaxY);
-      this._previewBar.setAttribute("style", "height:" + height + "px;transform:translateY(" + scrollTo + "px)");
+      this._previewBar.setAttribute("style", "height:" + height +
+        "px;transform:translateY(" + scrollTo + "px)");
     } else {
       this._previewBar.setAttribute("style", "height:100%");
     }
@@ -886,14 +1056,17 @@ MarkupView.prototype = {
 
     let height = ~~(win.innerHeight * ratio) + "px";
     let top = ~~(win.scrollY * ratio) + "px";
-    this._viewbox.setAttribute("style", "height:" + height + ";transform: translateY(" + top + ")");
+    this._viewbox.setAttribute("style", "height:" + height +
+      ";transform: translateY(" + top + ")");
   },
 
   /**
    * Hide the preview while resizing, to avoid slowness.
    */
-  _resizePreview: function MT_resizePreview()
-  {
+  _resizePreview: function() {
+    if (!this._previewEnabled) {
+      return;
+    }
     let win = this._frame.contentWindow;
     this._previewBar.classList.add("hide");
     win.clearTimeout(this._resizePreviewTimeout);
@@ -916,12 +1089,15 @@ MarkupView.prototype = {
  *        The markup view that owns this container.
  * @param DOMNode aNode
  *        The node to display.
+ * @param Inspector aInspector
+ *        The inspector tool container the markup-view
  */
-function MarkupContainer(aMarkupView, aNode) {
+function MarkupContainer(aMarkupView, aNode, aInspector) {
   this.markup = aMarkupView;
   this.doc = this.markup.doc;
   this.undo = this.markup.undo;
   this.node = aNode;
+  this._inspector = aInspector;
 
   if (aNode.nodeType == Ci.nsIDOMNode.TEXT_NODE) {
     this.editor = new TextEditor(this, aNode, "text");
@@ -962,12 +1138,59 @@ function MarkupContainer(aMarkupView, aNode) {
   // Appending the editor element and attaching event listeners
   this.tagLine.appendChild(this.editor.elt);
 
-  this.elt.addEventListener("mousedown", this._onMouseDown.bind(this), false);
+  this._onMouseDown = this._onMouseDown.bind(this);
+  this.elt.addEventListener("mousedown", this._onMouseDown, false);
+
+  this._onClick = this._onClick.bind(this);
+  this.elt.addEventListener("click", this._onClick, false);
+
+  // Prepare the image preview tooltip data if any
+  this._prepareImagePreview();
 }
 
 MarkupContainer.prototype = {
   toString: function() {
     return "[MarkupContainer for " + this.node + "]";
+  },
+
+  _prepareImagePreview: function() {
+    if (this.node.tagName) {
+      let tagName = this.node.tagName.toLowerCase();
+      let srcAttr = this.editor.getAttributeElement("src");
+      let isImage = tagName === "img" && srcAttr;
+      let isCanvas = tagName === "canvas";
+
+      // Get the image data for later so that when the user actually hovers over
+      // the element, the tooltip does contain the image
+      if (isImage || isCanvas) {
+        let def = promise.defer();
+
+        this.tooltipData = {
+          target: isImage ? srcAttr : this.editor.tag,
+          data: def.promise
+        };
+
+        this.node.getImageData(IMAGE_PREVIEW_MAX_DIM).then(data => {
+          if (data) {
+            data.data.string().then(str => {
+              // Resolving the data promise and, to always keep tooltipData.data
+              // as a promise, create a new one that resolves immediately
+              def.resolve(str, data.size);
+              this.tooltipData.data = promise.resolve(str, data.size);
+            });
+          }
+        });
+      }
+    }
+  },
+
+  _buildTooltipContent: function(target, tooltip) {
+    if (this.tooltipData && target === this.tooltipData.target) {
+      this.tooltipData.data.then((data, size) => {
+        tooltip.setImageContent(data, size);
+      });
+      return true;
+    }
   },
 
   /**
@@ -1055,9 +1278,23 @@ MarkupContainer.prototype = {
   },
 
   _onMouseDown: function(event) {
-    this.highlighted = false;
-    this.markup.navigate(this);
-    event.stopPropagation();
+    if (event.target.nodeName !== "a") {
+      this.highlighted = false;
+      this.markup.navigate(this);
+      event.stopPropagation();
+    }
+  },
+
+  _onClick: function(event) {
+    let target = event.target;
+
+    if (target.nodeName === "a") {
+      event.stopPropagation();
+      event.preventDefault();
+      let browserWin = this.markup._inspector.target
+                           .tab.ownerDocument.defaultView;
+      browserWin.openUILinkIn(target.href, "tab");
+    }
   },
 
   /**
@@ -1122,12 +1359,14 @@ MarkupContainer.prototype = {
         this.highlighter.classList.add("theme-bg-darker");
       }
       if (this.closeTagLine) {
-        this.closeTagLine.querySelector(".highlighter").classList.add("theme-bg-darker");
+        this.closeTagLine.querySelector(".highlighter").classList.add(
+          "theme-bg-darker");
       }
     } else {
       this.highlighter.classList.remove("theme-bg-darker");
       if (this.closeTagLine) {
-        this.closeTagLine.querySelector(".highlighter").classList.remove("theme-bg-darker");
+        this.closeTagLine.querySelector(".highlighter").classList.remove(
+          "theme-bg-darker");
       }
     }
   },
@@ -1165,9 +1404,9 @@ MarkupContainer.prototype = {
    * Update the container's editor to the current state of the
    * viewed node.
    */
-  update: function(parseColors=true) {
+  update: function() {
     if (this.editor.update) {
-      this.editor.update(parseColors);
+      this.editor.update();
     }
   },
 
@@ -1179,6 +1418,30 @@ MarkupContainer.prototype = {
     if (focusable) {
       focusable.focus();
     }
+  },
+
+  /**
+   * Get rid of event listeners and references, when the container is no longer
+   * needed
+   */
+  destroy: function() {
+    // Recursively destroy children containers
+    let firstChild;
+    while (firstChild = this.children.firstChild) {
+      firstChild.container.destroy();
+      this.children.removeChild(firstChild);
+    }
+
+    // Remove event listeners
+    this.elt.removeEventListener("dblclick", this._onToggle, false);
+    this.elt.removeEventListener("mouseover", this._onMouseOver, false);
+    this.elt.removeEventListener("mouseout", this._onMouseOut, false);
+    this.elt.removeEventListener("mousedown", this._onMouseDown, false);
+    this.elt.removeEventListener("click", this._onClick, false);
+    this.expander.removeEventListener("click", this._onToggle, false);
+
+    // Destroy my editor
+    this.editor.destroy();
   }
 };
 
@@ -1192,24 +1455,28 @@ function RootContainer(aMarkupView, aNode) {
   this.elt.container = this;
   this.children = this.elt;
   this.node = aNode;
-  this.toString = function() { return "[root container]"}
+  this.toString = () => "[root container]";
 }
 
 RootContainer.prototype = {
   hasChildren: true,
   expanded: true,
-  update: function() {}
+  update: function() {},
+  destroy: function() {}
 };
 
 /**
  * Creates an editor for simple nodes.
  */
-function GenericEditor(aContainer, aNode)
-{
+function GenericEditor(aContainer, aNode) {
   this.elt = aContainer.doc.createElement("span");
   this.elt.className = "editor";
   this.elt.textContent = aNode.nodeName;
 }
+
+GenericEditor.prototype = {
+  destroy: function() {}
+};
 
 /**
  * Creates an editor for a DOCTYPE node.
@@ -1217,8 +1484,7 @@ function GenericEditor(aContainer, aNode)
  * @param MarkupContainer aContainer The container owning this editor.
  * @param DOMNode aNode The node being edited.
  */
-function DoctypeEditor(aContainer, aNode)
-{
+function DoctypeEditor(aContainer, aNode) {
   this.elt = aContainer.doc.createElement("span");
   this.elt.className = "editor comment";
   this.elt.textContent = '<!DOCTYPE ' + aNode.name +
@@ -1226,6 +1492,10 @@ function DoctypeEditor(aContainer, aNode)
      (aNode.systemId ? ' "' + aNode.systemId + '"' : '') +
      '>';
 }
+
+DoctypeEditor.prototype = {
+  destroy: function() {}
+};
 
 /**
  * Creates a simple text editor node, used for TEXT and COMMENT
@@ -1235,8 +1505,7 @@ function DoctypeEditor(aContainer, aNode)
  * @param DOMNode aNode The node being edited.
  * @param string aTemplate The template id to use to build the editor.
  */
-function TextEditor(aContainer, aNode, aTemplate)
-{
+function TextEditor(aContainer, aNode, aTemplate) {
   this.node = aNode;
   this._selected = false;
 
@@ -1282,8 +1551,7 @@ TextEditor.prototype = {
     this.update();
   },
 
-  update: function TE_update()
-  {
+  update: function() {
     if (!this.selected || !this.node.incompleteValue) {
       let text = this.node.shortValue;
       // XXX: internationalize the elliding
@@ -1303,7 +1571,9 @@ TextEditor.prototype = {
         }
       }).then(null, console.error);
     }
-  }
+  },
+
+  destroy: function() {}
 };
 
 /**
@@ -1312,8 +1582,7 @@ TextEditor.prototype = {
  * @param MarkupContainer aContainer The container owning this editor.
  * @param Element aNode The node being edited.
  */
-function ElementEditor(aContainer, aNode)
-{
+function ElementEditor(aContainer, aNode) {
   this.doc = aContainer.doc;
   this.undo = aContainer.undo;
   this.template = aContainer.markup.template.bind(aContainer.markup);
@@ -1334,7 +1603,9 @@ function ElementEditor(aContainer, aNode)
   // Create the main editor
   this.template("element", this);
 
-  this.rawNode = aNode.rawNode();
+  if (aNode.isLocal_toBeDeprecated()) {
+    this.rawNode = aNode.rawNode();
+  }
 
   // Make the tag name editable (unless this is a remote node or
   // a document element)
@@ -1386,8 +1657,7 @@ ElementEditor.prototype = {
   /**
    * Update the state of the editor from the node.
    */
-  update: function EE_update(parseColors=true)
-  {
+  update: function() {
     let attrs = this.node.attributes;
     if (!attrs) {
       return;
@@ -1406,9 +1676,6 @@ ElementEditor.prototype = {
     // Get the attribute editor for each attribute that exists on
     // the node and show it.
     for (let attr of attrs) {
-      if (parseColors && typeof attr.value !== "undefined") {
-        attr.value = colorUtils.processCSSString(attr.value);
-      }
       let attribute = this._createAttribute(attr);
       if (!attribute.inplaceEditor) {
         attribute.style.removeProperty("display");
@@ -1420,8 +1687,17 @@ ElementEditor.prototype = {
     return this.node.startModifyingAttributes();
   },
 
-  _createAttribute: function EE_createAttribute(aAttr, aBefore = null)
-  {
+  /**
+   * Get the element used for one of the attributes of this element
+   * @param string attrName The name of the attribute to get the element for
+   * @return DOMElement
+   */
+  getAttributeElement: function(attrName) {
+    return this.attrList.querySelector(
+      ".attreditor[data-attr=" + attrName + "] .attr-value");
+  },
+
+  _createAttribute: function(aAttr, aBefore = null) {
     // Create the template editor, which will save some variables here.
     let data = {
       attrName: aAttr.name,
@@ -1497,7 +1773,6 @@ ElementEditor.prototype = {
       }
     });
 
-
     // Figure out where we should place the attribute.
     let before = aBefore;
     if (aAttr.name == "id") {
@@ -1516,18 +1791,104 @@ ElementEditor.prototype = {
 
     this.attrs[aAttr.name] = attr;
 
-    let collapsedValue;
-    if (aAttr.value.match(COLLAPSE_DATA_URL_REGEX)) {
-      collapsedValue = truncateString(aAttr.value, COLLAPSE_DATA_URL_LENGTH);
-    }
-    else {
-      collapsedValue = truncateString(aAttr.value, COLLAPSE_ATTRIBUTE_LENGTH);
-    }
-
     name.textContent = aAttr.name;
-    val.textContent = collapsedValue;
+
+    if (typeof aAttr.value !== "undefined") {
+      let outputParser = this.markup._outputParser;
+      let frag = outputParser.parseHTMLAttribute(aAttr.value, {
+        urlClass: "theme-link",
+        baseURI: this.node.baseURI
+      });
+      frag = this._truncateFrag(frag);
+      val.appendChild(frag);
+    }
 
     return attr;
+  },
+
+  /**
+   * We truncate HTML attributes to a text length defined by
+   * COLLAPSE_DATA_URL_LENGTH and COLLAPSE_ATTRIBUTE_LENGTH. Because we parse
+   * text into document fragments we need to process each fragment and truncate
+   * according to the fragment's textContent length.
+   *
+   * @param  {DocumentFragment} frag
+   *         The fragment to truncate.
+   * @return {[DocumentFragment]}
+   *         Truncated fragment.
+   */
+  _truncateFrag: function(frag) {
+    let text = frag.textContent;
+
+    if (!text) {
+      return frag;
+    }
+
+    let chars = 0;
+    let maxWidth = text.match(COLLAPSE_DATA_URL_REGEX) ?
+                            COLLAPSE_DATA_URL_LENGTH : COLLAPSE_ATTRIBUTE_LENGTH;
+    let overBy = text.length - maxWidth;
+    let children = frag.childNodes;
+    let croppedNode = null;
+
+    if (overBy <= 0) {
+      return frag;
+    }
+
+    // For fragments containing only one single node we just need to truncate
+    // frag.textContent.
+    if (children.length === 1) {
+      let length = text.length;
+      let start = text.substr(0, maxWidth / 2);
+      let end = text.substr(length - maxWidth / 2, length - 1);
+
+      frag.textContent = start + "…" + end;
+      return frag;
+    }
+
+    // First maxWidth / 2 chars plus &hellip;
+    for (let i = 0; i < children.length; i++) {
+      let node = children[i];
+      let text = node.textContent;
+
+      let numChars = text.length;
+      if (chars + numChars > maxWidth / 2) {
+        let insertionPoint = maxWidth / 2 - chars;
+        let start = text.substr(0, insertionPoint) + "…";
+        let end = text.substr(insertionPoint);
+
+        if (end.length > maxWidth / 2) {
+          end = end.substr(end.length - maxWidth / 2);
+        }
+
+        node.textContent = start + end;
+        croppedNode = node;
+        break;
+      } else {
+        chars += numChars;
+      }
+    }
+
+    // Last maxWidth / two chars.
+    chars = 0;
+    for (let i = children.length - 1; i >= 0; i--) {
+      let node = children[i];
+      let text = node.textContent;
+
+      let numChars = text.length;
+      if (chars + numChars > maxWidth / 2) {
+        if (node !== croppedNode) {
+          node.parentNode.removeChild(node);
+          chars += numChars;
+        } else {
+          break;
+        }
+      } else {
+        chars += numChars;
+      }
+    }
+
+    return frag;
   },
 
   /**
@@ -1539,8 +1900,7 @@ ElementEditor.prototype = {
    *        set of attributes, used to place new attributes where the
    *        user put them.
    */
-  _applyAttributes: function EE__applyAttributes(aValue, aAttrNode, aDoMods, aUndoMods)
-  {
+  _applyAttributes: function(aValue, aAttrNode, aDoMods, aUndoMods) {
     let attrs = parseAttributeValues(aValue, this.doc);
     for (let attr of attrs) {
       // Create an attribute editor next to the current attribute if needed.
@@ -1554,8 +1914,7 @@ ElementEditor.prototype = {
    * Saves the current state of the given attribute into an attribute
    * modification list.
    */
-  _saveAttribute: function(aName, aUndoMods)
-  {
+  _saveAttribute: function(aName, aUndoMods) {
     let node = this.node;
     if (node.hasAttribute(aName)) {
       let oldValue = node.getAttribute(aName);
@@ -1568,7 +1927,7 @@ ElementEditor.prototype = {
   /**
    * Called when the tag name editor has is done editing.
    */
-  onTagEdit: function EE_onTagEdit(aVal, aCommit) {
+  onTagEdit: function(aVal, aCommit) {
     if (!aCommit || aVal == this.rawNode.tagName) {
       return;
     }
@@ -1619,11 +1978,14 @@ ElementEditor.prototype = {
         }
       });
     }).then(null, console.error);
-  }
+  },
+
+  destroy: function() {}
 };
 
 function nodeDocument(node) {
-  return node.ownerDocument || (node.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE ? node : null);
+  return node.ownerDocument ||
+    (node.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE ? node : null);
 }
 
 function truncateString(str, maxLength) {

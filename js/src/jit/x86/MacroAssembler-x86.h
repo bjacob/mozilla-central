@@ -72,7 +72,8 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
 
     enum Result {
         GENERAL,
-        DOUBLE
+        DOUBLE,
+        FLOAT
     };
 
     typedef MoveResolver::MoveOperand MoveOperand;
@@ -356,6 +357,18 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
         JS_ASSERT(cond == Equal || cond == NotEqual);
         return testDouble(cond, Operand(address));
     }
+
+
+    Condition testUndefined(Condition cond, const Operand &operand) {
+        JS_ASSERT(cond == Equal || cond == NotEqual);
+        cmpl(ToType(operand), ImmTag(JSVAL_TAG_UNDEFINED));
+        return cond;
+    }
+    Condition testUndefined(Condition cond, const Address &addr) {
+        return testUndefined(cond, Operand(addr));
+    }
+
+
     Condition testUndefined(Condition cond, const ValueOperand &value) {
         return testUndefined(cond, value.typeReg());
     }
@@ -499,6 +512,7 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     }
 
     Condition testNegativeZero(const FloatRegister &reg, const Register &scratch);
+    Condition testNegativeZeroFloat32(const FloatRegister &reg, const Register &scratch);
 
     /////////////////////////////////////////////////////////////////
     // Common interface.
@@ -768,7 +782,7 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
         movl(payloadOf(src), dest);
     }
     void unboxDouble(const Address &src, const FloatRegister &dest) {
-        movsd(Operand(src), dest);
+        loadDouble(Operand(src), dest);
     }
     void unboxBoolean(const ValueOperand &src, const Register &dest) {
         movl(src.payloadReg(), dest);
@@ -879,16 +893,22 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     void addConstantFloat32(float f, const FloatRegister &dest);
 
     void branchTruncateDouble(const FloatRegister &src, const Register &dest, Label *fail) {
-        const uint32_t IndefiniteIntegerValue = 0x80000000;
         cvttsd2si(src, dest);
-        cmpl(dest, Imm32(IndefiniteIntegerValue));
-        j(Assembler::Equal, fail);
+
+        // cvttsd2si returns 0x80000000 on failure. Test for it by
+        // subtracting 1 and testing overflow (this permits the use of a
+        // smaller immediate field).
+        cmpl(dest, Imm32(1));
+        j(Assembler::Overflow, fail);
     }
     void branchTruncateFloat32(const FloatRegister &src, const Register &dest, Label *fail) {
-        const uint32_t IndefiniteIntegerValue = 0x80000000;
         cvttss2si(src, dest);
-        cmpl(dest, Imm32(IndefiniteIntegerValue));
-        j(Assembler::Equal, fail);
+
+        // cvttss2si returns 0x80000000 on failure. Test for it by
+        // subtracting 1 and testing overflow (this permits the use of a
+        // smaller immediate field).
+        cmpl(dest, Imm32(1));
+        j(Assembler::Overflow, fail);
     }
 
     Condition testInt32Truthy(bool truthy, const ValueOperand &operand) {
@@ -915,7 +935,7 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
         convertInt32ToDouble(ToPayload(operand), dest);
         jump(&end);
         bind(&notInt32);
-        movsd(operand, dest);
+        loadDouble(operand, dest);
         bind(&end);
     }
 
@@ -1052,7 +1072,7 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     // Save an exit frame (which must be aligned to the stack pointer) to
     // ThreadData::ionTop of the main thread.
     void linkExitFrame() {
-        movl(StackPointer, Operand(AbsoluteAddress(&GetIonContext()->runtime->mainThread.ionTop)));
+        movl(StackPointer, Operand(AbsoluteAddress(GetIonContext()->runtime->addressOfIonTop())));
     }
 
     void callWithExitFrame(IonCode *target, Register dynStack) {

@@ -17,8 +17,10 @@
     _(DivSelfI)                 \
     _(ModI)                     \
     _(ModPowTwoI)               \
+    _(ModSelfI)                 \
     _(PowHalfD)                 \
     _(AsmJSUInt32ToDouble)      \
+    _(AsmJSUInt32ToFloat32)     \
     _(AsmJSLoadFuncPtr)         \
     _(UDivOrMod)
 

@@ -42,7 +42,6 @@ SettingsLock.prototype = {
 
   process: function process() {
     let lock = this;
-    lock._open = false;
     let store = lock._transaction.objectStore(SETTINGSSTORE_NAME);
 
     while (!lock._requests.isEmpty()) {
@@ -143,7 +142,6 @@ SettingsLock.prototype = {
           break;
       }
     }
-    lock._open = true;
   },
 
   createTransactionAndProcess: function() {
@@ -249,16 +247,10 @@ SettingsLock.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports]),
 };
 
-let myGlobal = this;
-
 function SettingsManager() {
   this._locks = new Queue();
-  if (!("indexedDB" in myGlobal)) {
-    let idbManager = Components.classes["@mozilla.org/dom/indexeddb/manager;1"].getService(Ci.nsIIndexedDatabaseManager);
-    idbManager.initWindowless(myGlobal);
-  }
   this._settingsDB = new SettingsDB();
-  this._settingsDB.init(myGlobal);
+  this._settingsDB.init();
 }
 
 SettingsManager.prototype = {
@@ -289,8 +281,8 @@ SettingsManager.prototype = {
     this._locks.enqueue(lock);
     this._settingsDB.ensureDB(
       function() { lock.createTransactionAndProcess(); },
-      function() { dump("Cannot open Settings DB. Trying to open an old version?\n"); },
-      myGlobal );
+      function() { dump("Cannot open Settings DB. Trying to open an old version?\n"); }
+    );
     this.nextTick(function() { this._open = false; }, lock);
     return lock;
   },

@@ -37,7 +37,6 @@ using mozilla::plugins::PluginInstanceParent;
 #include "nsIWidgetListener.h"
 #include "mozilla/unused.h"
 
-#include "LayerManagerOGL.h"
 #ifdef MOZ_ENABLE_D3D9_LAYER
 #include "LayerManagerD3D9.h"
 #endif
@@ -45,6 +44,7 @@ using mozilla::plugins::PluginInstanceParent;
 #include "LayerManagerD3D10.h"
 #endif
 #include "mozilla/layers/CompositorParent.h"
+#include "ClientLayerManager.h"
 
 #include "nsUXThemeData.h"
 #include "nsUXThemeConstants.h"
@@ -127,11 +127,11 @@ nsIntRegion nsWindow::GetRegionToPaint(bool aForceFullRepaint,
   }
 
   HRGN paintRgn = ::CreateRectRgn(0, 0, 0, 0);
-  if (paintRgn != NULL) {
+  if (paintRgn != nullptr) {
     int result = GetRandomRgn(aDC, paintRgn, SYSRGN);
     if (result == 1) {
       POINT pt = {0,0};
-      ::MapWindowPoints(NULL, mWnd, &pt, 1);
+      ::MapWindowPoints(nullptr, mWnd, &pt, 1);
       ::OffsetRgn(paintRgn, pt.x, pt.y);
     }
     nsIntRegion rgn(WinUtils::ConvertHRGNToRegion(paintRgn));
@@ -177,7 +177,7 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
   // windows event spin loop. If we don't trap for this, we'll try to paint,
   // but view manager will refuse to paint the surface, resulting is black
   // flashes on the plugin rendering surface.
-  if (mozilla::ipc::RPCChannel::IsSpinLoopActive() && mPainting)
+  if (mozilla::ipc::MessageChannel::IsSpinLoopActive() && mPainting)
     return false;
 
   if (mWindowType == eWindowType_plugin) {
@@ -209,27 +209,24 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
       NS_WARNING("Plugin failed to subclass our window");
     }
 
-    ValidateRect(mWnd, NULL);
+    ValidateRect(mWnd, nullptr);
     return true;
   }
 
-  // Do an early async composite so that we at least have something on screen
-  // in the right place, even if the content is out of date.
-  if (GetLayerManager()->GetBackendType() == LAYERS_CLIENT &&
-      mCompositorParent) {
+  ClientLayerManager *clientLayerManager =
+      (GetLayerManager()->GetBackendType() == LAYERS_CLIENT)
+      ? static_cast<ClientLayerManager*>(GetLayerManager())
+      : nullptr;
+
+  if (clientLayerManager && mCompositorParent &&
+      !mBounds.IsEqualEdges(mLastPaintBounds))
+  {
+    // Do an early async composite so that we at least have something on the
+    // screen in the right place, even if the content is out of date.
     mCompositorParent->ScheduleRenderOnCompositorThread();
   }
+  mLastPaintBounds = mBounds;
 
-  nsIWidgetListener* listener = GetPaintListener();
-  if (listener) {
-    listener->WillPaintWindow(this);
-  }
-  // Re-get the listener since the will paint notification may have killed it.
-  listener = GetPaintListener();
-  if (!listener)
-    return false;
-
-  bool result = true;
   PAINTSTRUCT ps;
 
 #ifdef MOZ_XUL
@@ -251,8 +248,8 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
   mPainting = true;
 
 #ifdef WIDGET_DEBUG_OUTPUT
-  HRGN debugPaintFlashRegion = NULL;
-  HDC debugPaintFlashDC = NULL;
+  HRGN debugPaintFlashRegion = nullptr;
+  HDC debugPaintFlashDC = nullptr;
 
   if (debug_WantPaintFlashing())
   {
@@ -270,9 +267,33 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
 #ifdef MOZ_XUL
   bool forceRepaint = aDC || (eTransparencyTransparent == mTransparencyMode);
 #else
-  bool forceRepaint = NULL != aDC;
+  bool forceRepaint = nullptr != aDC;
 #endif
   nsIntRegion region = GetRegionToPaint(forceRepaint, ps, hDC);
+
+  if (clientLayerManager && mCompositorParent) {
+    // We need to paint to the screen even if nothing changed, since if we
+    // don't have a compositing window manager, our pixels could be stale.
+    clientLayerManager->SetNeedsComposite(true);
+    clientLayerManager->SendInvalidRegion(region);
+  }
+
+  nsIWidgetListener* listener = GetPaintListener();
+  if (listener) {
+    listener->WillPaintWindow(this);
+  }
+  // Re-get the listener since the will paint notification may have killed it.
+  listener = GetPaintListener();
+  if (!listener) {
+    return false;
+  }
+
+  if (clientLayerManager && mCompositorParent && clientLayerManager->NeedsComposite()) {
+    mCompositorParent->ScheduleRenderOnCompositorThread();
+    clientLayerManager->SetNeedsComposite(false);
+  }
+
+  bool result = true;
   if (!region.IsEmpty() && listener)
   {
     // Should probably pass in a real region here, using GetRandomRgn
@@ -529,11 +550,6 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
           }
         }
         break;
-      case LAYERS_OPENGL:
-        static_cast<mozilla::layers::LayerManagerOGL*>(GetLayerManager())->
-          SetClippingRegion(region);
-        result = listener->PaintWindow(this, region);
-        break;
 #ifdef MOZ_ENABLE_D3D9_LAYER
       case LAYERS_D3D9:
         {
@@ -605,7 +621,7 @@ bool nsWindow::OnPaint(HDC aDC, uint32_t aNestingLevel)
   if (listener)
     listener->DidPaintWindow();
 
-  if (aNestingLevel == 0 && ::GetUpdateRect(mWnd, NULL, false)) {
+  if (aNestingLevel == 0 && ::GetUpdateRect(mWnd, nullptr, false)) {
     OnPaint(aDC, 1);
   }
 
@@ -714,7 +730,7 @@ uint8_t* nsWindowGfx::Data32BitTo1Bit(uint8_t* aImageData,
   // Allocate and clear mask buffer
   uint8_t* outData = (uint8_t*)PR_Calloc(outBpr, aHeight);
   if (!outData)
-    return NULL;
+    return nullptr;
 
   int32_t *imageRow = (int32_t*)aImageData;
   for (uint32_t curRow = 0; curRow < aHeight; curRow++) {
@@ -748,14 +764,14 @@ uint8_t* nsWindowGfx::Data32BitTo1Bit(uint8_t* aImageData,
  *
  * @return The HBITMAP representing the image. Caller should call
  *         DeleteObject when done with the bitmap.
- *         On failure, NULL will be returned.
+ *         On failure, nullptr will be returned.
  */
 HBITMAP nsWindowGfx::DataToBitmap(uint8_t* aImageData,
                                   uint32_t aWidth,
                                   uint32_t aHeight,
                                   uint32_t aDepth)
 {
-  HDC dc = ::GetDC(NULL);
+  HDC dc = ::GetDC(nullptr);
 
   if (aDepth == 32) {
     // Alpha channel. We need the new header.
@@ -783,7 +799,7 @@ HBITMAP nsWindowGfx::DataToBitmap(uint8_t* aImageData,
                                    aImageData,
                                    reinterpret_cast<CONST BITMAPINFO*>(&head),
                                    DIB_RGB_COLORS);
-    ::ReleaseDC(NULL, dc);
+    ::ReleaseDC(nullptr, dc);
     return bmp;
   }
 
@@ -813,6 +829,6 @@ HBITMAP nsWindowGfx::DataToBitmap(uint8_t* aImageData,
   }
 
   HBITMAP bmp = ::CreateDIBitmap(dc, &head, CBM_INIT, aImageData, &bi, DIB_RGB_COLORS);
-  ::ReleaseDC(NULL, dc);
+  ::ReleaseDC(nullptr, dc);
   return bmp;
 }

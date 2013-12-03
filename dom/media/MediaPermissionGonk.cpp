@@ -19,6 +19,8 @@
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
 #include "nsISupportsPrimitives.h"
+#include "nsServiceManagerUtils.h"
+#include "mozilla/dom/PermissionMessageUtils.h"
 
 #define AUDIO_PERMISSION_NAME "audio-capture"
 

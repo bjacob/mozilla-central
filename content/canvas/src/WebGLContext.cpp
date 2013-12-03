@@ -10,7 +10,7 @@
 #include "WebGLContextUtils.h"
 #include "WebGLBuffer.h"
 #include "WebGLVertexAttribData.h"
-#include "WebGLMemoryReporterWrapper.h"
+#include "WebGLMemoryTracker.h"
 #include "WebGLFramebuffer.h"
 #include "WebGLVertexArray.h"
 #include "WebGLQuery.h"
@@ -27,7 +27,7 @@
 
 #include "nsIVariant.h"
 
-#include "imgIEncoder.h"
+#include "ImageEncoder.h"
 
 #include "gfxContext.h"
 #include "gfxPattern.h"
@@ -38,6 +38,7 @@
 
 #include "GLContextProvider.h"
 #include "GLContext.h"
+#include "ScopedGLHelpers.h"
 
 #include "gfxCrashReporterUtils.h"
 
@@ -121,8 +122,7 @@ WebGLContext::WebGLContext()
 
     mShaderValidation = true;
 
-    mBlackTexturesAreInitialized = false;
-    mFakeBlackStatus = DoNotNeedFakeBlack;
+    mFakeBlackStatus = WebGLContextFakeBlackStatus::NotNeeded;
 
     mVertexAttrib0Vector[0] = 0;
     mVertexAttrib0Vector[1] = 0;
@@ -134,7 +134,7 @@ WebGLContext::WebGLContext()
     mFakeVertexAttrib0BufferObjectVector[3] = 1;
     mFakeVertexAttrib0BufferObjectSize = 0;
     mFakeVertexAttrib0BufferObject = 0;
-    mFakeVertexAttrib0BufferStatus = VertexAttrib0Status::Default;
+    mFakeVertexAttrib0BufferStatus = WebGLVertexAttrib0Status::Default;
 
     // these are de default values, see 6.2 State tables in the OpenGL ES 2.0.25 spec
     mColorWriteMask[0] = 1;
@@ -179,7 +179,7 @@ WebGLContext::WebGLContext()
     mPixelStorePackAlignment = 4;
     mPixelStoreUnpackAlignment = 4;
 
-    WebGLMemoryReporterWrapper::AddWebGLContext(this);
+    WebGLMemoryTracker::AddWebGLContext(this);
 
     mAllowRestore = true;
     mContextLossTimerRunning = false;
@@ -213,7 +213,7 @@ WebGLContext::WebGLContext()
 WebGLContext::~WebGLContext()
 {
     DestroyResourcesAndContext();
-    WebGLMemoryReporterWrapper::RemoveWebGLContext(this);
+    WebGLMemoryTracker::RemoveWebGLContext(this);
     TerminateContextLossTimer();
     mContextRestorer = nullptr;
 }
@@ -264,11 +264,10 @@ WebGLContext::DestroyResourcesAndContext()
     while (!mQueries.isEmpty())
         mQueries.getLast()->DeleteOnce();
 
-    if (mBlackTexturesAreInitialized) {
-        gl->fDeleteTextures(1, &mBlackTexture2D);
-        gl->fDeleteTextures(1, &mBlackTextureCubeMap);
-        mBlackTexturesAreInitialized = false;
-    }
+    mBlackOpaqueTexture2D = nullptr;
+    mBlackOpaqueTextureCubeMap = nullptr;
+    mBlackTransparentTexture2D = nullptr;
+    mBlackTransparentTextureCubeMap = nullptr;
 
     if (mFakeVertexAttrib0BufferObject) {
         gl->fDeleteBuffers(1, &mFakeVertexAttrib0BufferObject);
@@ -348,6 +347,20 @@ WebGLContext::SetContextOptions(JSContext* aCx, JS::Handle<JS::Value> aOptions)
     return NS_OK;
 }
 
+#ifdef DEBUG
+int32_t
+WebGLContext::GetWidth() const
+{
+  return mWidth;
+}
+
+int32_t
+WebGLContext::GetHeight() const
+{
+  return mHeight;
+}
+#endif
+
 NS_IMETHODIMP
 WebGLContext::SetDimensions(int32_t width, int32_t height)
 {
@@ -369,8 +382,10 @@ WebGLContext::SetDimensions(int32_t width, int32_t height)
         return NS_OK;
 
     // Zero-sized surfaces can cause problems.
-    if (width == 0 || height == 0) {
+    if (width == 0) {
         width = 1;
+    }
+    if (height == 0) {
         height = 1;
     }
 
@@ -378,6 +393,10 @@ WebGLContext::SetDimensions(int32_t width, int32_t height)
     if (gl) {
         MakeContextCurrent();
 
+        // If we've already drawn, we should commit the current buffer.
+        PresentScreenBuffer();
+
+        // ResizeOffscreen scraps the current prod buffer before making a new one.
         gl->ResizeOffscreen(gfxIntSize(width, height)); // Doesn't matter if it succeeds (soft-fail)
         // It's unlikely that we'll get a proper-sized context if we recreate if we didn't on resize
 
@@ -386,9 +405,7 @@ WebGLContext::SetDimensions(int32_t width, int32_t height)
         mHeight = gl->OffscreenSize().height;
         mResetLayer = true;
 
-        ScopedBindFramebuffer autoFB(gl, 0);
-        gl->ClearSafely();
-        mShouldPresent = true;
+        ClearScreen();
 
         return NS_OK;
     }
@@ -595,7 +612,7 @@ WebGLContext::SetDimensions(int32_t width, int32_t height)
 }
 
 NS_IMETHODIMP
-WebGLContext::Render(gfxContext *ctx, gfxPattern::GraphicsFilter f, uint32_t aFlags)
+WebGLContext::Render(gfxContext *ctx, GraphicsFilter f, uint32_t aFlags)
 {
     if (!gl)
         return NS_OK;
@@ -653,8 +670,8 @@ void WebGLContext::LoseOldestWebGLContextIfLimitExceeded()
     // when choosing which one to lose first.
     UpdateLastUseIndex();
 
-    WebGLMemoryReporterWrapper::ContextsArrayType &contexts
-      = WebGLMemoryReporterWrapper::Contexts();
+    WebGLMemoryTracker::ContextsArrayType &contexts
+      = WebGLMemoryTracker::Contexts();
 
     // quick exit path, should cover a majority of cases
     if (contexts.Length() <= kMaxWebGLContextsPerPrincipal) {
@@ -721,6 +738,54 @@ void WebGLContext::LoseOldestWebGLContextIfLimitExceeded()
     }
 }
 
+void
+WebGLContext::GetImageBuffer(uint8_t** aImageBuffer, int32_t* aFormat)
+{
+    *aImageBuffer = nullptr;
+    *aFormat = 0;
+
+    nsRefPtr<gfxImageSurface> imgsurf =
+        new gfxImageSurface(gfxIntSize(mWidth, mHeight),
+                            gfxImageFormatARGB32);
+
+    if (!imgsurf || imgsurf->CairoStatus()) {
+        return;
+    }
+
+    nsRefPtr<gfxContext> ctx = new gfxContext(imgsurf);
+    if (!ctx || ctx->HasError()) {
+        return;
+    }
+
+    // Use Render() to make sure that appropriate y-flip gets applied
+    uint32_t flags = mOptions.premultipliedAlpha ? RenderFlagPremultAlpha : 0;
+    nsresult rv = Render(ctx, GraphicsFilter::FILTER_NEAREST, flags);
+    if (NS_FAILED(rv)) {
+        return;
+    }
+
+    int32_t format = imgIEncoder::INPUT_FORMAT_HOSTARGB;
+    if (!mOptions.premultipliedAlpha) {
+        // We need to convert to INPUT_FORMAT_RGBA, otherwise
+        // we are automatically considered premult, and unpremult'd.
+        // Yes, it is THAT silly.
+        // Except for different lossy conversions by color,
+        // we could probably just change the label, and not change the data.
+        gfxUtils::ConvertBGRAtoRGBA(imgsurf);
+        format = imgIEncoder::INPUT_FORMAT_RGBA;
+    }
+
+    static const fallible_t fallible = fallible_t();
+    uint8_t* imageBuffer = new (fallible) uint8_t[mWidth * mHeight * 4];
+    if (!imageBuffer) {
+        return;
+    }
+    memcpy(imageBuffer, imgsurf->Data(), mWidth * mHeight * 4);
+
+    *aImageBuffer = imageBuffer;
+    *aFormat = format;
+}
+
 NS_IMETHODIMP
 WebGLContext::GetInputStream(const char* aMimeType,
                              const PRUnichar* aEncoderOptions,
@@ -730,48 +795,22 @@ WebGLContext::GetInputStream(const char* aMimeType,
     if (!gl)
         return NS_ERROR_FAILURE;
 
-    nsRefPtr<gfxImageSurface> surf = new gfxImageSurface(gfxIntSize(mWidth, mHeight),
-                                                         gfxImageFormatARGB32);
-    if (surf->CairoStatus() != 0)
+    nsCString enccid("@mozilla.org/image/encoder;2?type=");
+    enccid += aMimeType;
+    nsCOMPtr<imgIEncoder> encoder = do_CreateInstance(enccid.get());
+    if (!encoder) {
         return NS_ERROR_FAILURE;
-
-    nsRefPtr<gfxContext> tmpcx = new gfxContext(surf);
-    // Use Render() to make sure that appropriate y-flip gets applied
-    uint32_t flags = mOptions.premultipliedAlpha ? RenderFlagPremultAlpha : 0;
-    nsresult rv = Render(tmpcx, gfxPattern::FILTER_NEAREST, flags);
-    if (NS_FAILED(rv))
-        return rv;
-
-    const char encoderPrefix[] = "@mozilla.org/image/encoder;2?type=";
-    nsAutoArrayPtr<char> conid(new char[strlen(encoderPrefix) + strlen(aMimeType) + 1]);
-
-    strcpy(conid, encoderPrefix);
-    strcat(conid, aMimeType);
-
-    nsCOMPtr<imgIEncoder> encoder = do_CreateInstance(conid);
-    if (!encoder)
-        return NS_ERROR_FAILURE;
-
-    int format = imgIEncoder::INPUT_FORMAT_HOSTARGB;
-    if (!mOptions.premultipliedAlpha) {
-        // We need to convert to INPUT_FORMAT_RGBA, otherwise
-        // we are automatically considered premult, and unpremult'd.
-        // Yes, it is THAT silly.
-        // Except for different lossy conversions by color,
-        // we could probably just change the label, and not change the data.
-        gfxUtils::ConvertBGRAtoRGBA(surf);
-        format = imgIEncoder::INPUT_FORMAT_RGBA;
     }
 
-    rv = encoder->InitFromData(surf->Data(),
-                               mWidth * mHeight * 4,
-                               mWidth, mHeight,
-                               surf->Stride(),
-                               format,
-                               nsDependentString(aEncoderOptions));
-    NS_ENSURE_SUCCESS(rv, rv);
+    nsAutoArrayPtr<uint8_t> imageBuffer;
+    int32_t format = 0;
+    GetImageBuffer(getter_Transfers(imageBuffer), &format);
+    if (!imageBuffer) {
+        return NS_ERROR_FAILURE;
+    }
 
-    return CallQueryInterface(encoder, aStream);
+    return ImageEncoder::GetInputStream(mWidth, mHeight, imageBuffer, format,
+                                        encoder, aEncoderOptions, aStream);
 }
 
 NS_IMETHODIMP
@@ -897,7 +936,7 @@ WebGLContext::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
 }
 
 void
-WebGLContext::GetContextAttributes(Nullable<dom::WebGLContextAttributesInitializer> &retval)
+WebGLContext::GetContextAttributes(Nullable<dom::WebGLContextAttributes> &retval)
 {
     retval.SetNull();
     if (IsContextLost())
@@ -1135,6 +1174,10 @@ WebGLContext::ForceClearFramebufferWithDefaultValues(GLbitfield mask, const bool
 bool
 WebGLContext::PresentScreenBuffer()
 {
+    if (IsContextLost()) {
+        return false;
+    }
+
     if (!mShouldPresent) {
         return false;
     }
@@ -1314,6 +1357,12 @@ WebGLContext::ForceRestoreContext()
 
 void
 WebGLContext::MakeContextCurrent() const { gl->MakeCurrent(); }
+
+mozilla::TemporaryRef<mozilla::gfx::SourceSurface>
+WebGLContext::GetSurfaceSnapshot()
+{
+  return nullptr;
+}
 
 //
 // XPCOM goop

@@ -9,22 +9,18 @@ if CONFIG['MOZ_B2G_FM']:
         'ipc',
     ]
 
-    MODULE = 'dom'
-
     EXPORTS.mozilla.dom += [
         'FMRadio.h',
         'FMRadioCommon.h',
         'FMRadioService.h',
     ]
 
-    CPP_SOURCES += [
+    SOURCES += [
         'FMRadio.cpp',
         'FMRadioService.cpp',
     ]
 
-    LIBXUL_LIBRARY = True
-
-    LIBRARY_NAME = 'domfmradio_s'
+    FINAL_LIBRARY = 'gklayout'
 
 IPDL_SOURCES += [
     'ipc/PFMRadio.ipdl',
@@ -33,3 +29,8 @@ IPDL_SOURCES += [
 
 FAIL_ON_WARNINGS = True
 
+LOCAL_INCLUDES += [
+    '../base',
+    '../system/gonk',
+]
+include('/ipc/chromium/chromium-config.mozbuild')

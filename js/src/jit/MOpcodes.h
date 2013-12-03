@@ -24,6 +24,7 @@ namespace jit {
     _(Beta)                                                                 \
     _(OsrValue)                                                             \
     _(OsrScopeChain)                                                        \
+    _(OsrReturnValue)                                                       \
     _(OsrArgumentsObject)                                                   \
     _(ReturnFromCtor)                                                       \
     _(CheckOverRecursed)                                                    \
@@ -43,7 +44,7 @@ namespace jit {
     _(Bail)                                                                 \
     _(AssertFloat32)                                                        \
     _(GetDynamicName)                                                       \
-    _(FilterArguments)                                                      \
+    _(FilterArgumentsOrEval)                                                \
     _(CallDirectEval)                                                       \
     _(BitNot)                                                               \
     _(TypeOf)                                                               \
@@ -58,6 +59,7 @@ namespace jit {
     _(Abs)                                                                  \
     _(Sqrt)                                                                 \
     _(Atan2)                                                                \
+    _(Hypot)                                                                \
     _(Pow)                                                                  \
     _(PowHalf)                                                              \
     _(Random)                                                               \
@@ -71,6 +73,7 @@ namespace jit {
     _(ConcatPar)                                                            \
     _(CharCodeAt)                                                           \
     _(FromCharCode)                                                         \
+    _(StringSplit)                                                          \
     _(Return)                                                               \
     _(Throw)                                                                \
     _(Box)                                                                  \
@@ -120,8 +123,10 @@ namespace jit {
     _(BindNameCache)                                                        \
     _(GuardShape)                                                           \
     _(GuardObjectType)                                                      \
+    _(GuardObjectIdentity)                                                  \
     _(GuardClass)                                                           \
     _(ArrayLength)                                                          \
+    _(SetArrayLength)                                                       \
     _(TypedArrayLength)                                                     \
     _(TypedArrayElements)                                                   \
     _(TypedObjectElements)                                                  \
@@ -165,7 +170,8 @@ namespace jit {
     _(IteratorEnd)                                                          \
     _(StringLength)                                                         \
     _(ArgumentsLength)                                                      \
-    _(GetArgument)                                                          \
+    _(GetFrameArgument)                                                     \
+    _(SetFrameArgument)                                                     \
     _(RunOncePrologue)                                                      \
     _(Rest)                                                                 \
     _(Floor)                                                                \
@@ -176,13 +182,13 @@ namespace jit {
     _(InterruptCheck)                                                       \
     _(FunctionBoundary)                                                     \
     _(GetDOMProperty)                                                       \
+    _(GetDOMMember)                                                         \
     _(SetDOMProperty)                                                       \
     _(IsCallable)                                                           \
     _(HaveSameClass)                                                        \
     _(AsmJSNeg)                                                             \
-    _(AsmJSUDiv)                                                            \
-    _(AsmJSUMod)                                                            \
     _(AsmJSUnsignedToDouble)                                                \
+    _(AsmJSUnsignedToFloat32)                                               \
     _(AsmJSLoadHeap)                                                        \
     _(AsmJSStoreHeap)                                                       \
     _(AsmJSLoadGlobalVar)                                                   \

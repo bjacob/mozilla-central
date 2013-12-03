@@ -16,6 +16,11 @@
 #include "nsChildView.h"
 #include "nsCocoaWindow.h"
 
+#include "mozilla/MiscEvents.h"
+#include "mozilla/MouseEvents.h"
+#include "mozilla/TextEvents.h"
+#include "mozilla/TouchEvents.h"
+
 #include "nsObjCExceptions.h"
 #include "nsCOMPtr.h"
 #include "nsToolkit.h"
@@ -51,7 +56,6 @@
 #include "gfxUtils.h"
 #include "nsRegion.h"
 #include "Layers.h"
-#include "LayerManagerOGL.h"
 #include "ClientLayerManager.h"
 #include "mozilla/layers/LayerManagerComposite.h"
 #include "GLTextureImage.h"
@@ -135,7 +139,10 @@ uint32_t nsChildView::sLastInputEventCount = 0;
 - (void)forceRefreshOpenGL;
 
 // set up a gecko mouse event based on a cocoa mouse event
-- (void) convertCocoaMouseEvent:(NSEvent*)aMouseEvent toGeckoEvent:(nsInputEvent*)outGeckoEvent;
+- (void) convertCocoaMouseWheelEvent:(NSEvent*)aMouseEvent
+                        toGeckoEvent:(WidgetWheelEvent*)outWheelEvent;
+- (void) convertCocoaMouseEvent:(NSEvent*)aMouseEvent
+                   toGeckoEvent:(WidgetInputEvent*)outGeckoEvent;
 
 - (NSMenu*)contextMenu;
 
@@ -160,7 +167,6 @@ uint32_t nsChildView::sLastInputEventCount = 0;
 - (void)clearCorners;
 
 // Overlay drawing functions for traditional CGContext drawing
-- (void)drawTitleString;
 - (void)drawTitlebarHighlight;
 - (void)maskTopCornersInContext:(CGContextRef)aContext;
 
@@ -286,6 +292,10 @@ public:
     }
   }
 
+  void UpdateFromCGContext(const nsIntSize& aNewSize,
+                           const nsIntRegion& aDirtyRegion,
+                           CGContextRef aCGContext);
+
   void UpdateFromDrawTarget(const nsIntSize& aNewSize,
                             const nsIntRegion& aDirtyRegion,
                             gfx::DrawTarget* aFromDrawTarget);
@@ -360,10 +370,12 @@ nsChildView::nsChildView() : nsBaseWidget()
 , mView(nullptr)
 , mParentView(nullptr)
 , mParentWidget(nullptr)
+, mViewTearDownLock("ChildViewTearDown")
 , mEffectsLock("WidgetEffects")
 , mShowsResizeIndicator(false)
 , mHasRoundedBottomCorners(false)
 , mIsCoveringTitlebar(false)
+, mTitlebarCGContext(nullptr)
 , mBackingScaleFactor(0.0)
 , mVisible(false)
 , mDrawing(false)
@@ -381,6 +393,8 @@ nsChildView::nsChildView() : nsBaseWidget()
 
 nsChildView::~nsChildView()
 {
+  ReleaseTitlebarCGContext();
+
   // Notify the children that we're gone.  childView->ResetParent() can change
   // our list of children while it's being iterated, so the way we iterate the
   // list must allow for this.
@@ -389,7 +403,7 @@ nsChildView::~nsChildView()
     kid = kid->GetPrevSibling();
     childView->ResetParent();
   }
-  
+
   NS_WARN_IF_FALSE(mOnDestroyCalled, "nsChildView object destroyed without calling Destroy()");
 
   DestroyCompositor();
@@ -404,6 +418,15 @@ nsChildView::~nsChildView()
   [mView widgetDestroyed]; // Safe if mView is nil.
   mParentWidget = nil;
   TearDownView(); // Safe if called twice.
+}
+
+void
+nsChildView::ReleaseTitlebarCGContext()
+{
+  if (mTitlebarCGContext) {
+    CGContextRelease(mTitlebarCGContext);
+    mTitlebarCGContext = nullptr;
+  }
 }
 
 NS_IMPL_ISUPPORTS_INHERITED1(nsChildView, nsBaseWidget, nsIPluginWidget)
@@ -566,6 +589,10 @@ nsChildView::GetXULWindowWidget()
 NS_IMETHODIMP nsChildView::Destroy()
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+
+  // Make sure that no composition is in progress while disconnecting
+  // ourselves from the view.
+  MutexAutoLock lock(mViewTearDownLock);
 
   if (mOnDestroyCalled)
     return NS_OK;
@@ -960,7 +987,7 @@ nsChildView::BackingScaleFactorChanged()
 
   if (IsPluginView()) {
     nsEventStatus status = nsEventStatus_eIgnore;
-    nsGUIEvent guiEvent(true, NS_PLUGIN_RESOLUTION_CHANGED, this);
+    WidgetGUIEvent guiEvent(true, NS_PLUGIN_RESOLUTION_CHANGED, this);
     guiEvent.time = PR_IntervalNow();
     DispatchEvent(&guiEvent, status);
   }
@@ -1409,7 +1436,8 @@ NS_IMETHODIMP nsChildView::ActivateNativeMenuItemAt(const nsAString& indexString
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  NSString* locationString = [NSString stringWithCharacters:indexString.BeginReading() length:indexString.Length()];
+  NSString* locationString = [NSString stringWithCharacters:reinterpret_cast<const unichar*>(indexString.BeginReading())
+                                                     length:indexString.Length()];
   NSMenuItem* item = NativeMenuItemWithLocation([NSApp mainMenu], locationString);
   // We can't perform an action on an item with a submenu, that will raise
   // an obj-c exception.
@@ -1582,7 +1610,8 @@ nsresult nsChildView::ConfigureChildren(const nsTArray<Configuration>& aConfigur
 }
 
 // Invokes callback and ProcessEvent methods on Event Listener object
-NS_IMETHODIMP nsChildView::DispatchEvent(nsGUIEvent* event, nsEventStatus& aStatus)
+NS_IMETHODIMP nsChildView::DispatchEvent(WidgetGUIEvent* event,
+                                         nsEventStatus& aStatus)
 {
 #ifdef DEBUG
   debug_DumpEvent(stdout, event->widget, event, nsAutoCString("something"), 0);
@@ -1592,10 +1621,12 @@ NS_IMETHODIMP nsChildView::DispatchEvent(nsGUIEvent* event, nsEventStatus& aStat
                  event->HasKeyEventMessage()),
     "Any key events should not be fired during IME composing");
 
-  if (event->mFlags.mIsSynthesizedForTests && event->HasKeyEventMessage()) {
-    nsKeyEvent* keyEvent = reinterpret_cast<nsKeyEvent*>(event);
-    nsresult rv = mTextInputHandler->AttachNativeKeyEvent(*keyEvent);
-    NS_ENSURE_SUCCESS(rv, rv);
+  if (event->mFlags.mIsSynthesizedForTests) {
+    WidgetKeyboardEvent* keyEvent = event->AsKeyboardEvent();
+    if (keyEvent) {
+      nsresult rv = mTextInputHandler->AttachNativeKeyEvent(*keyEvent);
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
   }
 
   aStatus = nsEventStatus_eIgnore;
@@ -1626,7 +1657,7 @@ NS_IMETHODIMP nsChildView::DispatchEvent(nsGUIEvent* event, nsEventStatus& aStat
   return NS_OK;
 }
 
-bool nsChildView::DispatchWindowEvent(nsGUIEvent &event)
+bool nsChildView::DispatchWindowEvent(WidgetGUIEvent& event)
 {
   nsEventStatus status;
   DispatchEvent(&event, status);
@@ -1933,7 +1964,7 @@ NSView<mozView>* nsChildView::GetEditorView()
   // We need to get editor's view. E.g., when the focus is in the bookmark
   // dialog, the view is <panel> element of the dialog.  At this time, the key
   // events are processed the parent window's view that has native focus.
-  nsQueryContentEvent textContent(true, NS_QUERY_TEXT_CONTENT, this);
+  WidgetQueryContentEvent textContent(true, NS_QUERY_TEXT_CONTENT, this);
   textContent.InitForQueryTextContent(0, 0);
   DispatchWindowEvent(textContent);
   if (textContent.mSucceeded && textContent.mReply.mFocusedWidget) {
@@ -1952,18 +1983,6 @@ nsChildView::CreateCompositor()
 {
   nsBaseWidget::CreateCompositor();
   if (mCompositorChild) {
-    LayerManagerComposite *manager =
-      compositor::GetLayerManager(mCompositorParent);
-    Compositor *compositor = manager->GetCompositor();
-
-    ClientLayerManager *clientManager = static_cast<ClientLayerManager*>(GetLayerManager());
-    if (clientManager->GetCompositorBackendType() == LAYERS_OPENGL) {
-      CompositorOGL *compositorOGL = static_cast<CompositorOGL*>(compositor);
-
-      NSOpenGLContext *glContext = (NSOpenGLContext *)compositorOGL->gl()->GetNativeData(GLContext::NativeGLContext);
-
-      [(ChildView *)mView setGLContext:glContext];
-    }
     [(ChildView *)mView setUsingOMTCompositor:true];
   }
 }
@@ -1984,7 +2003,6 @@ nsChildView::NotifyDirtyRegion(const nsIntRegion& aDirtyRegion)
   if ([(ChildView*)mView isCoveringTitlebar]) {
     // We store the dirty region so that we know what to repaint in the titlebar.
     mDirtyTitlebarRegion.Or(mDirtyTitlebarRegion, aDirtyRegion);
-    mDirtyTitlebarRegion.And(mDirtyTitlebarRegion, RectContainingTitlebarControls());
   }
 }
 
@@ -2015,7 +2033,7 @@ nsChildView::PrepareWindowEffects()
   mIsCoveringTitlebar = [(ChildView*)mView isCoveringTitlebar];
   if (mIsCoveringTitlebar) {
     mTitlebarRect = RectContainingTitlebarControls();
-    UpdateTitlebarImageBuffer();
+    UpdateTitlebarCGContext();
   }
 }
 
@@ -2027,15 +2045,38 @@ nsChildView::CleanupWindowEffects()
   mTitlebarImage = nullptr;
 }
 
-void
+bool
 nsChildView::PreRender(LayerManager* aManager)
+{
+  nsAutoPtr<GLManager> manager(GLManager::CreateGLManager(aManager));
+  if (!manager) {
+    return true;
+  }
+
+  // The lock makes sure that we don't attempt to tear down the view while
+  // compositing. That would make us unable to call postRender on it when the
+  // composition is done, thus keeping the GL context locked forever.
+  mViewTearDownLock.Lock();
+
+  NSOpenGLContext *glContext = (NSOpenGLContext *)manager->gl()->GetNativeData(GLContext::NativeGLContext);
+
+  if (![(ChildView*)mView preRender:glContext]) {
+    mViewTearDownLock.Unlock();
+    return false;
+  }
+  return true;
+}
+
+void
+nsChildView::PostRender(LayerManager* aManager)
 {
   nsAutoPtr<GLManager> manager(GLManager::CreateGLManager(aManager));
   if (!manager) {
     return;
   }
   NSOpenGLContext *glContext = (NSOpenGLContext *)manager->gl()->GetNativeData(GLContext::NativeGLContext);
-  [(ChildView*)mView preRender:glContext];
+  [(ChildView*)mView postRender:glContext];
+  mViewTearDownLock.Unlock();
 }
 
 void
@@ -2149,32 +2190,64 @@ DrawTitlebarHighlight(NSSize aWindowSize, CGFloat aRadius, CGFloat aDevicePixelW
   [NSGraphicsContext restoreGraphicsState];
 }
 
+static CGContextRef
+CreateCGContext(const nsIntSize& aSize)
+{
+  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+  CGContextRef ctx =
+    CGBitmapContextCreate(NULL,
+                          aSize.width,
+                          aSize.height,
+                          8 /* bitsPerComponent */,
+                          aSize.width * 4,
+                          cs,
+                          kCGBitmapByteOrder32Host | kCGImageAlphaPremultipliedFirst);
+  CGColorSpaceRelease(cs);
+
+  CGContextTranslateCTM(ctx, 0, aSize.height);
+  CGContextScaleCTM(ctx, 1, -1);
+  CGContextSetInterpolationQuality(ctx, kCGInterpolationLow);
+
+  return ctx;
+}
+
 // When this method is entered, mEffectsLock is already being held.
 void
-nsChildView::UpdateTitlebarImageBuffer()
+nsChildView::UpdateTitlebarCGContext()
 {
-  nsIntRegion dirtyTitlebarRegion = mDirtyTitlebarRegion;
+  nsIntRegion dirtyTitlebarRegion;
+  dirtyTitlebarRegion.And(mDirtyTitlebarRegion, mTitlebarRect);
   mDirtyTitlebarRegion.SetEmpty();
 
   nsIntSize texSize = RectTextureImage::TextureSizeForSize(mTitlebarRect.Size());
-  gfx::IntSize titlebarBufferSize(texSize.width, texSize.height);
-  if (!mTitlebarImageBuffer ||
-      mTitlebarImageBuffer->GetSize() != titlebarBufferSize) {
+  if (!mTitlebarCGContext ||
+      CGBitmapContextGetWidth(mTitlebarCGContext) != size_t(texSize.width) ||
+      CGBitmapContextGetHeight(mTitlebarCGContext) != size_t(texSize.height)) {
     dirtyTitlebarRegion = mTitlebarRect;
 
-    mTitlebarImageBuffer =
-      gfx::Factory::CreateDrawTarget(gfx::BACKEND_COREGRAPHICS,
-                                     titlebarBufferSize,
-                                     gfx::FORMAT_B8G8R8A8);
+    ReleaseTitlebarCGContext();
+
+    mTitlebarCGContext = CreateCGContext(texSize);
   }
 
   if (dirtyTitlebarRegion.IsEmpty())
     return;
 
-  ClearRegion(mTitlebarImageBuffer, dirtyTitlebarRegion);
+  CGContextRef ctx = mTitlebarCGContext;
 
-  gfx::BorrowedCGContext borrow(mTitlebarImageBuffer);
-  CGContextRef ctx = borrow.cg;
+  CGContextSaveGState(ctx);
+
+  std::vector<CGRect> rects;
+  nsIntRegionRectIterator iter(dirtyTitlebarRegion);
+  for (;;) {
+    const nsIntRect* r = iter.Next();
+    if (!r)
+      break;
+    rects.push_back(CGRectMake(r->x, r->y, r->width, r->height));
+  }
+  CGContextClipToRects(ctx, rects.data(), rects.size());
+
+  CGContextClearRect(ctx, CGRectMake(0, 0, texSize.width, texSize.height));
 
   double scale = BackingScaleFactor();
   CGContextScaleCTM(ctx, scale, scale);
@@ -2191,18 +2264,11 @@ nsChildView::UpdateTitlebarImageBuffer()
   NSGraphicsContext* context = [NSGraphicsContext graphicsContextWithGraphicsPort:ctx flipped:[frameView isFlipped]];
   [NSGraphicsContext setCurrentContext:context];
 
-  // Draw the title string.
-  if ([frameView respondsToSelector:@selector(_drawTitleBar:)]) {
-    [frameView _drawTitleBar:[frameView bounds]];
-  }
-
   // Draw the titlebar controls into the titlebar image.
   for (id view in [window titlebarControls]) {
     NSRect viewFrame = [view frame];
     nsIntRect viewRect = CocoaPointsToDevPixels([mView convertRect:viewFrame fromView:frameView]);
-    nsIntRegion intersection;
-    intersection.And(dirtyTitlebarRegion, viewRect);
-    if (intersection.IsEmpty()) {
+    if (!dirtyTitlebarRegion.Intersects(viewRect)) {
       continue;
     }
     // All of the titlebar controls we're interested in are subclasses of
@@ -2227,8 +2293,7 @@ nsChildView::UpdateTitlebarImageBuffer()
 
     [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithGraphicsPort:ctx flipped:[view isFlipped]]];
 
-    NSRect intersectRect = DevPixelsToCocoaPoints(intersection.GetBounds());
-    [cell drawWithFrame:[view convertRect:intersectRect fromView:mView] inView:button];
+    [cell drawWithFrame:[button bounds] inView:button];
 
     [NSGraphicsContext setCurrentContext:context];
     CGContextRestoreGState(ctx);
@@ -2240,7 +2305,8 @@ nsChildView::UpdateTitlebarImageBuffer()
                         DevPixelsToCocoaPoints(1));
 
   [NSGraphicsContext setCurrentContext:oldContext];
-  borrow.Finish();
+
+  CGContextRestoreGState(ctx);
 
   mUpdatedTitlebarRegion.Or(mUpdatedTitlebarRegion, dirtyTitlebarRegion);
 }
@@ -2271,9 +2337,9 @@ nsChildView::MaybeDrawTitlebar(GLManager* aManager, const nsIntRect& aRect)
     mTitlebarImage = new RectTextureImage(aManager->gl());
   }
 
-  mTitlebarImage->UpdateFromDrawTarget(mTitlebarRect.Size(),
-                                       updatedTitlebarRegion,
-                                       mTitlebarImageBuffer);
+  mTitlebarImage->UpdateFromCGContext(mTitlebarRect.Size(),
+                                      updatedTitlebarRegion,
+                                      mTitlebarCGContext);
 
   mTitlebarImage->Draw(aManager, mTitlebarRect.TopLeft());
 }
@@ -2297,9 +2363,12 @@ nsChildView::MaybeDrawRoundedCorners(GLManager* aManager, const nsIntRect& aRect
   nsIntSize size(mDevPixelCornerRadius, mDevPixelCornerRadius);
   mCornerMaskImage->UpdateIfNeeded(size, nsIntRegion(), ^(gfx::DrawTarget* drawTarget, const nsIntRegion& updateRegion) {
     ClearRegion(drawTarget, updateRegion);
-    gfx::BorrowedCGContext borrow(drawTarget);
-    DrawTopLeftCornerMask(borrow.cg, mDevPixelCornerRadius);
-    borrow.Finish();
+    RefPtr<gfx::PathBuilder> builder = drawTarget->CreatePathBuilder();
+    builder->Arc(gfx::Point(mDevPixelCornerRadius, mDevPixelCornerRadius), mDevPixelCornerRadius, 0, 2.0f * M_PI);
+    RefPtr<gfx::Path> path = builder->Finish();
+    drawTarget->Fill(path,
+                     gfx::ColorPattern(gfx::Color(1.0, 1.0, 1.0, 1.0)),
+                     gfx::DrawOptions(1.0f, gfx::OP_SOURCE));
   });
 
   // Use operator destination in: multiply all 4 channels with source alpha.
@@ -2360,6 +2429,19 @@ FindUnifiedToolbarBottom(const nsTArray<nsIWidget::ThemeGeometry>& aThemeGeometr
   }
   return unifiedToolbarBottom;
 }
+ 
+static nsIntRect
+FindFirstRectOfType(const nsTArray<nsIWidget::ThemeGeometry>& aThemeGeometries,
+                    uint8_t aWidgetType)
+{
+  for (uint32_t i = 0; i < aThemeGeometries.Length(); ++i) {
+    const nsIWidget::ThemeGeometry& g = aThemeGeometries[i];
+    if (g.mWidgetType == aWidgetType) {
+      return g.mRect;
+    }
+  }
+  return nsIntRect();
+}
 
 void
 nsChildView::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries)
@@ -2367,6 +2449,7 @@ nsChildView::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometri
   if (![mView window] || ![[mView window] isKindOfClass:[ToolbarWindow class]])
     return;
 
+  // Update unified toolbar height.
   int32_t windowWidth = mBounds.width;
   int32_t titlebarBottom = FindTitlebarBottom(aThemeGeometries, windowWidth);
   int32_t unifiedToolbarBottom =
@@ -2378,6 +2461,12 @@ nsChildView::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometri
   int32_t contentOffset = drawsContentsIntoWindowFrame ? titlebarHeight : 0;
   int32_t devUnifiedHeight = titlebarHeight + unifiedToolbarBottom - contentOffset;
   [win setUnifiedToolbarHeight:DevPixelsToCocoaPoints(devUnifiedHeight)];
+
+  // Update titlebar control offsets.
+  nsIntRect windowButtonRect = FindFirstRectOfType(aThemeGeometries, NS_THEME_WINDOW_BUTTON_BOX);
+  [win placeWindowButtons:[mView convertRect:DevPixelsToCocoaPoints(windowButtonRect) toView:nil]];
+  nsIntRect fullScreenButtonRect = FindFirstRectOfType(aThemeGeometries, NS_THEME_MOZ_MAC_FULLSCREEN_BUTTON);
+  [win placeFullScreenButton:[mView convertRect:DevPixelsToCocoaPoints(fullScreenButtonRect) toView:nil]];
 }
 
 TemporaryRef<gfx::DrawTarget>
@@ -2430,7 +2519,9 @@ nsChildView::CleanupRemoteDrawing()
 void
 nsChildView::DoRemoteComposition(const nsIntRect& aRenderRect)
 {
-  [(ChildView*)mView preRender:mGLPresenter->GetNSOpenGLContext()];
+  if (![(ChildView*)mView preRender:mGLPresenter->GetNSOpenGLContext()]) {
+    return;
+  }
   mGLPresenter->BeginFrame(aRenderRect.Size());
 
   // Draw the result from the basic compositor.
@@ -2441,6 +2532,8 @@ nsChildView::DoRemoteComposition(const nsIntRect& aRenderRect)
   DrawWindowOverlay(mGLPresenter, aRenderRect);
 
   mGLPresenter->EndFrame();
+
+  [(ChildView*)mView postRender:mGLPresenter->GetNSOpenGLContext()];
 }
 
 #ifdef ACCESSIBILITY
@@ -2555,6 +2648,31 @@ RectTextureImage::EndUpdate(bool aKeepSurface)
   }
 
   mInUpdate = false;
+}
+
+void
+RectTextureImage::UpdateFromCGContext(const nsIntSize& aNewSize,
+                                      const nsIntRegion& aDirtyRegion,
+                                      CGContextRef aCGContext)
+{
+  gfx::IntSize size = gfx::IntSize(CGBitmapContextGetWidth(aCGContext),
+                                   CGBitmapContextGetHeight(aCGContext));
+  mBufferSize.SizeTo(size.width, size.height);
+  RefPtr<gfx::DrawTarget> dt = BeginUpdate(aNewSize, aDirtyRegion);
+  if (dt) {
+    gfx::Rect rect(0, 0, size.width, size.height);
+    gfxUtils::ClipToRegion(dt, GetUpdateRegion());
+    RefPtr<gfx::SourceSurface> sourceSurface =
+      dt->CreateSourceSurfaceFromData(static_cast<uint8_t *>(CGBitmapContextGetData(aCGContext)),
+                                      size,
+                                      CGBitmapContextGetBytesPerRow(aCGContext),
+                                      gfx::FORMAT_B8G8R8A8);
+    dt->DrawSurface(sourceSurface, rect, rect,
+                    gfx::DrawSurfaceOptions(),
+                    gfx::DrawOptions(1.0, gfx::OP_SOURCE));
+    dt->PopClip();
+    EndUpdate();
+  }
 }
 
 void
@@ -2769,6 +2887,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 #endif
     mPendingDisplay = NO;
     mBlockedLastMouseDown = NO;
+    mExpectingWheelStop = NO;
 
     mLastMouseDownEvent = nil;
     mClickThroughMouseDownEvent = nil;
@@ -2788,6 +2907,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
 #ifdef __LP64__
     mCancelSwipeAnimation = nil;
+    mCurrentSwipeDir = 0;
 #endif
 
     mTopLeftCornerMask = NULL;
@@ -2854,7 +2974,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
   [mGLContext clearDrawable];
-  [mGLContext setView:self];
+  [self updateGLContext];
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -2869,16 +2989,35 @@ NSEvent* gLastDragMouseDownEvent = nil;
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
--(void)preRender:(NSOpenGLContext *)aGLContext
+- (bool)preRender:(NSOpenGLContext *)aGLContext
 {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+
+  if (![self window] ||
+      ([[self window] isKindOfClass:[BaseWindow class]] &&
+       ![(BaseWindow*)[self window] isVisibleOrBeingShown])) {
+    // Before the window is shown, our GL context's front FBO is not
+    // framebuffer complete, so we refuse to render.
+    return false;
+  }
 
   if (!mGLContext) {
     [self setGLContext:aGLContext];
+    [self updateGLContext];
   }
 
-  [aGLContext setView:self];
-  [aGLContext update];
+  CGLLockContext((CGLContextObj)[aGLContext CGLContextObj]);
+
+  return true;
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(false);
+}
+
+- (void)postRender:(NSOpenGLContext *)aGLContext
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  CGLUnlockContext((CGLContextObj)[aGLContext CGLContextObj]);
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -2907,7 +3046,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsPluginEvent pluginEvent(true, NS_PLUGIN_FOCUS_EVENT, mGeckoChild);
+  WidgetPluginEvent pluginEvent(true, NS_PLUGIN_FOCUS_EVENT, mGeckoChild);
   NPCocoaEvent cocoaEvent;
   nsCocoaUtils::InitNPCocoaEvent(&cocoaEvent);
   cocoaEvent.type = NPCocoaEventWindowFocusChanged;
@@ -3140,7 +3279,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
     return;
 
   nsEventStatus status = nsEventStatus_eIgnore;
-  nsGUIEvent focusGuiEvent(true, eventType, mGeckoChild);
+  WidgetGUIEvent focusGuiEvent(true, eventType, mGeckoChild);
   focusGuiEvent.time = PR_IntervalNow();
   mGeckoChild->DispatchEvent(&focusGuiEvent, status);
 }
@@ -3212,33 +3351,19 @@ NSEvent* gLastDragMouseDownEvent = nil;
   return [[self window] isMovableByWindowBackground];
 }
 
-- (void)lockFocus
-{
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  [super lockFocus];
-
-  if (mGLContext) {
-    if ([mGLContext view] != self) {
-      [mGLContext setView:self];
-    }
-
-    [mGLContext makeCurrentContext];
-  }
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
-}
-
--(void)update
+-(void)updateGLContext
 {
   if (mGLContext) {
+    CGLLockContext((CGLContextObj)[mGLContext CGLContextObj]);
+    [mGLContext setView:self];
     [mGLContext update];
+    CGLUnlockContext((CGLContextObj)[mGLContext CGLContextObj]);
   }
 }
 
-- (void) _surfaceNeedsUpdate:(NSNotification*)notification
+- (void)_surfaceNeedsUpdate:(NSNotification*)notification
 {
-   [self update];
+   [self updateGLContext];
 }
 
 - (BOOL)wantsBestResolutionOpenGLSurface
@@ -3362,11 +3487,19 @@ NSEvent* gLastDragMouseDownEvent = nil;
   targetSurface->SetAllowUseAsSource(false);
 
   nsRefPtr<gfxContext> targetContext;
-  if (gfxPlatform::GetPlatform()->SupportsAzureContentForType(mozilla::gfx::BACKEND_CAIRO)) {
-    RefPtr<mozilla::gfx::DrawTarget> dt =
+  if (gfxPlatform::GetPlatform()->SupportsAzureContentForType(gfx::BACKEND_CAIRO)) {
+    RefPtr<gfx::DrawTarget> dt =
       gfxPlatform::GetPlatform()->CreateDrawTargetForSurface(targetSurface,
-                                                             mozilla::gfx::IntSize(backingSize.width,
-                                                                                   backingSize.height));
+                                                             gfx::IntSize(backingSize.width,
+                                                                          backingSize.height));
+    dt->AddUserData(&gfxContext::sDontUseAsSourceKey, dt, nullptr);
+    targetContext = new gfxContext(dt);
+  } else if (gfxPlatform::GetPlatform()->SupportsAzureContentForType(gfx::BACKEND_COREGRAPHICS)) {
+    RefPtr<gfx::DrawTarget> dt =
+      gfx::Factory::CreateDrawTargetForCairoCGContext(aContext,
+                                                      gfx::IntSize(backingSize.width,
+                                                                   backingSize.height));
+    dt->AddUserData(&gfxContext::sDontUseAsSourceKey, dt, nullptr);
     targetContext = new gfxContext(dt);
   } else {
     targetContext = new gfxContext(targetSurface);
@@ -3411,7 +3544,6 @@ NSEvent* gLastDragMouseDownEvent = nil;
   }
 
   if ([self isCoveringTitlebar]) {
-    [self drawTitleString];
     [self drawTitlebarHighlight];
     [self maskTopCornersInContext:aContext];
   }
@@ -3445,7 +3577,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild || ![self window])
     return NO;
 
-  return mGLContext || [self isUsingMainThreadOpenGL];
+  return mGLContext || mUsingOMTCompositor || [self isUsingMainThreadOpenGL];
 }
 
 - (void)drawUsingOpenGL
@@ -3460,19 +3592,6 @@ NSEvent* gLastDragMouseDownEvent = nil;
   nsIntRect geckoBounds;
   mGeckoChild->GetBounds(geckoBounds);
   nsIntRegion region(geckoBounds);
-
-  if ([self isUsingMainThreadOpenGL]) {
-    LayerManagerOGL *manager = static_cast<LayerManagerOGL*>(mGeckoChild->GetLayerManager(nullptr));
-    manager->SetClippingRegion(region);
-    NSOpenGLContext *glContext = (NSOpenGLContext *)manager->GetNSOpenGLContext();
-
-    if (!mGLContext) {
-      [self setGLContext:glContext];
-    }
-
-    [glContext setView:self];
-    [glContext update];
-  }
 
   mGeckoChild->PaintWindow(region);
 
@@ -3581,26 +3700,6 @@ NSEvent* gLastDragMouseDownEvent = nil;
   CGContextRestoreGState(aContext);
 }
 
-- (void)drawTitleString
-{
-  NSView* frameView = [[[self window] contentView] superview];
-  if (![frameView respondsToSelector:@selector(_drawTitleBar:)]) {
-    return;
-  }
-
-  NSGraphicsContext* oldContext = [NSGraphicsContext currentContext];
-  CGContextRef ctx = (CGContextRef)[oldContext graphicsPort];
-  CGContextSaveGState(ctx);
-  if ([oldContext isFlipped] != [frameView isFlipped]) {
-    CGContextTranslateCTM(ctx, 0, [self bounds].size.height);
-    CGContextScaleCTM(ctx, 1, -1);
-  }
-  [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithGraphicsPort:ctx flipped:[frameView isFlipped]]];
-  [frameView _drawTitleBar:[frameView bounds]];
-  CGContextRestoreGState(ctx);
-  [NSGraphicsContext setCurrentContext:oldContext];
-}
-
 - (void)drawTitlebarHighlight
 {
   DrawTitlebarHighlight([self bounds].size, [self cornerRadius],
@@ -3656,7 +3755,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
       if (mGeckoChild->GetLayerManager()->GetBackendType() == LAYERS_CLIENT) {
         ClientLayerManager *manager = static_cast<ClientLayerManager*>(mGeckoChild->GetLayerManager());
-        manager->WindowOverlayChanged();
+        manager->AsShadowForwarder()->WindowOverlayChanged();
       }
     }
 
@@ -3781,7 +3880,15 @@ NSEvent* gLastDragMouseDownEvent = nil;
       }
 
       if (shouldRollup) {
-        consumeEvent = (BOOL)rollupListener->Rollup(popupsToRollup, nullptr);
+        if ([theEvent type] == NSLeftMouseDown) {
+          NSPoint point = [NSEvent mouseLocation];
+          FlipCocoaScreenCoordinate(point);
+          nsIntPoint pos(point.x, point.y);
+          consumeEvent = (BOOL)rollupListener->Rollup(popupsToRollup, &pos, nullptr);
+        }
+        else {
+          consumeEvent = (BOOL)rollupListener->Rollup(popupsToRollup, nullptr, nullptr);
+        }
       }
     }
   }
@@ -3816,7 +3923,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
   float deltaY = [anEvent deltaY];  // up=1.0, down=-1.0
 
   // Setup the "swipe" event.
-  nsSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_SWIPE, mGeckoChild, 0, 0.0);
+  WidgetSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_SWIPE,
+                                      mGeckoChild, 0, 0.0);
   [self convertCocoaMouseEvent:anEvent toGeckoEvent:&geckoEvent];
 
   // Record the left/right direction.
@@ -3885,7 +3993,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   }
 
   // Setup the event.
-  nsSimpleGestureEvent geckoEvent(true, msg, mGeckoChild, 0, deltaZ);
+  WidgetSimpleGestureEvent geckoEvent(true, msg, mGeckoChild, 0, deltaZ);
   [self convertCocoaMouseEvent:anEvent toGeckoEvent:&geckoEvent];
 
   // Send the event.
@@ -3908,8 +4016,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
   nsAutoRetainCocoaObject kungFuDeathGrip(self);
 
   // Setup the "double tap" event.
-  nsSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_TAP,
-                                  mGeckoChild, 0, 0.0);
+  WidgetSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_TAP,
+                                      mGeckoChild, 0, 0.0);
   [self convertCocoaMouseEvent:anEvent toGeckoEvent:&geckoEvent];
   geckoEvent.clickCount = 1;
 
@@ -3951,7 +4059,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   }
 
   // Setup the event.
-  nsSimpleGestureEvent geckoEvent(true, msg, mGeckoChild, 0, 0.0);
+  WidgetSimpleGestureEvent geckoEvent(true, msg, mGeckoChild, 0, 0.0);
   [self convertCocoaMouseEvent:anEvent toGeckoEvent:&geckoEvent];
   geckoEvent.delta = -rotation;
   if (rotation > 0.0) {
@@ -3987,8 +4095,9 @@ NSEvent* gLastDragMouseDownEvent = nil;
   case eGestureState_MagnifyGesture:
     {
       // Setup the "magnify" event.
-      nsSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_MAGNIFY,
-                                      mGeckoChild, 0, mCumulativeMagnification);
+      WidgetSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_MAGNIFY,
+                                          mGeckoChild, 0,
+                                          mCumulativeMagnification);
       [self convertCocoaMouseEvent:anEvent toGeckoEvent:&geckoEvent];
 
       // Send the event.
@@ -3999,7 +4108,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
   case eGestureState_RotateGesture:
     {
       // Setup the "rotate" event.
-      nsSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_ROTATE, mGeckoChild, 0, 0.0);
+      WidgetSimpleGestureEvent geckoEvent(true, NS_SIMPLE_GESTURE_ROTATE,
+                                          mGeckoChild, 0, 0.0);
       [self convertCocoaMouseEvent:anEvent toGeckoEvent:&geckoEvent];
       geckoEvent.delta = -mCumulativeRotation;
       if (mCumulativeRotation > 0.0) {
@@ -4053,7 +4163,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return false;
 
-  nsSimpleGestureEvent geckoEvent(true, aMsg, mGeckoChild, aDirection, aDelta);
+  WidgetSimpleGestureEvent geckoEvent(true, aMsg, mGeckoChild,
+                                      aDirection, aDelta);
   geckoEvent.allowedDirections = *aAllowedDirections;
   [self convertCocoaMouseEvent:aEvent toGeckoEvent:&geckoEvent];
   bool eventCancelled = mGeckoChild->DispatchWindowEvent(geckoEvent);
@@ -4073,17 +4184,20 @@ NSEvent* gLastDragMouseDownEvent = nil;
                    delta:0.0];
 }
 
-// Support fluid swipe tracking on OS X 10.7 and higher.  We must be careful
-// to only invoke this support on a horizontal two-finger gesture that really
+// Support fluid swipe tracking on OS X 10.7 and higher. We must be careful
+// to only invoke this support on a two-finger gesture that really
 // is a swipe (and not a scroll) -- in other words, the app is responsible
-// for deciding which is which.  But once the decision is made, the OS tracks
+// for deciding which is which. But once the decision is made, the OS tracks
 // the swipe until it has finished, and decides whether or not it succeeded.
-// A swipe has the same functionality as the Back and Forward buttons.  For
-// now swipe animation is unsupported (e.g. no bounces).  This method is
-// partly based on Apple sample code available at
-// http://developer.apple.com/library/mac/#releasenotes/Cocoa/AppKit.html
+// A horizontal swipe has the same functionality as the Back and Forward
+// buttons.
+// This method is partly based on Apple sample code available at
+// developer.apple.com/library/mac/#releasenotes/Cocoa/AppKitOlderNotes.html
+// (under Fluid Swipe Tracking API).
 - (void)maybeTrackScrollEventAsSwipe:(NSEvent *)anEvent
-                      scrollOverflow:(double)overflow
+                     scrollOverflowX:(double)anOverflowX
+                     scrollOverflowY:(double)anOverflowY
+              viewPortIsOverscrolled:(BOOL)aViewPortIsOverscrolled
 {
   if (!nsCocoaFeatures::OnLionOrLater()) {
     return;
@@ -4098,6 +4212,12 @@ NSEvent* gLastDragMouseDownEvent = nil;
     return;
   }
 
+  // We should only track scroll events as swipe if the viewport is being
+  // overscrolled.
+  if (!aViewPortIsOverscrolled) {
+    return;
+  }
+
   // Verify that this is a scroll wheel event with proper phase to be tracked
   // by the OS.
   if ([anEvent type] != NSScrollWheel || [anEvent phase] == NSEventPhaseNone) {
@@ -4105,12 +4225,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
   }
 
   // Only initiate tracking if the user has tried to scroll past the edge of
-  // the current page (as indicated by 'overflow' being non-zero).  Gecko only
-  // sets nsMouseScrollEvent.scrollOverflow when it's processing
-  // NS_MOUSE_PIXEL_SCROLL events (not NS_MOUSE_SCROLL events).
-  // nsMouseScrollEvent.scrollOverflow only indicates left or right overflow
-  // for horizontal NS_MOUSE_PIXEL_SCROLL events.
-  if (!overflow) {
+  // the current page (as indicated by 'anOverflowX' or 'anOverflowY' being
+  // non-zero). Gecko only sets WidgetMouseScrollEvent.scrollOverflow when it's
+  // processing NS_MOUSE_PIXEL_SCROLL events (not NS_MOUSE_SCROLL events).
+  if (anOverflowX == 0.0 && anOverflowY == 0.0) {
     return;
   }
 
@@ -4119,18 +4237,20 @@ NSEvent* gLastDragMouseDownEvent = nil;
     deltaX = [anEvent scrollingDeltaX];
     deltaY = [anEvent scrollingDeltaY];
   } else {
-    deltaX = [anEvent deltaX];
-    deltaY = [anEvent deltaY];
+    return;
   }
 
+  uint32_t vDirs = (uint32_t)nsIDOMSimpleGestureEvent::DIRECTION_DOWN |
+                   (uint32_t)nsIDOMSimpleGestureEvent::DIRECTION_UP;
   uint32_t direction = 0;
+
   // Only initiate horizontal tracking for events whose horizontal element is
   // at least eight times larger than its vertical element. This minimizes
   // performance problems with vertical scrolls (by minimizing the possibility
   // that they'll be misinterpreted as horizontal swipes), while still
   // tolerating a small vertical element to a true horizontal swipe.  The number
   // '8' was arrived at by trial and error.
-  if (overflow != 0.0 && deltaX != 0.0 &&
+  if (anOverflowX != 0.0 && deltaX != 0.0 &&
       fabsf(deltaX) > fabsf(deltaY) * 8) {
     // Only initiate horizontal tracking for gestures that have just begun --
     // otherwise a scroll to one side of the page can have a swipe tacked on
@@ -4144,16 +4264,34 @@ NSEvent* gLastDragMouseDownEvent = nil;
     } else {
       direction = (uint32_t)nsIDOMSimpleGestureEvent::DIRECTION_LEFT;
     }
+  }
+  // Only initiate vertical tracking for events whose vertical element is
+  // at least two times larger than its horizontal element. This minimizes
+  // performance problems. The number '2' was arrived at by trial and error.
+  else if (anOverflowY != 0.0 && deltaY != 0.0 &&
+           fabsf(deltaY) > fabsf(deltaX) * 2) {
+    if (deltaY < 0.0) {
+      direction = (uint32_t)nsIDOMSimpleGestureEvent::DIRECTION_DOWN;
+    } else {
+      direction = (uint32_t)nsIDOMSimpleGestureEvent::DIRECTION_UP;
+    }
+
+    if ((mCurrentSwipeDir & vDirs) && (mCurrentSwipeDir != direction)) {
+      // If a swipe is currently being tracked kill it -- it's been interrupted
+      // by another gesture event.
+      if (mCancelSwipeAnimation && *mCancelSwipeAnimation == NO) {
+        *mCancelSwipeAnimation = YES;
+        mCancelSwipeAnimation = nil;
+        [self sendSwipeEndEvent:anEvent allowedDirections:0];
+      }
+      return;
+    }
   } else {
     return;
   }
 
-  // If a swipe is currently being tracked kill it -- it's been interrupted
-  // by another gesture event.
-  if (mCancelSwipeAnimation && *mCancelSwipeAnimation == NO) {
-    *mCancelSwipeAnimation = YES;
-    mCancelSwipeAnimation = nil;
-  }
+  // Track the direction we're going in.
+  mCurrentSwipeDir = direction;
 
   uint32_t allowedDirections = 0;
   // We're ready to start the animation. Tell Gecko about it, and at the same
@@ -4169,8 +4307,21 @@ NSEvent* gLastDragMouseDownEvent = nil;
     return;
   }
 
-  double min = (allowedDirections & nsIDOMSimpleGestureEvent::DIRECTION_RIGHT) ? -1 : 0;
-  double max = (allowedDirections & nsIDOMSimpleGestureEvent::DIRECTION_LEFT) ? 1 : 0;
+  // If a swipe is currently being tracked kill it -- it's been interrupted
+  // by another gesture event.
+  if (mCancelSwipeAnimation && *mCancelSwipeAnimation == NO) {
+    *mCancelSwipeAnimation = YES;
+    mCancelSwipeAnimation = nil;
+  }
+
+  CGFloat min = 0.0;
+  CGFloat max = 0.0;
+  if (!(direction & vDirs)) {
+    min = (allowedDirections & nsIDOMSimpleGestureEvent::DIRECTION_RIGHT) ?
+          -1.0 : 0.0;
+    max = (allowedDirections & nsIDOMSimpleGestureEvent::DIRECTION_LEFT) ?
+          1.0 : 0.0;
+  }
 
   __block BOOL animationCanceled = NO;
   __block BOOL geckoSwipeEventSent = NO;
@@ -4208,13 +4359,15 @@ NSEvent* gLastDragMouseDownEvent = nil;
     if (animationCanceled || !mGeckoChild || gestureAmount == 0.0) {
       *stop = YES;
       animationCanceled = YES;
-      if (gestureAmount == 0.0) {
+      if (gestureAmount == 0.0 ||
+          ((direction & vDirs) && (direction != mCurrentSwipeDir))) {
         if (mCancelSwipeAnimation)
           *mCancelSwipeAnimation = YES;
         mCancelSwipeAnimation = nil;
         [self sendSwipeEndEvent:anEvent
               allowedDirections:allowedDirectionsCopy];
       }
+      mCurrentSwipeDir = 0;
       return;
     }
 
@@ -4248,6 +4401,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
     if (isComplete) {
       [self sendSwipeEndEvent:anEvent allowedDirections:allowedDirectionsCopy];
+      mCurrentSwipeDir = 0;
       mCancelSwipeAnimation = nil;
     }
   }];
@@ -4326,7 +4480,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   NSUInteger modifierFlags = [theEvent modifierFlags];
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
 
   NSInteger clickCount = [theEvent clickCount];
@@ -4338,9 +4493,9 @@ NSEvent* gLastDragMouseDownEvent = nil;
   geckoEvent.clickCount = clickCount;
 
   if (modifierFlags & NSControlKeyMask)
-    geckoEvent.button = nsMouseEvent::eRightButton;
+    geckoEvent.button = WidgetMouseEvent::eRightButton;
   else
-    geckoEvent.button = nsMouseEvent::eLeftButton;
+    geckoEvent.button = WidgetMouseEvent::eLeftButton;
 
   // Create event for use by plugins.
   // This is going to our child view so we don't need to look up the destination
@@ -4371,12 +4526,13 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   NPCocoaEvent cocoaEvent;
 	
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
   if ([theEvent modifierFlags] & NSControlKeyMask)
-    geckoEvent.button = nsMouseEvent::eRightButton;
+    geckoEvent.button = WidgetMouseEvent::eRightButton;
   else
-    geckoEvent.button = nsMouseEvent::eLeftButton;
+    geckoEvent.button = WidgetMouseEvent::eLeftButton;
 
   // Create event for use by plugins.
   // This is going to our child view so we don't need to look up the destination
@@ -4413,7 +4569,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
 - (void)sendMouseEnterOrExitEvent:(NSEvent*)aEvent
                             enter:(BOOL)aEnter
-                             type:(nsMouseEvent::exitType)aType
+                             type:(WidgetMouseEvent::exitType)aType
 {
   if (!mGeckoChild)
     return;
@@ -4422,7 +4578,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   NSPoint localEventLocation = [self convertPoint:windowEventLocation fromView:nil];
 
   uint32_t msg = aEnter ? NS_MOUSE_ENTER : NS_MOUSE_EXIT;
-  nsMouseEvent event(true, msg, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent event(true, msg, mGeckoChild, WidgetMouseEvent::eReal);
   event.refPoint = LayoutDeviceIntPoint::FromUntyped(
     mGeckoChild->CocoaPointsToDevPixels(localEventLocation));
 
@@ -4453,7 +4609,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
   }
 
   // We assume later on that sending a hit test event won't cause widget destruction.
-  nsMouseEvent hitTestEvent(true, NS_MOUSE_MOZHITTEST, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent hitTestEvent(true, NS_MOUSE_MOZHITTEST, mGeckoChild,
+                                WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&hitTestEvent];
   bool result = mGeckoChild->DispatchWindowEvent(hitTestEvent);
 
@@ -4467,7 +4624,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
 
   // Create event for use by plugins.
@@ -4493,7 +4651,8 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   NPCocoaEvent cocoaEvent;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
 
   // create event for use by plugins
@@ -4523,9 +4682,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
     return;
 
   // The right mouse went down, fire off a right mouse down event to gecko
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
-  geckoEvent.button = nsMouseEvent::eRightButton;
+  geckoEvent.button = WidgetMouseEvent::eRightButton;
   geckoEvent.clickCount = [theEvent clickCount];
 
   // create event for use by plugins
@@ -4553,9 +4713,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   NPCocoaEvent cocoaEvent;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
-  geckoEvent.button = nsMouseEvent::eRightButton;
+  geckoEvent.button = WidgetMouseEvent::eRightButton;
   geckoEvent.clickCount = [theEvent clickCount];
 
   // create event for use by plugins
@@ -4581,9 +4742,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
-  geckoEvent.button = nsMouseEvent::eRightButton;
+  geckoEvent.button = WidgetMouseEvent::eRightButton;
 
   // create event for use by plugins
   NPCocoaEvent cocoaEvent;
@@ -4609,9 +4771,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_DOWN, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
-  geckoEvent.button = nsMouseEvent::eMiddleButton;
+  geckoEvent.button = WidgetMouseEvent::eMiddleButton;
   geckoEvent.clickCount = [theEvent clickCount];
 
   // create event for use by plugins
@@ -4630,9 +4793,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_BUTTON_UP, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
-  geckoEvent.button = nsMouseEvent::eMiddleButton;
+  geckoEvent.button = WidgetMouseEvent::eMiddleButton;
 
   // create event for use by plugins
   NPCocoaEvent cocoaEvent;
@@ -4656,9 +4820,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (!mGeckoChild)
     return;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_MOVE, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
-  geckoEvent.button = nsMouseEvent::eMiddleButton;
+  geckoEvent.button = WidgetMouseEvent::eMiddleButton;
 
   // create event for use by plugins
   NPCocoaEvent cocoaEvent;
@@ -4677,6 +4842,22 @@ static int32_t RoundUp(double aDouble)
                        static_cast<int32_t>(ceil(aDouble));
 }
 
+- (void)sendWheelStartOrStop:(uint32_t)msg forEvent:(NSEvent *)theEvent
+{
+  WidgetWheelEvent wheelEvent(true, msg, mGeckoChild);
+  [self convertCocoaMouseWheelEvent:theEvent toGeckoEvent:&wheelEvent];
+  mExpectingWheelStop = (msg == NS_WHEEL_START);
+  mGeckoChild->DispatchWindowEvent(wheelEvent);
+}
+
+- (void)sendWheelCondition:(BOOL)condition first:(uint32_t)first second:(uint32_t)second forEvent:(NSEvent *)theEvent
+{
+  if (mExpectingWheelStop == condition) {
+    [self sendWheelStartOrStop:first forEvent:theEvent];
+  }
+  [self sendWheelStartOrStop:second forEvent:theEvent];
+}
+
 - (void)scrollWheel:(NSEvent*)theEvent
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
@@ -4693,24 +4874,22 @@ static int32_t RoundUp(double aDouble)
     return;
   }
 
-  WheelEvent wheelEvent(true, NS_WHEEL_WHEEL, mGeckoChild);
-  [self convertCocoaMouseEvent:theEvent toGeckoEvent:&wheelEvent];
-  wheelEvent.deltaMode =
-    Preferences::GetBool("mousewheel.enable_pixel_scrolling", true) ?
-      nsIDOMWheelEvent::DOM_DELTA_PIXEL : nsIDOMWheelEvent::DOM_DELTA_LINE;
+  if (nsCocoaFeatures::OnLionOrLater()) {
+    NSEventPhase phase = [theEvent phase];
+    // Fire NS_WHEEL_START/STOP events when 2 fingers touch/release the touchpad.
+    if (phase & NSEventPhaseMayBegin) {
+      [self sendWheelCondition:YES first:NS_WHEEL_STOP second:NS_WHEEL_START forEvent:theEvent];
+      return;
+    }
 
-  // Calling deviceDeltaX or deviceDeltaY on theEvent will trigger a Cocoa
-  // assertion and an Objective-C NSInternalInconsistencyException if the
-  // underlying "Carbon" event doesn't contain pixel scrolling information.
-  // For these events, carbonEventKind is kEventMouseWheelMoved instead of
-  // kEventMouseScroll.
-  if (wheelEvent.deltaMode == nsIDOMWheelEvent::DOM_DELTA_PIXEL) {
-    EventRef theCarbonEvent = [theEvent _eventRef];
-    UInt32 carbonEventKind = theCarbonEvent ? ::GetEventKind(theCarbonEvent) : 0;
-    if (carbonEventKind != kEventMouseScroll) {
-      wheelEvent.deltaMode = nsIDOMWheelEvent::DOM_DELTA_LINE;
+    if (phase & (NSEventPhaseEnded | NSEventPhaseCancelled)) {
+      [self sendWheelCondition:NO first:NS_WHEEL_START second:NS_WHEEL_STOP forEvent:theEvent];
+      return;
     }
   }
+
+  WidgetWheelEvent wheelEvent(true, NS_WHEEL_WHEEL, mGeckoChild);
+  [self convertCocoaMouseWheelEvent:theEvent toGeckoEvent:&wheelEvent];
 
   wheelEvent.lineOrPageDeltaX = RoundUp(-[theEvent deltaX]);
   wheelEvent.lineOrPageDeltaY = RoundUp(-[theEvent deltaY]);
@@ -4742,25 +4921,36 @@ static int32_t RoundUp(double aDouble)
     return;
   }
 
-  wheelEvent.isMomentum = nsCocoaUtils::IsMomentumScrollEvent(theEvent);
-
   NPCocoaEvent cocoaEvent;
   ChildViewMouseTracker::AttachPluginEvent(wheelEvent, self, theEvent,
                                            NPCocoaEventScrollWheel,
                                            &cocoaEvent);
 
-  mGeckoChild->DispatchWindowEvent(wheelEvent);
-  if (!mGeckoChild) {
-    return;
+#ifdef __LP64__
+  // Only dispatch this event if we're not currently tracking a scroll event as
+  // swipe.
+  if (!mCancelSwipeAnimation || *mCancelSwipeAnimation == YES) {
+#endif // #ifdef __LP64__
+    mGeckoChild->DispatchWindowEvent(wheelEvent);
+    if (!mGeckoChild) {
+      return;
+    }
+#ifdef __LP64__
+  } else {
+    // Manually set these members here since we didn't dispatch the event.
+    wheelEvent.overflowDeltaX = wheelEvent.deltaX;
+    wheelEvent.overflowDeltaY = wheelEvent.deltaY;
+    wheelEvent.mViewPortIsOverscrolled = true;
   }
 
-#ifdef __LP64__
-  // overflowDeltaX tells us when the user has tried to scroll past the edge
-  // of a page to the left or the right (in those cases it's non-zero).
-  if (wheelEvent.deltaMode == nsIDOMWheelEvent::DOM_DELTA_PIXEL &&
-      wheelEvent.deltaX != 0.0) {
+  // overflowDeltaX and overflowDeltaY tell us when the user has tried to
+  // scroll past the edge of a page (in those cases it's non-zero).
+  if ((wheelEvent.deltaMode == nsIDOMWheelEvent::DOM_DELTA_PIXEL) &&
+      (wheelEvent.deltaX != 0.0 || wheelEvent.deltaY != 0.0)) {
     [self maybeTrackScrollEventAsSwipe:theEvent
-                        scrollOverflow:wheelEvent.overflowDeltaX];
+                       scrollOverflowX:wheelEvent.overflowDeltaX
+                       scrollOverflowY:wheelEvent.overflowDeltaY
+                viewPortIsOverscrolled:wheelEvent.mViewPortIsOverscrolled];
   }
 #endif // #ifdef __LP64__
 
@@ -4790,9 +4980,10 @@ static int32_t RoundUp(double aDouble)
       return nil;
   }
 
-  nsMouseEvent geckoEvent(true, NS_CONTEXTMENU, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_CONTEXTMENU, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
-  geckoEvent.button = nsMouseEvent::eRightButton;
+  geckoEvent.button = WidgetMouseEvent::eRightButton;
   mGeckoChild->DispatchWindowEvent(geckoEvent);
   if (!mGeckoChild)
     return nil;
@@ -4818,7 +5009,31 @@ static int32_t RoundUp(double aDouble)
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;
 }
 
-- (void) convertCocoaMouseEvent:(NSEvent*)aMouseEvent toGeckoEvent:(nsInputEvent*)outGeckoEvent
+- (void) convertCocoaMouseWheelEvent:(NSEvent*)aMouseEvent
+                        toGeckoEvent:(WidgetWheelEvent*)outWheelEvent
+{
+  [self convertCocoaMouseEvent:aMouseEvent toGeckoEvent:outWheelEvent];
+  outWheelEvent->deltaMode =
+    Preferences::GetBool("mousewheel.enable_pixel_scrolling", true) ?
+      nsIDOMWheelEvent::DOM_DELTA_PIXEL : nsIDOMWheelEvent::DOM_DELTA_LINE;
+
+  // Calling deviceDeltaX or deviceDeltaY on theEvent will trigger a Cocoa
+  // assertion and an Objective-C NSInternalInconsistencyException if the
+  // underlying "Carbon" event doesn't contain pixel scrolling information.
+  // For these events, carbonEventKind is kEventMouseWheelMoved instead of
+  // kEventMouseScroll.
+  if (outWheelEvent->deltaMode == nsIDOMWheelEvent::DOM_DELTA_PIXEL) {
+    EventRef theCarbonEvent = [aMouseEvent _eventRef];
+    UInt32 carbonEventKind = theCarbonEvent ? ::GetEventKind(theCarbonEvent) : 0;
+    if (carbonEventKind != kEventMouseScroll) {
+      outWheelEvent->deltaMode = nsIDOMWheelEvent::DOM_DELTA_LINE;
+    }
+  }
+  outWheelEvent->isMomentum = nsCocoaUtils::IsMomentumScrollEvent(aMouseEvent);
+}
+
+- (void) convertCocoaMouseEvent:(NSEvent*)aMouseEvent
+                   toGeckoEvent:(WidgetInputEvent*)outGeckoEvent
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
@@ -4835,25 +5050,24 @@ static int32_t RoundUp(double aDouble)
   outGeckoEvent->refPoint = LayoutDeviceIntPoint::FromUntyped(
     mGeckoChild->CocoaPointsToDevPixels(localPoint));
 
-  nsMouseEvent_base* mouseEvent =
-    static_cast<nsMouseEvent_base*>(outGeckoEvent);
+  WidgetMouseEventBase* mouseEvent = outGeckoEvent->AsMouseEventBase();
   mouseEvent->buttons = 0;
   NSUInteger mouseButtons = [NSEvent pressedMouseButtons];
 
   if (mouseButtons & 0x01) {
-    mouseEvent->buttons |= nsMouseEvent::eLeftButtonFlag;
+    mouseEvent->buttons |= WidgetMouseEvent::eLeftButtonFlag;
   }
   if (mouseButtons & 0x02) {
-    mouseEvent->buttons |= nsMouseEvent::eRightButtonFlag;
+    mouseEvent->buttons |= WidgetMouseEvent::eRightButtonFlag;
   }
   if (mouseButtons & 0x04) {
-    mouseEvent->buttons |= nsMouseEvent::eMiddleButtonFlag;
+    mouseEvent->buttons |= WidgetMouseEvent::eMiddleButtonFlag;
   }
   if (mouseButtons & 0x08) {
-    mouseEvent->buttons |= nsMouseEvent::e4thButtonFlag;
+    mouseEvent->buttons |= WidgetMouseEvent::e4thButtonFlag;
   }
   if (mouseButtons & 0x10) {
-    mouseEvent->buttons |= nsMouseEvent::e5thButtonFlag;
+    mouseEvent->buttons |= WidgetMouseEvent::e5thButtonFlag;
   }
 
   switch ([aMouseEvent type]) {
@@ -5233,7 +5447,8 @@ static int32_t RoundUp(double aDouble)
   if (!mGeckoChild)
     return YES;
 
-  nsMouseEvent geckoEvent(true, NS_MOUSE_ACTIVATE, mGeckoChild, nsMouseEvent::eReal);
+  WidgetMouseEvent geckoEvent(true, NS_MOUSE_ACTIVATE, mGeckoChild,
+                              WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:aEvent toGeckoEvent:&geckoEvent];
   return !mGeckoChild->DispatchWindowEvent(geckoEvent);
 }
@@ -5260,7 +5475,8 @@ static int32_t RoundUp(double aDouble)
     mGeckoChild->CocoaPointsToDevPixels(eventLoc) -
     mGeckoChild->WidgetToScreenOffset());
 
-  nsQueryContentEvent hitTest(true, NS_QUERY_DOM_WIDGET_HITTEST, mGeckoChild);
+  WidgetQueryContentEvent hitTest(true, NS_QUERY_DOM_WIDGET_HITTEST,
+                                  mGeckoChild);
   hitTest.InitForQueryDOMWidgetHittest(widgetLoc);
   // This might destroy our widget (and null out mGeckoChild).
   mGeckoChild->DispatchWindowEvent(hitTest);
@@ -5299,7 +5515,7 @@ static int32_t RoundUp(double aDouble)
     return NO;
 
   if (mPluginEventModel == NPEventModelCocoa) {
-    nsPluginEvent pluginEvent(true, NS_PLUGIN_FOCUS_EVENT, mGeckoChild);
+    WidgetPluginEvent pluginEvent(true, NS_PLUGIN_FOCUS_EVENT, mGeckoChild);
     NPCocoaEvent cocoaEvent;
     nsCocoaUtils::InitNPCocoaEvent(&cocoaEvent);
     cocoaEvent.type = NPCocoaEventFocusChanged;
@@ -5482,7 +5698,7 @@ static int32_t RoundUp(double aDouble)
   }
 
   // set up gecko event
-  nsDragEvent geckoEvent(true, aMessage, mGeckoChild);
+  WidgetDragEvent geckoEvent(true, aMessage, mGeckoChild);
   nsCocoaUtils::InitInputEvent(geckoEvent, [NSApp currentEvent]);
 
   // Use our own coordinates in the gecko event.
@@ -5742,7 +5958,8 @@ static int32_t RoundUp(double aDouble)
       
       // Determine if there is a selection (if sending to the service).
       if (sendType) {
-        nsQueryContentEvent event(true, NS_QUERY_CONTENT_STATE, mGeckoChild);
+        WidgetQueryContentEvent event(true, NS_QUERY_CONTENT_STATE,
+                                      mGeckoChild);
         // This might destroy our widget (and null out mGeckoChild).
         mGeckoChild->DispatchWindowEvent(event);
         if (!mGeckoChild || !event.mSucceeded || !event.mReply.mHasSelection)
@@ -5751,7 +5968,9 @@ static int32_t RoundUp(double aDouble)
 
       // Determine if we can paste (if receiving data from the service).
       if (mGeckoChild && returnType) {
-        nsContentCommandEvent command(true, NS_CONTENT_COMMAND_PASTE_TRANSFERABLE, mGeckoChild, true);
+        WidgetContentCommandEvent command(true,
+                                          NS_CONTENT_COMMAND_PASTE_TRANSFERABLE,
+                                          mGeckoChild, true);
         // This might possibly destroy our widget (and null out mGeckoChild).
         mGeckoChild->DispatchWindowEvent(command);
         if (!mGeckoChild || !command.mSucceeded || !command.mIsEnabled)
@@ -5788,9 +6007,9 @@ static int32_t RoundUp(double aDouble)
     return NO;
 
   // Obtain the current selection.
-  nsQueryContentEvent event(true,
-                            NS_QUERY_SELECTION_AS_TRANSFERABLE,
-                            mGeckoChild);
+  WidgetQueryContentEvent event(true,
+                                NS_QUERY_SELECTION_AS_TRANSFERABLE,
+                                mGeckoChild);
   mGeckoChild->DispatchWindowEvent(event);
   if (!event.mSucceeded || !event.mReply.mTransferable)
     return NO;
@@ -5848,9 +6067,9 @@ static int32_t RoundUp(double aDouble)
 
   NS_ENSURE_TRUE(mGeckoChild, false);
 
-  nsContentCommandEvent command(true,
-                                NS_CONTENT_COMMAND_PASTE_TRANSFERABLE,
-                                mGeckoChild);
+  WidgetContentCommandEvent command(true,
+                                    NS_CONTENT_COMMAND_PASTE_TRANSFERABLE,
+                                    mGeckoChild);
   command.mTransferable = trans;
   mGeckoChild->DispatchWindowEvent(command);
   
@@ -6056,11 +6275,12 @@ ChildViewMouseTracker::ReEvaluateMouseEnterState(NSEvent* aEvent, ChildView* aOl
   sLastMouseEventView = ViewForEvent(aEvent);
   if (sLastMouseEventView != oldView) {
     // Send enter and / or exit events.
-    nsMouseEvent::exitType type = [sLastMouseEventView window] == [oldView window] ?
-                                    nsMouseEvent::eChild : nsMouseEvent::eTopLevel;
+    WidgetMouseEvent::exitType type =
+      [sLastMouseEventView window] == [oldView window] ?
+        WidgetMouseEvent::eChild : WidgetMouseEvent::eTopLevel;
     [oldView sendMouseEnterOrExitEvent:aEvent enter:NO type:type];
     // After the cursor exits the window set it to a visible regular arrow cursor.
-    if (type == nsMouseEvent::eTopLevel) {
+    if (type == WidgetMouseEvent::eTopLevel) {
       [[nsCursorManager sharedInstance] setCursor:eCursor_standard];
     }
     [sLastMouseEventView sendMouseEnterOrExitEvent:aEvent enter:YES type:type];
@@ -6116,7 +6336,7 @@ ChildViewMouseTracker::ViewForEvent(NSEvent* aEvent)
 }
 
 void
-ChildViewMouseTracker::AttachPluginEvent(nsMouseEvent_base& aMouseEvent,
+ChildViewMouseTracker::AttachPluginEvent(WidgetMouseEventBase& aMouseEvent,
                                          ChildView* aView,
                                          NSEvent* aNativeMouseEvent,
                                          int aPluginEventType,
@@ -6141,10 +6361,12 @@ ChildViewMouseTracker::AttachPluginEvent(nsMouseEvent_base& aMouseEvent,
   // ("fix 0.3") of the patch for bug 435041 ("Implement Cocoa NPAPI event
   // model for Mac OS X").  But there's no trace of it in the WebKit code that
   // was used as a model for much of that patch.
+#if (0)
   if (type == NPCocoaEventMouseEntered ||
       type == NPCocoaEventMouseExited) {
     point.x = point.y = 5;
   }
+#endif
   NSUInteger clickCount = 0;
   if (type != NPCocoaEventMouseEntered &&
       type != NPCocoaEventMouseExited &&

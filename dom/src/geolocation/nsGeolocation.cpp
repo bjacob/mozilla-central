@@ -24,6 +24,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "PCOMContentPermissionRequestChild.h"
+#include "mozilla/dom/PermissionMessageUtils.h"
 
 class nsIPrincipal;
 
@@ -77,8 +78,9 @@ class nsGeolocationRequest
   void Shutdown();
 
   void SendLocation(nsIDOMGeoPosition* location);
-  bool WantsHighAccuracy() {return mOptions && mOptions->mEnableHighAccuracy;}
+  bool WantsHighAccuracy() {return !mShutdown && mOptions && mOptions->mEnableHighAccuracy;}
   void SetTimeoutTimer();
+  void NotifyErrorAndShutdown(uint16_t);
   nsIPrincipal* GetPrincipal();
 
   ~nsGeolocationRequest();
@@ -225,23 +227,6 @@ private:
   nsRefPtr<Geolocation> mLocator;
 };
 
-class RequestRestartTimerEvent : public nsRunnable
-{
-public:
-  RequestRestartTimerEvent(nsGeolocationRequest* aRequest)
-    : mRequest(aRequest)
-  {
-  }
-
-  NS_IMETHOD Run() {
-    mRequest->SetTimeoutTimer();
-    return NS_OK;
-  }
-
-private:
-  nsRefPtr<nsGeolocationRequest> mRequest;
-};
-
 ////////////////////////////////////////////////////
 // PositionError
 ////////////////////////////////////////////////////
@@ -367,6 +352,13 @@ NS_IMPL_CYCLE_COLLECTION_3(nsGeolocationRequest, mCallback, mErrorCallback, mLoc
 NS_IMETHODIMP
 nsGeolocationRequest::Notify(nsITimer* aTimer)
 {
+  NotifyErrorAndShutdown(nsIDOMGeoPositionError::TIMEOUT);
+  return NS_OK;
+}
+
+void
+nsGeolocationRequest::NotifyErrorAndShutdown(uint16_t aErrorCode)
+{
   MOZ_ASSERT(!mShutdown, "timeout after shutdown");
 
   if (!mIsWatchPositionRequest) {
@@ -374,13 +366,11 @@ nsGeolocationRequest::Notify(nsITimer* aTimer)
     mLocator->RemoveRequest(this);
   }
 
-  NotifyError(nsIDOMGeoPositionError::TIMEOUT);
+  NotifyError(aErrorCode);
 
   if (!mShutdown) {
     SetTimeoutTimer();
   }
-
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -454,19 +444,15 @@ nsGeolocationRequest::Allow()
   }
 
   // check to see if we can use a cached value
-  //
-  // either:
-  // a) the user has specified a maximumAge which allows us to return a cached value,
-  // -or-
-  // b) the cached position time is some reasonable value to return to the user (<30s)
+  // if the user has specified a maximumAge, return a cached value.
 
-  uint32_t maximumAge = 30 * PR_MSEC_PER_SEC;
+  uint32_t maximumAge = 0;
   if (mOptions) {
-    if (mOptions->mMaximumAge >= 0) {
+    if (mOptions->mMaximumAge > 0) {
       maximumAge = mOptions->mMaximumAge;
     }
   }
-  gs->SetHigherAccuracy(mOptions && mOptions->mEnableHighAccuracy);
+  gs->UpdateAccuracy(WantsHighAccuracy());
 
   bool canUseCache = lastPosition && maximumAge > 0 &&
     (PRTime(PR_Now() / PR_USEC_PER_MSEC) - maximumAge <=
@@ -606,12 +592,12 @@ nsGeolocationRequest::Shutdown()
     mTimeoutTimer = nullptr;
   }
 
-  // This should happen last, to ensure that this request isn't taken into consideration
-  // when deciding whether existing requests still require high accuracy.
+  // If there are no other high accuracy requests, the geolocation service will
+  // notify the provider to switch to the default accuracy.
   if (mOptions && mOptions->mEnableHighAccuracy) {
     nsRefPtr<nsGeolocationService> gs = nsGeolocationService::GetGeolocationService();
     if (gs) {
-      gs->SetHigherAccuracy(false);
+      gs->UpdateAccuracy();
     }
   }
 }
@@ -640,14 +626,12 @@ NS_IMPL_RELEASE(nsGeolocationService)
 
 static bool sGeoEnabled = true;
 static bool sGeoInitPending = true;
-static bool sGeoIgnoreLocationFilter = false;
 static int32_t sProviderTimeout = 6000; // Time, in milliseconds, to wait for the location provider to spin up.
 
 nsresult nsGeolocationService::Init()
 {
   Preferences::AddIntVarCache(&sProviderTimeout, "geo.timeout", sProviderTimeout);
   Preferences::AddBoolVarCache(&sGeoEnabled, "geo.enabled", sGeoEnabled);
-  Preferences::AddBoolVarCache(&sGeoIgnoreLocationFilter, "geo.ignore.location_filter", sGeoIgnoreLocationFilter);
 
   if (!sGeoEnabled) {
     return NS_ERROR_FAILURE;
@@ -698,7 +682,10 @@ nsresult nsGeolocationService::Init()
 #endif
 
 #ifdef MOZ_WIDGET_COCOA
-  mProvider = new CoreLocationLocationProvider();
+  if (Preferences::GetBool("geo.provider.use_corelocation", true) &&
+      CoreLocationLocationProvider::IsCoreLocationAvailable()) {
+    mProvider = new CoreLocationLocationProvider();
+  }
 #endif
 
   // Override platform-specific providers with the default (network)
@@ -922,9 +909,9 @@ nsGeolocationService::HighAccuracyRequested()
 }
 
 void
-nsGeolocationService::SetHigherAccuracy(bool aEnable)
+nsGeolocationService::UpdateAccuracy(bool aForceHigh)
 {
-  bool highRequired = aEnable || HighAccuracyRequested();
+  bool highRequired = aForceHigh || HighAccuracyRequested();
 
   if (XRE_GetProcessType() == GeckoProcessType_Content) {
     ContentChild* cpc = ContentChild::GetSingleton();
@@ -1082,6 +1069,7 @@ Geolocation::Shutdown()
 
   if (mService) {
     mService->RemoveLocator(this);
+    mService->UpdateAccuracy();
   }
 
   mService = nullptr;
@@ -1125,8 +1113,6 @@ Geolocation::RemoveRequest(nsGeolocationRequest* aRequest)
     (mPendingCallbacks.RemoveElement(aRequest) !=
      mWatchingCallbacks.RemoveElement(aRequest));
 
-  // request must have been in one of the lists
-  MOZ_ASSERT(requestWasKnown);
   unused << requestWasKnown;
 }
 
@@ -1160,13 +1146,13 @@ Geolocation::NotifyError(uint16_t aErrorCode)
   }
 
   for (uint32_t i = mPendingCallbacks.Length(); i > 0; i--) {
-    mPendingCallbacks[i-1]->NotifyError(aErrorCode);
-    RemoveRequest(mPendingCallbacks[i-1]);
+    mPendingCallbacks[i-1]->NotifyErrorAndShutdown(aErrorCode);
+    //NotifyErrorAndShutdown() removes the request from the array
   }
 
   // notify everyone that is watching
   for (uint32_t i = 0; i < mWatchingCallbacks.Length(); i++) {
-    mWatchingCallbacks[i]->NotifyError(aErrorCode);
+    mWatchingCallbacks[i]->NotifyErrorAndShutdown(aErrorCode);
   }
 
   return NS_OK;

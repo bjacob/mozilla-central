@@ -4,13 +4,15 @@
 
 from __future__ import unicode_literals
 
-import errno
+import itertools
 import logging
 import os
+import re
 import types
 
 from collections import namedtuple
 
+import mozbuild.makeutil as mozmakeutil
 from mozpack.copier import FilePurger
 from mozpack.manifests import (
     InstallManifest,
@@ -24,12 +26,22 @@ from ..frontend.data import (
     DirectoryTraversal,
     Exports,
     GeneratedEventWebIDLFile,
+    GeneratedInclude,
     GeneratedWebIDLFile,
+    HeaderFileSubstitution,
+    HostProgram,
+    HostSimpleProgram,
+    InstallationTarget,
     IPDLFile,
+    JavaJarData,
+    LibraryDefinition,
     LocalInclude,
+    PreprocessedTestWebIDLFile,
     PreprocessedWebIDLFile,
     Program,
     SandboxDerived,
+    SandboxWrapped,
+    SimpleProgram,
     TestWebIDLFile,
     VariablePassthru,
     XPIDLFile,
@@ -41,7 +53,6 @@ from ..util import (
     FileAvoidWrite,
 )
 from ..makeutil import Makefile
-
 
 class BackendMakeFile(object):
     """Represents a generated backend.mk file.
@@ -74,29 +85,23 @@ class BackendMakeFile(object):
         self.objdir = objdir
         self.relobjdir = objdir[len(environment.topobjdir) + 1:]
         self.environment = environment
-        self.path = os.path.join(objdir, 'backend.mk')
+        self.name = os.path.join(objdir, 'backend.mk')
 
         # XPIDLFiles attached to this file.
         self.idls = []
         self.xpt_name = None
 
-        self.fh = FileAvoidWrite(self.path)
+        self.fh = FileAvoidWrite(self.name)
         self.fh.write('# THIS FILE WAS AUTOMATICALLY GENERATED. DO NOT EDIT.\n')
         self.fh.write('\n')
         self.fh.write('MOZBUILD_DERIVED := 1\n')
 
-        # The global rule to incur backend generation generates Makefiles.
-        self.fh.write('NO_MAKEFILE_RULE := 1\n')
-
-        # We can't blindly have a SUBMAKEFILES rule because some of the
-        # Makefile may not have a corresponding Makefile.in. For the case
-        # where a new directory is added, the mozbuild file referencing that
-        # new directory will need updated. This will cause a full backend
-        # scan and build, installing the new Makefile.
-        self.fh.write('NO_SUBMAKEFILES_RULE := 1\n')
-
     def write(self, buf):
         self.fh.write(buf)
+
+    # For compatibility with makeutil.Makefile
+    def add_statement(self, stmt):
+        self.write('%s\n' % stmt)
 
     def close(self):
         if self.xpt_name:
@@ -107,9 +112,9 @@ class BackendMakeFile(object):
             self.fh.write('NONRECURSIVE_TARGETS += export\n')
             self.fh.write('NONRECURSIVE_TARGETS_export += xpidl\n')
             self.fh.write('NONRECURSIVE_TARGETS_export_xpidl_DIRECTORY = '
-                '$(DEPTH)/config/makefiles/precompile\n')
+                '$(DEPTH)/xpcom/xpidl\n')
             self.fh.write('NONRECURSIVE_TARGETS_export_xpidl_TARGETS += '
-                'xpidl\n')
+                'export\n')
 
         return self.fh.close()
 
@@ -206,7 +211,7 @@ class RecursiveMakeTraversal(object):
             parallel_nodes = []
             for node in parallel:
                 nodes = recurse(node, prev_nodes)
-                if nodes != ('',):
+                if nodes and nodes != ('',):
                     parallel_nodes.extend(nodes)
             if parallel_nodes:
                 prev_nodes = tuple(parallel_nodes)
@@ -266,13 +271,18 @@ class RecursiveMakeBackend(CommonBackend):
         self._webidl_sources = set()
         self._generated_events_webidl_sources = set()
         self._test_webidl_sources = set()
+        self._preprocessed_test_webidl_sources = set()
         self._preprocessed_webidl_sources = set()
         self._generated_webidl_sources = set()
 
         def detailed(summary):
-            return '{:d} total backend files. {:d} created; {:d} updated; {:d} unchanged'.format(
-                summary.managed_count, summary.created_count,
+            s = '{:d} total backend files. {:d} created; {:d} updated; {:d} unchanged'.format(
+                summary.created_count + summary.updated_count +
+                summary.unchanged_count, summary.created_count,
                 summary.updated_count, summary.unchanged_count)
+            if summary.deleted_count:
+                s+= '; {:d} deleted'.format(summary.deleted_count)
+            return s
 
         # This is a little kludgy and could be improved with a better API.
         self.summary.backend_detailed_summary = types.MethodType(detailed,
@@ -296,21 +306,20 @@ class RecursiveMakeBackend(CommonBackend):
             ]}
 
         self._traversal = RecursiveMakeTraversal()
+        self._may_skip = {
+            'export': set(),
+            'compile': set(),
+            'binaries': set(),
+            'libs': set(),
+            'tools': set(),
+        }
 
         derecurse = self.environment.substs.get('MOZ_PSEUDO_DERECURSE', '').split(',')
         self._parallel_export = False
-        if derecurse != [''] and not 'no-parallel-export' in derecurse:
-            self._parallel_export = True
-
-    def _update_from_avoid_write(self, result):
-        existed, updated = result
-
-        if not existed:
-            self.summary.created_count += 1
-        elif updated:
-            self.summary.updated_count += 1
-        else:
-            self.summary.unchanged_count += 1
+        self._no_skip = False
+        if derecurse != ['']:
+            self._parallel_export = 'no-parallel-export' not in derecurse
+            self._no_skip = 'no-skip' in derecurse
 
     def consume_object(self, obj):
         """Write out build files necessary to build with recursive make."""
@@ -320,23 +329,56 @@ class RecursiveMakeBackend(CommonBackend):
         if not isinstance(obj, SandboxDerived):
             return
 
-        backend_file = self._backend_files.get(obj.srcdir,
-            BackendMakeFile(obj.srcdir, obj.objdir, self.get_environment(obj)))
+        if obj.srcdir not in self._backend_files:
+            self._backend_files[obj.srcdir] = \
+                BackendMakeFile(obj.srcdir, obj.objdir, self.get_environment(obj))
+        backend_file = self._backend_files[obj.srcdir]
 
         if isinstance(obj, DirectoryTraversal):
             self._process_directory_traversal(obj, backend_file)
         elif isinstance(obj, ConfigFileSubstitution):
-            self._update_from_avoid_write(
-                backend_file.environment.create_config_file(obj.output_path))
+            with self._write_file(obj.output_path) as fh:
+                backend_file.environment.create_config_file(fh)
             self.backend_input_files.add(obj.input_path)
-            self.summary.managed_count += 1
+        elif isinstance(obj, HeaderFileSubstitution):
+            with self._write_file(obj.output_path) as fh:
+                backend_file.environment.create_config_header(fh)
+            self.backend_input_files.add(obj.input_path)
         elif isinstance(obj, XPIDLFile):
             backend_file.idls.append(obj)
             backend_file.xpt_name = '%s.xpt' % obj.module
         elif isinstance(obj, VariablePassthru):
+            unified_suffixes = dict(
+                UNIFIED_CSRCS='c',
+                UNIFIED_CMMSRCS='mm',
+                UNIFIED_CPPSRCS='cpp',
+            )
+
+            files_per_unification = 16
+            if 'FILES_PER_UNIFIED_FILE' in obj.variables.keys():
+                files_per_unification = obj.variables['FILES_PER_UNIFIED_FILE']
+
+            do_unify = not self.environment.substs.get(
+                'MOZ_DISABLE_UNIFIED_COMPILATION') and files_per_unification > 1
+
             # Sorted so output is consistent and we don't bump mtimes.
             for k, v in sorted(obj.variables.items()):
-                if isinstance(v, list):
+                if k in unified_suffixes:
+                    if do_unify:
+                        self._add_unified_build_rules(backend_file, v,
+                            backend_file.objdir,
+                            unified_prefix='Unified_%s_%s' % (
+                                unified_suffixes[k],
+                                backend_file.relobjdir.replace('/', '_')),
+                            unified_suffix=unified_suffixes[k],
+                            unified_files_makefile_variable=k,
+                            include_curdir_build_rules=False,
+                            files_per_unified_file=files_per_unification)
+                        backend_file.write('%s += $(%s)\n' % (k[len('UNIFIED_'):], k))
+                    else:
+                        backend_file.write('%s += %s\n' % (
+                            k[len('UNIFIED_'):], ' '.join(sorted(v))))
+                elif isinstance(v, list):
                     for item in v:
                         backend_file.write('%s += %s\n' % (k, item))
                 elif isinstance(v, bool):
@@ -371,6 +413,11 @@ class RecursiveMakeBackend(CommonBackend):
                                                        obj.basename))
             # Test WebIDL files are not exported.
 
+        elif isinstance(obj, PreprocessedTestWebIDLFile):
+            self._preprocessed_test_webidl_sources.add(mozpath.join(obj.srcdir,
+                                                                    obj.basename))
+            # Test WebIDL files are not exported.
+
         elif isinstance(obj, GeneratedWebIDLFile):
             self._generated_webidl_sources.add(mozpath.join(obj.srcdir,
                                                             obj.basename))
@@ -384,13 +431,44 @@ class RecursiveMakeBackend(CommonBackend):
         elif isinstance(obj, Program):
             self._process_program(obj.program, backend_file)
 
+        elif isinstance(obj, HostProgram):
+            self._process_host_program(obj.program, backend_file)
+
+        elif isinstance(obj, SimpleProgram):
+            self._process_simple_program(obj.program, backend_file)
+
+        elif isinstance(obj, HostSimpleProgram):
+            self._process_host_simple_program(obj.program, backend_file)
+
         elif isinstance(obj, TestManifest):
             self._process_test_manifest(obj, backend_file)
 
         elif isinstance(obj, LocalInclude):
             self._process_local_include(obj.path, backend_file)
 
-        self._backend_files[obj.srcdir] = backend_file
+        elif isinstance(obj, GeneratedInclude):
+            self._process_generated_include(obj.path, backend_file)
+
+        elif isinstance(obj, InstallationTarget):
+            self._process_installation_target(obj, backend_file)
+
+        elif isinstance(obj, SandboxWrapped):
+            # Process a rich build system object from the front-end
+            # as-is.  Please follow precedent and handle CamelCaseData
+            # in a function named _process_camel_case_data.  At some
+            # point in the future, this unwrapping process may be
+            # automated.
+            if isinstance(obj.wrapped, JavaJarData):
+                self._process_java_jar_data(obj.wrapped, backend_file)
+            else:
+                return
+
+        elif isinstance(obj, LibraryDefinition):
+            self._process_library_definition(obj, backend_file)
+
+        else:
+            return
+        obj.ack()
 
     def _fill_root_mk(self):
         """
@@ -398,13 +476,21 @@ class RecursiveMakeBackend(CommonBackend):
         convenience variables, and the other dependency definitions for a
         hopefully proper directory traversal.
         """
+        if not self._no_skip:
+            for tier, skip in self._may_skip.items():
+                self.log(logging.DEBUG, 'fill_root_mk', {
+                    'number': len(skip), 'tier': tier
+                    }, 'Ignoring {number} directories during {tier}')
+
         # Traverse directories in parallel, and skip static dirs
         def parallel_filter(current, subdirs):
             all_subdirs = subdirs.parallel + subdirs.dirs + \
                           subdirs.tests + subdirs.tools
+            if current in self._may_skip[tier]:
+                current = None
             # subtiers/*_start and subtiers/*_finish, under subtiers/*, are
             # kept sequential. Others are all forced parallel.
-            if current.startswith('subtiers/') and all_subdirs and \
+            if current and current.startswith('subtiers/') and all_subdirs and \
                     all_subdirs[0].startswith('subtiers/'):
                 return current, [], all_subdirs
             return current, all_subdirs, []
@@ -417,25 +503,30 @@ class RecursiveMakeBackend(CommonBackend):
             return current, subdirs.parallel, \
                 subdirs.dirs + subdirs.tests + subdirs.tools
 
-        # compile and tools build everything in parallel, but skip precompile.
-        def other_filter(current, subdirs):
-            if current == 'subtiers/precompile':
-                return None, [], []
-            return parallel_filter(current, subdirs)
-
-        # Skip tools dirs during libs traversal
+        # Skip tools dirs during libs traversal. Because of bug 925236 and
+        # possible other unknown race conditions, don't parallelize the libs
+        # tier.
         def libs_filter(current, subdirs):
-            if current == 'subtiers/precompile':
-                return None, [], []
-            return current, subdirs.parallel, \
+            if current in self._may_skip[tier]:
+                current = None
+            return current, [], subdirs.parallel + \
                 subdirs.static + subdirs.dirs + subdirs.tests
 
-        # compile and tools tiers use the same traversal as export
+        # Because of bug 925236 and possible other unknown race conditions,
+        # don't parallelize the tools tier.
+        def tools_filter(current, subdirs):
+            if current in self._may_skip[tier]:
+                current = None
+            return current, subdirs.parallel, \
+                subdirs.static + subdirs.dirs + subdirs.tests + subdirs.tools
+
+        # compile, binaries and tools tiers use the same traversal as export
         filters = {
             'export': export_filter,
-            'compile': other_filter,
+            'compile': parallel_filter,
+            'binaries': parallel_filter,
             'libs': libs_filter,
-            'tools': other_filter,
+            'tools': tools_filter,
         }
 
         root_deps_mk = Makefile()
@@ -448,8 +539,9 @@ class RecursiveMakeBackend(CommonBackend):
                 rule = root_deps_mk.create_rule(['%s/%s' % (dir, tier)])
                 if deps is not None:
                     rule.add_dependencies('%s/%s' % (d, tier) for d in deps if d)
-            root_deps_mk.create_rule(['recurse_%s' % tier]) \
-                        .add_dependencies('%s/%s' % (d, tier) for d in main)
+            rule = root_deps_mk.create_rule(['recurse_%s' % tier])
+            if main:
+                rule.add_dependencies('%s/%s' % (d, tier) for d in main)
 
         root_mk = Makefile()
 
@@ -492,114 +584,223 @@ class RecursiveMakeBackend(CommonBackend):
 
         root_mk.add_statement('$(call include_deps,root-deps.mk)')
 
-        root = FileAvoidWrite(
-            os.path.join(self.environment.topobjdir, 'root.mk'))
-        root_deps = FileAvoidWrite(
-            os.path.join(self.environment.topobjdir, 'root-deps.mk'))
-        root_mk.dump(root, removal_guard=False)
-        root_deps_mk.dump(root_deps, removal_guard=False)
-        self._update_from_avoid_write(root.close())
-        self._update_from_avoid_write(root_deps.close())
+        with self._write_file(
+                os.path.join(self.environment.topobjdir, 'root.mk')) as root:
+            root_mk.dump(root, removal_guard=False)
+
+        with self._write_file(
+                os.path.join(self.environment.topobjdir, 'root-deps.mk')) as root_deps:
+            root_deps_mk.dump(root_deps, removal_guard=False)
+
+    def _add_unified_build_rules(self, makefile, files, output_directory,
+                                 unified_prefix='Unified',
+                                 unified_suffix='cpp',
+                                 extra_dependencies=[],
+                                 unified_files_makefile_variable='unified_files',
+                                 include_curdir_build_rules=True,
+                                 poison_windows_h=False,
+                                 files_per_unified_file=16):
+
+        explanation = "\n" \
+            "# We build files in 'unified' mode by including several files\n" \
+            "# together into a single source file.  This cuts down on\n" \
+            "# compilation times and debug information size.  %d was chosen as\n" \
+            "# a reasonable compromise between clobber rebuild time, incremental\n" \
+            "# rebuild time, and compiler memory usage." % files_per_unified_file
+        makefile.add_statement(explanation)
+
+        def unified_files():
+            "Return an iterator of (unified_filename, source_filenames) tuples."
+            # Our last returned list of source filenames may be short, and we
+            # don't want the fill value inserted by izip_longest to be an
+            # issue.  So we do a little dance to filter it out ourselves.
+            dummy_fill_value = ("dummy",)
+            def filter_out_dummy(iterable):
+                return itertools.ifilter(lambda x: x != dummy_fill_value,
+                                         iterable)
+
+            # From the itertools documentation, slightly modified:
+            def grouper(n, iterable):
+                "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
+                args = [iter(iterable)] * n
+                return itertools.izip_longest(fillvalue=dummy_fill_value, *args)
+
+            for i, unified_group in enumerate(grouper(files_per_unified_file,
+                                                      sorted(files))):
+                just_the_filenames = list(filter_out_dummy(unified_group))
+                yield '%s%d.%s' % (unified_prefix, i, unified_suffix), just_the_filenames
+
+        all_sources = ' '.join(source for source, _ in unified_files())
+        makefile.add_statement('%s := %s' % (unified_files_makefile_variable,
+                                               all_sources))
+
+        for unified_file, source_filenames in unified_files():
+            if extra_dependencies:
+                rule = makefile.create_rule([unified_file])
+                rule.add_dependencies(extra_dependencies)
+
+            # The rule we just defined is only for cases where the cpp files get
+            # blown away and we need to regenerate them.  The rule doesn't correctly
+            # handle source files being added/removed/renamed.  Therefore, we
+            # generate them here also to make sure everything's up-to-date.
+            with self._write_file(os.path.join(output_directory, unified_file)) as f:
+                f.write('#define MOZ_UNIFIED_BUILD\n')
+                includeTemplate = '#include "%(cppfile)s"'
+                if poison_windows_h:
+                    includeTemplate += (
+                        '\n'
+                        '#ifdef _WINDOWS_\n'
+                        '#error "%(cppfile)s included windows.h"\n'
+                        "#endif")
+                includeTemplate += (
+                    '\n'
+                    '#ifdef PL_ARENA_CONST_ALIGN_MASK\n'
+                    '#error "%(cppfile)s uses PL_ARENA_CONST_ALIGN_MASK, '
+                    'so it cannot be built in unified mode."\n'
+                    '#undef PL_ARENA_CONST_ALIGN_MASK\n'
+                    '#endif\n'
+                    '#ifdef FORCE_PR_LOG\n'
+                    '#error "%(cppfile)s forces NSPR logging, '
+                    'so it cannot be built in unified mode."\n'
+                    '#undef FORCE_PR_LOG\n'
+                    '#endif')
+                f.write('\n'.join(includeTemplate % { "cppfile": s } for
+                                  s in source_filenames))
+
+        if include_curdir_build_rules:
+            makefile.add_statement('\n'
+                '# Make sometimes gets confused between "foo" and "$(CURDIR)/foo".\n'
+                '# Help it out by explicitly specifiying dependencies.')
+            makefile.add_statement('all_absolute_unified_files := \\\n'
+                                   '  $(addprefix $(CURDIR)/,$(%s))'
+                                   % unified_files_makefile_variable)
+            rule = makefile.create_rule(['$(all_absolute_unified_files)'])
+            rule.add_dependencies(['$(CURDIR)/%: %'])
 
     def consume_finished(self):
         CommonBackend.consume_finished(self)
 
-        self._fill_root_mk()
-
         for srcdir in sorted(self._backend_files.keys()):
-            bf = self._backend_files[srcdir]
+            with self._write_file(fh=self._backend_files[srcdir]) as bf:
+                makefile_in = os.path.join(srcdir, 'Makefile.in')
+                makefile = os.path.join(bf.objdir, 'Makefile')
 
-            if not os.path.exists(bf.objdir):
-                try:
-                    os.makedirs(bf.objdir)
-                except OSError as error:
-                    if error.errno != errno.EEXIST:
-                        raise
+                # If Makefile.in exists, use it as a template. Otherwise,
+                # create a stub.
+                stub = not os.path.exists(makefile_in)
+                if not stub:
+                    self.log(logging.DEBUG, 'substitute_makefile',
+                        {'path': makefile}, 'Substituting makefile: {path}')
 
-            makefile_in = os.path.join(srcdir, 'Makefile.in')
-            makefile = os.path.join(bf.objdir, 'Makefile')
+                    # Adding the Makefile.in here has the desired side-effect
+                    # that if the Makefile.in disappears, this will force
+                    # moz.build traversal. This means that when we remove empty
+                    # Makefile.in files, the old file will get replaced with
+                    # the autogenerated one automatically.
+                    self.backend_input_files.add(makefile_in)
 
-            # If Makefile.in exists, use it as a template. Otherwise, create a
-            # stub.
-            stub = not os.path.exists(makefile_in)
-            if not stub:
-                self.log(logging.DEBUG, 'substitute_makefile',
-                    {'path': makefile}, 'Substituting makefile: {path}')
+                    for tier, skiplist in self._may_skip.items():
+                        if tier in ('compile', 'binaries'):
+                            continue
+                        if bf.relobjdir in skiplist:
+                            skiplist.remove(bf.relobjdir)
+                else:
+                    self.log(logging.DEBUG, 'stub_makefile',
+                        {'path': makefile}, 'Creating stub Makefile: {path}')
 
-                # Adding the Makefile.in here has the desired side-effect that
-                # if the Makefile.in disappears, this will force moz.build
-                # traversal. This means that when we remove empty Makefile.in
-                # files, the old file will get replaced with the autogenerated
-                # one automatically.
-                self.backend_input_files.add(makefile_in)
-            else:
-                self.log(logging.DEBUG, 'stub_makefile',
-                    {'path': makefile}, 'Creating stub Makefile: {path}')
+                # Can't skip directories with a jar.mn for the 'libs' tier.
+                if bf.relobjdir in self._may_skip['libs'] and \
+                        os.path.exists(os.path.join(srcdir, 'jar.mn')):
+                    self._may_skip['libs'].remove(bf.relobjdir)
 
-            self._update_from_avoid_write(
-                bf.environment.create_makefile(makefile, stub=stub))
-            self.summary.managed_count += 1
-
-            self._update_from_avoid_write(bf.close())
-            self.summary.managed_count += 1
-
+                with self._write_file(makefile) as fh:
+                    bf.environment.create_makefile(fh, stub=stub)
 
         # Write out a master list of all IPDL source files.
-        ipdls = FileAvoidWrite(os.path.join(self.environment.topobjdir,
-            'ipc', 'ipdl', 'ipdlsrcs.mk'))
-        for p in sorted(self._ipdl_sources):
-            ipdls.write('ALL_IPDLSRCS += %s\n' % p)
-            base = os.path.basename(p)
+        ipdl_dir = os.path.join(self.environment.topobjdir, 'ipc', 'ipdl')
+        mk = mozmakeutil.Makefile()
+
+        sorted_ipdl_sources = list(sorted(self._ipdl_sources))
+        mk.add_statement('ALL_IPDLSRCS := %s' % ' '.join(sorted_ipdl_sources))
+
+        def files_from(ipdl):
+            base = os.path.basename(ipdl)
             root, ext = os.path.splitext(base)
 
             # Both .ipdl and .ipdlh become .cpp files
-            ipdls.write('CPPSRCS += %s.cpp\n' % root)
+            files = ['%s.cpp' % root]
             if ext == '.ipdl':
                 # .ipdl also becomes Child/Parent.cpp files
-                ipdls.write('CPPSRCS += %sChild.cpp\n' % root)
-                ipdls.write('CPPSRCS += %sParent.cpp\n' % root)
+                files.extend(['%sChild.cpp' % root,
+                              '%sParent.cpp' % root])
+            return files
 
-        ipdls.write('IPDLDIRS := %s\n' % ' '.join(sorted(set(os.path.dirname(p)
+        ipdl_cppsrcs = list(itertools.chain(*[files_from(p) for p in sorted_ipdl_sources]))
+        self._add_unified_build_rules(mk, ipdl_cppsrcs, ipdl_dir,
+                                      unified_prefix='UnifiedProtocols',
+                                      unified_files_makefile_variable='CPPSRCS')
+
+        mk.add_statement('IPDLDIRS := %s' % ' '.join(sorted(set(os.path.dirname(p)
             for p in self._ipdl_sources))))
 
-        self._update_from_avoid_write(ipdls.close())
-        self.summary.managed_count += 1
+        with self._write_file(os.path.join(ipdl_dir, 'ipdlsrcs.mk')) as ipdls:
+            mk.dump(ipdls, removal_guard=False)
+
+        self._may_skip['compile'] -= set(['ipc/ipdl'])
 
         # Write out master lists of WebIDL source files.
-        webidls = FileAvoidWrite(os.path.join(self.environment.topobjdir,
-              'dom', 'bindings', 'webidlsrcs.mk'))
+        bindings_dir = os.path.join(self.environment.topobjdir, 'dom', 'bindings')
 
-        for webidl in sorted(self._webidl_sources):
-            webidls.write('webidl_files += %s\n' % os.path.basename(webidl))
-        for webidl in sorted(self._generated_events_webidl_sources):
-            webidls.write('generated_events_webidl_files += %s\n' % os.path.basename(webidl))
-        for webidl in sorted(self._test_webidl_sources):
-            webidls.write('test_webidl_files += %s\n' % os.path.basename(webidl))
-        for webidl in sorted(self._generated_webidl_sources):
-            webidls.write('generated_webidl_files += %s\n' % os.path.basename(webidl))
-        for webidl in sorted(self._preprocessed_webidl_sources):
-            webidls.write('preprocessed_webidl_files += %s\n' % os.path.basename(webidl))
+        mk = mozmakeutil.Makefile()
 
-        self._update_from_avoid_write(webidls.close())
-        self.summary.managed_count += 1
+        def write_var(variable, sources):
+            files = [os.path.basename(f) for f in sorted(sources)]
+            mk.add_statement('%s += %s' % (variable, ' '.join(files)))
+        write_var('webidl_files', self._webidl_sources)
+        write_var('generated_events_webidl_files', self._generated_events_webidl_sources)
+        write_var('test_webidl_files', self._test_webidl_sources)
+        write_var('preprocessed_test_webidl_files', self._preprocessed_test_webidl_sources)
+        write_var('generated_webidl_files', self._generated_webidl_sources)
+        write_var('preprocessed_webidl_files', self._preprocessed_webidl_sources)
+
+        all_webidl_files = itertools.chain(iter(self._webidl_sources),
+                                           iter(self._generated_events_webidl_sources),
+                                           iter(self._generated_webidl_sources),
+                                           iter(self._preprocessed_webidl_sources))
+        all_webidl_files = [os.path.basename(x) for x in all_webidl_files]
+        all_webidl_sources = [re.sub(r'\.webidl$', 'Binding.cpp', x) for x in all_webidl_files]
+
+        self._add_unified_build_rules(mk, all_webidl_sources,
+                                      bindings_dir,
+                                      unified_prefix='UnifiedBindings',
+                                      unified_files_makefile_variable='unified_binding_cpp_files',
+                                      poison_windows_h=True)
+
+        # Assume that Somebody Else has responsibility for correctly
+        # specifying removal dependencies for |all_webidl_sources|.
+        with self._write_file(os.path.join(bindings_dir, 'webidlsrcs.mk')) as webidls:
+            mk.dump(webidls, removal_guard=False)
+
+        self._may_skip['compile'] -= set(['dom/bindings', 'dom/bindings/test'])
+
+        self._fill_root_mk()
 
         # Write out a dependency file used to determine whether a config.status
         # re-run is needed.
-        backend_built_path = os.path.join(self.environment.topobjdir,
-            'backend.%s.built' % self.__class__.__name__).replace(os.sep, '/')
-        backend_deps = FileAvoidWrite('%s.pp' % backend_built_path)
         inputs = sorted(p.replace(os.sep, '/') for p in self.backend_input_files)
 
         # We need to use $(DEPTH) so the target here matches what's in
         # rules.mk. If they are different, the dependencies don't get pulled in
         # properly.
-        backend_deps.write('$(DEPTH)/backend.RecursiveMakeBackend.built: %s\n' %
-            ' '.join(inputs))
-        for path in inputs:
-            backend_deps.write('%s:\n' % path)
+        with self._write_file('%s.pp' % self._backend_output_list_file) as backend_deps:
+            backend_deps.write('$(DEPTH)/backend.%s: %s\n' %
+                (self.__class__.__name__, ' '.join(inputs)))
+            for path in inputs:
+                backend_deps.write('%s:\n' % path)
 
-        self._update_from_avoid_write(backend_deps.close())
-        self.summary.managed_count += 1
+        with open(self._backend_output_list_file, 'a'):
+            pass
+        os.utime(self._backend_output_list_file, None)
 
         # Make the master test manifest files.
         for flavor, t in self._test_manifests.items():
@@ -704,6 +905,23 @@ class RecursiveMakeBackend(CommonBackend):
         if obj.is_tool_dir:
             fh.write('IS_TOOL_DIR := 1\n')
 
+        if self._no_skip:
+            return
+
+        affected_tiers = set(obj.affected_tiers)
+        # Until all SOURCES are really in moz.build, consider all directories
+        # building binaries to require a pass at compile, too.
+        if 'binaries' in affected_tiers:
+            affected_tiers.add('compile')
+        if 'compile' in affected_tiers or 'binaries' in affected_tiers:
+            affected_tiers.add('libs')
+        if obj.is_tool_dir and 'libs' in affected_tiers:
+            affected_tiers.remove('libs')
+            affected_tiers.add('tools')
+
+        for tier in set(self._may_skip.keys()) - affected_tiers:
+            self._may_skip[tier].add(backend_file.relobjdir)
+
     def _process_exports(self, obj, exports, backend_file, namespace=""):
         # This may not be needed, but is present for backwards compatibility
         # with the old make rules, just in case.
@@ -726,6 +944,22 @@ class RecursiveMakeBackend(CommonBackend):
         for subdir in sorted(children):
             self._process_exports(obj, children[subdir], backend_file,
                 namespace=namespace + subdir)
+
+    def _process_installation_target(self, obj, backend_file):
+        # A few makefiles need to be able to override the following rules via
+        # make XPI_NAME=blah commands, so we default to the lazy evaluation as
+        # much as possible here to avoid breaking things.
+        if obj.xpiname:
+            backend_file.write('XPI_NAME = %s\n' % (obj.xpiname))
+        if obj.subdir:
+            backend_file.write('DIST_SUBDIR = %s\n' % (obj.subdir))
+        if obj.target and not obj.is_custom():
+            backend_file.write('FINAL_TARGET = $(DEPTH)/%s\n' % (obj.target))
+        else:
+            backend_file.write('FINAL_TARGET = $(if $(XPI_NAME),$(DIST)/xpi-stage/$(XPI_NAME),$(DIST)/bin)$(DIST_SUBDIR:%=/%)\n')
+
+        if not obj.enabled:
+            backend_file.write('NO_DIST_INSTALL := 1\n')
 
     def _handle_idl_manager(self, manager):
         build_files = self._install_manifests['xpidl']
@@ -777,12 +1011,11 @@ class RecursiveMakeBackend(CommonBackend):
 
         out_path = os.path.join(self.environment.topobjdir, 'config',
             'makefiles', 'xpidl', 'Makefile')
-        result = self.environment.create_config_file(out_path, extra=dict(
-            xpidl_rules='\n'.join(rules),
-            xpidl_modules=' '.join(xpt_modules),
-        ))
-        self._update_from_avoid_write(result)
-        self.summary.managed_count += 1
+        with self._write_file(out_path) as fh:
+            self.environment.create_config_file(fh, extra=dict(
+                xpidl_rules='\n'.join(rules),
+                xpidl_modules=' '.join(xpt_modules),
+            ))
 
         # The Makefile can't regenerate itself because of custom substitution.
         # We need to list it here to ensure changes cause regeneration.
@@ -792,11 +1025,21 @@ class RecursiveMakeBackend(CommonBackend):
     def _process_program(self, program, backend_file):
         backend_file.write('PROGRAM = %s\n' % program)
 
+    def _process_host_program(self, program, backend_file):
+        backend_file.write('HOST_PROGRAM = %s\n' % program)
+
+    def _process_simple_program(self, program, backend_file):
+        backend_file.write('SIMPLE_PROGRAMS += %s\n' % program)
+
+    def _process_host_simple_program(self, program, backend_file):
+        backend_file.write('HOST_SIMPLE_PROGRAMS += %s\n' % program)
+
     def _process_webidl_basename(self, basename):
         header = 'mozilla/dom/%sBinding.h' % os.path.splitext(basename)[0]
         self._install_manifests['dist_include'].add_optional_exists(header)
 
     def _process_test_manifest(self, obj, backend_file):
+        # Much of the logic in this function could be moved to CommonBackend.
         self.backend_input_files.add(os.path.join(obj.topsrcdir,
             obj.manifest_relpath))
 
@@ -826,6 +1069,44 @@ class RecursiveMakeBackend(CommonBackend):
             path = '$(srcdir)/'
         backend_file.write('LOCAL_INCLUDES += -I%s%s\n' % (path, local_include))
 
+    def _process_generated_include(self, generated_include, backend_file):
+        if generated_include.startswith('/'):
+            path = self.environment.topobjdir.replace('\\', '/')
+        else:
+            path = ''
+        backend_file.write('LOCAL_INCLUDES += -I%s%s\n' % (path, generated_include))
+
+    def _process_java_jar_data(self, jar, backend_file):
+        target = jar.name
+        backend_file.write('JAVA_JAR_TARGETS += %s\n' % target)
+        backend_file.write('%s_DEST := %s.jar\n' % (target, jar.name))
+        if jar.sources:
+            backend_file.write('%s_JAVAFILES := %s\n' %
+                (target, ' '.join(jar.sources)))
+        if jar.generated_sources:
+            backend_file.write('%s_PP_JAVAFILES := %s\n' %
+                (target, ' '.join(os.path.join('generated', f) for f in jar.generated_sources)))
+        if jar.extra_jars:
+            backend_file.write('%s_EXTRA_JARS := %s\n' %
+                (target, ' '.join(jar.extra_jars)))
+        if jar.javac_flags:
+            backend_file.write('%s_JAVAC_FLAGS := %s\n' %
+                (target, ' '.join(jar.javac_flags)))
+
+    def _process_library_definition(self, libdef, backend_file):
+        backend_file.write('LIBRARY_NAME = %s\n' % libdef.basename)
+        thisobjdir = libdef.objdir
+        topobjdir = libdef.topobjdir.replace(os.sep, '/')
+        for objdir, basename in libdef.static_libraries:
+            # If this is an external objdir (i.e., comm-central), use the other
+            # directory instead of $(DEPTH).
+            if objdir.startswith(topobjdir + '/'):
+                relpath = '$(DEPTH)/%s' % mozpath.relpath(objdir, topobjdir)
+            else:
+                relpath = mozpath.relpath(objdir, thisobjdir)
+            backend_file.write('SHARED_LIBRARY_LIBS += %s/$(LIB_PREFIX)%s.$(LIB_SUFFIX)\n'
+                               % (relpath, basename))
+
     def _write_manifests(self, dest, manifests):
         man_dir = os.path.join(self.environment.topobjdir, '_build_manifests',
             dest)
@@ -837,19 +1118,15 @@ class RecursiveMakeBackend(CommonBackend):
         for k, manifest in manifests.items():
             purger.add(k)
 
-            fh = FileAvoidWrite(os.path.join(man_dir, k))
-            manifest.write(fileobj=fh)
-            self._update_from_avoid_write(fh.close())
+            with self._write_file(os.path.join(man_dir, k)) as fh:
+                manifest.write(fileobj=fh)
 
         purger.purge(man_dir)
 
     def _write_master_test_manifest(self, path, manifests):
-        master = FileAvoidWrite(path)
-        master.write(
-            '; THIS FILE WAS AUTOMATICALLY GENERATED. DO NOT MODIFY BY HAND.\n\n')
+        with self._write_file(path) as master:
+            master.write(
+                '; THIS FILE WAS AUTOMATICALLY GENERATED. DO NOT MODIFY BY HAND.\n\n')
 
-        for manifest in sorted(manifests):
-            master.write('[include:%s]\n' % manifest)
-
-        self._update_from_avoid_write(master.close())
-        self.summary.managed_count += 1
+            for manifest in sorted(manifests):
+                master.write('[include:%s]\n' % manifest)

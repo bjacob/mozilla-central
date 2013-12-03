@@ -6,6 +6,7 @@
 
 #include "MediaStreamGraph.h"
 #include "GetUserMediaRequest.h"
+#include "nsHashPropertyBag.h"
 #ifdef MOZ_WIDGET_GONK
 #include "nsIAudioManager.h"
 #endif
@@ -22,6 +23,8 @@
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
 #include "mozilla/dom/GetUserMediaRequestBinding.h"
+
+#include "Latency.h"
 
 // For PR_snprintf
 #include "prprf.h"
@@ -105,7 +108,7 @@ static nsresult CompareDictionaries(JSContext* aCx, JSObject *aA,
       bool success = JS_IdToValue(aCx, props[i], nameval.address());
       NS_ENSURE_TRUE(success, NS_ERROR_UNEXPECTED);
 
-      JS::Rooted<JSString*> namestr(aCx, JS_ValueToString(aCx, nameval));
+      JS::Rooted<JSString*> namestr(aCx, JS::ToString(aCx, nameval));
       NS_ENSURE_TRUE(namestr, NS_ERROR_UNEXPECTED);
       aDifference->Assign(JS_GetStringCharsZ(aCx, namestr));
       return NS_OK;
@@ -124,8 +127,8 @@ static nsresult ValidateTrackConstraints(
     nsString *aOutUnknownConstraint)
 {
   // First find raw mMandatory member (use MediaTrackConstraints as helper)
-  dom::RootedDictionary<MediaTrackConstraints> track(aCx);
   JS::Rooted<JS::Value> rawval(aCx, JS::ObjectValue(*aRaw));
+  dom::RootedDictionary<MediaTrackConstraints> track(aCx);
   bool success = track.Init(aCx, rawval);
   NS_ENSURE_TRUE(success, NS_ERROR_FAILURE);
 
@@ -564,6 +567,12 @@ public:
       AllocateInputPort(stream, MediaInputPort::FLAG_BLOCK_OUTPUT);
     trackunion->mSourceStream = stream;
     trackunion->mPort = port.forget();
+    // Log the relationship between SourceMediaStream and TrackUnion stream
+    // Make sure logger starts before capture
+    AsyncLatencyLogger::Get(true);
+    LogLatency(AsyncLatencyLogger::MediaStreamCreate,
+               reinterpret_cast<uint64_t>(stream.get()),
+               reinterpret_cast<int64_t>(trackunion->GetStream()));
 
     trackunion->CombineWithPrincipal(window->GetExtantDoc()->NodePrincipal());
 
@@ -584,7 +593,7 @@ public:
     nsRefPtr<MediaOperationRunnable> runnable(
       new MediaOperationRunnable(MEDIA_START, mListener, trackunion,
                                  tracksAvailableCallback,
-                                 mAudioSource, mVideoSource, false));
+                                 mAudioSource, mVideoSource, false, mWindowID));
     mediaThread->Dispatch(runnable, NS_DISPATCH_NORMAL);
 
 #ifdef MOZ_WEBRTC
@@ -1105,6 +1114,68 @@ MediaManager::GetInstance()
   return service.forget();
 }
 
+/* static */ nsresult
+MediaManager::NotifyRecordingStatusChange(nsPIDOMWindow* aWindow,
+                                          const nsString& aMsg,
+                                          const bool& aIsAudio,
+                                          const bool& aIsVideo)
+{
+  NS_ENSURE_ARG(aWindow);
+
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (!obs) {
+    NS_WARNING("Could not get the Observer service for GetUserMedia recording notification.");
+    return NS_ERROR_FAILURE;
+  }
+
+  nsRefPtr<nsHashPropertyBag> props = new nsHashPropertyBag();
+  props->SetPropertyAsBool(NS_LITERAL_STRING("isAudio"), aIsAudio);
+  props->SetPropertyAsBool(NS_LITERAL_STRING("isVideo"), aIsVideo);
+
+  bool isApp = false;
+  nsString requestURL;
+
+  if (nsCOMPtr<nsIDocShell> docShell = aWindow->GetDocShell()) {
+    nsresult rv = docShell->GetIsApp(&isApp);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    if (isApp) {
+      rv = docShell->GetAppManifestURL(requestURL);
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
+  }
+
+  if (!isApp) {
+    nsCString pageURL;
+    nsCOMPtr<nsIURI> docURI = aWindow->GetDocumentURI();
+    NS_ENSURE_TRUE(docURI, NS_ERROR_FAILURE);
+
+    nsresult rv = docURI->GetSpec(pageURL);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    requestURL = NS_ConvertUTF8toUTF16(pageURL);
+  }
+
+  props->SetPropertyAsBool(NS_LITERAL_STRING("isApp"), isApp);
+  props->SetPropertyAsAString(NS_LITERAL_STRING("requestURL"), requestURL);
+
+  obs->NotifyObservers(static_cast<nsIPropertyBag2*>(props),
+		       "recording-device-events",
+		       aMsg.get());
+
+  // Forward recording events to parent process.
+  // The events are gathered in chrome process and used for recording indicator
+  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    unused <<
+      dom::ContentChild::GetSingleton()->SendRecordingDeviceEvents(aMsg,
+                                                                   requestURL,
+                                                                   aIsAudio,
+                                                                   aIsVideo);
+  }
+
+  return NS_OK;
+}
+
 /**
  * The entry point for this file. A call from Navigator::mozGetUserMedia
  * will end up here. MediaManager is a singleton that is responsible
@@ -1226,17 +1297,19 @@ MediaManager::GetUserMedia(JSContext* aCx, bool aPrivileged,
 
   if (!unknownConstraintFound.IsEmpty()) {
     // An unsupported mandatory constraint was found.
-    // Things are set up enough here that we can fire Error callback.
+    //
+    // We continue to ignore these for now, because we implement just
+    // facingMode, which means all existing uses of mandatory width/height would
+    // fail on Firefox only otherwise, which is undesirable.
+    //
+    // There's also basis for always ignoring them in a new proposal.
+    // TODO(jib): This is a super-low-risk fix for backport. Clean up later.
 
     LOG(("Unsupported mandatory constraint: %s\n",
           NS_ConvertUTF16toUTF8(unknownConstraintFound).get()));
 
-    nsString errormsg(NS_LITERAL_STRING("NOT_SUPPORTED_ERR: "));
-    errormsg.Append(unknownConstraintFound);
-    NS_DispatchToMainThread(new ErrorCallbackRunnable(onSuccess.forget(),
-                                                      onError.forget(),
-                                                      errormsg, windowID));
-    return NS_OK;
+    // unknown constraints existed in aRawConstraints only, which is unused
+    // from here, so continuing here effectively ignores them, as is desired.
   }
 
   // Ensure there's a thread for gum to proxy to off main thread
@@ -1730,7 +1803,7 @@ GetUserMediaCallbackMediaStreamListener::Invalidate()
   runnable = new MediaOperationRunnable(MEDIA_STOP,
                                         this, nullptr, nullptr,
                                         mAudioSource, mVideoSource,
-                                        mFinished);
+                                        mFinished, mWindowID);
   mMediaThread->Dispatch(runnable, NS_DISPATCH_NORMAL);
 }
 
@@ -1769,11 +1842,6 @@ GetUserMediaNotificationEvent::Run()
   // releasing DOMMediaStream off the main thread, which is not allowed.
   nsRefPtr<DOMMediaStream> stream = mStream.forget();
 
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  if (!obs) {
-    NS_WARNING("Could not get the Observer service for GetUserMedia recording notification.");
-    return NS_ERROR_FAILURE;
-  }
   nsString msg;
   switch (mStatus) {
   case STARTING:
@@ -1787,15 +1855,11 @@ GetUserMediaNotificationEvent::Run()
     }
     break;
   }
-  obs->NotifyObservers(nullptr,
-		       "recording-device-events",
-		       msg.get());
-  // Forward recording events to parent process.
-  // The events are gathered in chrome process and used for recording indicator
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
-    unused << dom::ContentChild::GetSingleton()->SendRecordingDeviceEvents(msg);
-  }
-  return NS_OK;
+
+  nsCOMPtr<nsPIDOMWindow> window = nsGlobalWindow::GetInnerWindowWithId(mWindowID);
+  NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
+
+  return MediaManager::NotifyRecordingStatusChange(window, msg, mIsAudio, mIsVideo);
 }
 
 } // namespace mozilla

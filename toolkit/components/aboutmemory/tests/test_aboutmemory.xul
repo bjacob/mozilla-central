@@ -6,7 +6,7 @@
   <script type="application/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"/>
   <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/EventUtils.js"></script>
 
-  <!-- This file uses fake memory reporters to test the presentation of memory 
+  <!-- This file uses fake memory reporters to test the presentation of memory
        reports in about:memory.  test_memoryReporters.xul uses the real
        memory reporters to test whether the memory reporters are producing
        sensible results. -->
@@ -27,15 +27,8 @@
   let mgr = Cc["@mozilla.org/memory-reporter-manager;1"].
             getService(Ci.nsIMemoryReporterManager);
 
-  // Remove all the real reporters;  save them to restore at the end.
-  mgr.blockRegistration();
-  let e = mgr.enumerateReporters();
-  let realReporters = [];
-  while (e.hasMoreElements()) {
-    let r = e.getNext().QueryInterface(Ci.nsIMemoryReporter);
-    mgr.unregisterReporter(r);
-    realReporters.push(r);
-  }
+  // Hide all the real reporters;  we'll restore them at the end.
+  mgr.blockRegistrationAndHideExistingReporters();
 
   // Setup various fake-but-deterministic reporters.
   const KB = 1024;
@@ -50,8 +43,7 @@
   const PERCENTAGE = Ci.nsIMemoryReporter.UNITS_PERCENTAGE;
 
   let fakeReporters = [
-    { name: "fake0",
-      collectReports: function(aCbObj, aClosure) {
+    { collectReports: function(aCbObj, aClosure) {
         function f(aP, aK, aU, aA) {
           aCbObj.callback("", aP, aK, aU, aA, "Desc.", aClosure);
         }
@@ -88,8 +80,7 @@
         f("compartments/system/foo", OTHER, COUNT, 1);
       }
     },
-    { name: "fake1",
-      collectReports: function(aCbObj, aClosure) {
+    { collectReports: function(aCbObj, aClosure) {
         function f(aP, aK, aU, aA) {
           aCbObj.callback("", aP, aK, aU, aA, "Desc.", aClosure);
         }
@@ -104,8 +95,7 @@
         f("explicit/f/g/h/j", HEAP,    BYTES,  10 * MB);
       }
     },
-    { name: "fake2",
-      collectReports: function(aCbObj, aClosure) {
+    { collectReports: function(aCbObj, aClosure) {
         function f(aP, aK, aU, aA) {
           aCbObj.callback("", aP, aK, aU, aA, "Desc.", aClosure);
         }
@@ -116,8 +106,7 @@
         f("compartments/user/https:\\\\very-long-url.com\\very-long\\oh-so-long\\really-quite-long.html?a=2&b=3&c=4&d=5&e=abcdefghijklmnopqrstuvwxyz&f=123456789123456789123456789", OTHER, COUNT, 1);
       }
     },
-    { name: "compartments",
-      collectReports: function(aCbObj, aClosure) {
+    { collectReports: function(aCbObj, aClosure) {
         function f(aP) {
           aCbObj.callback("", aP, OTHER, COUNT, 1, "Desc.", aClosure);
         }
@@ -127,7 +116,7 @@
     }
   ];
   for (let i = 0; i < fakeReporters.length; i++) {
-    mgr.registerReporterEvenIfBlocked(fakeReporters[i]);
+    mgr.registerStrongReporterEvenIfBlocked(fakeReporters[i]);
   }
 
   // mgr.explicit sums "heap-allocated" and all the appropriate NONHEAP ones:
@@ -144,22 +133,13 @@
   } catch (ex) {
     is(ex.result, Cr.NS_ERROR_NOT_AVAILABLE, "mgr.explicit exception");
   }
- 
+
   // The main process always comes first when we display about:memory.  The
   // remaining processes are sorted by their |resident| values (starting with
   // the largest).  Processes without a |resident| memory reporter are saved
   // for the end.
   let fakeReporters2 = [
-    { name: "redundant/foobar",
-      collectReports: function(aCbObj, aClosure) {
-        // Shouldn't reach here;  aboutMemory.js should skip the reporter.
-        // (Nb: this must come after |mgr.explicit| is accessed, otherwise it
-        // *will* be run by nsMemoryReporterManager::GetExplicit()).
-        ok(false, "'redundant/foobar' reporter was run");
-      }
-    },
-    { name: "fake3",
-      collectReports: function(aCbObj, aClosure) {
+    { collectReports: function(aCbObj, aClosure) {
         function f(aP1, aP2, aK, aU, aA) {
           aCbObj.callback(aP1, aP2, aK, aU, aA, "Desc.", aClosure);
         }
@@ -174,7 +154,6 @@
                                     HEAP,    BYTES,200 * MB);
         f("2nd", "other0",          OTHER,   BYTES,666 * MB);
         f("2nd", "other1",          OTHER,   BYTES,111 * MB);
-        f("2nd", "redundant/blah",  NONHEAP, BYTES,24*4*KB); // ignored!
 
         // Check that we can handle "heap-allocated" not being present.
         f("3rd", "explicit/a/b",    HEAP,    BYTES,333 * MB);
@@ -214,7 +193,7 @@
     }
   ];
   for (let i = 0; i < fakeReporters2.length; i++) {
-    mgr.registerReporterEvenIfBlocked(fakeReporters2[i]);
+    mgr.registerStrongReporterEvenIfBlocked(fakeReporters2[i]);
   }
   fakeReporters = fakeReporters.concat(fakeReporters2);
   ]]>
@@ -288,6 +267,7 @@ Other Measurements\n\
    45.67% ── perc1\n\
   100.00% ── perc2\n\
 \n\
+End of Main Process\n\
 4th\n\
 \n\
 WARNING: the following values are negative or unreasonably large.\n\
@@ -323,6 +303,7 @@ Other Measurements\n\
    666.66% ── other6\n\
  200.00 MB ── resident\n\
 \n\
+End of 4th\n\
 3rd\n\
 \n\
 WARNING: the 'heap-allocated' memory reporter does not work for this platform and/or configuration. This means that 'heap-unclassified' is not shown and the 'explicit' tree shows less memory than it should.\n\
@@ -338,6 +319,7 @@ Other Measurements\n\
   1.00 MB ── other1\n\
 100.00 MB ── resident\n\
 \n\
+End of 3rd\n\
 2nd\n\
 Explicit Allocations\n\
 \n\
@@ -354,6 +336,7 @@ Other Measurements\n\
   666.00 MB ── other0\n\
   111.00 MB ── other1\n\
 \n\
+End of 2nd\n\
 5th\n\
 \n\
 WARNING: the following values are negative or unreasonably large.\n\
@@ -386,6 +369,7 @@ Other Measurements\n\
 \n\
 100.00 MB ── heap-allocated\n\
 \n\
+End of 5th\n\
 ";
 
   let amvExpectedText =
@@ -455,6 +439,7 @@ Other Measurements\n\
        45.67% ── perc1\n\
       100.00% ── perc2\n\
 \n\
+End of Main Process\n\
 4th\n\
 \n\
 WARNING: the following values are negative or unreasonably large.\n\
@@ -488,6 +473,7 @@ Other Measurements\n\
        666.66% ── other6\n\
  209,715,200 B ── resident\n\
 \n\
+End of 4th\n\
 3rd\n\
 \n\
 WARNING: the 'heap-allocated' memory reporter does not work for this platform and/or configuration. This means that 'heap-unclassified' is not shown and the 'explicit' tree shows less memory than it should.\n\
@@ -503,6 +489,7 @@ Other Measurements\n\
   1,048,576 B ── other1\n\
 104,857,600 B ── resident\n\
 \n\
+End of 3rd\n\
 2nd\n\
 Explicit Allocations\n\
 \n\
@@ -519,6 +506,7 @@ Other Measurements\n\
   698,351,616 B ── other0\n\
   116,391,936 B ── other1\n\
 \n\
+End of 2nd\n\
 5th\n\
 \n\
 WARNING: the following values are negative or unreasonably large.\n\
@@ -550,20 +538,12 @@ Other Measurements\n\
 \n\
 104,857,600 B ── heap-allocated\n\
 \n\
-"
+End of 5th\n\
+";
 
   function finish()
   {
-    // Unregister fake reporters and re-register the real reporters, just in
-    // case subsequent tests rely on them.
-    for (let i = 0; i < fakeReporters.length; i++) {
-      mgr.unregisterReporter(fakeReporters[i]);
-    }
-    for (let i = 0; i < realReporters.length; i++) {
-      mgr.registerReporterEvenIfBlocked(realReporters[i]);
-    }
-    mgr.unblockRegistration();
-
+    mgr.unblockRegistrationAndRestoreOriginalReporters();
     SimpleTest.finish();
   }
 
@@ -576,7 +556,7 @@ Other Measurements\n\
       let mostRecentActual;
       let frame = document.getElementById(aFrameId);
       frame.focus();
-        
+
       // Set the verbose checkbox value and click the go button.
       let doc = frame.contentWindow.document;
       let measureButton = doc.getElementById("measureButton");
@@ -597,9 +577,9 @@ Other Measurements\n\
         function() {
           ok(false, "pasted text doesn't match for " + aFrameId);
           dump("******EXPECTED******\n");
-          dump(aExpected);
+          dump("<<<" + aExpected + ">>>\n");
           dump("*******ACTUAL*******\n");
-          dump(mostRecentActual);
+          dump("<<<" + mostRecentActual + ">>>\n");
           dump("********************\n");
           finish();
         }

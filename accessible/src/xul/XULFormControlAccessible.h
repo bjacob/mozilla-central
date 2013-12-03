@@ -115,7 +115,7 @@ public:
 
   // Accessible
   virtual mozilla::a11y::role NativeRole();
-  virtual Relation RelationByType(uint32_t aRelationType);
+  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
 
 protected:
   // Accessible
@@ -240,6 +240,7 @@ public:
   virtual mozilla::a11y::role NativeRole();
   virtual uint64_t NativeState();
   virtual bool CanHaveAnonChildren();
+  virtual bool IsAcceptableChild(Accessible* aPossibleChild) const MOZ_OVERRIDE;
 
   // ActionAccessible
   virtual uint8_t ActionCount();
@@ -249,7 +250,7 @@ protected:
   virtual void CacheChildren();
 
   // HyperTextAccessible
-  virtual already_AddRefed<nsFrameSelection> FrameSelection();
+  virtual already_AddRefed<nsFrameSelection> FrameSelection() const;
 
   // nsXULTextFieldAccessible
   already_AddRefed<nsIContent> GetInputField() const;

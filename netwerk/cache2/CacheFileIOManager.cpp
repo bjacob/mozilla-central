@@ -2,9 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "CacheLog.h"
 #include "CacheFileIOManager.h"
 
-#include "CacheLog.h"
 #include "../cache/nsCacheUtils.h"
 #include "CacheHashUtils.h"
 #include "CacheStorageService.h"
@@ -99,7 +99,7 @@ public:
   SHA1Sum::Hash mHash;
 };
 
-PLDHashTableOps CacheFileHandles::mOps =
+const PLDHashTableOps CacheFileHandles::mOps =
 {
   PL_DHashAllocTable,
   PL_DHashFreeTable,
@@ -877,6 +877,8 @@ CacheFileIOManager::Shutdown()
   if (!gInstance)
     return NS_ERROR_NOT_INITIALIZED;
 
+  Telemetry::AutoTimer<Telemetry::NETWORK_DISK_CACHE_SHUTDOWN_V2> shutdownTimer;
+
   {
     mozilla::Mutex lock("CacheFileIOManager::Shutdown() lock");
     mozilla::CondVar condVar(lock, "CacheFileIOManager::Shutdown() condVar");
@@ -1002,7 +1004,7 @@ CacheFileIOManager::OpenFile(const nsACString &aKey,
        PromiseFlatCString(aKey).get(), aFlags, aCallback));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (!ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1101,7 +1103,7 @@ CacheFileIOManager::CloseHandle(CacheFileHandle *aHandle)
   LOG(("CacheFileIOManager::CloseHandle() [handle=%p]", aHandle));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (aHandle->IsClosed() || !ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1154,7 +1156,7 @@ CacheFileIOManager::Read(CacheFileHandle *aHandle, int64_t aOffset,
        "listener=%p]", aHandle, aOffset, aCount, aCallback));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (aHandle->IsClosed() || !ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1215,7 +1217,7 @@ CacheFileIOManager::Write(CacheFileHandle *aHandle, int64_t aOffset,
        aCallback));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (aHandle->IsClosed() || !ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1283,7 +1285,7 @@ CacheFileIOManager::DoomFile(CacheFileHandle *aHandle,
        aHandle, aCallback));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (aHandle->IsClosed() || !ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1347,7 +1349,7 @@ CacheFileIOManager::DoomFileByKey(const nsACString &aKey,
        PromiseFlatCString(aKey).get(), aCallback));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (!ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1408,7 +1410,7 @@ CacheFileIOManager::ReleaseNSPRHandle(CacheFileHandle *aHandle)
   LOG(("CacheFileIOManager::ReleaseNSPRHandle() [handle=%p]", aHandle));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (aHandle->IsClosed() || !ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1444,7 +1446,7 @@ CacheFileIOManager::TruncateSeekSetEOF(CacheFileHandle *aHandle,
        "EOFPos=%lld, listener=%p]", aHandle, aTruncatePos, aEOFPos, aCallback));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (aHandle->IsClosed() || !ioMan)
     return NS_ERROR_NOT_INITIALIZED;
@@ -1465,7 +1467,7 @@ CacheFileIOManager::EnumerateEntryFiles(EEnumerateMode aMode,
   LOG(("CacheFileIOManager::EnumerateEntryFiles(%d)", aMode));
 
   nsresult rv;
-  CacheFileIOManager *ioMan = gInstance;
+  nsRefPtr<CacheFileIOManager> ioMan = gInstance;
 
   if (!ioMan)
     return NS_ERROR_NOT_INITIALIZED;

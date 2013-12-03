@@ -21,14 +21,14 @@ class nsIObserver;
 namespace mozilla {
 namespace layers {
 
-class LayerManager;
+class ClientLayerManager;
 class CompositorParent;
 
 class CompositorChild : public PCompositorChild
 {
   NS_INLINE_DECL_REFCOUNTING(CompositorChild)
 public:
-  CompositorChild(LayerManager *aLayerManager);
+  CompositorChild(ClientLayerManager *aLayerManager);
   virtual ~CompositorChild();
 
   void Destroy();
@@ -38,12 +38,15 @@ public:
    * or Bridge() request from our parent process.  The Transport is to
    * the compositor's context.
    */
-  static bool
+  static PCompositorChild*
   Create(Transport* aTransport, ProcessId aOtherProcess);
 
   static PCompositorChild* Get();
 
   static bool ChildProcessHasCompositor() { return sCompositor != nullptr; }
+
+  virtual bool RecvInvalidateAll() MOZ_OVERRIDE;
+
 protected:
   virtual PLayerTransactionChild*
     AllocPLayerTransactionChild(const nsTArray<LayersBackend>& aBackendHints,
@@ -56,7 +59,7 @@ protected:
   virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
 
 private:
-  nsRefPtr<LayerManager> mLayerManager;
+  nsRefPtr<ClientLayerManager> mLayerManager;
   nsCOMPtr<nsIObserver> mMemoryPressureObserver;
 
   // When we're in a child process, this is the process-global

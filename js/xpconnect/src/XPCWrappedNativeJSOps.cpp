@@ -134,6 +134,8 @@ GetDoubleWrappedJSObject(XPCCallContext& ccx, XPCWrappedNative* wrapper)
 static bool
 XPC_WN_DoubleWrappedGetter(JSContext *cx, unsigned argc, jsval *vp)
 {
+    CallArgs args = CallArgsFromVp(argc, vp);
+
     RootedObject obj(cx, JS_THIS_OBJECT(cx, vp));
     if (!obj)
         return false;
@@ -149,7 +151,7 @@ XPC_WN_DoubleWrappedGetter(JSContext *cx, unsigned argc, jsval *vp)
         // This is pretty unexpected at this point. The object originally
         // responded to this get property call and now gives no object.
         // XXX Should this throw something at the caller?
-        *vp = JSVAL_NULL;
+        args.rval().setNull();
         return true;
     }
 
@@ -178,8 +180,9 @@ XPC_WN_DoubleWrappedGetter(JSContext *cx, unsigned argc, jsval *vp)
             }
         }
     }
-    *vp = OBJECT_TO_JSVAL(realObject);
-    return JS_WrapValue(cx, vp);
+
+    args.rval().setObject(*realObject);
+    return JS_WrapValue(cx, args.rval());
 }
 
 /***************************************************************************/
@@ -383,14 +386,6 @@ DefinePropertyIfFound(XPCCallContext& ccx,
     RootedValue funval(ccx);
     if (!member->NewFunctionObject(ccx, iface, obj, funval.address()))
         return false;
-
-#ifdef off_DEBUG_jband
-    {
-        static int cloneCount = 0;
-        if (!(++cloneCount%10))
-            printf("<><><> %d cloned functions created\n", cloneCount);
-    }
-#endif
 
     if (member->IsMethod()) {
         AutoResolveName arn(ccx, id);
@@ -736,6 +731,7 @@ const XPCWrappedNativeJSClass XPC_WN_NoHelper_JSClass = {
         nullptr, // deleteProperty
         nullptr, // deleteElement
         nullptr, // deleteSpecial
+        nullptr, nullptr, // watch/unwatch
         XPC_WN_JSOp_Enumerate,
         XPC_WN_JSOp_ThisObject,
     }
@@ -812,6 +808,7 @@ static bool
 XPC_WN_Helper_DelProperty(JSContext *cx, HandleObject obj, HandleId id,
                           bool *succeeded)
 {
+    *succeeded = true;
     PRE_HELPER_STUB
     DelProperty(wrapper, cx, obj, id, &retval);
     POST_HELPER_STUB
@@ -1132,11 +1129,8 @@ XPCNativeScriptableInfo::Construct(const XPCNativeScriptableCreateInfo* sci)
 
     XPCJSRuntime* rt = XPCJSRuntime::Get();
     XPCNativeScriptableSharedMap* map = rt->GetNativeScriptableSharedMap();
-    {   // scoped lock
-        XPCAutoLock lock(rt->GetMapLock());
-        success = map->GetNewOrUsed(sci->GetFlags(), name,
-                                    sci->GetInterfacesBitmap(), newObj);
-    }
+    success = map->GetNewOrUsed(sci->GetFlags(), name,
+                                sci->GetInterfacesBitmap(), newObj);
 
     if (!success) {
         delete newObj;

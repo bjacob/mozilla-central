@@ -29,6 +29,11 @@ const browserElementTestHelpers = {
     }
   },
 
+  _setPrefs: function() {
+    this.lockTestReady();
+    SpecialPowers.pushPrefEnv({'set': Array.slice(arguments)}, this.unlockTestReady.bind(this));
+  },
+
   _testReadyLockCount: 0,
   _firedTestReady: false,
   lockTestReady: function() {
@@ -44,8 +49,11 @@ const browserElementTestHelpers = {
   },
 
   enableProcessPriorityManager: function() {
-    this._setPref('dom.ipc.processPriorityManager.testMode', true);
-    this._setPref('dom.ipc.processPriorityManager.enabled', true);
+    this._setPrefs(
+      ['dom.ipc.processPriorityManager.testMode', true],
+      ['dom.ipc.processPriorityManager.enabled', true],
+      ['dom.ipc.processPriorityManager.backgroundLRUPoolLevels', 2]
+    );
   },
 
   setEnabledPref: function(value) {
@@ -183,6 +191,39 @@ function expectPriorityChange(childID, expectedPriority,
 
       if (priority == expectedPriority &&
           (!expectedCPUPriority || expectedCPUPriority == cpuPriority)) {
+        deferred.resolve();
+      } else {
+        deferred.reject();
+      }
+    }
+  );
+
+  return deferred.promise;
+}
+
+// Returns a promise which is resolved or rejected the next time the background
+// process childID changes its priority.  We resolve if the backgroundLRU
+// matches expectedBackgroundLRU and we reject otherwise.
+
+function expectPriorityWithBackgroundLRUSet(childID, expectedBackgroundLRU) {
+  var deferred = Promise.defer();
+
+  browserElementTestHelpers.addProcessPriorityObserver(
+    'process-priority-with-background-LRU-set',
+    function(subject, topic, data) {
+
+      dump("browserElementTestHelpers got notify: topic "+ topic + ", data " + data +"\n");
+      [id, priority, cpuPriority, backgroundLRU] = data.split(":");
+      if (id != childID) {
+        dump("id(" + id + ") != childID(" + childID + ")\n");
+        return;
+      }
+
+      is(backgroundLRU, expectedBackgroundLRU,
+         'Expected backgroundLRU ' + backgroundLRU + ' of childID ' + childID +
+         ' to change to ' + expectedBackgroundLRU);
+
+      if (backgroundLRU == expectedBackgroundLRU) {
         deferred.resolve();
       } else {
         deferred.reject();

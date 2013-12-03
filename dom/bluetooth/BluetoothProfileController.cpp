@@ -10,7 +10,6 @@
 #include "BluetoothA2dpManager.h"
 #include "BluetoothHfpManager.h"
 #include "BluetoothHidManager.h"
-#include "BluetoothOppManager.h"
 
 #include "BluetoothUtils.h"
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
@@ -26,20 +25,38 @@ USING_BLUETOOTH_NAMESPACE
   } while(0)
 
 BluetoothProfileController::BluetoothProfileController(
+                                   bool aConnect,
                                    const nsAString& aDeviceAddress,
                                    BluetoothReplyRunnable* aRunnable,
-                                   BluetoothProfileControllerCallback aCallback)
-  : mCallback(aCallback)
+                                   BluetoothProfileControllerCallback aCallback,
+                                   uint16_t aServiceUuid,
+                                   uint32_t aCod)
+  : mConnect(aConnect)
   , mDeviceAddress(aDeviceAddress)
   , mRunnable(aRunnable)
+  , mCallback(aCallback)
   , mSuccess(false)
+  , mProfilesIndex(-1)
 {
   MOZ_ASSERT(!aDeviceAddress.IsEmpty());
   MOZ_ASSERT(aRunnable);
   MOZ_ASSERT(aCallback);
 
-  mProfilesIndex = -1;
   mProfiles.Clear();
+
+  /**
+   * If the service uuid is not specified, either connect multiple profiles
+   * based on Cod, or disconnect all connected profiles.
+   */
+  if (!aServiceUuid) {
+    mTarget.cod = aCod;
+    SetupProfiles(false);
+  } else {
+    BluetoothServiceClass serviceClass =
+      BluetoothUuidHelper::GetBluetoothServiceClass(aServiceUuid);
+    mTarget.service = serviceClass;
+    SetupProfiles(true);
+  }
 }
 
 BluetoothProfileController::~BluetoothProfileController()
@@ -49,7 +66,7 @@ BluetoothProfileController::~BluetoothProfileController()
   mCallback = nullptr;
 }
 
-bool
+void
 BluetoothProfileController::AddProfileWithServiceClass(
                                                    BluetoothServiceClass aClass)
 {
@@ -62,9 +79,6 @@ BluetoothProfileController::AddProfileWithServiceClass(
     case BluetoothServiceClass::A2DP:
       profile = BluetoothA2dpManager::Get();
       break;
-    case BluetoothServiceClass::OBJECT_PUSH:
-      profile = BluetoothOppManager::Get();
-      break;
     case BluetoothServiceClass::HID:
       profile = BluetoothHidManager::Get();
       break;
@@ -72,13 +86,13 @@ BluetoothProfileController::AddProfileWithServiceClass(
       DispatchBluetoothReply(mRunnable, BluetoothValue(),
                              NS_LITERAL_STRING(ERR_UNKNOWN_PROFILE));
       mCallback();
-      return false;
+      return;
   }
 
-  return AddProfile(profile);
+  AddProfile(profile);
 }
 
-bool
+void
 BluetoothProfileController::AddProfile(BluetoothProfileManagerBase* aProfile,
                                        bool aCheckConnected)
 {
@@ -86,47 +100,51 @@ BluetoothProfileController::AddProfile(BluetoothProfileManagerBase* aProfile,
     DispatchBluetoothReply(mRunnable, BluetoothValue(),
                            NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     mCallback();
-    return false;
+    return;
   }
 
   if (aCheckConnected && !aProfile->IsConnected()) {
-    return false;
+    BT_WARNING("The profile is not connected.");
+    return;
   }
 
   mProfiles.AppendElement(aProfile);
-  return true;
 }
 
 void
-BluetoothProfileController::Connect(BluetoothServiceClass aClass)
+BluetoothProfileController::SetupProfiles(bool aAssignServiceClass)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  NS_ENSURE_TRUE_VOID(AddProfileWithServiceClass(aClass));
+  /**
+   * When a service class is assigned, only its corresponding profile is put
+   * into array.
+   */
+  if (aAssignServiceClass) {
+    AddProfileWithServiceClass(mTarget.service);
+    return;
+  }
 
-  ConnectNext();
-}
+  // For a disconnect request, all connected profiles are put into array.
+  if (!mConnect) {
+    AddProfile(BluetoothHidManager::Get(), true);
+    AddProfile(BluetoothA2dpManager::Get(), true);
+    AddProfile(BluetoothHfpManager::Get(), true);
+    return;
+  }
 
-void
-BluetoothProfileController::Connect(uint32_t aCod)
-{
-  MOZ_ASSERT(NS_IsMainThread());
+  /**
+   * For a connect request, put multiple profiles into array and connect to
+   * all of them sequencely.
+   */
+  bool hasAudio = HAS_AUDIO(mTarget.cod);
+  bool hasRendering = HAS_RENDERING(mTarget.cod);
+  bool isPeripheral = IS_PERIPHERAL(mTarget.cod);
 
-  // Put multiple profiles into array and connect to all of them sequencely
-  bool hasAudio = HAS_AUDIO(aCod);
-  bool hasObjectTransfer = HAS_OBJECT_TRANSFER(aCod);
-  bool hasRendering = HAS_RENDERING(aCod);
-  bool isPeripheral = IS_PERIPHERAL(aCod);
-
-  NS_ENSURE_TRUE_VOID(hasAudio || hasObjectTransfer ||
-                      hasRendering || isPeripheral);
-
-  mCod = aCod;
+  NS_ENSURE_TRUE_VOID(hasAudio || hasRendering || isPeripheral);
 
   /**
    * Connect to HFP/HSP first. Then, connect A2DP if Rendering bit is set.
-   * It's almost impossible to send file to a remote device which is an Audio
-   * device or a Rendering device, so we won't connect OPP in that case.
    */
   if (hasAudio) {
     AddProfile(BluetoothHfpManager::Get());
@@ -134,26 +152,44 @@ BluetoothProfileController::Connect(uint32_t aCod)
   if (hasRendering) {
     AddProfile(BluetoothA2dpManager::Get());
   }
-  if (hasObjectTransfer && !hasAudio && !hasRendering) {
-    AddProfile(BluetoothOppManager::Get());
-  }
   if (isPeripheral) {
     AddProfile(BluetoothHidManager::Get());
   }
-
-  ConnectNext();
 }
 
 void
-BluetoothProfileController::ConnectNext()
+BluetoothProfileController::Start()
 {
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!mDeviceAddress.IsEmpty());
+  MOZ_ASSERT(mProfilesIndex == -1);
+  NS_ENSURE_TRUE_VOID(mProfiles.Length() > 0);
+
+  ++mProfilesIndex;
+  BT_LOGR_PROFILE(mProfiles[mProfilesIndex], "");
+
+  if (mConnect) {
+    mProfiles[mProfilesIndex]->Connect(mDeviceAddress, this);
+  } else {
+    mProfiles[mProfilesIndex]->Disconnect(this);
+  }
+}
+
+void
+BluetoothProfileController::Next()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!mDeviceAddress.IsEmpty());
+  MOZ_ASSERT(mProfilesIndex < mProfiles.Length());
 
   if (++mProfilesIndex < mProfiles.Length()) {
-    MOZ_ASSERT(!mDeviceAddress.IsEmpty());
     BT_LOGR_PROFILE(mProfiles[mProfilesIndex], "");
 
-    mProfiles[mProfilesIndex]->Connect(mDeviceAddress, this);
+    if (mConnect) {
+      mProfiles[mProfilesIndex]->Connect(mDeviceAddress, this);
+    } else {
+      mProfiles[mProfilesIndex]->Disconnect(this);
+    }
     return;
   }
 
@@ -183,53 +219,7 @@ BluetoothProfileController::OnConnect(const nsAString& aErrorStr)
     mSuccess = true;
   }
 
-  ConnectNext();
-}
-
-void
-BluetoothProfileController::Disconnect(BluetoothServiceClass aClass)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (aClass != BluetoothServiceClass::UNKNOWN) {
-    NS_ENSURE_TRUE_VOID(AddProfileWithServiceClass(aClass));
-
-    DisconnectNext();
-    return;
-  }
-
-  // Put all connected profiles into array and disconnect all of them
-  AddProfile(BluetoothHidManager::Get(), true);
-  AddProfile(BluetoothOppManager::Get(), true);
-  AddProfile(BluetoothA2dpManager::Get(), true);
-  AddProfile(BluetoothHfpManager::Get(), true);
-
-  DisconnectNext();
-}
-
-void
-BluetoothProfileController::DisconnectNext()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (++mProfilesIndex < mProfiles.Length()) {
-    BT_LOGR_PROFILE(mProfiles[mProfilesIndex], "");
-
-    mProfiles[mProfilesIndex]->Disconnect(this);
-    return;
-  }
-
-  MOZ_ASSERT(mRunnable && mCallback);
-
-  // The action has been completed, so the dom request is replied and then
-  // the callback is invoked
-  if (mSuccess) {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(true), EmptyString());
-  } else {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(),
-                           NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
-  }
-  mCallback();
+  Next();
 }
 
 void
@@ -245,5 +235,5 @@ BluetoothProfileController::OnDisconnect(const nsAString& aErrorStr)
     mSuccess = true;
   }
 
-  DisconnectNext();
+  Next();
 }

@@ -3,8 +3,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MODULE = 'content'
-
 XPIDL_MODULE = 'dom_webspeechrecognition'
 
 XPIDL_SOURCES = [
@@ -25,8 +23,11 @@ EXPORTS.mozilla.dom += [
     'test/FakeSpeechRecognitionService.h',
 ]
 
-CPP_SOURCES += [
+UNIFIED_SOURCES += [
     'EnableWebSpeechRecognitionCheck.cpp',
+    'endpointer.cc',
+    'energy_endpointer.cc',
+    'energy_endpointer_params.cc',
     'SpeechGrammar.cpp',
     'SpeechGrammarList.cpp',
     'SpeechRecognition.cpp',
@@ -34,13 +35,13 @@ CPP_SOURCES += [
     'SpeechRecognitionResult.cpp',
     'SpeechRecognitionResultList.cpp',
     'SpeechStreamListener.cpp',
-    'endpointer.cc',
-    'energy_endpointer.cc',
-    'energy_endpointer_params.cc',
     'test/FakeSpeechRecognitionService.cpp',
 ]
 
-LIBXUL_LIBRARY = True
+LOCAL_INCLUDES += [
+    '/dom/base',
+]
 
-LIBRARY_NAME = 'gkconwebspeechrecognition_s'
+include('/ipc/chromium/chromium-config.mozbuild')
 
+FINAL_LIBRARY = 'gklayout'

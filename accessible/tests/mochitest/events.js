@@ -1210,6 +1210,14 @@ function synthUpKey(aNodeOrID, aCheckerOrEventSeq, aArgs)
 }
 
 /**
+ * Left arrow key invoker.
+ */
+function synthLeftKey(aNodeOrID, aCheckerOrEventSeq)
+{
+  this.__proto__ = new synthKey(aNodeOrID, "VK_LEFT", null, aCheckerOrEventSeq);
+}
+
+/**
  * Right arrow key invoker.
  */
 function synthRightKey(aNodeOrID, aCheckerOrEventSeq)
@@ -1658,6 +1666,17 @@ function invokerChecker(aEventType, aTargetOrFunc, aTargetFuncArg, aIsAsync)
 }
 
 /**
+ * Generic invoker checker for unexpected events.
+ */
+function unexpectedInvokerChecker(aEventType, aTargetOrFunc, aTargetFuncArg)
+{
+  this.__proto__ = new invokerChecker(aEventType, aTargetOrFunc,
+                                      aTargetFuncArg, true);
+
+  this.unexpected = true;
+}
+
+/**
  * Common invoker checker for async events.
  */
 function asyncInvokerChecker(aEventType, aTargetOrFunc, aTargetFuncArg)
@@ -1733,6 +1752,19 @@ function caretMoveChecker(aCaretOffset, aTargetOrFunc, aTargetFuncArg)
     is(aEvent.QueryInterface(nsIAccessibleCaretMoveEvent).caretOffset,
        aCaretOffset,
        "Wrong caret offset for " + prettyName(aEvent.accessible));
+  }
+}
+
+/**
+ * Text selection change checker.
+ */
+function textSelectionChecker(aID, aStartOffset, aEndOffset)
+{
+  this.__proto__ = new invokerChecker(EVENT_TEXT_SELECTION_CHANGED, aID);
+
+  this.check = function textSelectionChecker_check(aEvent)
+  {
+    testTextGetSelection(aID, aStartOffset, aEndOffset, 0);
   }
 }
 
@@ -1927,7 +1959,12 @@ var gA11yEventObserver =
         var type = eventTypeToString(event.eventType);
         var info = "Event type: " + type;
 
-        if (event instanceof nsIAccessibleTextChangeEvent) {
+        if (event instanceof nsIAccessibleStateChangeEvent) {
+          var stateStr = statesToString(event.isExtraState ? 0 : event.state,
+                                        event.isExtraState ? event.state : 0);
+          info += ", state: " + stateStr + ", is enabled: " + event.isEnabled;
+
+        } else if (event instanceof nsIAccessibleTextChangeEvent) {
           info += ", start: " + event.start + ", length: " + event.length +
             ", " + (event.isInserted ? "inserted" : "removed") +
             " text: " + event.modifiedText;

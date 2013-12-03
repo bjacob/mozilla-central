@@ -39,6 +39,10 @@ class gfxContext;
 class nsIWidget;
 
 namespace mozilla {
+namespace gfx {
+class DrawTarget;
+}
+
 namespace layers {
 
 class APZCTreeManager;
@@ -69,6 +73,12 @@ public:
 
   virtual ~CompositorParent();
 
+  // IToplevelProtocol::CloneToplevel()
+  virtual IToplevelProtocol*
+  CloneToplevel(const InfallibleTArray<mozilla::ipc::ProtocolFdMapping>& aFds,
+                base::ProcessHandle aPeerProcess,
+                mozilla::ipc::ProtocolCloneContext* aCtx) MOZ_OVERRIDE;
+
   virtual bool RecvWillStop() MOZ_OVERRIDE;
   virtual bool RecvStop() MOZ_OVERRIDE;
   virtual bool RecvPause() MOZ_OVERRIDE;
@@ -77,6 +87,10 @@ public:
   virtual bool RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,
                                 SurfaceDescriptor* aOutSnapshot);
   virtual bool RecvFlushRendering() MOZ_OVERRIDE;
+
+  virtual bool RecvNotifyRegionInvalidated(const nsIntRegion& aRegion) MOZ_OVERRIDE;
+  virtual bool RecvStartFrameTimeRecording(const int32_t& aBufferSize, uint32_t* aOutStartIndex) MOZ_OVERRIDE;
+  virtual bool RecvStopFrameTimeRecording(const uint32_t& aStartIndex, InfallibleTArray<float>* intervals) MOZ_OVERRIDE;
 
   virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
 
@@ -172,7 +186,7 @@ public:
    * A new child process has been configured to push transactions
    * directly to us.  Transport is to its thread context.
    */
-  static bool
+  static PCompositorParent*
   Create(Transport* aTransport, ProcessId aOtherProcess);
 
   /**
@@ -220,8 +234,9 @@ protected:
                                  bool* aSuccess);
   virtual bool DeallocPLayerTransactionParent(PLayerTransactionParent* aLayers);
   virtual void ScheduleTask(CancelableTask*, int);
-  virtual void Composite();
-  virtual void ComposeToTarget(gfxContext* aTarget);
+  void Composite();
+  void CompositeInTransaction();
+  virtual void ComposeToTarget(gfx::DrawTarget* aTarget);
 
   void SetEGLSurfaceSize(int width, int height);
 

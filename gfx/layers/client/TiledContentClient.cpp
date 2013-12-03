@@ -21,6 +21,7 @@
 #include "nsSize.h"                     // for nsIntSize
 #include "gfxReusableSharedImageSurfaceWrapper.h"
 #include "nsMathUtils.h"               // for NS_roundf
+#include "gfx2DGlue.h"
 
 #ifdef GFX_TILEDLAYER_DEBUG_OVERLAY
 #include "cairo.h"
@@ -273,7 +274,7 @@ BasicTiledLayerBuffer::PaintThebes(const nsIntRegion& aNewValidRegion,
 #endif
     PROFILER_LABEL("BasicTiledLayerBuffer", "PaintThebesSingleBufferDraw");
 
-    mCallback(mThebesLayer, ctxt, aPaintRegion, nsIntRegion(), mCallbackData);
+    mCallback(mThebesLayer, ctxt, aPaintRegion, CLIP_NONE, nsIntRegion(), mCallbackData);
   }
 
 #ifdef GFX_TILEDLAYER_PREF_WARNINGS
@@ -315,7 +316,7 @@ BasicTiledLayerBuffer::ValidateTileInternal(BasicTiledLayerTile aTile,
 {
   if (aTile.IsPlaceholderTile()) {
     RefPtr<DeprecatedTextureClient> textureClient =
-      new DeprecatedTextureClientTile(mManager, TextureInfo(BUFFER_TILED));
+      new DeprecatedTextureClientTile(mManager->AsShadowForwarder(), TextureInfo(BUFFER_TILED));
     aTile.mDeprecatedTextureClient = static_cast<DeprecatedTextureClientTile*>(textureClient.get());
   }
   aTile.mDeprecatedTextureClient->EnsureAllocated(gfx::IntSize(GetTileLength(), GetTileLength()), GetContentType());
@@ -382,6 +383,7 @@ BasicTiledLayerBuffer::ValidateTileInternal(BasicTiledLayerTile aTile,
     mCallback(mThebesLayer, ctxt,
               nsIntRegion(nsIntRect(a, nsIntSize(GetScaledTileLength(),
                                                  GetScaledTileLength()))),
+              CLIP_NONE,
               nsIntRegion(), mCallbackData);
   }
 
@@ -417,25 +419,28 @@ BasicTiledLayerBuffer::ValidateTile(BasicTiledLayerTile aTile,
   return aTile;
 }
 
-static nsIntRect
-RoundedTransformViewportBounds(const gfx::Rect& aViewport,
-                               const CSSPoint& aScrollOffset,
-                               const gfxSize& aResolution,
-                               float aScaleX,
-                               float aScaleY,
-                               const gfx3DMatrix& aTransform)
+static LayoutDeviceRect
+TransformCompositionBounds(const ScreenRect& aCompositionBounds,
+                           const CSSToScreenScale& aZoom,
+                           const ScreenPoint& aScrollOffset,
+                           const CSSToScreenScale& aResolution,
+                           const gfx3DMatrix& aTransformScreenToLayout)
 {
-  gfxRect transformedViewport(aViewport.x - (aScrollOffset.x * aResolution.width),
-                              aViewport.y - (aScrollOffset.y * aResolution.height),
-                              aViewport.width, aViewport.height);
-  transformedViewport.Scale((aScaleX / aResolution.width) / aResolution.width,
-                            (aScaleY / aResolution.height) / aResolution.height);
-  transformedViewport = aTransform.TransformBounds(transformedViewport);
+  // Transform the current composition bounds into transformed layout device
+  // space by compensating for the difference in resolution and subtracting the
+  // old composition bounds origin.
+  ScreenRect offsetViewportRect = (aCompositionBounds / aZoom) * aResolution;
+  offsetViewportRect.MoveBy(-aScrollOffset);
 
-  return nsIntRect((int32_t)floor(transformedViewport.x),
-                   (int32_t)floor(transformedViewport.y),
-                   (int32_t)ceil(transformedViewport.width),
-                   (int32_t)ceil(transformedViewport.height));
+  gfxRect transformedViewport =
+    aTransformScreenToLayout.TransformBounds(
+      gfxRect(offsetViewportRect.x, offsetViewportRect.y,
+              offsetViewportRect.width, offsetViewportRect.height));
+
+  return LayoutDeviceRect(transformedViewport.x,
+                          transformedViewport.y,
+                          transformedViewport.width,
+                          transformedViewport.height);
 }
 
 bool
@@ -446,6 +451,14 @@ BasicTiledLayerBuffer::ComputeProgressiveUpdateRegion(const nsIntRegion& aInvali
                                                       bool aIsRepeated)
 {
   aRegionToPaint = aInvalidRegion;
+
+  // If the composition bounds rect is empty, we can't make any sensible
+  // decision about how to update coherently. In this case, just update
+  // everything in one transaction.
+  if (aPaintData->mCompositionBounds.IsEmpty()) {
+    aPaintData->mPaintFinished = true;
+    return false;
+  }
 
   // If this is a low precision buffer, we force progressive updates. The
   // assumption is that the contents is less important, so visual coherency
@@ -459,27 +472,37 @@ BasicTiledLayerBuffer::ComputeProgressiveUpdateRegion(const nsIntRegion& aInvali
   // Find out the current view transform to determine which tiles to draw
   // first, and see if we should just abort this paint. Aborting is usually
   // caused by there being an incoming, more relevant paint.
-  gfx::Rect viewport;
-  float scaleX, scaleY;
+  ScreenRect compositionBounds;
+  CSSToScreenScale zoom;
   if (mManager->ProgressiveUpdateCallback(!staleRegion.Contains(aInvalidRegion),
-                                          viewport,
-                                          scaleX, scaleY, !drawingLowPrecision)) {
-    PROFILER_LABEL("ContentClient", "Abort painting");
-    aRegionToPaint.SetEmpty();
-    return aIsRepeated;
+                                          compositionBounds, zoom,
+                                          !drawingLowPrecision)) {
+    // We ignore if front-end wants to abort if this is the first,
+    // non-low-precision paint, as in that situation, we're about to override
+    // front-end's page/viewport metrics.
+    if (!aPaintData->mFirstPaint || drawingLowPrecision) {
+      PROFILER_LABEL("ContentClient", "Abort painting");
+      aRegionToPaint.SetEmpty();
+      return aIsRepeated;
+    }
   }
 
-  // Transform the screen coordinates into local layer coordinates.
-  nsIntRect roundedTransformedViewport =
-    RoundedTransformViewportBounds(viewport, aPaintData->mScrollOffset, aPaintData->mResolution,
-                                   scaleX, scaleY, aPaintData->mTransformScreenToLayer);
+  // Transform the screen coordinates into transformed layout device coordinates.
+  LayoutDeviceRect transformedCompositionBounds =
+    TransformCompositionBounds(compositionBounds, zoom, aPaintData->mScrollOffset,
+                            aPaintData->mResolution, aPaintData->mTransformScreenToLayout);
 
   // Paint tiles that have stale content or that intersected with the screen
   // at the time of issuing the draw command in a single transaction first.
   // This is to avoid rendering glitches on animated page content, and when
   // layers change size/shape.
-  nsIntRect criticalViewportRect = roundedTransformedViewport.Intersect(aPaintData->mCompositionBounds);
-  aRegionToPaint.And(aInvalidRegion, criticalViewportRect);
+  LayoutDeviceRect coherentUpdateRect =
+    transformedCompositionBounds.Intersect(aPaintData->mCompositionBounds);
+
+  nsIntRect roundedCoherentUpdateRect =
+    LayoutDeviceIntRect::ToUntyped(RoundedOut(coherentUpdateRect));
+
+  aRegionToPaint.And(aInvalidRegion, roundedCoherentUpdateRect);
   aRegionToPaint.Or(aRegionToPaint, staleRegion);
   bool drawingStale = !aRegionToPaint.IsEmpty();
   if (!drawingStale) {
@@ -488,8 +511,8 @@ BasicTiledLayerBuffer::ComputeProgressiveUpdateRegion(const nsIntRegion& aInvali
 
   // Prioritise tiles that are currently visible on the screen.
   bool paintVisible = false;
-  if (aRegionToPaint.Intersects(roundedTransformedViewport)) {
-    aRegionToPaint.And(aRegionToPaint, roundedTransformedViewport);
+  if (aRegionToPaint.Intersects(roundedCoherentUpdateRect)) {
+    aRegionToPaint.And(aRegionToPaint, roundedCoherentUpdateRect);
     paintVisible = true;
   }
 

@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "mozilla/dom/DesktopNotification.h"
 #include "mozilla/dom/DesktopNotificationBinding.h"
+#include "mozilla/dom/AppNotificationServiceOptionsBinding.h"
 #include "nsContentPermissionHelper.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/dom/PBrowserChild.h"
@@ -13,6 +14,7 @@
 #include "nsIAppsService.h"
 #include "PCOMContentPermissionRequestChild.h"
 #include "nsIScriptSecurityManager.h"
+#include "nsServiceManagerUtils.h"
 
 namespace mozilla {
 namespace dom {
@@ -90,11 +92,18 @@ DesktopNotification::PostDesktopNotification()
       nsCOMPtr<nsIAppsService> appsService = do_GetService("@mozilla.org/AppsService;1");
       nsString manifestUrl = EmptyString();
       appsService->GetManifestURLByLocalId(appId, manifestUrl);
+      mozilla::AutoSafeJSContext cx;
+      JS::Rooted<JS::Value> val(cx);
+      AppNotificationServiceOptions ops;
+      ops.mTextClickable = true;
+      ops.mManifestURL = manifestUrl;
+
+      if (!ops.ToObject(cx, JS::NullPtr(), &val)) {
+        return NS_ERROR_FAILURE;
+      }
+
       return appNotifier->ShowAppNotification(mIconURL, mTitle, mDescription,
-                                              true,
-                                              manifestUrl,
-                                              mObserver,
-                                              EmptyString());
+                                              mObserver, val);
     }
   }
 #endif
@@ -110,13 +119,15 @@ DesktopNotification::PostDesktopNotification()
   // to nsIObservers, thus cookies must be unique to differentiate observers.
   nsString uniqueName = NS_LITERAL_STRING("desktop-notification:");
   uniqueName.AppendInt(sCount++);
+  nsIPrincipal* principal = GetOwner()->GetDoc()->NodePrincipal();
   return alerts->ShowAlertNotification(mIconURL, mTitle, mDescription,
                                        true,
                                        uniqueName,
                                        mObserver,
                                        uniqueName,
                                        NS_LITERAL_STRING("auto"),
-                                       EmptyString());
+                                       EmptyString(),
+                                       principal);
 }
 
 DesktopNotification::DesktopNotification(const nsAString & title,

@@ -8,6 +8,7 @@
 
 #include "mozilla/dom/DocumentFragment.h"
 #include "mozilla/Base64.h"
+#include "mozilla/BasicEvents.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Selection.h"
 #include "mozilla/Util.h"
@@ -26,7 +27,6 @@
 #include "nsEditor.h"
 #include "nsEditorUtils.h"
 #include "nsError.h"
-#include "nsGUIEvent.h"
 #include "nsGkAtoms.h"
 #include "nsHTMLEditUtils.h"
 #include "nsHTMLEditor.h"

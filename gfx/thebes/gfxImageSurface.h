@@ -9,7 +9,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "gfxASurface.h"
 #include "nsAutoPtr.h"
-#include "gfxPoint.h"
+#include "nsSize.h"
 
 // ARGB -- raw buffer.. wont be changed.. good for storing data.
 
@@ -101,6 +101,12 @@ public:
      * Assumes that the format of this surface is compatable with aSurface
      */
     bool CopyFrom (mozilla::gfx::SourceSurface *aSurface);
+
+    /**
+     * Fast copy to a source surface; returns TRUE if successful, FALSE otherwise
+     * Assumes that the format of this surface is compatible with aSurface
+     */
+    bool CopyTo (mozilla::gfx::SourceSurface *aSurface);
 
     /* return new Subimage with pointing to original image starting from aRect.pos
      * and size of aRect.size. New subimage keeping current image reference

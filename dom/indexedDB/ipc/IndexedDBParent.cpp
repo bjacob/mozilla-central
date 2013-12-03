@@ -53,7 +53,7 @@ AutoSetCurrentTransaction::AutoSetCurrentTransaction(
 
 AutoSetCurrentTransaction::~AutoSetCurrentTransaction()
 {
-  AsyncConnectionHelper::SetCurrentTransaction(NULL);
+  AsyncConnectionHelper::SetCurrentTransaction(nullptr);
 }
 
 /*******************************************************************************
@@ -110,6 +110,24 @@ IndexedDBParent::CheckWritePermission(const nsAString& aDatabaseName)
 
   NS_NAMED_LITERAL_CSTRING(permission, PERMISSION_SUFFIX_WRITE);
   return CheckPermissionInternal(aDatabaseName, permission);
+}
+
+mozilla::ipc::IProtocol*
+IndexedDBParent::CloneProtocol(Channel* aChannel,
+                               mozilla::ipc::ProtocolCloneContext* aCtx)
+{
+  MOZ_ASSERT(mManagerContent != nullptr);
+  MOZ_ASSERT(mManagerTab == nullptr);
+  MOZ_ASSERT(!mDisconnected);
+  MOZ_ASSERT(IndexedDatabaseManager::Get());
+  MOZ_ASSERT(IndexedDatabaseManager::IsMainProcess());
+
+  ContentParent* contentParent = aCtx->GetContentParent();
+  nsAutoPtr<PIndexedDBParent> actor(contentParent->AllocPIndexedDBParent());
+  if (!actor || !contentParent->RecvPIndexedDBConstructor(actor)) {
+    return nullptr;
+  }
+  return actor.forget();
 }
 
 bool
@@ -397,7 +415,7 @@ IndexedDBDatabaseParent::HandleRequestEvent(nsIDOMEvent* aEvent,
   MOZ_ASSERT(!JSVAL_IS_PRIMITIVE(result));
 
   IDBDatabase *database;
-  rv = UNWRAP_OBJECT(IDBDatabase, cx, &result.toObject(), database);
+  rv = UNWRAP_OBJECT(IDBDatabase, &result.toObject(), database);
   if (NS_FAILED(rv)) {
     NS_WARNING("Didn't get the object we expected!");
     return rv;
@@ -549,7 +567,7 @@ void
 IndexedDBDatabaseParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   if (mDatabase) {
-    mDatabase->SetActor(static_cast<IndexedDBDatabaseParent*>(NULL));
+    mDatabase->SetActor(static_cast<IndexedDBDatabaseParent*>(nullptr));
     mDatabase->Invalidate();
   }
 }
@@ -728,7 +746,7 @@ IndexedDBTransactionParent::ActorDestroy(ActorDestroyReason aWhy)
       mArtificialRequestCount = false;
 #endif
     }
-    mTransaction->SetActor(static_cast<IndexedDBTransactionParent*>(NULL));
+    mTransaction->SetActor(static_cast<IndexedDBTransactionParent*>(nullptr));
   }
 }
 
@@ -980,7 +998,7 @@ void
 IndexedDBCursorParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   MOZ_ASSERT(mCursor);
-  mCursor->SetActor(static_cast<IndexedDBCursorParent*>(NULL));
+  mCursor->SetActor(static_cast<IndexedDBCursorParent*>(nullptr));
 }
 
 bool
@@ -1057,7 +1075,7 @@ void
 IndexedDBObjectStoreParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   if (mObjectStore) {
-    mObjectStore->SetActor(static_cast<IndexedDBObjectStoreParent*>(NULL));
+    mObjectStore->SetActor(static_cast<IndexedDBObjectStoreParent*>(nullptr));
   }
 }
 
@@ -1097,6 +1115,9 @@ IndexedDBObjectStoreParent::RecvPIndexedDBRequestConstructor(
     case ObjectStoreRequestParams::TGetAllParams:
       return actor->GetAll(aParams.get_GetAllParams());
 
+    case ObjectStoreRequestParams::TGetAllKeysParams:
+      return actor->GetAllKeys(aParams.get_GetAllKeysParams());
+
     case ObjectStoreRequestParams::TAddParams:
       return actor->Add(aParams.get_AddParams());
 
@@ -1114,6 +1135,9 @@ IndexedDBObjectStoreParent::RecvPIndexedDBRequestConstructor(
 
     case ObjectStoreRequestParams::TOpenCursorParams:
       return actor->OpenCursor(aParams.get_OpenCursorParams());
+
+    case ObjectStoreRequestParams::TOpenKeyCursorParams:
+      return actor->OpenKeyCursor(aParams.get_OpenKeyCursorParams());
 
     default:
       MOZ_CRASH("Unknown type!");
@@ -1335,7 +1359,7 @@ void
 IndexedDBIndexParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   if (mIndex) {
-    mIndex->SetActor(static_cast<IndexedDBIndexParent*>(NULL));
+    mIndex->SetActor(static_cast<IndexedDBIndexParent*>(nullptr));
   }
 }
 
@@ -1436,7 +1460,7 @@ void
 IndexedDBRequestParentBase::ActorDestroy(ActorDestroyReason aWhy)
 {
   if (mRequest) {
-    mRequest->SetActor(NULL);
+    mRequest->SetActor(nullptr);
   }
 }
 
@@ -1546,6 +1570,44 @@ IndexedDBObjectStoreRequestParent::GetAll(const GetAllParams& aParams)
 
     ErrorResult rv;
     request = mObjectStore->GetAllInternal(keyRange, aParams.limit(), rv);
+    ENSURE_SUCCESS(rv, false);
+  }
+
+  request->SetActor(this);
+  mRequest.swap(request);
+  return true;
+}
+
+bool
+IndexedDBObjectStoreRequestParent::GetAllKeys(const GetAllKeysParams& aParams)
+{
+  MOZ_ASSERT(mRequestType == ParamsUnionType::TGetAllKeysParams);
+  MOZ_ASSERT(mObjectStore);
+
+  nsRefPtr<IDBRequest> request;
+
+  const ipc::OptionalKeyRange keyRangeUnion = aParams.optionalKeyRange();
+
+  nsRefPtr<IDBKeyRange> keyRange;
+
+  switch (keyRangeUnion.type()) {
+    case ipc::OptionalKeyRange::TKeyRange:
+      keyRange =
+        IDBKeyRange::FromSerializedKeyRange(keyRangeUnion.get_KeyRange());
+      break;
+
+    case ipc::OptionalKeyRange::Tvoid_t:
+      break;
+
+    default:
+      MOZ_CRASH("Unknown param type!");
+  }
+
+  {
+    AutoSetCurrentTransaction asct(mObjectStore->Transaction());
+
+    ErrorResult rv;
+    request = mObjectStore->GetAllKeysInternal(keyRange, aParams.limit(), rv);
     ENSURE_SUCCESS(rv, false);
   }
 
@@ -1726,6 +1788,47 @@ IndexedDBObjectStoreRequestParent::OpenCursor(const OpenCursorParams& aParams)
 
     ErrorResult rv;
     request = mObjectStore->OpenCursorInternal(keyRange, direction, rv);
+    ENSURE_SUCCESS(rv, false);
+  }
+
+  request->SetActor(this);
+  mRequest.swap(request);
+  return true;
+}
+
+bool
+IndexedDBObjectStoreRequestParent::OpenKeyCursor(
+                                             const OpenKeyCursorParams& aParams)
+{
+  MOZ_ASSERT(mRequestType == ParamsUnionType::TOpenKeyCursorParams);
+  MOZ_ASSERT(mObjectStore);
+
+  const ipc::OptionalKeyRange keyRangeUnion = aParams.optionalKeyRange();
+
+  nsRefPtr<IDBKeyRange> keyRange;
+
+  switch (keyRangeUnion.type()) {
+    case ipc::OptionalKeyRange::TKeyRange:
+      keyRange =
+        IDBKeyRange::FromSerializedKeyRange(keyRangeUnion.get_KeyRange());
+      break;
+
+    case ipc::OptionalKeyRange::Tvoid_t:
+      break;
+
+    default:
+      MOZ_CRASH("Unknown param type!");
+  }
+
+  size_t direction = static_cast<size_t>(aParams.direction());
+
+  nsRefPtr<IDBRequest> request;
+
+  {
+    AutoSetCurrentTransaction asct(mObjectStore->Transaction());
+
+    ErrorResult rv;
+    request = mObjectStore->OpenKeyCursorInternal(keyRange, direction, rv);
     ENSURE_SUCCESS(rv, false);
   }
 

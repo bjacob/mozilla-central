@@ -10,6 +10,7 @@ import os
 import sys
 import which
 
+from configobj import ConfigObjError
 from StringIO import StringIO
 
 from mozversioncontrol.repoupdate import (
@@ -17,7 +18,10 @@ from mozversioncontrol.repoupdate import (
     update_git_repo,
 )
 
-from .config import MercurialConfig
+from .config import (
+    HOST_FINGERPRINTS,
+    MercurialConfig,
+)
 
 
 INITIAL_MESSAGE = '''
@@ -105,7 +109,13 @@ class MercurialSetupWizard(object):
                 'up to date.')
             return 1
 
-        c = MercurialConfig(config_paths)
+        try:
+            c = MercurialConfig(config_paths)
+        except ConfigObjError as e:
+            print('Error importing existing Mercurial config!\n'
+                  '%s\n'
+                  'If using quotes, they must wrap the entire string.' % e)
+            return 1
 
         print(INITIAL_MESSAGE)
         raw_input()
@@ -256,17 +266,20 @@ class MercurialSetupWizard(object):
         return 0
 
     def update_mercurial_repo(self, hg, url, dest, branch, msg):
+        # We always pass the host fingerprints that we "know" to be canonical
+        # because the existing config may have outdated fingerprints and this
+        # may cause Mercurial to abort.
         return self._update_repo(hg, url, dest, branch, msg,
-            update_mercurial_repo)
+            update_mercurial_repo, hostfingerprints=HOST_FINGERPRINTS)
 
     def update_git_repo(self, git, url, dest, ref, msg):
         return self._update_repo(git, url, dest, ref, msg, update_git_repo)
 
-    def _update_repo(self, binary, url, dest, branch, msg, fn):
+    def _update_repo(self, binary, url, dest, branch, msg, fn, *args, **kwargs):
         print('=' * 80)
         print(msg)
         try:
-            fn(binary, url, dest, branch)
+            fn(binary, url, dest, branch, *args, **kwargs)
         finally:
             print('=' * 80)
             print('')

@@ -7,17 +7,18 @@
 #include "jit/BytecodeAnalysis.h"
 
 #include "jsopcode.h"
-
+#include "jit/IonSpewer.h"
 #include "jsopcodeinlines.h"
 
 using namespace js;
 using namespace js::jit;
 
-BytecodeAnalysis::BytecodeAnalysis(JSScript *script)
+BytecodeAnalysis::BytecodeAnalysis(TempAllocator &alloc, JSScript *script)
   : script_(script),
-    infos_(),
+    infos_(alloc),
     usesScopeChain_(false),
-    hasTryFinally_(false)
+    hasTryFinally_(false),
+    hasSetArg_(false)
 {
 }
 
@@ -39,25 +40,25 @@ struct CatchFinallyRange
 };
 
 bool
-BytecodeAnalysis::init(JSContext *cx)
+BytecodeAnalysis::init(TempAllocator &alloc, GSNCache &gsn)
 {
-    if (!infos_.growByUninitialized(script_->length))
+    if (!infos_.growByUninitialized(script_->length()))
         return false;
 
-    jsbytecode *end = script_->code + script_->length;
+    jsbytecode *end = script_->codeEnd();
 
     // Clear all BytecodeInfo.
     mozilla::PodZero(infos_.begin(), infos_.length());
     infos_[0].init(/*stackDepth=*/0);
 
-    Vector<CatchFinallyRange, 0, IonAllocPolicy> catchFinallyRanges;
+    Vector<CatchFinallyRange, 0, IonAllocPolicy> catchFinallyRanges(alloc);
 
-    for (jsbytecode *pc = script_->code; pc < end; pc += GetBytecodeLength(pc)) {
+    for (jsbytecode *pc = script_->code(); pc < end; pc += GetBytecodeLength(pc)) {
         JSOp op = JSOp(*pc);
-        unsigned offset = pc - script_->code;
+        unsigned offset = script_->pcToOffset(pc);
 
         IonSpew(IonSpew_BaselineOp, "Analyzing op @ %d (end=%d): %s",
-                int(pc - script_->code), int(end - script_->code), js_CodeName[op]);
+                int(script_->pcToOffset(pc)), int(script_->length()), js_CodeName[op]);
 
         // If this bytecode info has not yet been initialized, it's not reachable.
         if (!infos_[offset].initialized)
@@ -67,7 +68,7 @@ BytecodeAnalysis::init(JSContext *cx)
         unsigned stackDepth = infos_[offset].stackDepth;
 #ifdef DEBUG
         for (jsbytecode *chkpc = pc + 1; chkpc < (pc + GetBytecodeLength(pc)); chkpc++)
-            JS_ASSERT(!infos_[chkpc - script_->code].initialized);
+            JS_ASSERT(!infos_[script_->pcToOffset(chkpc)].initialized);
 #endif
 
         unsigned nuses = GetUseCount(script_, offset);
@@ -120,7 +121,7 @@ BytecodeAnalysis::init(JSContext *cx)
 
             // Get the pc of the last instruction in the try block. It's a JSOP_GOTO to
             // jump over the catch/finally blocks.
-            jssrcnote *sn = js_GetSrcNote(cx, script_, pc);
+            jssrcnote *sn = GetSrcNote(gsn, script_, pc);
             JS_ASSERT(SN_TYPE(sn) == SRC_TRY);
 
             jsbytecode *endOfTry = pc + js_GetSrcNoteOffset(sn, 0);
@@ -133,7 +134,7 @@ BytecodeAnalysis::init(JSContext *cx)
             while (!catchFinallyRanges.empty() && catchFinallyRanges.back().end <= offset)
                 catchFinallyRanges.popBack();
 
-            CatchFinallyRange range(endOfTry - script_->code, afterTry - script_->code);
+            CatchFinallyRange range(script_->pcToOffset(endOfTry), script_->pcToOffset(afterTry));
             if (!catchFinallyRanges.append(range))
                 return false;
             break;
@@ -166,6 +167,10 @@ BytecodeAnalysis::init(JSContext *cx)
             hasTryFinally_ = true;
             break;
 
+          case JSOP_SETARG:
+            hasSetArg_ = true;
+            break;
+
           default:
             break;
         }
@@ -186,14 +191,14 @@ BytecodeAnalysis::init(JSContext *cx)
             infos_[targetOffset].jumpTarget = true;
 
             if (jumpBack)
-                pc = script_->code + targetOffset;
+                pc = script_->offsetToPC(targetOffset);
         }
 
         // Handle any fallthrough from this opcode.
         if (BytecodeFallsThrough(op)) {
             jsbytecode *nextpc = pc + GetBytecodeLength(pc);
             JS_ASSERT(nextpc < end);
-            unsigned nextOffset = nextpc - script_->code;
+            unsigned nextOffset = script_->pcToOffset(nextpc);
 
             infos_[nextOffset].init(stackDepth);
 

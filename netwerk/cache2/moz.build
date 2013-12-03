@@ -15,37 +15,42 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'necko_cache2'
 
-MODULE = 'nkcache2'
-
 EXPORTS += [
     'CacheObserver.h',
     'CacheStorageService.h',
 ]
 
-CPP_SOURCES += [
-    'AppCacheStorage.cpp',
+UNIFIED_SOURCES += [
     'CacheEntriesEnumerator.cpp',
+    'CacheHashUtils.cpp',
+    'CacheIOThread.cpp',
+    'CacheObserver.cpp',
+]
+
+# AppCacheStorage.cpp cannot be built in unified mode because it uses plarena.h.
+# The rest of these files cannot be built in unified mode because they rely oni
+# including prlog.h after nsCache.h.
+SOURCES += [
+    'AppCacheStorage.cpp',
     'CacheEntry.cpp',
     'CacheFile.cpp',
     'CacheFileChunk.cpp',
-    'CacheFileMetadata.cpp',
     'CacheFileInputStream.cpp',
     'CacheFileIOManager.cpp',
+    'CacheFileMetadata.cpp',
     'CacheFileOutputStream.cpp',
-    'CacheHashUtils.cpp',
-    'CacheIOThread.cpp',
     'CacheLog.cpp',
-    'CacheObserver.cpp',
     'CacheStorage.cpp',
     'CacheStorageService.cpp',
     'OldWrappers.cpp',
 ]
 
-LIBRARY_NAME = 'nkcache2_s'
+LOCAL_INCLUDES += [
+    '../base/src',
+]
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
-
 MSVC_ENABLE_PGO = True
 
+FINAL_LIBRARY = 'necko'

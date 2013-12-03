@@ -99,6 +99,7 @@
 #include "nsIWinAppHelper.h"
 #include <windows.h>
 #include "cairo/cairo-features.h"
+#include "mozilla/WindowsVersion.h"
 #ifdef MOZ_METRO
 #include <roapi.h>
 #endif
@@ -126,10 +127,14 @@
 #include "nsXREDirProvider.h"
 #include "nsToolkitCompsCID.h"
 
+#if defined(XP_WIN) && defined(MOZ_METRO)
+#include "updatehelper.h"
+#endif
+
 #include "nsINIParser.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/StartupTimeline.h"
-#include "mozilla/mozPoisonWrite.h"
+#include "mozilla/LateWriteChecks.h"
 
 #include <stdlib.h>
 
@@ -148,6 +153,8 @@
 #include <process.h>
 #include <shlobj.h>
 #include "nsThreadUtils.h"
+#include <comdef.h>
+#include <wbemidl.h>
 #endif
 
 #ifdef XP_MACOSX
@@ -391,7 +398,7 @@ static void Output(bool isError, const char *fmt, ... )
                         wide_msg,
                         sizeof(wide_msg) / sizeof(wchar_t));
 
-    MessageBoxW(NULL, wide_msg, L"XULRunner", flags);
+    MessageBoxW(nullptr, wide_msg, L"XULRunner", flags);
     PR_smprintf_free(msg);
   }
 #else
@@ -584,7 +591,7 @@ class nsXULAppInfo : public nsIXULAppInfo,
 
 {
 public:
-  nsXULAppInfo() {}
+  MOZ_CONSTEXPR nsXULAppInfo() {}
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIXULAPPINFO
   NS_DECL_NSIXULRUNTIME
@@ -1155,10 +1162,10 @@ ProfileServiceFactoryConstructor(const mozilla::Module& module, const mozilla::M
 NS_DEFINE_NAMED_CID(APPINFO_CID);
 
 static const mozilla::Module::CIDEntry kXRECIDs[] = {
-  { &kAPPINFO_CID, false, NULL, AppInfoConstructor },
-  { &kProfileServiceCID, false, ProfileServiceFactoryConstructor, NULL },
-  { &kNativeAppSupportCID, false, NULL, ScopedXPCOMStartup::CreateAppSupport },
-  { NULL }
+  { &kAPPINFO_CID, false, nullptr, AppInfoConstructor },
+  { &kProfileServiceCID, false, ProfileServiceFactoryConstructor, nullptr },
+  { &kNativeAppSupportCID, false, nullptr, ScopedXPCOMStartup::CreateAppSupport },
+  { nullptr }
 };
 
 static const mozilla::Module::ContractIDEntry kXREContracts[] = {
@@ -1169,7 +1176,7 @@ static const mozilla::Module::ContractIDEntry kXREContracts[] = {
 #endif
   { NS_PROFILESERVICE_CONTRACTID, &kProfileServiceCID },
   { NS_NATIVEAPPSUPPORT_CONTRACTID, &kNativeAppSupportCID },
-  { NULL }
+  { nullptr }
 };
 
 static const mozilla::Module kXREModule = {
@@ -1541,7 +1548,7 @@ char *createEnv()
   // copy the existing environment
   char *env = (char *)calloc(0x6000, sizeof(char));
   if (!env) {
-    return NULL;
+    return nullptr;
   }
 
   // walk along the environ string array of the C library and copy
@@ -1647,7 +1654,7 @@ static nsresult LaunchChild(nsINativeAppSupport* aNative,
   SaveToEnv("MOZ_LAUNCHED_CHILD=1");
 
 #if defined(MOZ_WIDGET_ANDROID)
-  mozilla::AndroidBridge::Bridge()->ScheduleRestart();
+  mozilla::widget::android::GeckoAppShell::ScheduleRestart();
 #else
 #if defined(XP_MACOSX)
   CommandLineServiceMac::SetupMacCommandLine(gRestartArgc, gRestartArgv, true);
@@ -1759,7 +1766,7 @@ ProfileLockedDialog(nsIFile* aProfileDir, nsIFile* aProfileLocalDir,
     if (aUnlocker) {
       int32_t button;
 #ifdef MOZ_WIDGET_ANDROID
-      mozilla::AndroidBridge::Bridge()->KillAnyZombies();
+      mozilla::widget::android::GeckoAppShell::KillAnyZombies();
       button = 1;
 #else
       const uint32_t flags =
@@ -1786,7 +1793,7 @@ ProfileLockedDialog(nsIFile* aProfileDir, nsIFile* aProfileLocalDir,
       }
     } else {
 #ifdef MOZ_WIDGET_ANDROID
-      if (mozilla::AndroidBridge::Bridge()->UnlockProfile()) {
+      if (mozilla::widget::android::GeckoAppShell::UnlockProfile()) {
         return NS_LockProfilePath(aProfileDir, aProfileLocalDir, 
                                   nullptr, aResult);
       }
@@ -2037,6 +2044,8 @@ static nsresult
 SelectProfile(nsIProfileLock* *aResult, nsIToolkitProfileService* aProfileSvc, nsINativeAppSupport* aNative,
               bool* aStartOffline, nsACString* aProfileName)
 {
+  StartupTimeline::Record(StartupTimeline::SELECT_PROFILE);
+
   nsresult rv;
   ArgResult ar;
   const char* arg;
@@ -2180,12 +2189,12 @@ SelectProfile(nsIProfileLock* *aResult, nsIToolkitProfileService* aProfileSvc, n
         return rv;
       }
       
-      // As with -profile, assume that the given path will be used for both the
-      // main profile directory and the temp profile directory.
-      rv = aProfileSvc->CreateProfile(lf, lf, nsDependentCSubstring(arg, delim),
+      // As with -profile, assume that the given path will be used for the
+      // main profile directory.
+      rv = aProfileSvc->CreateProfile(lf, nsDependentCSubstring(arg, delim),
                                      getter_AddRefs(profile));
     } else {
-      rv = aProfileSvc->CreateProfile(nullptr, nullptr, nsDependentCString(arg),
+      rv = aProfileSvc->CreateProfile(nullptr, nsDependentCString(arg),
                                      getter_AddRefs(profile));
     }
     // Some pathological arguments can make it this far
@@ -2270,7 +2279,6 @@ SelectProfile(nsIProfileLock* *aResult, nsIToolkitProfileService* aProfileSvc, n
     // create a default profile
     nsCOMPtr<nsIToolkitProfile> profile;
     nsresult rv = aProfileSvc->CreateProfile(nullptr, // choose a default dir for us
-                                             nullptr, // choose a default dir for us
                                              NS_LITERAL_CSTRING("default"),
                                              getter_AddRefs(profile));
     if (NS_SUCCEEDED(rv)) {
@@ -2311,17 +2319,31 @@ SelectProfile(nsIProfileLock* *aResult, nsIToolkitProfileService* aProfileSvc, n
         else
           gDoProfileReset = false;
       }
+
+      // If you close Firefox and very quickly reopen it, the old Firefox may
+      // still be closing down. Rather than immediately showing the
+      // "Firefox is running but is not responding" message, we spend a few
+      // seconds retrying first.
+
+      static const int kLockRetrySeconds = 5;
+      static const int kLockRetrySleepMS = 100;
+
       nsCOMPtr<nsIProfileUnlocker> unlocker;
-      rv = profile->Lock(getter_AddRefs(unlocker), aResult);
-      if (NS_SUCCEEDED(rv)) {
-        // Try to grab the profile name.
-        if (aProfileName) {
-          rv = profile->GetName(*aProfileName);
-          if (NS_FAILED(rv))
-            aProfileName->Truncate(0);
+      const TimeStamp start = TimeStamp::Now();
+      do {
+        rv = profile->Lock(getter_AddRefs(unlocker), aResult);
+        if (NS_SUCCEEDED(rv)) {
+          StartupTimeline::Record(StartupTimeline::AFTER_PROFILE_LOCKED);
+          // Try to grab the profile name.
+          if (aProfileName) {
+            rv = profile->GetName(*aProfileName);
+            if (NS_FAILED(rv))
+              aProfileName->Truncate(0);
+          }
+          return NS_OK;
         }
-        return NS_OK;
-      }
+        PR_Sleep(kLockRetrySleepMS);
+      } while (TimeStamp::Now() - start < TimeDuration::FromSeconds(kLockRetrySeconds));
 
       return ProfileLockedDialog(profile, unlocker, aNative, aResult);
     }
@@ -2605,7 +2627,7 @@ static void MOZ_gdk_display_close(GdkDisplay *display)
   GtkSettings* settings =
     gtk_settings_get_for_screen(gdk_display_get_default_screen(display));
   gchar *theme_name;
-  g_object_get(settings, "gtk-theme-name", &theme_name, NULL);
+  g_object_get(settings, "gtk-theme-name", &theme_name, nullptr);
   if (theme_name) {
     theme_is_qt = strcmp(theme_name, "Qt") == 0;
     if (theme_is_qt)
@@ -2645,7 +2667,7 @@ static void MOZ_gdk_display_close(GdkDisplay *display)
   // Now that we have finished with GTK and Pango, we could unref fontmap,
   // which would allow us to call FcFini, but removing what is really
   // Pango's ref feels a bit evil.  Pango-1.22 will have support for
-  // pango_cairo_font_map_set_default(NULL), which would release the
+  // pango_cairo_font_map_set_default(nullptr), which would release the
   // reference on the old fontmap.
 
   // cairo_debug_reset_static_data() is prototyped through cairo.h included
@@ -2849,11 +2871,10 @@ XREMain::XRE_mainInit(bool* aExitFlag)
     // manual font file I/O on _all_ system fonts.  To avoid this, load the
     // dwrite library and create a factory as early as possible so that the
     // FntCache service is ready by the time it's needed.
-      
-    OSVERSIONINFO vinfo;
-    vinfo.dwOSVersionInfoSize = sizeof(vinfo);
-    if (GetVersionEx(&vinfo) && vinfo.dwMajorVersion >= 6) {
-      CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&InitDwriteBG, NULL, 0, NULL);
+
+    if (IsVistaOrLater()) {
+      CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE)&InitDwriteBG,
+                   nullptr, 0, nullptr);
     }
   }
 #endif
@@ -3200,6 +3221,88 @@ XREMain::XRE_mainInit(bool* aExitFlag)
 
   return 0;
 }
+
+#ifdef MOZ_CRASHREPORTER
+#ifdef XP_WIN
+/**
+ * Uses WMI to read some manufacturer information that may be useful for
+ * diagnosing hardware-specific crashes. This function is best-effort; failures
+ * shouldn't burden the caller. COM must be initialized before calling.
+ */
+static void AnnotateSystemManufacturer()
+{
+  nsRefPtr<IWbemLocator> locator;
+
+  HRESULT hr = CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_IWbemLocator, getter_AddRefs(locator));
+
+  if (FAILED(hr)) {
+    return;
+  }
+
+  nsRefPtr<IWbemServices> services;
+
+  hr = locator->ConnectServer(_bstr_t(L"ROOT\\CIMV2"), nullptr, nullptr, nullptr,
+                              0, nullptr, nullptr, getter_AddRefs(services));
+
+  if (FAILED(hr)) {
+    return;
+  }
+
+  hr = CoSetProxyBlanket(services, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr,
+                         RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
+                         nullptr, EOAC_NONE);
+
+  if (FAILED(hr)) {
+    return;
+  }
+
+  nsRefPtr<IEnumWbemClassObject> enumerator;
+
+  hr = services->ExecQuery(_bstr_t(L"WQL"), _bstr_t(L"SELECT * FROM Win32_BIOS"),
+                           WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                           nullptr, getter_AddRefs(enumerator));
+
+  if (FAILED(hr) || !enumerator) {
+    return;
+  }
+
+  nsRefPtr<IWbemClassObject> classObject;
+  ULONG results;
+
+  hr = enumerator->Next(WBEM_INFINITE, 1, getter_AddRefs(classObject), &results);
+
+  if (FAILED(hr) || results == 0) {
+    return;
+  }
+
+  VARIANT value;
+  VariantInit(&value);
+
+  hr = classObject->Get(L"Manufacturer", 0, &value, 0, 0);
+
+  if (SUCCEEDED(hr) && V_VT(&value) == VT_BSTR) {
+    CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("BIOS_Manufacturer"),
+                                       NS_ConvertUTF16toUTF8(V_BSTR(&value)));
+  }
+
+  VariantClear(&value);
+}
+
+static void PR_CALLBACK AnnotateSystemManufacturer_ThreadStart(void*)
+{
+  HRESULT hr = CoInitialize(nullptr);
+
+  if (FAILED(hr)) {
+    return;
+  }
+
+  AnnotateSystemManufacturer();
+
+  CoUninitialize();
+}
+#endif
+#endif
 
 namespace mozilla {
   ShutdownChecksMode gShutdownChecks = SCM_NOTHING;
@@ -3678,6 +3781,12 @@ XREMain::XRE_mainRun()
                                      nsPrintfCString("%.16llx", uint64_t(gMozillaPoisonBase)));
   CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("FramePoisonSize"),
                                      nsPrintfCString("%lu", uint32_t(gMozillaPoisonSize)));
+
+#ifdef XP_WIN
+  PR_CreateThread(PR_USER_THREAD, AnnotateSystemManufacturer_ThreadStart, 0,
+                  PR_PRIORITY_LOW, PR_GLOBAL_THREAD, PR_UNJOINABLE_THREAD, 0);
+#endif
+
 #endif
 
   if (mStartOffline) {
@@ -3834,6 +3943,7 @@ XREMain::XRE_mainRun()
     if (obsService)
       obsService->NotifyObservers(nullptr, "final-ui-startup", nullptr);
 
+    (void)appStartup->DoneStartingUp();
     appStartup->GetShuttingDown(&mShuttingDown);
   }
 
@@ -3908,7 +4018,7 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
   // This must be done before g_thread_init() is called.
   g_slice_set_config(G_SLICE_CONFIG_ALWAYS_MALLOC, 1);
 #endif
-  g_thread_init(NULL);
+  g_thread_init(nullptr);
 #endif
 
   // init
@@ -3941,12 +4051,18 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
 
   // Check for an application initiated restart.  This is one that
   // corresponds to nsIAppStartup.quit(eRestart)
-  if (rv == NS_SUCCESS_RESTART_APP) {
+  if (rv == NS_SUCCESS_RESTART_APP || rv == NS_SUCCESS_RESTART_METRO_APP) {
     appInitiatedRestart = true;
-  } else {
-    // We will have a real shutdown, let ShutdownXPCOM poison writes to
-    // find any late ones.
-    mozilla::EnableWritePoisoning();
+
+    // We have an application restart don't do any shutdown checks here
+    // In particular we don't want to poison IO for checking late-writes.
+    gShutdownChecks = SCM_NOTHING;
+
+    #if defined(MOZ_METRO) && defined(XP_WIN)
+    if (rv == NS_SUCCESS_RESTART_METRO_APP) {
+      LaunchDefaultMetroBrowser();
+    }
+    #endif
   }
 
   if (!mShuttingDown) {
@@ -4126,8 +4242,8 @@ void SetWindowsEnvironment(WindowsEnvironmentType aEnvID);
 #endif // MOZ_METRO || !defined(XP_WIN)
 
 void
-XRE_DisableWritePoisoning(void) {
-  mozilla::DisableWritePoisoning();
+XRE_StopLateWriteChecks(void) {
+  mozilla::StopLateWriteChecks();
 }
 
 int

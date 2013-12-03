@@ -101,6 +101,8 @@ public:
 
   // MathML scriptlevel support
   int8_t  mScriptLevel;          // [inherited]
+  // MathML  mathvariant support
+  uint8_t mMathVariant;          // [inherited]
 
   // was mLanguage set based on a lang attribute in the document?
   bool mExplicitLanguage;        // [inherited]
@@ -443,6 +445,7 @@ struct nsStyleBackground {
     uint8_t mAttachment;                // [reset] See nsStyleConsts.h
     uint8_t mClip;                      // [reset] See nsStyleConsts.h
     uint8_t mOrigin;                    // [reset] See nsStyleConsts.h
+    uint8_t mBlendMode;                 // [reset] See nsStyleConsts.h
     Repeat mRepeat;                     // [reset] See nsStyleConsts.h
     Position mPosition;                 // [reset]
     nsStyleImage mImage;                // [reset]
@@ -488,7 +491,8 @@ struct nsStyleBackground {
            mRepeatCount,
            mPositionCount,
            mImageCount,
-           mSizeCount;
+           mSizeCount,
+           mBlendModeCount;
   // Layers are stored in an array, matching the top-to-bottom order in
   // which they are specified in CSS.  The number of layers to be used
   // should come from the background-image property.  We create
@@ -630,7 +634,7 @@ struct nsBorderColors {
       c1 = c1->mNext;
       c2 = c2->mNext;
     }
-    // both should be NULL if these are equal, otherwise one
+    // both should be nullptr if these are equal, otherwise one
     // has more colors than another
     return !c1 && !c2;
   }
@@ -915,7 +919,7 @@ struct nsStyleBorder {
 
 public:
   nsBorderColors** mBorderColors;        // [reset] composite (stripe) colors
-  nsRefPtr<nsCSSShadowArray> mBoxShadow; // [reset] NULL for 'none'
+  nsRefPtr<nsCSSShadowArray> mBoxShadow; // [reset] nullptr for 'none'
 
 #ifdef DEBUG
   bool mImageTracked;
@@ -1310,6 +1314,8 @@ struct nsStyleText {
 
   uint8_t mTextAlign;                   // [inherited] see nsStyleConsts.h
   uint8_t mTextAlignLast;               // [inherited] see nsStyleConsts.h
+  bool mTextAlignTrue : 1;              // [inherited] see nsStyleConsts.h
+  bool mTextAlignLastTrue : 1;          // [inherited] see nsStyleConsts.h
   uint8_t mTextTransform;               // [inherited] see nsStyleConsts.h
   uint8_t mWhiteSpace;                  // [inherited] see nsStyleConsts.h
   uint8_t mWordBreak;                   // [inherited] see nsStyleConsts.h
@@ -1325,7 +1331,7 @@ struct nsStyleText {
   nsStyleCoord  mLineHeight;            // [inherited] coord, factor, normal
   nsStyleCoord  mTextIndent;            // [inherited] coord, percent, calc
 
-  nsRefPtr<nsCSSShadowArray> mTextShadow; // [inherited] NULL in case of a zero-length
+  nsRefPtr<nsCSSShadowArray> mTextShadow; // [inherited] nullptr in case of a zero-length
 
   bool WhiteSpaceIsSignificant() const {
     return mWhiteSpace == NS_STYLE_WHITESPACE_PRE ||
@@ -1778,6 +1784,17 @@ struct nsStyleDisplay {
     return IsDisplayTypeInlineOutside(mOriginalDisplay);
   }
 
+  bool IsInnerTableStyle() const {
+    return NS_STYLE_DISPLAY_TABLE_CAPTION == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_CELL == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_ROW == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_ROW_GROUP == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_HEADER_GROUP == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_FOOTER_GROUP == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_COLUMN == mDisplay ||
+           NS_STYLE_DISPLAY_TABLE_COLUMN_GROUP == mDisplay;
+  }
+
   bool IsFloatingStyle() const {
     return NS_STYLE_FLOAT_NONE != mFloats;
   }
@@ -1887,7 +1904,8 @@ enum nsStyleContentType {
   eStyleContentType_CloseQuote    = 41,
   eStyleContentType_NoOpenQuote   = 42,
   eStyleContentType_NoCloseQuote  = 43,
-  eStyleContentType_AltContent    = 50
+  eStyleContentType_AltContent    = 50,
+  eStyleContentType_Uninitialized
 };
 
 struct nsStyleContentData {
@@ -1902,7 +1920,7 @@ struct nsStyleContentData {
 #endif
 
   nsStyleContentData()
-    : mType(nsStyleContentType(0))
+    : mType(eStyleContentType_Uninitialized)
 #ifdef DEBUG
     , mImageTracked(false)
 #endif
@@ -2371,6 +2389,22 @@ struct nsStyleSVG {
   bool HasMarker() const {
     return mMarkerStart || mMarkerMid || mMarkerEnd;
   }
+
+  /**
+   * Returns true if the stroke is not "none" and the stroke-opacity is greater
+   * than zero. This ignores stroke-widths as that depends on the context.
+   */
+  bool HasStroke() const {
+    return mStroke.mType != eStyleSVGPaintType_None && mStrokeOpacity > 0;
+  }
+
+  /**
+   * Returns true if the fill is not "none" and the fill-opacity is greater
+   * than zero.
+   */
+  bool HasFill() const {
+    return mFill.mType != eStyleSVGPaintType_None && mFillOpacity > 0;
+  }
 };
 
 struct nsStyleFilter {
@@ -2419,8 +2453,9 @@ private:
 };
 
 template<>
-struct nsTArray_CopyElements<nsStyleFilter>
-  : public nsTArray_CopyWithConstructors<nsStyleFilter> {};
+struct nsTArray_CopyChooser<nsStyleFilter> {
+  typedef nsTArray_CopyWithConstructors<nsStyleFilter> Type;
+};
 
 struct nsStyleSVGReset {
   nsStyleSVGReset();

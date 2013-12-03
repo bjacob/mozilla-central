@@ -32,18 +32,22 @@ Navigator implements NavigatorStorageUtils;
 
 [NoInterfaceObject]
 interface NavigatorID {
+  // WebKit/Blink/Trident/Presto support this (hardcoded "Mozilla").
+  [Constant]
+  readonly attribute DOMString appCodeName; // constant "Mozilla"
+  [Constant]
   readonly attribute DOMString appName;
-  [Throws]
+  [Constant]
   readonly attribute DOMString appVersion;
-  [Throws]
+  [Constant]
   readonly attribute DOMString platform;
-  [Throws]
+  [Constant]
   readonly attribute DOMString userAgent;
+  [Constant]
+  readonly attribute DOMString product; // constant "Gecko"
 
-  // Spec has this as a const, but that's wrong because it should not
-  // be on the interface object.
-  //const DOMString product = "Gecko"; // for historical reasons
-  readonly attribute DOMString product;
+  // Everyone but WebKit/Blink supports this.  See bug 679971.
+  boolean taintEnabled(); // constant false
 };
 
 [NoInterfaceObject]
@@ -108,16 +112,20 @@ interface NavigatorBattery {
 };
 Navigator implements NavigatorBattery;
 
+// https://wiki.mozilla.org/WebAPI/DataStore
+[NoInterfaceObject]
+interface NavigatorDataStore {
+    [Throws, NewObject, Pref="dom.datastore.enabled"]
+    Promise getDataStores(DOMString name);
+};
+Navigator implements NavigatorDataStore;
+
 // http://www.w3.org/TR/vibration/#vibration-interface
 partial interface Navigator {
     // We don't support sequences in unions yet
     //boolean vibrate ((unsigned long or sequence<unsigned long>) pattern);
-    // XXXbz also, per spec we should be returning a boolean, and we just don't.
-    // See bug 884935.
-    [Throws]
-    void vibrate(unsigned long duration);
-    [Throws]
-    void vibrate(sequence<unsigned long> pattern);
+    boolean vibrate(unsigned long duration);
+    boolean vibrate(sequence<unsigned long> pattern);
 };
 
 // Mozilla-specific extensions
@@ -132,9 +140,6 @@ callback interface MozIdleObserver {
 
 // nsIDOMNavigator
 partial interface Navigator {
-  // WebKit/Blink/Trident/Presto support this (hardcoded "Mozilla").
-  [Throws]
-  readonly attribute DOMString appCodeName;
   [Throws]
   readonly attribute DOMString oscpu;
   // WebKit/Blink support this; Trident/Presto do not.
@@ -153,8 +158,6 @@ partial interface Navigator {
   // WebKit/Blink/Trident/Presto support this.
   [Throws]
   boolean javaEnabled();
-  // Everyone but WebKit/Blink supports this.  See bug 679971.
-  boolean taintEnabled();
 
   /**
    * Navigator requests to add an idle observer to the existing window.
@@ -252,15 +255,8 @@ partial interface Navigator {
 
 #ifdef MOZ_B2G_RIL
 partial interface Navigator {
-  [Throws, Func="Navigator::HasTelephonySupport"]
-  readonly attribute Telephony? mozTelephony;
-};
-
-// nsIMozNavigatorMobileConnection
-interface MozMobileConnection;
-partial interface Navigator {
   [Throws, Func="Navigator::HasMobileConnectionSupport"]
-  readonly attribute MozMobileConnection mozMobileConnection;
+  readonly attribute MozMobileConnectionArray mozMobileConnections;
 };
 
 partial interface Navigator {
@@ -280,6 +276,11 @@ partial interface Navigator {
   readonly attribute MozIccManager? mozIccManager;
 };
 #endif // MOZ_B2G_RIL
+
+partial interface Navigator {
+  [Throws, Func="Navigator::HasTelephonySupport"]
+  readonly attribute Telephony? mozTelephony;
+};
 
 #ifdef MOZ_GAMEPAD
 // https://dvcs.w3.org/hg/gamepad/raw-file/default/gamepad.html#navigator-interface-extension

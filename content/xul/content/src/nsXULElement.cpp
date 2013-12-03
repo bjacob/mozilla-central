@@ -73,6 +73,7 @@
 #include "nsIListBoxObject.h"
 #include "nsContentUtils.h"
 #include "nsContentList.h"
+#include "mozilla/MouseEvents.h"
 #include "mozilla/MutationEvent.h"
 #include "nsAsyncDOMEvent.h"
 #include "nsIDOMMutationEvent.h"
@@ -292,7 +293,7 @@ nsXULElement::Create(nsXULPrototypeElement* aPrototype,
 }
 
 nsresult
-NS_NewXULElement(nsIContent** aResult, already_AddRefed<nsINodeInfo> aNodeInfo)
+NS_NewXULElement(Element** aResult, already_AddRefed<nsINodeInfo> aNodeInfo)
 {
     NS_PRECONDITION(aNodeInfo.get(), "need nodeinfo for non-proto Create");
 
@@ -495,7 +496,7 @@ nsXULElement::GetEventListenerManagerForAttr(nsIAtom* aAttrName, bool* aDefer)
         nsCOMPtr<EventTarget> piTarget = do_QueryInterface(window);
 
         *aDefer = false;
-        return piTarget->GetListenerManager(true);
+        return piTarget->GetOrCreateListenerManager();
     }
 
     return nsStyledElement::GetEventListenerManagerForAttr(aAttrName, aDefer);
@@ -510,7 +511,7 @@ static bool IsNonList(nsINodeInfo* aNodeInfo)
 }
 
 bool
-nsXULElement::IsFocusable(int32_t *aTabIndex, bool aWithMouse)
+nsXULElement::IsFocusableInternal(int32_t *aTabIndex, bool aWithMouse)
 {
   /* 
    * Returns true if an element may be focused, and false otherwise. The inout
@@ -1189,8 +1190,7 @@ nsXULElement::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
                     }
                 }
 
-                nsInputEvent* orig =
-                    static_cast<nsInputEvent*>(aVisitor.mEvent);
+                WidgetInputEvent* orig = aVisitor.mEvent->AsInputEvent();
                 nsContentUtils::DispatchXULCommand(
                   commandContent,
                   aVisitor.mEvent->mFlags.mIsTrusted,
@@ -1599,12 +1599,12 @@ nsXULElement::ClickWithInputSource(uint16_t aInputSource)
 
             bool isCallerChrome = nsContentUtils::IsCallerChrome();
 
-            nsMouseEvent eventDown(isCallerChrome, NS_MOUSE_BUTTON_DOWN,
-                                   nullptr, nsMouseEvent::eReal);
-            nsMouseEvent eventUp(isCallerChrome, NS_MOUSE_BUTTON_UP,
-                                 nullptr, nsMouseEvent::eReal);
-            nsMouseEvent eventClick(isCallerChrome, NS_MOUSE_CLICK, nullptr,
-                                    nsMouseEvent::eReal);
+            WidgetMouseEvent eventDown(isCallerChrome, NS_MOUSE_BUTTON_DOWN,
+                                       nullptr, WidgetMouseEvent::eReal);
+            WidgetMouseEvent eventUp(isCallerChrome, NS_MOUSE_BUTTON_UP,
+                                     nullptr, WidgetMouseEvent::eReal);
+            WidgetMouseEvent eventClick(isCallerChrome, NS_MOUSE_CLICK, nullptr,
+                                        WidgetMouseEvent::eReal);
             eventDown.inputSource = eventUp.inputSource = eventClick.inputSource 
                                   = aInputSource;
 
@@ -1670,7 +1670,7 @@ nsXULElement::AddPopupListener(nsIAtom* aName)
       new nsXULPopupListener(this, isContext);
 
     // Add the popup as a listener on this element.
-    nsEventListenerManager* manager = GetListenerManager(true);
+    nsEventListenerManager* manager = GetOrCreateListenerManager();
     SetFlags(listenerFlag);
 
     if (isContext) {
@@ -1779,7 +1779,7 @@ nsXULElement::GetWindowWidget()
     nsIDocument* doc = GetCurrentDoc();
 
     // only top level chrome documents can set the titlebar color
-    if (doc->IsRootDisplayDocument()) {
+    if (doc && doc->IsRootDisplayDocument()) {
         nsCOMPtr<nsISupports> container = doc->GetContainer();
         nsCOMPtr<nsIBaseWindow> baseWindow = do_QueryInterface(container);
         if (baseWindow) {
@@ -2633,7 +2633,7 @@ nsXULPrototypeScript::Compile(const PRUnichar* aText,
     // source from the files on demand.
     options.setSourcePolicy(mOutOfLine ? JS::CompileOptions::LAZY_SOURCE
                                        : JS::CompileOptions::SAVE_SOURCE);
-    JS::RootedObject scope(cx, JS::CurrentGlobalOrNull(cx));
+    JS::Rooted<JSObject*> scope(cx, JS::CurrentGlobalOrNull(cx));
     if (scope) {
       JS::ExposeObjectToActiveJS(scope);
     }

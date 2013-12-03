@@ -47,6 +47,7 @@
 #include "nsCExternalHandlerService.h"
 #include "nsIPermissionManager.h"
 #include "nsIStringBundle.h"
+#include "nsIDocument.h"
 #include <algorithm>
 
 #include "mozilla/dom/DeviceStorageBinding.h"
@@ -389,6 +390,7 @@ DeviceStorageTypeChecker::GetAccessForRequest(
       break;
     case DEVICE_STORAGE_REQUEST_WRITE:
     case DEVICE_STORAGE_REQUEST_DELETE:
+    case DEVICE_STORAGE_REQUEST_FORMAT:
       aAccessResult.AssignLiteral("write");
       break;
     case DEVICE_STORAGE_REQUEST_CREATE:
@@ -761,10 +763,16 @@ DeviceStorageFile::GetRootDirectoryForType(const nsAString& aStorageType,
   // crash reports directory.
   else if (aStorageType.EqualsLiteral(DEVICESTORAGE_CRASHES)) {
     f = sDirs->crashes;
+  } else {
+    // Not a storage type that we recognize. Return null
+    return;
   }
 
-  // in testing, we default all device storage types to a temp directory
-  if (f && sDirs->temp) {
+  // In testing, we default all device storage types to a temp directory.
+  // sDirs->temp will only have been initialized (in InitDirs) if the
+  // preference device.storage.testing was set to true. We can't test the
+  // preference directly here, since we may not be on the main thread.
+  if (sDirs->temp) {
     f = sDirs->temp;
   }
 
@@ -1273,6 +1281,36 @@ DeviceStorageFile::IsAvailable()
 }
 
 void
+DeviceStorageFile::DoFormat(nsAString& aStatus)
+{
+  DeviceStorageTypeChecker* typeChecker
+    = DeviceStorageTypeChecker::CreateOrGet();
+  if (!typeChecker) {
+    return;
+  }
+  if (!typeChecker->IsVolumeBased(mStorageType)) {
+    aStatus.AssignLiteral("notVolume");
+    return;
+  }
+#ifdef MOZ_WIDGET_GONK
+  nsCOMPtr<nsIVolumeService> vs = do_GetService(NS_VOLUMESERVICE_CONTRACTID);
+  NS_ENSURE_TRUE_VOID(vs);
+
+  nsCOMPtr<nsIVolume> vol;
+  nsresult rv = vs->GetVolumeByName(mStorageName, getter_AddRefs(vol));
+  NS_ENSURE_SUCCESS_VOID(rv);
+  if (!vol) {
+    return;
+  }
+
+  vol->Format();
+
+  aStatus.AssignLiteral("formatting");
+#endif
+  return;
+}
+
+void
 DeviceStorageFile::GetStatus(nsAString& aStatus)
 {
   DeviceStorageTypeChecker* typeChecker
@@ -1307,6 +1345,13 @@ DeviceStorageFile::GetStatus(nsAString& aStatus)
   NS_ENSURE_SUCCESS_VOID(rv);
   if (isSharing) {
     aStatus.AssignLiteral("shared");
+    return;
+  }
+  bool isFormatting;
+  rv = vol->GetIsFormatting(&isFormatting);
+  NS_ENSURE_SUCCESS_VOID(rv);
+  if (isFormatting) {
+    aStatus.AssignLiteral("unavailable");
     return;
   }
   int32_t volState;
@@ -1367,17 +1412,14 @@ InterfaceToJsval(nsPIDOMWindow* aWindow,
     return JSVAL_NULL;
   }
 
-  JS::RootedObject scopeObj(cx, sgo->GetGlobalJSObject());
+  JS::Rooted<JSObject*> scopeObj(cx, sgo->GetGlobalJSObject());
   NS_ENSURE_TRUE(scopeObj, JSVAL_NULL);
   JSAutoCompartment ac(cx, scopeObj);
 
 
   JS::Rooted<JS::Value> someJsVal(cx);
-  nsresult rv = nsContentUtils::WrapNative(cx,
-                                           scopeObj,
-                                           aObject,
-                                           aIID,
-                                           someJsVal.address());
+  nsresult rv =
+    nsContentUtils::WrapNative(cx, scopeObj, aObject, aIID, &someJsVal);
   if (NS_FAILED(rv)) {
     return JSVAL_NULL;
   }
@@ -1436,7 +1478,7 @@ JS::Value StringToJsval(nsPIDOMWindow* aWindow, nsAString& aString)
     return JSVAL_NULL;
   }
 
-  JS::Value result = JSVAL_NULL;
+  JS::Rooted<JS::Value> result(cx);
   if (!xpc::StringToJsval(cx, aString, &result)) {
     return JSVAL_NULL;
   }
@@ -1829,6 +1871,39 @@ public:
     nsString state = NS_LITERAL_STRING("unavailable");
     if (mFile) {
       mFile->GetStatus(state);
+    }
+
+    AutoJSContext cx;
+    JS::Rooted<JS::Value> result(cx,
+                                 StringToJsval(mRequest->GetOwner(), state));
+    mRequest->FireSuccess(result);
+    mRequest = nullptr;
+    return NS_OK;
+  }
+
+private:
+  nsRefPtr<DeviceStorageFile> mFile;
+  nsRefPtr<DOMRequest> mRequest;
+};
+
+class PostFormatResultEvent : public nsRunnable
+{
+public:
+  PostFormatResultEvent(DeviceStorageFile *aFile, DOMRequest* aRequest)
+    : mFile(aFile)
+    , mRequest(aRequest)
+  {
+  }
+
+  ~PostFormatResultEvent() {}
+
+  NS_IMETHOD Run()
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    nsString state = NS_LITERAL_STRING("unavailable");
+    if (mFile) {
+      mFile->DoFormat(state);
     }
 
     AutoJSContext cx;
@@ -2419,6 +2494,23 @@ public:
         mDeviceStorage->mAllowedToWatchFile = true;
         return NS_OK;
       }
+
+      case DEVICE_STORAGE_REQUEST_FORMAT:
+      {
+        if (XRE_GetProcessType() != GeckoProcessType_Default) {
+          PDeviceStorageRequestChild* child
+            = new DeviceStorageRequestChild(mRequest, mFile);
+          DeviceStorageFormatParams params(mFile->mStorageType,
+                                           mFile->mStorageName);
+          ContentChild::GetSingleton()
+            ->SendPDeviceStorageRequestConstructor(child, params);
+          return NS_OK;
+        }
+        r = new PostFormatResultEvent(mFile, mRequest);
+        NS_DispatchToMainThread(r);
+        return NS_OK;
+      }
+
     }
 
     if (r) {
@@ -3079,6 +3171,26 @@ nsDOMDeviceStorage::Available(ErrorResult& aRv)
   return request.forget();
 }
 
+already_AddRefed<DOMRequest>
+nsDOMDeviceStorage::Format(ErrorResult& aRv)
+{
+  nsCOMPtr<nsPIDOMWindow> win = GetOwner();
+  if (!win) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
+
+  nsRefPtr<DOMRequest> request = new DOMRequest(win);
+
+  nsRefPtr<DeviceStorageFile> dsf = new DeviceStorageFile(mStorageType,
+                                                          mStorageName);
+  nsCOMPtr<nsIRunnable> r
+    = new DeviceStorageRequest(DEVICE_STORAGE_REQUEST_FORMAT,
+                               win, mPrincipal, dsf, request);
+  NS_DispatchToMainThread(r);
+  return request.forget();
+}
+
 NS_IMETHODIMP
 nsDOMDeviceStorage::GetRootDirectoryForFile(const nsAString& aName,
                                             nsIFile** aRootDirectory)
@@ -3466,10 +3578,10 @@ nsDOMDeviceStorage::PostHandleEvent(nsEventChainPostVisitor & aVisitor)
 }
 
 nsresult
-nsDOMDeviceStorage::DispatchDOMEvent(nsEvent *aEvent,
-                                     nsIDOMEvent *aDOMEvent,
-                                     nsPresContext *aPresContext,
-                                     nsEventStatus *aEventStatus)
+nsDOMDeviceStorage::DispatchDOMEvent(WidgetEvent* aEvent,
+                                     nsIDOMEvent* aDOMEvent,
+                                     nsPresContext* aPresContext,
+                                     nsEventStatus* aEventStatus)
 {
   return nsDOMEventTargetHelper::DispatchDOMEvent(aEvent,
                                                   aDOMEvent,
@@ -3478,9 +3590,15 @@ nsDOMDeviceStorage::DispatchDOMEvent(nsEvent *aEvent,
 }
 
 nsEventListenerManager *
-nsDOMDeviceStorage::GetListenerManager(bool aMayCreate)
+nsDOMDeviceStorage::GetOrCreateListenerManager()
 {
-  return nsDOMEventTargetHelper::GetListenerManager(aMayCreate);
+  return nsDOMEventTargetHelper::GetOrCreateListenerManager();
+}
+
+nsEventListenerManager *
+nsDOMDeviceStorage::GetExistingListenerManager() const
+{
+  return nsDOMEventTargetHelper::GetExistingListenerManager();
 }
 
 nsIScriptContext *

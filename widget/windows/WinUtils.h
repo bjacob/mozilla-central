@@ -53,6 +53,13 @@ namespace widget {
                          QS_ALLPOSTMESSAGE | QS_RAWINPUT |        \
                          QS_TOUCH | QS_POINTER)
 
+// Logging macros
+#define LogFunction() mozilla::widget::WinUtils::Log(__FUNCTION__)
+#define LogThread() mozilla::widget::WinUtils::Log("%s: IsMainThread:%d ThreadId:%X", __FUNCTION__, NS_IsMainThread(), GetCurrentThreadId())
+#define LogThis() mozilla::widget::WinUtils::Log("[%X] %s", this, __FUNCTION__)
+#define LogException(e) mozilla::widget::WinUtils::Log("%s Exception:%s", __FUNCTION__, e->ToString()->Data())
+#define LogHRESULT(hr) mozilla::widget::WinUtils::Log("%s hr=%X", __FUNCTION__, hr)
+
 class myDownloadObserver MOZ_FINAL : public nsIDownloadObserver
 {
 public:
@@ -62,19 +69,12 @@ public:
 
 class WinUtils {
 public:
-  enum WinVersion {
-    WINXP_VERSION     = 0x501,
-    WIN2K3_VERSION    = 0x502,
-    VISTA_VERSION     = 0x600,
-    WIN7_VERSION      = 0x601,
-    WIN8_VERSION      = 0x602,
-    WIN8_1_VERSION    = 0x603
-  };
-  static WinVersion GetWindowsVersion();
-
-  // Retrieves the Service Pack version number.
-  // Returns true on success, false on failure.
-  static bool GetWindowsServicePackVersion(UINT& aOutMajor, UINT& aOutMinor);
+  /**
+   * Logging helpers that dump output to prlog module 'Widget', console, and
+   * OutputDebugString. Note these output in both debug and release builds.
+   */
+  static void Log(const char *fmt, ...);
+  static void LogW(const wchar_t *fmt, ...);
 
   /**
    * PeekMessage() and GetMessage() are wrapper methods for PeekMessageW(),
@@ -114,9 +114,9 @@ public:
    * @return Whether the value exists and is a string.
    */
   static bool GetRegistryKey(HKEY aRoot,
-                             const PRUnichar* aKeyName,
-                             const PRUnichar* aValueName,
-                             PRUnichar* aBuffer,
+                             char16ptr_t aKeyName,
+                             char16ptr_t aValueName,
+                             wchar_t* aBuffer,
                              DWORD aBufferLength);
 
   /**
@@ -128,7 +128,7 @@ public:
    * @return TRUE if it exists and is readable.  Otherwise, FALSE.
    */
   static bool HasRegistryKey(HKEY aRoot,
-                             const PRUnichar* aKeyName);
+                             char16ptr_t aKeyName);
 
   /**
    * GetTopLevelHWND() returns a window handle of the top level window which
@@ -156,8 +156,8 @@ public:
                               bool aStopIfNotPopup = true);
 
   /**
-   * SetNSWindowBasePtr() associates an nsWindowBase to aWnd.  If aWidget is NULL,
-   * it dissociate any nsBaseWidget pointer from aWnd.
+   * SetNSWindowBasePtr() associates an nsWindowBase to aWnd.  If aWidget is
+   * nullptr, it dissociate any nsBaseWidget pointer from aWnd.
    * GetNSWindowBasePtr() returns an nsWindowBase pointer which was associated by
    * SetNSWindowBasePtr().
    * GetNSWindowPtr() is a legacy api for win32 nsWindow and should be avoided
@@ -181,9 +181,9 @@ public:
   /**
    * FindOurProcessWindow() returns the nearest ancestor window which
    * belongs to our process.  If it fails to find our process's window by the
-   * top level window, returns NULL.  And note that this is using ::GetParent()
-   * for climbing the window hierarchy, therefore, it gives up at an owned top
-   * level window except popup window (e.g., dialog).
+   * top level window, returns nullptr.  And note that this is using
+   * ::GetParent() for climbing the window hierarchy, therefore, it gives
+   * up at an owned top level window except popup window (e.g., dialog).
    */
   static HWND FindOurProcessWindow(HWND aWnd);
 

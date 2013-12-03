@@ -41,6 +41,7 @@ enum nsEventStructType
   NS_DRAG_EVENT,                     // WidgetDragEvent
   NS_MOUSE_SCROLL_EVENT,             // WidgetMouseScrollEvent
   NS_WHEEL_EVENT,                    // WidgetWheelEvent
+  NS_POINTER_EVENT,                  // PointerEvent
 
   // TouchEvents.h
   NS_GESTURENOTIFY_EVENT,            // WidgetGestureNotifyEvent
@@ -134,6 +135,19 @@ enum nsEventStructType
 #define NS_MOUSE_MOZHITTEST             (NS_MOUSE_MESSAGE_START + 33)
 #define NS_MOUSEENTER                   (NS_MOUSE_MESSAGE_START + 34)
 #define NS_MOUSELEAVE                   (NS_MOUSE_MESSAGE_START + 35)
+
+// Pointer spec events
+#define NS_POINTER_EVENT_START          4400
+#define NS_POINTER_MOVE                 (NS_POINTER_EVENT_START)
+#define NS_POINTER_UP                   (NS_POINTER_EVENT_START + 1)
+#define NS_POINTER_DOWN                 (NS_POINTER_EVENT_START + 2)
+#define NS_POINTER_OVER                 (NS_POINTER_EVENT_START + 22)
+#define NS_POINTER_OUT                  (NS_POINTER_EVENT_START + 23)
+#define NS_POINTER_ENTER                (NS_POINTER_EVENT_START + 24)
+#define NS_POINTER_LEAVE                (NS_POINTER_EVENT_START + 25)
+#define NS_POINTER_CANCEL               (NS_POINTER_EVENT_START + 26)
+#define NS_POINTER_GOT_CAPTURE          (NS_POINTER_EVENT_START + 27)
+#define NS_POINTER_LOST_CAPTURE         (NS_POINTER_EVENT_START + 28)
 
 #define NS_CONTEXTMENU_MESSAGE_START    500
 #define NS_CONTEXTMENU                  (NS_CONTEXTMENU_MESSAGE_START)
@@ -335,7 +349,7 @@ enum nsEventStructType
 #define NS_PLUGIN_INPUT_EVENT            (NS_PLUGIN_EVENT_START)
 #define NS_PLUGIN_FOCUS_EVENT            (NS_PLUGIN_EVENT_START+1)
 
-// Events to manipulate selection (nsSelectionEvent)
+// Events to manipulate selection (WidgetSelectionEvent)
 #define NS_SELECTION_EVENT_START        3700
 // Clear any previous selection and set the given range as the selection
 #define NS_SELECTION_SET                (NS_SELECTION_EVENT_START)
@@ -429,6 +443,8 @@ enum nsEventStructType
 
 #define NS_WHEEL_EVENT_START         5400
 #define NS_WHEEL_WHEEL               (NS_WHEEL_EVENT_START)
+#define NS_WHEEL_START               (NS_WHEEL_EVENT_START + 1)
+#define NS_WHEEL_STOP                (NS_WHEEL_EVENT_START + 2)
 
 //System time is changed
 #define NS_MOZ_TIME_CHANGE_EVENT     5500
@@ -443,6 +459,10 @@ enum nsEventStructType
 #define NS_MEDIARECORDER_DATAAVAILABLE  (NS_MEDIARECORDER_EVENT_START + 1)
 #define NS_MEDIARECORDER_WARNING        (NS_MEDIARECORDER_EVENT_START + 2)
 #define NS_MEDIARECORDER_STOP           (NS_MEDIARECORDER_EVENT_START + 3)
+
+// SpeakerManager events
+#define NS_SPEAKERMANAGER_EVENT_START 5800
+#define NS_SPEAKERMANAGER_SPEAKERFORCEDCHANGE (NS_SPEAKERMANAGER_EVENT_START + 1)
 
 #ifdef MOZ_GAMEPAD
 // Gamepad input events
@@ -620,7 +640,7 @@ public:
     mFlags.mBubbles = true;
   }
 
-  ~WidgetEvent()
+  virtual ~WidgetEvent()
   {
     MOZ_COUNT_DTOR(WidgetEvent);
   }
@@ -675,13 +695,19 @@ public:
    */
 
   /**
-   * Returns true if the event is WidgetInputEvent or inherits it.
+   * As*Event() returns the pointer of the instance only when the instance is
+   * the class or one of its derived class.
    */
-  bool IsInputDerivedEvent() const;
-  /**
-   * Returns true if the event is WidgetMouseEvent or inherits it.
-   */
-  bool IsMouseDerivedEvent() const;
+#define NS_ROOT_EVENT_CLASS(aPrefix, aName)
+#define NS_EVENT_CLASS(aPrefix, aName) \
+  virtual aPrefix##aName* As##aName(); \
+  const aPrefix##aName* As##aName() const;
+
+#include "mozilla/EventClassList.h"
+
+#undef NS_EVENT_CLASS
+#undef NS_ROOT_EVENT_CLASS
+
   /**
    * Returns true if the event is a query content event.
    */
@@ -721,14 +747,6 @@ public:
    */
   bool HasPluginActivationEventMessage() const;
 
-  /**
-   * Returns true if left click event.
-   */
-  bool IsLeftClickEvent() const;
-  /**
-   * Returns true if the event is a context menu event caused by key.
-   */
-  bool IsContextMenuKeyEvent() const;
   /**
    * Returns true if the event is native event deliverer event for plugin and
    * it should be retarted to focused document.
@@ -803,6 +821,8 @@ protected:
   }
 
 public:
+  virtual WidgetGUIEvent* AsGUIEvent() MOZ_OVERRIDE { return this; }
+
   WidgetGUIEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget) :
     WidgetEvent(aIsTrusted, aMessage, NS_GUI_EVENT),
     widget(aWidget), pluginEvent(nullptr)
@@ -890,6 +910,8 @@ protected:
   }
 
 public:
+  virtual WidgetInputEvent* AsInputEvent() MOZ_OVERRIDE { return this; }
+
   WidgetInputEvent(bool aIsTrusted, uint32_t aMessage, nsIWidget* aWidget) :
     WidgetGUIEvent(aIsTrusted, aMessage, aWidget, NS_INPUT_EVENT),
     modifiers(0)
@@ -1004,6 +1026,8 @@ protected:
   }
 
 public:
+  virtual InternalUIEvent* AsUIEvent() MOZ_OVERRIDE { return this; }
+
   InternalUIEvent(bool aIsTrusted, uint32_t aMessage, int32_t aDetail) :
     WidgetGUIEvent(aIsTrusted, aMessage, nullptr, NS_UI_EVENT),
     detail(aDetail)
@@ -1021,11 +1045,5 @@ public:
 };
 
 } // namespace mozilla
-
-// TODO: Remove following typedefs
-typedef mozilla::WidgetEvent      nsEvent;
-typedef mozilla::WidgetGUIEvent   nsGUIEvent;
-typedef mozilla::WidgetInputEvent nsInputEvent;
-typedef mozilla::InternalUIEvent  nsUIEvent;
 
 #endif // mozilla_BasicEvents_h__

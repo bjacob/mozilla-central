@@ -6,13 +6,13 @@
 #include "nsView.h"
 
 #include "mozilla/Attributes.h"
+#include "mozilla/BasicEvents.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Likely.h"
 #include "mozilla/Poison.h"
 #include "nsIWidget.h"
 #include "nsViewManager.h"
 #include "nsIFrame.h"
-#include "nsGUIEvent.h"
 #include "nsPresArena.h"
 #include "nsXULPopupManager.h"
 #include "nsIWidgetListener.h"
@@ -1064,7 +1064,8 @@ nsView::RequestRepaint()
 }
 
 nsEventStatus
-nsView::HandleEvent(nsGUIEvent* aEvent, bool aUseAttachedEvents)
+nsView::HandleEvent(WidgetGUIEvent* aEvent,
+                    bool aUseAttachedEvents)
 {
   NS_PRECONDITION(nullptr != aEvent->widget, "null widget ptr");
 

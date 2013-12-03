@@ -9,7 +9,6 @@
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
 #include "nsIFile.h"
-#include "nsIURI.h"
 #include "FileUtils.h"
 
 class nsZipArchive;
@@ -50,7 +49,7 @@ public:
   /**
    * Creates a new file location relative to another one.
    */
-  FileLocation(const FileLocation &file, const char *path = NULL);
+  FileLocation(const FileLocation &file, const char *path = nullptr);
 
   /**
    * Initialization functions corresponding to constructors

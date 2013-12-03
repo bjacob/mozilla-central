@@ -24,7 +24,7 @@ EXPORTS.mozilla.dom.power += [
     'Types.h',
 ]
 
-CPP_SOURCES += [
+UNIFIED_SOURCES += [
     'PowerManager.cpp',
     'PowerManagerService.cpp',
     'WakeLock.cpp',
@@ -32,7 +32,6 @@ CPP_SOURCES += [
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-LIBRARY_NAME = 'dom_power_s'
-
+FINAL_LIBRARY = 'gklayout'

@@ -15,7 +15,7 @@ Cu.import("resource:///modules/devtools/shared/event-emitter.js");
 
 var require = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools.require;
 let Telemetry = require("devtools/shared/telemetry");
-let {TouchEventHandler} = require("devtools/shared/touch-events");
+let {TouchEventHandler} = require("devtools/touch-events");
 
 this.EXPORTED_SYMBOLS = ["ResponsiveUIManager"];
 
@@ -116,6 +116,7 @@ function ResponsiveUI(aWindow, aTab)
   this.container = aWindow.gBrowser.getBrowserContainer(this.browser);
   this.stack = this.container.querySelector(".browserStack");
   this._telemetry = new Telemetry();
+  this._floatingScrollbars = !this.mainWindow.matchMedia("(-moz-overlay-scrollbars)").matches;
 
 
   // Try to load presets from prefs
@@ -175,10 +176,17 @@ function ResponsiveUI(aWindow, aTab)
   // Events
   this.tab.addEventListener("TabClose", this);
   this.tabContainer.addEventListener("TabSelect", this);
-  this.mainWindow.document.addEventListener("keypress", this.bound_onKeypress, false);
+  this.mainWindow.document.addEventListener("keypress", this.bound_onKeypress, true);
 
   this.buildUI();
   this.checkMenus();
+
+  this.docShell = this.browser.contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                      .getInterface(Ci.nsIWebNavigation)
+                      .QueryInterface(Ci.nsIDocShell);
+
+  this._deviceSizeWasPageSize = this.docShell.deviceSizeIsPageSize;
+  this.docShell.deviceSizeIsPageSize = true;
 
   try {
     if (Services.prefs.getBoolPref("devtools.responsiveUI.rotate")) {
@@ -210,7 +218,6 @@ function ResponsiveUI(aWindow, aTab)
 
 ResponsiveUI.prototype = {
   _transitionsEnabled: true,
-  _floatingScrollbars: Services.appinfo.OS != "Darwin",
   get transitionsEnabled() this._transitionsEnabled,
   set transitionsEnabled(aValue) {
     this._transitionsEnabled = aValue;
@@ -249,6 +256,8 @@ ResponsiveUI.prototype = {
       return;
     this.closing = true;
 
+    this.docShell.deviceSizeIsPageSize = this._deviceSizeWasPageSize;
+
     this.browser.removeEventListener("load", this.bound_onPageLoad, true);
     this.browser.removeEventListener("unload", this.bound_onPageUnload, true);
 
@@ -267,7 +276,7 @@ ResponsiveUI.prototype = {
       this.stopResizing();
 
     // Remove listeners.
-    this.mainWindow.document.removeEventListener("keypress", this.bound_onKeypress, false);
+    this.mainWindow.document.removeEventListener("keypress", this.bound_onKeypress, true);
     this.menulist.removeEventListener("select", this.bound_presetSelected, true);
     this.tab.removeEventListener("TabClose", this);
     this.tabContainer.removeEventListener("TabSelect", this);
@@ -288,6 +297,7 @@ ResponsiveUI.prototype = {
     this.container.removeAttribute("responsivemode");
     this.stack.removeAttribute("responsivemode");
 
+    delete this.docShell;
     delete this.tab.__responsiveUI;
     if (this.touchEventHandler)
       this.touchEventHandler.stop();

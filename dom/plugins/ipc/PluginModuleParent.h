@@ -13,6 +13,7 @@
 #include "mozilla/plugins/ScopedMethodFactory.h"
 #include "mozilla/plugins/PluginProcessParent.h"
 #include "mozilla/plugins/PPluginModuleParent.h"
+#include "mozilla/plugins/PluginMessageUtils.h"
 #include "npapi.h"
 #include "npfunctions.h"
 #include "nsAutoPtr.h"
@@ -124,7 +125,7 @@ public:
     PluginIdentifierParent*
     GetIdentifierForNPIdentifier(NPP npp, NPIdentifier aIdentifier);
 
-    void ProcessRemoteNativeEventsInRPCCall();
+    void ProcessRemoteNativeEventsInInterruptCall();
 
     void TerminateChildProcess(MessageLoop* aMsgLoop);
 
@@ -134,8 +135,8 @@ public:
 #endif // XP_WIN
 
 protected:
-    virtual mozilla::ipc::RPCChannel::RacyRPCPolicy
-    MediateRPCRace(const Message& parent, const Message& child) MOZ_OVERRIDE
+    virtual mozilla::ipc::RacyInterruptPolicy
+    MediateInterruptRace(const Message& parent, const Message& child) MOZ_OVERRIDE
     {
         return MediateRace(parent, child);
     }
@@ -158,7 +159,7 @@ protected:
     virtual bool AnswerProcessSomeEvents() MOZ_OVERRIDE;
 
     virtual bool
-    RecvProcessNativeEventsInRPCCall() MOZ_OVERRIDE;
+    RecvProcessNativeEventsInInterruptCall() MOZ_OVERRIDE;
 
     virtual bool
     RecvPluginShowWindow(const uint32_t& aWindowId, const bool& aModal,

@@ -68,6 +68,8 @@ enum CPUIDRegister { eax = 0, ebx = 1, ecx = 2, edx = 3 };
 
 #ifdef HAVE_CPUID_H
 
+#if !(defined(__SSE2__) || defined(_M_X64) || \
+     (defined(_M_IX86_FP) && _M_IX86_FP >= 2))
 // cpuid.h is available on gcc 4.3 and higher on i386 and x86_64
 #include <cpuid.h>
 
@@ -78,6 +80,7 @@ HasCPUIDBit(unsigned int level, CPUIDRegister reg, unsigned int bit)
   return __get_cpuid(level, &regs[0], &regs[1], &regs[2], &regs[3]) &&
          (regs[reg] & bit);
 }
+#endif
 
 #define HAVE_CPU_DETECTION
 #else
@@ -227,6 +230,17 @@ Factory::CreateDrawTarget(BackendType aBackend, const IntSize &aSize, SurfaceFor
       break;
     }
 #endif
+#ifdef USE_CAIRO
+  case BACKEND_CAIRO:
+    {
+      RefPtr<DrawTargetCairo> newTarget;
+      newTarget = new DrawTargetCairo();
+      if (newTarget->Init(aSize, aFormat)) {
+        retVal = newTarget;
+      }
+      break;
+    }
+#endif
   default:
     gfxDebug() << "Invalid draw target type specified.";
     return nullptr;
@@ -280,19 +294,32 @@ Factory::CreateDrawTargetForData(BackendType aBackend,
       break;
     }
 #endif
+#ifdef USE_CAIRO
+  case BACKEND_CAIRO:
+    {
+      RefPtr<DrawTargetCairo> newTarget;
+      newTarget = new DrawTargetCairo();
+      if (newTarget->Init(aData, aSize, aStride, aFormat)) {
+        retVal = newTarget;
+      }
+      break;
+    }
+#endif
   default:
     gfxDebug() << "Invalid draw target type specified.";
     return nullptr;
   }
 
   if (mRecorder && retVal) {
-    RefPtr<DrawTarget> recordDT = new DrawTargetRecording(mRecorder, retVal);
+    RefPtr<DrawTarget> recordDT = new DrawTargetRecording(mRecorder, retVal, true);
     return recordDT;
   }
 
-  gfxDebug() << "Failed to create DrawTarget, Type: " << aBackend << " Size: " << aSize;
-  // Failed
-  return nullptr;
+  if (!retVal) {
+    gfxDebug() << "Failed to create DrawTarget, Type: " << aBackend << " Size: " << aSize;
+  }
+
+  return retVal;
 }
 
 TemporaryRef<ScaledFont>
@@ -390,7 +417,7 @@ Factory::CreateDrawTargetForD3D10Texture(ID3D10Texture2D *aTexture, SurfaceForma
     RefPtr<DrawTarget> retVal = newTarget;
 
     if (mRecorder) {
-      retVal = new DrawTargetRecording(mRecorder, retVal);
+      retVal = new DrawTargetRecording(mRecorder, retVal, true);
     }
 
     return retVal;
@@ -513,7 +540,21 @@ Factory::CreateDrawTargetSkiaWithGLContextAndGrGLInterface(GenericRefCountedBase
   RefPtr<DrawTarget> newTarget = newDrawTargetSkia;
   return newTarget;
 }
+
+void
+Factory::SetGlobalSkiaCacheLimits(int aCount, int aSizeInBytes)
+{
+    DrawTargetSkia::SetGlobalCacheLimits(aCount, aSizeInBytes);
+}
 #endif // USE_SKIA_GPU
+
+void
+Factory::PurgeTextureCaches()
+{
+#ifdef USE_SKIA_GPU
+  DrawTargetSkia::PurgeTextureCaches();
+#endif
+}
 
 #ifdef USE_SKIA_FREETYPE
 TemporaryRef<GlyphRenderingOptions>
@@ -541,9 +582,21 @@ Factory::CreateDrawTargetForCairoSurface(cairo_surface_t* aSurface, const IntSiz
   }
 
   if (mRecorder && retVal) {
-    RefPtr<DrawTarget> recordDT = new DrawTargetRecording(mRecorder, retVal);
+    RefPtr<DrawTarget> recordDT = new DrawTargetRecording(mRecorder, retVal, true);
     return recordDT;
   }
+#endif
+  return retVal;
+}
+
+TemporaryRef<SourceSurface>
+Factory::CreateSourceSurfaceForCairoSurface(cairo_surface_t* aSurface,
+                                            SurfaceFormat aFormat)
+{
+  RefPtr<SourceSurface> retVal;
+
+#ifdef USE_CAIRO
+  retVal = DrawTargetCairo::CreateSourceSurfaceForCairoSurface(aSurface, aFormat);
 #endif
   return retVal;
 }

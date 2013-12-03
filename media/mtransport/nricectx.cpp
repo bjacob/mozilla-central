@@ -83,6 +83,7 @@ extern "C" {
 #include "nricemediastream.h"
 #include "nr_socket_prsock.h"
 #include "nrinterfaceprioritizer.h"
+#include "rlogringbuffer.h"
 
 namespace mozilla {
 
@@ -252,7 +253,7 @@ int NrIceCtx::select_pair(void *obj,nr_ice_media_stream *stream,
 int NrIceCtx::stream_ready(void *obj, nr_ice_media_stream *stream) {
   MOZ_MTLOG(ML_DEBUG, "stream_ready called");
 
-  // Get the ICE ctx
+  // Get the ICE ctx.
   NrIceCtx *ctx = static_cast<NrIceCtx *>(obj);
 
   RefPtr<NrIceMediaStream> s = ctx->FindStream(stream);
@@ -275,7 +276,7 @@ int NrIceCtx::stream_failed(void *obj, nr_ice_media_stream *stream) {
   // Streams which do not exist should never fail.
   MOZ_ASSERT(s);
 
-  ctx->SetState(ICE_CTX_FAILED);
+  ctx->SetConnectionState(ICE_CTX_FAILED);
   s -> SignalFailed(s);
   return 0;
 }
@@ -286,7 +287,7 @@ int NrIceCtx::ice_completed(void *obj, nr_ice_peer_ctx *pctx) {
   // Get the ICE ctx
   NrIceCtx *ctx = static_cast<NrIceCtx *>(obj);
 
-  ctx->SetState(ICE_CTX_OPEN);
+  ctx->SetConnectionState(ICE_CTX_OPEN);
 
   return 0;
 }
@@ -306,15 +307,41 @@ int NrIceCtx::msg_recvd(void *obj, nr_ice_peer_ctx *pctx,
   return 0;
 }
 
+void NrIceCtx::trickle_cb(void *arg, nr_ice_ctx *ice_ctx,
+                          nr_ice_media_stream *stream,
+                          int component_id,
+                          nr_ice_candidate *candidate) {
+  // Get the ICE ctx
+  NrIceCtx *ctx = static_cast<NrIceCtx *>(arg);
+  RefPtr<NrIceMediaStream> s = ctx->FindStream(stream);
+
+  // Streams which do not exist shouldn't have candidates.
+  MOZ_ASSERT(s);
+
+  // Format the candidate.
+  char candidate_str[NR_ICE_MAX_ATTRIBUTE_SIZE];
+  int r = nr_ice_format_candidate_attribute(candidate, candidate_str,
+                                            sizeof(candidate_str));
+  MOZ_ASSERT(!r);
+  if (r)
+    return;
+
+  MOZ_MTLOG(ML_INFO, "NrIceCtx(" << ctx->name_ << "): trickling candidate "
+            << candidate_str);
+
+  s->SignalCandidate(s, candidate_str);
+}
 
 RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
                                   bool offerer,
                                   bool set_interface_priorities) {
+
   RefPtr<NrIceCtx> ctx = new NrIceCtx(name, offerer);
 
-  // Initialize the crypto callbacks
+  // Initialize the crypto callbacks and logging stuff
   if (!initialized) {
     NR_reg_init(NR_REG_MODE_LOCAL);
+    RLogRingBuffer::CreateInstance();
     nr_crypto_vtbl = &nr_ice_crypto_nss_vtbl;
     initialized = true;
 
@@ -382,6 +409,14 @@ RefPtr<NrIceCtx> NrIceCtx::Create(const std::string& name,
     return nullptr;
   }
 #endif  // USE_INTERFACE_PRIORITIZER
+
+  if (ctx->generating_trickle()) {
+    r = nr_ice_ctx_set_trickle_cb(ctx->ctx_, &NrIceCtx::trickle_cb, ctx);
+    if (r) {
+      MOZ_MTLOG(ML_ERROR, "Couldn't set trickle cb for '" << name << "'");
+      return nullptr;
+    }
+  }
 
   // Create the handler objects
   ctx->ice_handler_vtbl_ = new nr_ice_handler_vtbl();
@@ -516,7 +551,7 @@ nsresult NrIceCtx::StartGathering() {
   if (ctx_->state != ICE_CTX_INIT) {
     MOZ_MTLOG(ML_ERROR, "ICE ctx in the wrong state for gathering: '"
               << name_ << "'");
-    SetState(ICE_CTX_FAILED);
+    SetConnectionState(ICE_CTX_FAILED);
     return NS_ERROR_FAILURE;
   }
 
@@ -526,22 +561,13 @@ nsresult NrIceCtx::StartGathering() {
   if (r && r != R_WOULDBLOCK) {
       MOZ_MTLOG(ML_ERROR, "Couldn't gather ICE candidates for '"
                 << name_ << "'");
-      SetState(ICE_CTX_FAILED);
+      SetConnectionState(ICE_CTX_FAILED);
       return NS_ERROR_FAILURE;
   }
 
-  SetState(ICE_CTX_GATHERING);
+  SetGatheringState(ICE_CTX_GATHER_STARTED);
 
   return NS_OK;
-}
-
-void NrIceCtx::EmitAllCandidates() {
-  MOZ_MTLOG(ML_NOTICE, "Gathered all ICE candidates for '"
-            << name_ << "'");
-
-  for(size_t i=0; i<streams_.size(); ++i) {
-    streams_[i]->EmitAllCandidates();
-  }
 }
 
 RefPtr<NrIceMediaStream> NrIceCtx::FindStream(
@@ -604,7 +630,7 @@ nsresult NrIceCtx::StartChecks() {
   if (r) {
     MOZ_MTLOG(ML_ERROR, "Couldn't pair candidates on "
               << name_ << "'");
-    SetState(ICE_CTX_FAILED);
+    SetConnectionState(ICE_CTX_FAILED);
     return NS_ERROR_FAILURE;
   }
 
@@ -616,11 +642,11 @@ nsresult NrIceCtx::StartChecks() {
     } else {
       MOZ_MTLOG(ML_ERROR, "Couldn't start peer checks on "
                 << name_ << "'");
-      SetState(ICE_CTX_FAILED);
+      SetConnectionState(ICE_CTX_FAILED);
       return NS_ERROR_FAILURE;
     }
   } else {
-    SetState(ICE_CTX_CHECKING);
+    SetConnectionState(ICE_CTX_CHECKING);
   }
 
   return NS_OK;
@@ -630,9 +656,7 @@ nsresult NrIceCtx::StartChecks() {
 void NrIceCtx::initialized_cb(NR_SOCKET s, int h, void *arg) {
   NrIceCtx *ctx = static_cast<NrIceCtx *>(arg);
 
-  ctx->EmitAllCandidates();
-
-  ctx->SetState(ICE_CTX_GATHERED);
+  ctx->SetGatheringState(ICE_CTX_GATHER_COMPLETE);
 }
 
 nsresult NrIceCtx::Finalize() {
@@ -647,27 +671,26 @@ nsresult NrIceCtx::Finalize() {
   return NS_OK;
 }
 
-void NrIceCtx::SetState(State state) {
-  if (state == state_)
+void NrIceCtx::SetConnectionState(ConnectionState state) {
+  if (state == connection_state_)
     return;
 
-  MOZ_MTLOG(ML_DEBUG, "NrIceCtx(" << name_ << "): state " <<
-            state_ << "->" << state);
-  state_ = state;
+  MOZ_MTLOG(ML_INFO, "NrIceCtx(" << name_ << "): state " <<
+            connection_state_ << "->" << state);
+  connection_state_ = state;
 
-  switch(state_) {
-    case ICE_CTX_GATHERED:
-      SignalGatheringCompleted(this);
-      break;
-    case ICE_CTX_OPEN:
-      SignalCompleted(this);
-      break;
-    case ICE_CTX_FAILED:
-      SignalFailed(this);
-      break;
-    default:
-      break;
-  }
+  SignalConnectionStateChange(this, state);
+}
+
+void NrIceCtx::SetGatheringState(GatheringState state) {
+  if (state == gathering_state_)
+    return;
+
+  MOZ_MTLOG(ML_DEBUG, "NrIceCtx(" << name_ << "): gathering state " <<
+            gathering_state_ << "->" << state);
+  gathering_state_ = state;
+
+  SignalGatheringStateChange(this, state);
 }
 
 }  // close namespace

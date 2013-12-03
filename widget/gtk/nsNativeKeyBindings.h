@@ -13,6 +13,7 @@
 
 #include "nsINativeKeyBindings.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/EventForwards.h"
 #include <gtk/gtk.h>
 
 enum NativeKeyBindingsType {
@@ -37,22 +38,22 @@ public:
   NS_DECL_ISUPPORTS
 
   // nsINativeKeyBindings
-  virtual NS_HIDDEN_(bool) KeyDown(const nsKeyEvent& aEvent,
+  virtual NS_HIDDEN_(bool) KeyDown(const mozilla::WidgetKeyboardEvent& aEvent,
                                    DoCommandCallback aCallback,
                                    void *aCallbackData);
 
-  virtual NS_HIDDEN_(bool) KeyPress(const nsKeyEvent& aEvent,
+  virtual NS_HIDDEN_(bool) KeyPress(const mozilla::WidgetKeyboardEvent& aEvent,
                                     DoCommandCallback aCallback,
                                     void *aCallbackData);
 
-  virtual NS_HIDDEN_(bool) KeyUp(const nsKeyEvent& aEvent,
+  virtual NS_HIDDEN_(bool) KeyUp(const mozilla::WidgetKeyboardEvent& aEvent,
                                  DoCommandCallback aCallback,
                                  void *aCallbackData);
 
 private:
   ~nsNativeKeyBindings() NS_HIDDEN;
 
-  bool KeyPressInternal(const nsKeyEvent& aEvent,
+  bool KeyPressInternal(const mozilla::WidgetKeyboardEvent& aEvent,
                         DoCommandCallback aCallback,
                         void *aCallbackData,
                         guint aKeyval);

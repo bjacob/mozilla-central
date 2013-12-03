@@ -4,6 +4,7 @@
 
 from __future__ import unicode_literals
 
+import json
 import os
 import unittest
 
@@ -152,9 +153,9 @@ class TestRecursiveMakeBackend(BackendTester):
         """Ensure the RecursiveMakeBackend works without error."""
         env = self._consume('stub0', RecursiveMakeBackend)
         self.assertTrue(os.path.exists(os.path.join(env.topobjdir,
-            'backend.RecursiveMakeBackend.built')))
+            'backend.RecursiveMakeBackend')))
         self.assertTrue(os.path.exists(os.path.join(env.topobjdir,
-            'backend.RecursiveMakeBackend.built.pp')))
+            'backend.RecursiveMakeBackend.pp')))
 
     def test_output_files(self):
         """Ensure proper files are generated."""
@@ -210,8 +211,6 @@ class TestRecursiveMakeBackend(BackendTester):
         lines = [l.strip() for l in open(p, 'rt').readlines()[2:]]
         self.assertEqual(lines, [
             'MOZBUILD_DERIVED := 1',
-            'NO_MAKEFILE_RULE := 1',
-            'NO_SUBMAKEFILES_RULE := 1',
             'DIRS := dir1',
             'PARALLEL_DIRS := dir2',
             'TEST_DIRS := dir3',
@@ -243,8 +242,6 @@ class TestRecursiveMakeBackend(BackendTester):
         lines = [l.strip() for l in open(backend_path, 'rt').readlines()[2:]]
         self.assertEqual(lines, [
             'MOZBUILD_DERIVED := 1',
-            'NO_MAKEFILE_RULE := 1',
-            'NO_SUBMAKEFILES_RULE := 1',
             'DIRS := dir',
             'PARALLEL_DIRS := p_dir',
             'DIRS += external',
@@ -304,18 +301,6 @@ class TestRecursiveMakeBackend(BackendTester):
             'FAIL_ON_WARNINGS': [
                 'FAIL_ON_WARNINGS := 1',
             ],
-            'GTEST_CMMSRCS': [
-                'GTEST_CMMSRCS += test1.mm',
-                'GTEST_CMMSRCS += test2.mm',
-            ],
-            'GTEST_CPPSRCS': [
-                'GTEST_CPPSRCS += test1.cpp',
-                'GTEST_CPPSRCS += test2.cpp',
-            ],
-            'GTEST_CSRCS': [
-                'GTEST_CSRCS += test1.c',
-                'GTEST_CSRCS += test2.c',
-            ],
             'HOST_CPPSRCS': [
                 'HOST_CPPSRCS += bar.cpp',
                 'HOST_CPPSRCS += foo.cpp',
@@ -326,9 +311,6 @@ class TestRecursiveMakeBackend(BackendTester):
             ],
             'HOST_LIBRARY_NAME': [
                 'HOST_LIBRARY_NAME := host_bar',
-            ],
-            'LIBRARY_NAME': [
-                'LIBRARY_NAME := lib_name',
             ],
             'LIBXUL_LIBRARY': [
                 'LIBXUL_LIBRARY := 1',
@@ -345,17 +327,12 @@ class TestRecursiveMakeBackend(BackendTester):
                 'SDK_LIBRARY += bar.sdk',
                 'SDK_LIBRARY += foo.sdk',
             ],
-            'SHARED_LIBRARY_LIBS': [
-                'SHARED_LIBRARY_LIBS += bar.sll',
-                'SHARED_LIBRARY_LIBS += foo.sll',
-            ],
-            'SIMPLE_PROGRAMS': [
-                'SIMPLE_PROGRAMS += bar.x',
-                'SIMPLE_PROGRAMS += foo.x',
-            ],
             'SSRCS': [
-                'SSRCS += bar.S',
+                'SSRCS += baz.S',
                 'SSRCS += foo.S',
+            ],
+            'VISIBILITY_FLAGS': [
+                'VISIBILITY_FLAGS :=',
             ],
         }
 
@@ -393,6 +370,17 @@ class TestRecursiveMakeBackend(BackendTester):
             '[include:dir1/xpcshell.ini]',
             '[include:xpcshell.ini]',
         ])
+
+        all_tests_path = os.path.join(env.topobjdir, 'all-tests.json')
+        self.assertTrue(os.path.exists(all_tests_path))
+
+        with open(all_tests_path, 'rt') as fh:
+            o = json.load(fh)
+
+            self.assertIn('xpcshell.js', o)
+            self.assertIn('dir1/test_bar.js', o)
+
+            self.assertEqual(len(o['xpcshell.js']), 1)
 
     def test_xpidl_generation(self):
         """Ensure xpidl files and directories are written out."""
@@ -467,21 +455,15 @@ class TestRecursiveMakeBackend(BackendTester):
         topsrcdir = env.topsrcdir.replace(os.sep, '/')
 
         expected = [
-            "ALL_IPDLSRCS += %s/bar/bar.ipdl" % topsrcdir,
-            "CPPSRCS += bar.cpp",
-            "CPPSRCS += barChild.cpp",
-            "CPPSRCS += barParent.cpp",
-            "ALL_IPDLSRCS += %s/bar/bar2.ipdlh" % topsrcdir,
-            "CPPSRCS += bar2.cpp",
-            "ALL_IPDLSRCS += %s/foo/foo.ipdl" % topsrcdir,
-            "CPPSRCS += foo.cpp",
-            "CPPSRCS += fooChild.cpp",
-            "CPPSRCS += fooParent.cpp",
-            "ALL_IPDLSRCS += %s/foo/foo2.ipdlh" % topsrcdir,
-            "CPPSRCS += foo2.cpp",
+            "ALL_IPDLSRCS := %s/bar/bar.ipdl %s/bar/bar2.ipdlh %s/foo/foo.ipdl %s/foo/foo2.ipdlh" % tuple([topsrcdir] * 4),
+            "CPPSRCS := UnifiedProtocols0.cpp",
             "IPDLDIRS := %s/bar %s/foo" % (topsrcdir, topsrcdir),
         ]
-        self.assertEqual(lines, expected)
+
+        found = [str for str in lines if str.startswith(('ALL_IPDLSRCS',
+                                                         'CPPSRCS',
+                                                         'IPDLDIRS'))]
+        self.assertEqual(found, expected)
 
     def test_defines(self):
         """Test that DEFINES are written to backend.mk correctly."""
@@ -493,7 +475,7 @@ class TestRecursiveMakeBackend(BackendTester):
         var = 'DEFINES'
         defines = [val for val in lines if val.startswith(var)]
 
-        expected = ['DEFINES += -DFOO -DBAZ=\'"abcd"\' -DBAR=7 -DVALUE=\'xyz\'']
+        expected = ['DEFINES += -DFOO -DBAZ=\'"ab\'\\\'\'cd"\' -DBAR=7 -DVALUE=\'xyz\'']
         self.assertEqual(defines, expected)
 
     def test_local_includes(self):
@@ -510,6 +492,56 @@ class TestRecursiveMakeBackend(BackendTester):
 
         found = [str for str in lines if str.startswith('LOCAL_INCLUDES')]
         self.assertEqual(found, expected)
+
+    def test_generated_includes(self):
+        """Test that GENERATED_INCLUDES are written to backend.mk correctly."""
+        env = self._consume('generated_includes', RecursiveMakeBackend)
+
+        backend_path = os.path.join(env.topobjdir, 'backend.mk')
+        lines = [l.strip() for l in open(backend_path, 'rt').readlines()[2:]]
+
+        topobjdir = env.topobjdir.replace('\\', '/')
+
+        expected = [
+            'LOCAL_INCLUDES += -I%s/bar/baz' % topobjdir,
+            'LOCAL_INCLUDES += -Ifoo',
+        ]
+
+        found = [str for str in lines if str.startswith('LOCAL_INCLUDES')]
+        self.assertEqual(found, expected)
+
+    def test_final_target(self):
+        """Test that FINAL_TARGET is written to backend.mk correctly."""
+        env = self._consume('final_target', RecursiveMakeBackend)
+
+        final_target_rule = "FINAL_TARGET = $(if $(XPI_NAME),$(DIST)/xpi-stage/$(XPI_NAME),$(DIST)/bin)$(DIST_SUBDIR:%=/%)"
+        print([x for x in os.walk(env.topobjdir)])
+        expected = dict()
+        expected[env.topobjdir] = []
+        expected[os.path.join(env.topobjdir, 'both')] = [
+            'XPI_NAME = mycrazyxpi',
+            'DIST_SUBDIR = asubdir',
+            final_target_rule
+        ]
+        expected[os.path.join(env.topobjdir, 'dist-subdir')] = [
+            'DIST_SUBDIR = asubdir',
+            final_target_rule
+        ]
+        expected[os.path.join(env.topobjdir, 'xpi-name')] = [
+            'XPI_NAME = mycrazyxpi',
+            final_target_rule
+        ]
+        expected[os.path.join(env.topobjdir, 'final-target')] = [
+            'FINAL_TARGET = $(DEPTH)/random-final-target'
+        ]
+        for key, expected_rules in expected.iteritems():
+            backend_path = os.path.join(key, 'backend.mk')
+            lines = [l.strip() for l in open(backend_path, 'rt').readlines()[2:]]
+            found = [str for str in lines if
+                str.startswith('FINAL_TARGET') or str.startswith('XPI_NAME') or
+                str.startswith('DIST_SUBDIR')]
+            self.assertEqual(found, expected_rules)
+
 
 if __name__ == '__main__':
     main()

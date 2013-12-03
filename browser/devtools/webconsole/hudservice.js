@@ -28,6 +28,8 @@ const BROWSER_CONSOLE_WINDOW_FEATURES = "chrome,titlebar,toolbar,centerscreen,re
 // The preference prefix for all of the Browser Console filters.
 const BROWSER_CONSOLE_FILTER_PREFS_PREFIX = "devtools.browserconsole.filter.";
 
+let gHudId = 0;
+
 ///////////////////////////////////////////////////////////////////////////
 //// The HUD service
 
@@ -301,7 +303,7 @@ function WebConsole(aTarget, aIframeWindow, aChromeWindow)
 {
   this.iframeWindow = aIframeWindow;
   this.chromeWindow = aChromeWindow;
-  this.hudId = "hud_" + Date.now();
+  this.hudId = "hud_" + ++gHudId;
   this.target = aTarget;
 
   this.browserWindow = this.chromeWindow.top;
@@ -334,12 +336,28 @@ WebConsole.prototype = {
   get lastFinishedRequestCallback() HUDService.lastFinishedRequest.callback,
 
   /**
+   * Getter for the window that can provide various utilities that the web
+   * console makes use of, like opening links, managing popups, etc.  In
+   * most cases, this will be |this.browserWindow|, but in some uses (such as
+   * the Browser Toolbox), there is no browser window, so an alternative window
+   * hosts the utilities there.
+   * @type nsIDOMWindow
+   */
+  get chromeUtilsWindow()
+  {
+    if (this.browserWindow) {
+      return this.browserWindow;
+    }
+    return this.chromeWindow.top;
+  },
+
+  /**
    * Getter for the xul:popupset that holds any popups we open.
    * @type nsIDOMElement
    */
   get mainPopupSet()
   {
-    return this.browserWindow.document.getElementById("mainPopupSet");
+    return this.chromeUtilsWindow.document.getElementById("mainPopupSet");
   },
 
   /**
@@ -351,7 +369,10 @@ WebConsole.prototype = {
     return this.ui ? this.ui.outputNode : null;
   },
 
-  get gViewSourceUtils() this.browserWindow.gViewSourceUtils,
+  get gViewSourceUtils()
+  {
+    return this.chromeUtilsWindow.gViewSourceUtils;
+  },
 
   /**
    * Initialize the Web Console instance.
@@ -414,7 +435,7 @@ WebConsole.prototype = {
    */
   openLink: function WC_openLink(aLink)
   {
-    this.browserWindow.openUILinkIn(aLink, "tab");
+    this.chromeUtilsWindow.openUILinkIn(aLink, "tab");
   },
 
   /**
@@ -483,7 +504,7 @@ WebConsole.prototype = {
 
     let showSource = ({ DebuggerView }) => {
       if (DebuggerView.Sources.containsValue(aSourceURL)) {
-        DebuggerView.setEditorLocation(aSourceURL, aSourceLine);
+        DebuggerView.setEditorLocation(aSourceURL, aSourceLine, { noDebug: true });
         return;
       }
       toolbox.selectTool("webconsole");
@@ -501,6 +522,43 @@ WebConsole.prototype = {
         dbg.once(dbg.EVENTS.SOURCES_ADDED, () => showSource(dbg));
       }
     });
+  },
+
+
+  /**
+   * Tries to open a JavaScript file related to the web page for the web console
+   * instance in the corresponding Scratchpad.
+   *
+   * @param string aSourceURL
+   *        The URL of the file which corresponds to a Scratchpad id.
+   */
+  viewSourceInScratchpad: function WC_viewSourceInScratchpad(aSourceURL)
+  {
+    // Check for matching top level Scratchpad window.
+    let wins = Services.wm.getEnumerator("devtools:scratchpad");
+
+    while (wins.hasMoreElements()) {
+      let win = wins.getNext();
+
+      if (!win.closed && win.Scratchpad.uniqueName === aSourceURL) {
+        win.focus();
+        return;
+      }
+    }
+
+    // Check for matching Scratchpad toolbox tab.
+    for (let [, toolbox] of gDevTools) {
+      let scratchpadPanel = toolbox.getPanel("scratchpad");
+      if (scratchpadPanel) {
+        let { scratchpad } = scratchpadPanel;
+        if (scratchpad.uniqueName === aSourceURL) {
+          toolbox.selectTool("scratchpad");
+          toolbox.raise();
+          scratchpad.editor.focus();
+          return;
+        }
+      }
+    }
   },
 
   /**

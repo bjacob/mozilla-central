@@ -27,6 +27,7 @@ static NS_DEFINE_CID(kStreamTransportServiceCID, NS_STREAMTRANSPORTSERVICE_CID);
 //
 static PRLogModuleInfo *gStreamPumpLog = nullptr;
 #endif
+#undef LOG
 #define LOG(args) PR_LOG(gStreamPumpLog, PR_LOG_DEBUG, args)
 
 //-----------------------------------------------------------------------------
@@ -198,6 +199,8 @@ nsInputStreamPump::GetStatus(nsresult *status)
 NS_IMETHODIMP
 nsInputStreamPump::Cancel(nsresult status)
 {
+    MOZ_ASSERT(NS_IsMainThread());
+
     ReentrantMonitorAutoEnter mon(mMonitor);
 
     LOG(("nsInputStreamPump::Cancel [this=%p status=%x]\n",

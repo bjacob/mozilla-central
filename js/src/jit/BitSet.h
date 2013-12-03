@@ -27,7 +27,7 @@ class BitSet : private TempObject
   private:
     BitSet(unsigned int max) :
         max_(max),
-        bits_(NULL) {}
+        bits_(nullptr) {}
 
     unsigned int max_;
     uint32_t *bits_;
@@ -44,12 +44,12 @@ class BitSet : private TempObject
         return RawLengthForBits(max_);
     }
 
-    bool init();
+    bool init(TempAllocator &alloc);
 
   public:
     class Iterator;
 
-    static BitSet *New(unsigned int max);
+    static BitSet *New(TempAllocator &alloc, unsigned int max);
 
     unsigned int getMax() const {
         return max_;

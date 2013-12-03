@@ -48,6 +48,9 @@ JS_SetGrayGCRootsTracer(JSRuntime *rt, JSTraceDataOp traceOp, void *data);
 extern JS_FRIEND_API(JSString *)
 JS_GetAnonymousString(JSRuntime *rt);
 
+extern JS_FRIEND_API(void)
+JS_SetIsWorkerRuntime(JSRuntime *rt);
+
 extern JS_FRIEND_API(JSObject *)
 JS_FindCompilationScope(JSContext *cx, JSObject *obj);
 
@@ -119,11 +122,11 @@ JS_GetCompartmentPrincipals(JSCompartment *compartment);
 extern JS_FRIEND_API(void)
 JS_SetCompartmentPrincipals(JSCompartment *compartment, JSPrincipals *principals);
 
-/* Safe to call with input obj == NULL. Returns non-NULL iff obj != NULL. */
+/* Safe to call with input obj == nullptr. Returns non-nullptr iff obj != nullptr. */
 extern JS_FRIEND_API(JSObject *)
 JS_ObjectToInnerObject(JSContext *cx, JSObject *obj);
 
-/* Requires obj != NULL. */
+/* Requires obj != nullptr. */
 extern JS_FRIEND_API(JSObject *)
 JS_ObjectToOuterObject(JSContext *cx, JSObject *obj);
 
@@ -173,8 +176,25 @@ extern JS_FRIEND_API(void)
 js_DumpChars(const jschar *s, size_t n);
 #endif
 
+/*
+ * Copies all own properties from |obj| to |target|. |obj| must be a "native"
+ * object (that is to say, normal-ish - not an Array or a Proxy).
+ *
+ * This function immediately enters a compartment, and does not impose any
+ * restrictions on the compartment of |cx|.
+ */
 extern JS_FRIEND_API(bool)
 JS_CopyPropertiesFrom(JSContext *cx, JSObject *target, JSObject *obj);
+
+/*
+ * Single-property version of the above. This function asserts that an |own|
+ * property of the given name exists on |obj|.
+ *
+ * On entry, |cx| must be same-compartment with |obj|.
+ */
+extern JS_FRIEND_API(bool)
+JS_CopyPropertyFrom(JSContext *cx, JS::HandleId id, JS::HandleObject target,
+                    JS::HandleObject obj);
 
 extern JS_FRIEND_API(bool)
 JS_WrapPropertyDescriptor(JSContext *cx, JS::MutableHandle<JSPropertyDescriptor> desc);
@@ -198,7 +218,7 @@ struct JSFunctionSpecWithHelp {
 #define JS_FN_HELP(name,call,nargs,flags,usage,help)                          \
     {name, call, nargs, (flags) | JSPROP_ENUMERATE | JSFUN_STUB_GSOPS, usage, help}
 #define JS_FS_HELP_END                                                        \
-    {NULL, NULL, 0, 0, NULL, NULL}
+    {nullptr, nullptr, 0, 0, nullptr, nullptr}
 
 extern JS_FRIEND_API(bool)
 JS_DefineFunctionsWithHelp(JSContext *cx, JSObject *obj, const JSFunctionSpecWithHelp *fs);
@@ -220,34 +240,26 @@ class SourceHook {
   public:
     virtual ~SourceHook() { }
 
-    /* Set |*src| and |*length| to refer to the source code for |filename|. */
+    /*
+     * Set |*src| and |*length| to refer to the source code for |filename|.
+     * On success, the caller owns the buffer to which |*src| points, and
+     * should use JS_free to free it.
+     */
     virtual bool load(JSContext *cx, const char *filename, jschar **src, size_t *length) = 0;
 };
 
 /*
- * Have |rt| use |hook| to retrieve LAZY_SOURCE source code.
- * See the comments for SourceHook.
+ * Have |rt| use |hook| to retrieve LAZY_SOURCE source code. See the
+ * comments for SourceHook. The runtime takes ownership of the hook, and
+ * will delete it when the runtime itself is deleted, or when a new hook is
+ * set.
  */
 extern JS_FRIEND_API(void)
 SetSourceHook(JSRuntime *rt, SourceHook *hook);
 
-inline JSRuntime *
-GetRuntime(const JSContext *cx)
-{
-    return ContextFriendFields::get(cx)->runtime_;
-}
-
-inline JSCompartment *
-GetContextCompartment(const JSContext *cx)
-{
-    return ContextFriendFields::get(cx)->compartment_;
-}
-
-inline JS::Zone *
-GetContextZone(const JSContext *cx)
-{
-    return ContextFriendFields::get(cx)->zone_;
-}
+/* Remove |rt|'s source hook, and return it. The caller now owns the hook. */
+extern JS_FRIEND_API(SourceHook *)
+ForgetSourceHook(JSRuntime *rt);
 
 extern JS_FRIEND_API(JS::Zone *)
 GetCompartmentZone(JSCompartment *comp);
@@ -255,12 +267,17 @@ GetCompartmentZone(JSCompartment *comp);
 typedef bool
 (* PreserveWrapperCallback)(JSContext *cx, JSObject *obj);
 
+typedef enum  {
+    CollectNurseryBeforeDump,
+    IgnoreNurseryObjects
+} DumpHeapNurseryBehaviour;
+
  /*
   * Dump the complete object graph of heap-allocated things.
   * fp is the file for the dump output.
   */
 extern JS_FRIEND_API(void)
-DumpHeapComplete(JSRuntime *rt, FILE *fp);
+DumpHeapComplete(JSRuntime *rt, FILE *fp, DumpHeapNurseryBehaviour nurseryBehaviour);
 
 #ifdef JS_OLD_GETTER_SETTER_METHODS
 JS_FRIEND_API(bool) obj_defineGetter(JSContext *cx, unsigned argc, JS::Value *vp);
@@ -301,7 +318,7 @@ struct WeakMapTracer;
  * Weak map tracer callback, called once for every binding of every
  * weak map that was live at the time of the last garbage collection.
  *
- * m will be NULL if the weak map is not contained in a JS Object.
+ * m will be nullptr if the weak map is not contained in a JS Object.
  */
 typedef void
 (* WeakMapTraceCallback)(WeakMapTracer *trc, JSObject *m,
@@ -394,6 +411,10 @@ struct Object {
             return fixedSlots()[slot];
         return slots[slot - nfixed];
     }
+
+    // Reserved slots with index < MAX_FIXED_SLOTS are guaranteed to
+    // be fixed slots.
+    static const uint32_t MAX_FIXED_SLOTS = 16;
 };
 
 struct Function {
@@ -468,6 +489,16 @@ GetObjectParentMaybeScope(JSObject *obj);
 JS_FRIEND_API(JSObject *)
 GetGlobalForObjectCrossCompartment(JSObject *obj);
 
+JS_FRIEND_API(void)
+AssertSameCompartment(JSContext *cx, JSObject *obj);
+
+#ifdef DEBUG
+JS_FRIEND_API(void)
+AssertSameCompartment(JSObject *objA, JSObject *objB);
+#else
+inline void AssertSameCompartment(JSObject *objA, JSObject *objB) {}
+#endif
+
 // For legacy consumers only. This whole concept is going away soon.
 JS_FRIEND_API(JSObject *)
 DefaultObjectForContextOrNull(JSContext *cx);
@@ -483,7 +514,7 @@ IsOriginalScriptFunction(JSFunction *fun);
 
 /*
  * Return the outermost enclosing function (script) of the scripted caller.
- * This function returns NULL in several cases:
+ * This function returns nullptr in several cases:
  *  - no script is running on the context
  *  - the caller is in global or eval code
  * In particular, this function will "stop" its outermost search at eval() and
@@ -519,6 +550,10 @@ SetFunctionNativeReserved(JSObject *fun, size_t which, const JS::Value &val);
 
 JS_FRIEND_API(bool)
 GetObjectProto(JSContext *cx, JS::Handle<JSObject*> obj, JS::MutableHandle<JSObject*> proto);
+
+JS_FRIEND_API(bool)
+GetOriginalEval(JSContext *cx, JS::HandleObject scope,
+                JS::MutableHandleObject eval);
 
 inline void *
 GetObjectPrivate(JSObject *obj)
@@ -624,7 +659,6 @@ ErrorFromException(JS::Value val);
 #define JSITER_KEYVALUE   0x4   /* destructuring for-in wants [key, value] */
 #define JSITER_OWNONLY    0x8   /* iterate over obj's own properties only */
 #define JSITER_HIDDEN     0x10  /* also enumerate non-enumerable properties */
-#define JSITER_FOR_OF     0x20  /* harmony for-of loop */
 
 JS_FRIEND_API(bool)
 RunningWithTrustedPrincipals(JSContext *cx);
@@ -645,11 +679,19 @@ GetNativeStackLimit(JSContext *cx)
  * extra space so that we can ensure that crucial code is able to run.
  */
 
-#define JS_CHECK_RECURSION(cx, onerror)                              \
+#define JS_CHECK_RECURSION(cx, onerror)                                         \
     JS_BEGIN_MACRO                                                              \
         int stackDummy_;                                                        \
         if (!JS_CHECK_STACK_SIZE(js::GetNativeStackLimit(cx), &stackDummy_)) {  \
             js_ReportOverRecursed(cx);                                          \
+            onerror;                                                            \
+        }                                                                       \
+    JS_END_MACRO
+
+#define JS_CHECK_RECURSION_DONT_REPORT(cx, onerror)                             \
+    JS_BEGIN_MACRO                                                              \
+        int stackDummy_;                                                        \
+        if (!JS_CHECK_STACK_SIZE(js::GetNativeStackLimit(cx), &stackDummy_)) {  \
             onerror;                                                            \
         }                                                                       \
     JS_END_MACRO
@@ -722,8 +764,7 @@ extern JS_FRIEND_API(bool)
 IsContextRunningJS(JSContext *cx);
 
 typedef bool
-(* DOMInstanceClassMatchesProto)(JS::HandleObject protoObject, uint32_t protoID,
-                                 uint32_t depth);
+(* DOMInstanceClassMatchesProto)(JSObject *protoObject, uint32_t protoID, uint32_t depth);
 struct JSDOMCallbacks {
     DOMInstanceClassMatchesProto instanceClassMatchesProto;
 };
@@ -753,7 +794,7 @@ CastToJSFreeOp(FreeOp *fop)
 
 /*
  * Get an error type name from a JSExnType constant.
- * Returns NULL for invalid arguments and JSEXN_INTERNALERR
+ * Returns nullptr for invalid arguments and JSEXN_INTERNALERR
  */
 extern JS_FRIEND_API(const jschar*)
 GetErrorTypeName(JSRuntime* rt, int16_t exnType);
@@ -839,6 +880,16 @@ struct ExpandoAndGeneration {
   {
       ++generation;
       expando.setUndefined();
+  }
+
+  static size_t offsetOfExpando()
+  {
+      return offsetof(ExpandoAndGeneration, expando);
+  }
+
+  static size_t offsetOfGeneration()
+  {
+      return offsetof(ExpandoAndGeneration, generation);
   }
 
   JS::Heap<JS::Value> expando;
@@ -1069,9 +1120,9 @@ extern JS_FRIEND_API(bool)
 JS_IsFloat64Array(JSObject *obj);
 
 /*
- * Unwrap Typed arrays all at once. Return NULL without throwing if the object
- * cannot be viewed as the correct typed array, or the typed array object on
- * success, filling both outparameters.
+ * Unwrap Typed arrays all at once. Return nullptr without throwing if the
+ * object cannot be viewed as the correct typed array, or the typed array
+ * object on success, filling both outparameters.
  */
 extern JS_FRIEND_API(JSObject *)
 JS_GetObjectAsInt8Array(JSObject *obj, uint32_t *length, int8_t **data);
@@ -1227,6 +1278,12 @@ extern JS_FRIEND_API(JSObject *)
 JS_GetArrayBufferViewBuffer(JSObject *obj);
 
 /*
+ * Set an ArrayBuffer's length to 0 and neuter all of its views.
+ */
+extern JS_FRIEND_API(bool)
+JS_NeuterArrayBuffer(JSContext *cx, JS::HandleObject obj);
+
+/*
  * Check whether obj supports JS_GetDataView* APIs.
  */
 JS_FRIEND_API(bool)
@@ -1248,7 +1305,7 @@ JS_GetDataViewByteOffset(JSObject *obj);
  *
  * |obj| must have passed a JS_IsDataViewObject test, or somehow be known that
  * it would pass such a test: it is a data view or a wrapper of a data view,
- * and the unwrapping will succeed. If cx is NULL, then DEBUG builds may be
+ * and the unwrapping will succeed. If cx is nullptr, then DEBUG builds may be
  * unable to assert when unwrapping should be disallowed.
  */
 JS_FRIEND_API(uint32_t)
@@ -1259,11 +1316,38 @@ JS_GetDataViewByteLength(JSObject *obj);
  *
  * |obj| must have passed a JS_IsDataViewObject test, or somehow be known that
  * it would pass such a test: it is a data view or a wrapper of a data view,
- * and the unwrapping will succeed. If cx is NULL, then DEBUG builds may be
+ * and the unwrapping will succeed. If cx is nullptr, then DEBUG builds may be
  * unable to assert when unwrapping should be disallowed.
  */
 JS_FRIEND_API(void *)
 JS_GetDataViewData(JSObject *obj);
+
+namespace js {
+
+/*
+ * Add a watchpoint -- in the Object.prototype.watch sense -- to |obj| for the
+ * property |id|, using the callable object |callable| as the function to be
+ * called for notifications.
+ *
+ * This is an internal function exposed -- temporarily -- only so that DOM
+ * proxies can be watchable.  Don't use it!  We'll soon kill off the
+ * Object.prototype.{,un}watch functions, at which point this will go too.
+ */
+extern JS_FRIEND_API(bool)
+WatchGuts(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::HandleObject callable);
+
+/*
+ * Remove a watchpoint -- in the Object.prototype.watch sense -- from |obj| for
+ * the property |id|.
+ *
+ * This is an internal function exposed -- temporarily -- only so that DOM
+ * proxies can be watchable.  Don't use it!  We'll soon kill off the
+ * Object.prototype.{,un}watch functions, at which point this will go too.
+ */
+extern JS_FRIEND_API(bool)
+UnwatchGuts(JSContext *cx, JS::HandleObject obj, JS::HandleId id);
+
+} // namespace js
 
 /*
  * A class, expected to be passed by value, which represents the CallArgs for a
@@ -1370,27 +1454,95 @@ struct JSJitInfo {
         OpType_None
     };
 
+    enum ArgType {
+        // Basic types
+        String = (1 << 0),
+        Integer = (1 << 1), // Only 32-bit or less
+        Double = (1 << 2), // Maybe we want to add Float sometime too
+        Boolean = (1 << 3),
+        Object = (1 << 4),
+        Null = (1 << 5),
+
+        // And derived types
+        Numeric = Integer | Double,
+        // Should "Primitive" use the WebIDL definition, which
+        // excludes string and null, or the typical JS one that includes them?
+        Primitive = Numeric | Boolean | Null | String,
+        ObjectOrNull = Object | Null,
+        Any = ObjectOrNull | Primitive,
+
+        // Our sentinel value.
+        ArgTypeListEnd = (1 << 31)
+    };
+
+    enum AliasSet {
+        // An enum that describes what this getter/setter/method aliases.  This
+        // determines what things can be hoisted past this call, and if this
+        // call is movable what it can be hoisted past.
+
+        // Alias nothing: a constant value, getting it can't affect any other
+        // values, nothing can affect it.
+        AliasNone,
+
+        // Alias things that can modify the DOM but nothing else.  Doing the
+        // call can't affect the behavior of any other function.
+        AliasDOMSets,
+
+        // Alias the world.  Calling this can change arbitrary values anywhere
+        // in the system.  Most things fall in this bucket.
+        AliasEverything
+    };
+
     union {
         JSJitGetterOp getter;
         JSJitSetterOp setter;
         JSJitMethodOp method;
     };
+
     uint32_t protoID;
     uint32_t depth;
     OpType type;
     bool isInfallible;      /* Is op fallible? False in setters. */
-    bool isConstant;        /* Getting a construction-time constant? */
-    bool isPure;            /* As long as no non-pure DOM things happen, will
-                               keep returning the same value for the given
-                               "this" object" */
+    bool isMovable;         /* Is op movable?  To be movable the op must not
+                               AliasEverything, but even that might not be
+                               enough (e.g. in cases when it can throw). */
+    AliasSet aliasSet;      /* The alias set for this op.  This is a _minimal_
+                               alias set; in particular for a method it does not
+                               include whatever argument conversions might do.
+                               That's covered by argTypes and runtime analysis
+                               of the actual argument types being passed in. */
+    // XXXbz should we have a JSGetterJitInfo subclass or something?
+    // XXXbz should we have a JSValueType for the type of the member?
+    bool isInSlot;          /* True if this is a getter that can get a member
+                               from a slot of the "this" object directly. */
+    size_t slotIndex;       /* If isMember is true, the index of the slot to get
+                               the value from.  Otherwise 0. */
     JSValueType returnType; /* The return type tag.  Might be JSVAL_TYPE_UNKNOWN */
+
+    const ArgType* const argTypes; /* For a method, a list of sets of types that
+                                      the function expects.  This can be used,
+                                      for example, to figure out when argument
+                                      coercions can have side-effects. nullptr
+                                      if we have no type information for
+                                      arguments. */
 
     /* An alternative native that's safe to call in parallel mode. */
     JSParallelNative parallelNative;
+
+private:
+    static void staticAsserts()
+    {
+        JS_STATIC_ASSERT(Any & String);
+        JS_STATIC_ASSERT(Any & Integer);
+        JS_STATIC_ASSERT(Any & Double);
+        JS_STATIC_ASSERT(Any & Boolean);
+        JS_STATIC_ASSERT(Any & Object);
+        JS_STATIC_ASSERT(Any & Null);
+    }
 };
 
 #define JS_JITINFO_NATIVE_PARALLEL(op)                                         \
-    {{NULL},0,0,JSJitInfo::OpType_None,false,false,false,JSVAL_TYPE_MISSING,op}
+    {{nullptr},0,0,JSJitInfo::OpType_None,false,false,JSJitInfo::AliasEverything,false,0,JSVAL_TYPE_MISSING,nullptr,op}
 
 static JS_ALWAYS_INLINE const JSJitInfo *
 FUNCTION_VALUE_TO_JITINFO(const JS::Value& v)
@@ -1478,7 +1630,7 @@ JSID_TO_ATOM(jsid id)
     return (JSAtom *)JSID_TO_STRING(id);
 }
 
-JS_STATIC_ASSERT(sizeof(jsid) == JS_BYTES_PER_WORD);
+JS_STATIC_ASSERT(sizeof(jsid) == sizeof(void*));
 
 namespace js {
 
@@ -1555,7 +1707,7 @@ class JS_FRIEND_API(AutoCTypesActivityCallback) {
     void DoEndCallback() {
         if (callback) {
             callback(cx, endType);
-            callback = NULL;
+            callback = nullptr;
         }
     }
 };

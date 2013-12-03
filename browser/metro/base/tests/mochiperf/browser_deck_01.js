@@ -4,8 +4,6 @@
 "use strict";
 
 function test() {
-  let testDir = gTestPath.substr(0, gTestPath.lastIndexOf("/"));
-  Services.scriptloader.loadSubScript(testDir + "/perfhelpers.js", this);
   runTests();
 }
 
@@ -29,10 +27,10 @@ gTests.push({
       window.addEventListener("MozAfterPaint", onPaint, true);
       stopwatch.start();
       let promise = waitForEvent(window, "MozDeckOffsetChanged");
-      ContentAreaObserver._shiftBrowserDeck(300);
+      ContentAreaObserver.shiftBrowserDeck(300);
       yield promise;
       promise = waitForEvent(window, "MozDeckOffsetChanged");
-      ContentAreaObserver._shiftBrowserDeck(0);
+      ContentAreaObserver.shiftBrowserDeck(0);
       yield promise;
       stopwatch.stop();
       yield waitForMs(500);

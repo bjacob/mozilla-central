@@ -8,3 +8,9 @@ DIRS += [
     'extensions',
     'subdir',
 ]
+
+MOCHITEST_MANIFESTS += ['mochitest.ini']
+
+MOCHITEST_CHROME_MANIFESTS += ['chrome.ini']
+
+XPCSHELL_TESTS_MANIFESTS += ['xpcshell/xpcshell.ini']

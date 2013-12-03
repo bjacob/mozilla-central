@@ -16,7 +16,7 @@
 using namespace JS;
 using namespace mozilla;
 
-NS_IMPL_CLASSINFO(XPCVariant, NULL, 0, XPCVARIANT_CID)
+NS_IMPL_CLASSINFO(XPCVariant, nullptr, 0, XPCVARIANT_CID)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(XPCVariant)
   NS_INTERFACE_MAP_ENTRY(XPCVariant)
   NS_INTERFACE_MAP_ENTRY(nsIVariant)
@@ -63,7 +63,7 @@ XPCTraceableVariant::~XPCTraceableVariant()
         nsVariant::Cleanup(&mData);
 
     if (!JSVAL_IS_NULL(val))
-        RemoveFromRootSet(nsXPConnect::GetRuntimeInstance()->GetMapLock());
+        RemoveFromRootSet();
 }
 
 void XPCTraceableVariant::TraceJS(JSTracer* trc)
@@ -103,7 +103,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(XPCVariant)
 
     if (val.isMarkable()) {
         XPCTraceableVariant *v = static_cast<XPCTraceableVariant*>(tmp);
-        v->RemoveFromRootSet(nsXPConnect::GetRuntimeInstance()->GetMapLock());
+        v->RemoveFromRootSet();
     }
     tmp->mJSVal = JS::NullValue();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -375,7 +375,7 @@ XPCVariant::GetAsJSVal(jsval* result)
 // static
 bool
 XPCVariant::VariantDataToJS(nsIVariant* variant,
-                            nsresult* pErr, jsval* pJSVal)
+                            nsresult* pErr, MutableHandleValue pJSVal)
 {
     // Get the type early because we might need to spoof it below.
     uint16_t type;
@@ -391,9 +391,9 @@ XPCVariant::VariantDataToJS(nsIVariant* variant,
          type == nsIDataType::VTYPE_ARRAY ||
          type == nsIDataType::VTYPE_EMPTY_ARRAY ||
          type == nsIDataType::VTYPE_ID)) {
-        if (!JS_WrapValue(cx, realVal.address()))
+        if (!JS_WrapValue(cx, &realVal))
             return false;
-        *pJSVal = realVal;
+        pJSVal.set(realVal);
         return true;
     }
 
@@ -403,9 +403,9 @@ XPCVariant::VariantDataToJS(nsIVariant* variant,
                    type == nsIDataType::VTYPE_INTERFACE_IS,
                    "Weird variant");
 
-        if (!JS_WrapValue(cx, realVal.address()))
+        if (!JS_WrapValue(cx, &realVal))
             return false;
-        *pJSVal = realVal;
+        pJSVal.set(realVal);
         return true;
     }
 
@@ -436,7 +436,7 @@ XPCVariant::VariantDataToJS(nsIVariant* variant,
             double d;
             if (NS_FAILED(variant->GetAsDouble(&d)))
                 return false;
-            *pJSVal = JS_NumberValue(d);
+            pJSVal.setNumber(d);
             return true;
         }
         case nsIDataType::VTYPE_BOOL:
@@ -444,7 +444,7 @@ XPCVariant::VariantDataToJS(nsIVariant* variant,
             bool b;
             if (NS_FAILED(variant->GetAsBool(&b)))
                 return false;
-            *pJSVal = BOOLEAN_TO_JSVAL(b);
+            pJSVal.setBoolean(b);
             return true;
         }
         case nsIDataType::VTYPE_CHAR:
@@ -647,14 +647,14 @@ VARIANT_DONE:
             JSObject* array = JS_NewArrayObject(cx, 0, nullptr);
             if (!array)
                 return false;
-            *pJSVal = OBJECT_TO_JSVAL(array);
+            pJSVal.setObject(*array);
             return true;
         }
         case nsIDataType::VTYPE_VOID:
-            *pJSVal = JSVAL_VOID;
+            pJSVal.setUndefined();
             return true;
         case nsIDataType::VTYPE_EMPTY:
-            *pJSVal = JSVAL_NULL;
+            pJSVal.setNull();
             return true;
         default:
             NS_ERROR("bad type in variant!");

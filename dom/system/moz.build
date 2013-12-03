@@ -14,8 +14,7 @@ elif toolkit == 'cocoa':
     DIRS += ['mac']
 elif toolkit == 'android':
     DIRS += ['android']
-
-if CONFIG['MOZ_B2G_RIL']:
+elif toolkit == 'gonk':
     DIRS += ['gonk']
 
 TEST_DIRS += ['tests']
@@ -26,8 +25,6 @@ XPIDL_SOURCES += [
 
 XPIDL_MODULE = 'dom_system'
 
-MODULE = 'dom'
-
 EXPORTS += [
     'nsDeviceSensors.h',
 ]
@@ -36,9 +33,9 @@ EXPORTS.mozilla += [
     'OSFileConstants.h',
 ]
 
-CPP_SOURCES += [
-    'OSFileConstants.cpp',
+UNIFIED_SOURCES += [
     'nsDeviceSensors.cpp',
+    'OSFileConstants.cpp',
 ]
 
 # On Systems that have build in geolocation providers,
@@ -51,7 +48,16 @@ if CONFIG['OS_TARGET'] != 'Android' or CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
 
 FAIL_ON_WARNINGS = True
 
-LIBXUL_LIBRARY = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-LIBRARY_NAME = 'domsystem_s'
+FINAL_LIBRARY = 'gklayout'
+# We fire the nsDOMDeviceAcceleration
+LOCAL_INCLUDES += [
+    '/content/events/src',
+    '/dom/base',
+    '/dom/bindings',
+    '/js/xpconnect/loader',
+]
 
+DEFINES['DLL_PREFIX'] = '"%s"' % CONFIG['DLL_PREFIX']
+DEFINES['DLL_SUFFIX'] = '"%s"' % CONFIG['DLL_SUFFIX']

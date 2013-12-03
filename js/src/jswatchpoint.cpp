@@ -56,31 +56,6 @@ WatchpointMap::init()
     return map.init();
 }
 
-#ifdef JSGC_GENERATIONAL
-void
-Mark(JSTracer *trc, WatchKey *key, const char *name)
-{
-    MarkId(trc, &key->id, "WatchKey id");
-    MarkObject(trc, &key->object, "WatchKey id");
-}
-#endif
-
-static void
-WatchpointWriteBarrierPost(JSRuntime *rt, WatchpointMap::Map *map, const WatchKey &key,
-                           const Watchpoint &val)
-{
-#ifdef JSGC_GENERATIONAL
-    if ((JSID_IS_OBJECT(key.id) && IsInsideNursery(rt, JSID_TO_OBJECT(key.id))) ||
-        (JSID_IS_STRING(key.id) && IsInsideNursery(rt, JSID_TO_STRING(key.id))) ||
-        IsInsideNursery(rt, key.object) ||
-        IsInsideNursery(rt, val.closure))
-    {
-        typedef HashKeyRef<WatchpointMap::Map, WatchKey> WatchKeyRef;
-        rt->gcStoreBuffer.putGeneric(WatchKeyRef(map, key));
-    }
-#endif
-}
-
 bool
 WatchpointMap::watch(JSContext *cx, HandleObject obj, HandleId id,
                      JSWatchPointHandler handler, HandleObject closure)
@@ -90,15 +65,16 @@ WatchpointMap::watch(JSContext *cx, HandleObject obj, HandleId id,
     if (!obj->setWatched(cx))
         return false;
 
-    Watchpoint w;
-    w.handler = handler;
-    w.closure = closure;
-    w.held = false;
+    Watchpoint w(handler, closure, false);
     if (!map.put(WatchKey(obj, id), w)) {
         js_ReportOutOfMemory(cx);
         return false;
     }
-    WatchpointWriteBarrierPost(cx->runtime(), &map, WatchKey(obj, id), w);
+    /*
+     * For generational GC, we don't need to post-barrier writes to the
+     * hashtable here because we mark all watchpoints as part of root marking in
+     * markAll().
+     */
     return true;
 }
 
@@ -211,17 +187,17 @@ WatchpointMap::markAll(JSTracer *trc)
 {
     for (Map::Enum e(map); !e.empty(); e.popFront()) {
         Map::Entry &entry = e.front();
-        JSObject *priorKeyObj = entry.key.object;
-        jsid priorKeyId = entry.key.id;
-        JS_ASSERT(JSID_IS_STRING(priorKeyId) || JSID_IS_INT(priorKeyId));
+        WatchKey key = entry.key;
+        WatchKey prior = key;
+        JS_ASSERT(JSID_IS_STRING(prior.id) || JSID_IS_INT(prior.id));
 
-        MarkObject(trc, const_cast<EncapsulatedPtrObject *>(&entry.key.object),
+        MarkObject(trc, const_cast<EncapsulatedPtrObject *>(&key.object),
                    "held Watchpoint object");
-        MarkId(trc, const_cast<EncapsulatedId *>(&entry.key.id), "WatchKey::id");
+        MarkId(trc, const_cast<EncapsulatedId *>(&key.id), "WatchKey::id");
         MarkObject(trc, &entry.value.closure, "Watchpoint::closure");
 
-        if (priorKeyObj != entry.key.object || priorKeyId != entry.key.id)
-            e.rekeyFront(entry.key);
+        if (prior.object != key.object || prior.id != key.id)
+            e.rekeyFront(key);
     }
 }
 
@@ -239,7 +215,7 @@ WatchpointMap::sweep()
 {
     for (Map::Enum e(map); !e.empty(); e.popFront()) {
         Map::Entry &entry = e.front();
-        RelocatablePtrObject obj(entry.key.object);
+        JSObject *obj(entry.key.object);
         if (IsObjectAboutToBeFinalized(&obj)) {
             JS_ASSERT(!entry.value.held);
             e.removeFront();
@@ -253,7 +229,7 @@ void
 WatchpointMap::traceAll(WeakMapTracer *trc)
 {
     JSRuntime *rt = trc->runtime;
-    for (CompartmentsIter comp(rt); !comp.done(); comp.next()) {
+    for (CompartmentsIter comp(rt, SkipAtoms); !comp.done(); comp.next()) {
         if (WatchpointMap *wpmap = comp->watchpointMap)
             wpmap->trace(trc);
     }
@@ -264,7 +240,7 @@ WatchpointMap::trace(WeakMapTracer *trc)
 {
     for (Map::Range r = map.all(); !r.empty(); r.popFront()) {
         Map::Entry &entry = r.front();
-        trc->callback(trc, NULL,
+        trc->callback(trc, nullptr,
                       entry.key.object.get(), JSTRACE_OBJECT,
                       entry.value.closure.get(), JSTRACE_OBJECT);
     }

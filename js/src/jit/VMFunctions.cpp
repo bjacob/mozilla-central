@@ -10,9 +10,8 @@
 #include "builtin/TypedObject.h"
 #include "frontend/BytecodeCompiler.h"
 #include "jit/BaselineIC.h"
-#include "jit/Ion.h"
-#include "jit/IonCompartment.h"
 #include "jit/IonFrames.h"
+#include "jit/JitCompartment.h"
 #include "vm/ArrayObject.h"
 #include "vm/Debugger.h"
 #include "vm/Interpreter.h"
@@ -20,6 +19,7 @@
 #include "jsinferinlines.h"
 
 #include "jit/BaselineFrame-inl.h"
+#include "jit/IonFrames-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/StringObject-inl.h"
 
@@ -33,13 +33,20 @@ namespace jit {
 // run before the constructors for static VMFunctions.
 /* static */ VMFunction *VMFunction::functions;
 
+AutoDetectInvalidation::AutoDetectInvalidation(JSContext *cx, Value *rval, IonScript *ionScript)
+  : cx_(cx),
+    ionScript_(ionScript ? ionScript : GetTopIonJSScript(cx)->ionScript()),
+    rval_(rval),
+    disabled_(false)
+{ }
+
 void
 VMFunction::addToFunctions()
 {
     static bool initialized = false;
     if (!initialized) {
         initialized = true;
-        functions = NULL;
+        functions = nullptr;
     }
     this->next = functions;
     functions = this;
@@ -57,9 +64,8 @@ InvokeFunction(JSContext *cx, HandleObject obj0, uint32_t argc, Value *argv, Val
 
             // Clone function at call site if needed.
             if (fun->nonLazyScript()->shouldCloneAtCallsite) {
-                RootedScript script(cx);
                 jsbytecode *pc;
-                types::TypeScript::GetPcScript(cx, script.address(), &pc);
+                RootedScript script(cx, cx->currentScript(&pc));
                 fun = CloneFunctionAtCallsite(cx, fun, script, pc);
                 if (!fun)
                     return false;
@@ -84,9 +90,8 @@ InvokeFunction(JSContext *cx, HandleObject obj0, uint32_t argc, Value *argv, Val
     }
 
     if (obj->is<JSFunction>()) {
-        RootedScript script(cx);
         jsbytecode *pc;
-        types::TypeScript::GetPcScript(cx, script.address(), &pc);
+        RootedScript script(cx, cx->currentScript(&pc));
         types::TypeScript::Monitor(cx, script, pc, rv.get());
     }
 
@@ -104,7 +109,7 @@ bool
 CheckOverRecursed(JSContext *cx)
 {
     // IonMonkey's stackLimit is equal to nativeStackLimit by default. When we
-    // want to trigger an operation callback, we set the ionStackLimit to NULL,
+    // want to trigger an operation callback, we set the ionStackLimit to nullptr,
     // which causes the stack limit check to fail.
     //
     // There are two states we're concerned about here:
@@ -123,14 +128,36 @@ CheckOverRecursed(JSContext *cx)
     return true;
 }
 
+// This function can get called in two contexts.  In the usual context, it's
+// called with ealyCheck=false, after the scope chain has been initialized on
+// a baseline frame.  In this case, it's ok to throw an exception, so a failed
+// stack check returns false, and a successful stack check promps a check for
+// an interrupt from the runtime, which may also cause a false return.
+//
+// In the second case, it's called with earlyCheck=true, prior to frame
+// initialization.  An exception cannot be thrown in this instance, so instead
+// an error flag is set on the frame and true returned.
 bool
-CheckOverRecursedWithExtra(JSContext *cx, uint32_t extra)
+CheckOverRecursedWithExtra(JSContext *cx, BaselineFrame *frame,
+                           uint32_t extra, uint32_t earlyCheck)
 {
+    JS_ASSERT_IF(earlyCheck, !frame->overRecursed());
+
     // See |CheckOverRecursed| above.  This is a variant of that function which
     // accepts an argument holding the extra stack space needed for the Baseline
     // frame that's about to be pushed.
     uint8_t spDummy;
     uint8_t *checkSp = (&spDummy) - extra;
+    if (earlyCheck) {
+        JS_CHECK_RECURSION_WITH_SP(cx, checkSp, frame->setOverRecursed());
+        return true;
+    }
+
+    // The OVERRECURSED flag may have already been set on the frame by an
+    // early over-recursed check.  If so, throw immediately.
+    if (frame->overRecursed())
+        return false;
+
     JS_CHECK_RECURSION_WITH_SP(cx, checkSp, return false);
 
     if (cx->runtime()->interrupt)
@@ -169,8 +196,8 @@ InitProp(JSContext *cx, HandleObject obj, HandlePropertyName name, HandleValue v
     RootedId id(cx, NameToId(name));
 
     if (name == cx->names().proto)
-        return baseops::SetPropertyHelper(cx, obj, obj, id, 0, &rval, false);
-    return DefineNativeProperty(cx, obj, id, rval, NULL, NULL, JSPROP_ENUMERATE, 0, 0, 0);
+        return baseops::SetPropertyHelper<SequentialExecution>(cx, obj, obj, id, 0, &rval, false);
+    return DefineNativeProperty(cx, obj, id, rval, nullptr, nullptr, JSPROP_ENUMERATE, 0, 0, 0);
 }
 
 template<bool Equal>
@@ -258,7 +285,7 @@ NewInitParallelArray(JSContext *cx, HandleObject templateObject)
 
     RootedObject obj(cx, ParallelArrayObject::newInstance(cx, TenuredObject));
     if (!obj)
-        return NULL;
+        return nullptr;
 
     obj->setType(templateObject->type());
 
@@ -270,11 +297,11 @@ NewInitArray(JSContext *cx, uint32_t count, types::TypeObject *typeArg)
 {
     RootedTypeObject type(cx, typeArg);
     NewObjectKind newKind = !type ? SingletonObject : GenericObject;
-    if (type && type->isLongLivedForJITAlloc())
+    if (type && type->shouldPreTenure())
         newKind = TenuredObject;
-    RootedObject obj(cx, NewDenseAllocatedArray(cx, count, NULL, newKind));
+    RootedObject obj(cx, NewDenseAllocatedArray(cx, count, nullptr, newKind));
     if (!obj)
-        return NULL;
+        return nullptr;
 
     if (!type)
         types::TypeScript::Monitor(cx, ObjectValue(*obj));
@@ -288,12 +315,12 @@ JSObject*
 NewInitObject(JSContext *cx, HandleObject templateObject)
 {
     NewObjectKind newKind = templateObject->hasSingletonType() ? SingletonObject : GenericObject;
-    if (!templateObject->hasLazyType() && templateObject->type()->isLongLivedForJITAlloc())
+    if (!templateObject->hasLazyType() && templateObject->type()->shouldPreTenure())
         newKind = TenuredObject;
     RootedObject obj(cx, CopyInitializerObject(cx, templateObject, newKind));
 
     if (!obj)
-        return NULL;
+        return nullptr;
 
     if (templateObject->hasSingletonType())
         types::TypeScript::Monitor(cx, ObjectValue(*obj));
@@ -309,7 +336,7 @@ NewInitObjectWithClassPrototype(JSContext *cx, HandleObject templateObject)
     JS_ASSERT(!templateObject->hasSingletonType());
     JS_ASSERT(!templateObject->hasLazyType());
 
-    NewObjectKind newKind = templateObject->type()->isLongLivedForJITAlloc()
+    NewObjectKind newKind = templateObject->type()->shouldPreTenure()
                             ? TenuredObject
                             : GenericObject;
     JSObject *obj = NewObjectWithGivenProto(cx,
@@ -318,7 +345,7 @@ NewInitObjectWithClassPrototype(JSContext *cx, HandleObject templateObject)
                                             cx->global(),
                                             newKind);
     if (!obj)
-        return NULL;
+        return nullptr;
 
     obj->setType(templateObject->type());
 
@@ -384,19 +411,19 @@ ArrayConcatDense(JSContext *cx, HandleObject obj1, HandleObject obj2, HandleObje
 {
     Rooted<ArrayObject*> arr1(cx, &obj1->as<ArrayObject>());
     Rooted<ArrayObject*> arr2(cx, &obj2->as<ArrayObject>());
-    Rooted<ArrayObject*> arrRes(cx, objRes ? &objRes->as<ArrayObject>() : NULL);
+    Rooted<ArrayObject*> arrRes(cx, objRes ? &objRes->as<ArrayObject>() : nullptr);
 
     if (arrRes) {
         // Fast path if we managed to allocate an object inline.
         if (!js::array_concat_dense(cx, arr1, arr2, arrRes))
-            return NULL;
+            return nullptr;
         return arrRes;
     }
 
     Value argv[] = { UndefinedValue(), ObjectValue(*arr1), ObjectValue(*arr2) };
     AutoValueArray ava(cx, argv, 3);
     if (!js::array_concat(cx, 1, argv))
-        return NULL;
+        return nullptr;
     return &argv[0].toObject();
 }
 
@@ -435,13 +462,14 @@ SetProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, HandleValu
         // required for initializing 'const' closure variables.
         Shape *shape = obj->nativeLookup(cx, name);
         JS_ASSERT(shape && shape->hasSlot());
-        JSObject::nativeSetSlotWithType(cx, obj, shape, value);
+        obj->nativeSetSlotWithType(cx, shape, value);
         return true;
     }
 
     if (JS_LIKELY(!obj->getOps()->setProperty)) {
         unsigned defineHow = (op == JSOP_SETNAME || op == JSOP_SETGNAME) ? DNP_UNQUALIFIED : 0;
-        return baseops::SetPropertyHelper(cx, obj, obj, id, defineHow, &v, strict);
+        return baseops::SetPropertyHelper<SequentialExecution>(cx, obj, obj, id, defineHow, &v,
+                                                               strict);
     }
 
     return JSObject::setGeneric(cx, obj, obj, id, &v, strict);
@@ -459,8 +487,8 @@ InterruptCheck(JSContext *cx)
     // is definitely about to be handled; if there are still backedges
     // afterwards which point to the interrupt handler, the next time they are
     // taken the backedges will just be reset again.
-    cx->runtime()->ionRuntime()->patchIonBackedges(cx->runtime(),
-                                                   IonRuntime::BackedgeLoopHeader);
+    cx->runtime()->jitRuntime()->patchIonBackedges(cx->runtime(),
+                                                   JitRuntime::BackedgeLoopHeader);
 
     return !!js_HandleExecutionInterrupt(cx);
 }
@@ -472,7 +500,7 @@ NewSlots(JSRuntime *rt, unsigned nslots)
 
     Value *slots = reinterpret_cast<Value *>(rt->malloc_(nslots * sizeof(Value)));
     if (!slots)
-        return NULL;
+        return nullptr;
 
     for (unsigned i = 0; i < nslots; i++)
         slots[i] = UndefinedValue();
@@ -485,6 +513,8 @@ NewCallObject(JSContext *cx, HandleScript script,
               HandleShape shape, HandleTypeObject type, HeapSlot *slots)
 {
     JSObject *obj = CallObject::create(cx, script, shape, type, slots);
+    if (!obj)
+        return nullptr;
 
 #ifdef JSGC_GENERATIONAL
     // The JIT creates call objects in the nursery, so elides barriers for
@@ -566,7 +596,7 @@ CreateThis(JSContext *cx, HandleObject callee, MutableHandleValue rval)
             JSScript *script = fun->getOrCreateScript(cx);
             if (!script || !script->ensureHasTypes(cx))
                 return false;
-            JSObject *thisObj = CreateThisForFunction(cx, callee, false);
+            JSObject *thisObj = CreateThisForFunction(cx, callee, GenericObject);
             if (!thisObj)
                 return false;
             rval.set(ObjectValue(*thisObj));
@@ -587,7 +617,7 @@ GetDynamicName(JSContext *cx, JSObject *scopeChain, JSString *str, Value *vp)
     if (str->isAtom()) {
         atom = &str->asAtom();
     } else {
-        atom = AtomizeString<NoGC>(cx, str);
+        atom = AtomizeString(cx, str);
         if (!atom) {
             vp->setUndefined();
             return;
@@ -599,8 +629,8 @@ GetDynamicName(JSContext *cx, JSObject *scopeChain, JSString *str, Value *vp)
         return;
     }
 
-    Shape *shape = NULL;
-    JSObject *scope = NULL, *pobj = NULL;
+    Shape *shape = nullptr;
+    JSObject *scope = nullptr, *pobj = nullptr;
     if (LookupNameNoGC(cx, atom->asPropertyName(), scopeChain, &scope, &pobj, &shape)) {
         if (FetchNameNoGC(pobj, shape, MutableHandleValue::fromMarkedLocation(vp)))
             return;
@@ -610,7 +640,7 @@ GetDynamicName(JSContext *cx, JSObject *scopeChain, JSString *str, Value *vp)
 }
 
 bool
-FilterArguments(JSContext *cx, JSString *str)
+FilterArgumentsOrEval(JSContext *cx, JSString *str)
 {
     // getChars() is fallible, but cannot GC: it can only allocate a character
     // for the flattened string. If this call fails then the calling Ion code
@@ -621,7 +651,10 @@ FilterArguments(JSContext *cx, JSString *str)
         return false;
 
     static const jschar arguments[] = {'a', 'r', 'g', 'u', 'm', 'e', 'n', 't', 's'};
-    return !StringHasPattern(chars, str->length(), arguments, mozilla::ArrayLength(arguments));
+    static const jschar eval[] = {'e', 'v', 'a', 'l'};
+
+    return !StringHasPattern(chars, str->length(), arguments, mozilla::ArrayLength(arguments)) &&
+        !StringHasPattern(chars, str->length(), eval, mozilla::ArrayLength(eval));
 }
 
 #ifdef JSGC_GENERATIONAL
@@ -710,7 +743,7 @@ DebugEpilogue(JSContext *cx, BaselineFrame *frame, bool ok)
     if (frame->hasPushedSPSFrame()) {
         cx->runtime()->spsProfiler.exit(cx, frame->script(), frame->maybeFun());
         // Unset the pushedSPSFrame flag because DebugEpilogue may get called before
-        // Probes::exitScript in baseline during exception handling, and we don't
+        // probes::ExitScript in baseline during exception handling, and we don't
         // want to double-pop SPS frames.
         frame->unsetPushedSPSFrame();
     }
@@ -763,7 +796,7 @@ InitRestParameter(JSContext *cx, uint32_t length, Value *rest, HandleObject temp
         // slots.
         if (length > 0) {
             if (!arrRes->ensureElements(cx, length))
-                return NULL;
+                return nullptr;
             arrRes->setDenseInitializedLength(length);
             arrRes->initDenseElements(0, rest, length);
             arrRes->setLengthInt32(length);
@@ -771,10 +804,10 @@ InitRestParameter(JSContext *cx, uint32_t length, Value *rest, HandleObject temp
         return arrRes;
     }
 
-    NewObjectKind newKind = templateObj->type()->isLongLivedForJITAlloc()
+    NewObjectKind newKind = templateObj->type()->shouldPreTenure()
                             ? TenuredObject
                             : GenericObject;
-    ArrayObject *arrRes = NewDenseCopiedArray(cx, length, rest, NULL, newKind);
+    ArrayObject *arrRes = NewDenseCopiedArray(cx, length, rest, nullptr, newKind);
     if (arrRes)
         arrRes->setType(templateObj->type());
     return arrRes;
@@ -886,7 +919,7 @@ InitBaselineFrameForOsr(BaselineFrame *frame, StackFrame *interpFrame, uint32_t 
 JSObject *CreateDerivedTypedObj(JSContext *cx, HandleObject type,
                                 HandleObject owner, int32_t offset)
 {
-    return BinaryBlock::createDerived(cx, type, owner, offset);
+    return TypedObject::createDerived(cx, type, owner, offset);
 }
 
 

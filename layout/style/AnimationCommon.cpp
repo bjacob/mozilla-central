@@ -80,6 +80,12 @@ CommonAnimationManager::HasStateDependentStyle(StateRuleProcessorData* aData)
   return nsRestyleHint(0);
 }
 
+nsRestyleHint
+CommonAnimationManager::HasStateDependentStyle(PseudoElementStateRuleProcessorData* aData)
+{
+  return nsRestyleHint(0);
+}
+
 bool
 CommonAnimationManager::HasDocumentStateDependentStyle(StateRuleProcessorData* aData)
 {
@@ -286,6 +292,13 @@ CommonElementAnimationData::CanAnimatePropertyOnCompositor(const dom::Element *a
                          (aProperty == eCSSProperty_opacity) ||
                          (aFlags & CanAnimate_AllowPartial);
   return enabled && propertyAllowed;
+}
+
+/* static */ bool
+CommonElementAnimationData::IsCompositorAnimationDisabledForFrame(nsIFrame* aFrame)
+{
+  void* prop = aFrame->Properties().Get(nsIFrame::RefusedAsyncAnimation());
+  return bool(reinterpret_cast<intptr_t>(prop));
 }
 
 /* static */ void

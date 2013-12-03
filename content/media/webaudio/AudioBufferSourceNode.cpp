@@ -223,9 +223,9 @@ public:
         static_cast<float*>(const_cast<void*>(aOutput->mChannelData[i])) +
         aBufferOffset;
 
-      speex_resampler_process_float(resampler, i,
-                                    inputData, &inSamples,
-                                    outputData, &outSamples);
+      WebAudioUtils::SpeexResamplerProcess(resampler, i,
+                                           inputData, &inSamples,
+                                           outputData, &outSamples);
 
       aFramesRead = inSamples;
       aFramesWritten = outSamples;
@@ -246,8 +246,10 @@ public:
                       TrackTicks* aCurrentPosition,
                       TrackTicks aMaxPos)
   {
-    uint32_t numFrames = std::min(WEBAUDIO_BLOCK_SIZE - *aOffsetWithinBlock,
-                                  uint32_t(aMaxPos - *aCurrentPosition));
+    MOZ_ASSERT(*aCurrentPosition < aMaxPos);
+    uint32_t numFrames =
+      std::min<TrackTicks>(WEBAUDIO_BLOCK_SIZE - *aOffsetWithinBlock,
+                           aMaxPos - *aCurrentPosition);
     if (numFrames == WEBAUDIO_BLOCK_SIZE) {
       aOutput->SetNull(numFrames);
     } else {
@@ -263,7 +265,7 @@ public:
   /**
    * Copy as many frames as possible from the source buffer to aOutput, and
    * advance aOffsetWithinBlock and aCurrentPosition based on how many frames
-   * we copy.  This will never advance aOffsetWithinBlock past
+   * we write.  This will never advance aOffsetWithinBlock past
    * WEBAUDIO_BLOCK_SIZE, or aCurrentPosition past mStop.  It takes data from
    * the buffer at aBufferOffset, and never takes more data than aBufferMax.
    * This function knows when it needs to allocate the output buffer, and also
@@ -277,9 +279,11 @@ public:
                       uint32_t aBufferOffset,
                       uint32_t aBufferMax)
   {
-    uint32_t numFrames = std::min(std::min(WEBAUDIO_BLOCK_SIZE - *aOffsetWithinBlock,
-                                           aBufferMax - aBufferOffset),
-                                  uint32_t(mStop - *aCurrentPosition));
+    MOZ_ASSERT(*aCurrentPosition < mStop);
+    uint32_t numFrames =
+      std::min<TrackTicks>(std::min(WEBAUDIO_BLOCK_SIZE - *aOffsetWithinBlock,
+                                    aBufferMax - aBufferOffset),
+                           mStop - *aCurrentPosition);
     if (numFrames == WEBAUDIO_BLOCK_SIZE && !ShouldResample(aStream->SampleRate())) {
       BorrowFromInputBuffer(aOutput, aChannels, aBufferOffset);
       *aOffsetWithinBlock += numFrames;
@@ -302,18 +306,10 @@ public:
 
         CopyFromInputBufferWithResampling(aStream, aOutput, aChannels, aBufferOffset, *aOffsetWithinBlock, availableInInputBuffer, framesRead, framesWritten);
         *aOffsetWithinBlock += framesWritten;
-        *aCurrentPosition += framesRead;
+        *aCurrentPosition += framesWritten;
         mPosition += framesRead;
       }
     }
-  }
-
-  TrackTicks GetPosition(AudioNodeStream* aStream)
-  {
-    if (aStream->GetCurrentPosition() < mStart) {
-      return aStream->GetCurrentPosition();
-    }
-    return mStart + mPosition;
   }
 
   uint32_t ComputeFinalOutSampleRate(TrackRate aStreamSampleRate)
@@ -382,38 +378,37 @@ public:
     UpdateSampleRateIfNeeded(aStream, channels);
 
     uint32_t written = 0;
-    TrackTicks currentPosition = GetPosition(aStream);
+    TrackTicks streamPosition = aStream->GetCurrentPosition();
     while (written < WEBAUDIO_BLOCK_SIZE) {
       if (mStop != TRACK_TICKS_MAX &&
-          currentPosition >= mStop) {
-        FillWithZeroes(aOutput, channels, &written, &currentPosition, TRACK_TICKS_MAX);
+          streamPosition >= mStop) {
+        FillWithZeroes(aOutput, channels, &written, &streamPosition, TRACK_TICKS_MAX);
         continue;
       }
-      if (currentPosition < mStart) {
-        FillWithZeroes(aOutput, channels, &written, &currentPosition, mStart);
+      if (streamPosition < mStart) {
+        FillWithZeroes(aOutput, channels, &written, &streamPosition, mStart);
         continue;
       }
-      TrackTicks t = currentPosition - mStart;
+      TrackTicks t = mPosition;
       if (mLoop) {
         if (mOffset + t < mLoopEnd) {
-          CopyFromBuffer(aStream, aOutput, channels, &written, &currentPosition, mOffset + t, mLoopEnd);
+          CopyFromBuffer(aStream, aOutput, channels, &written, &streamPosition, mOffset + t, mLoopEnd);
         } else {
           uint32_t offsetInLoop = (mOffset + t - mLoopEnd) % (mLoopEnd - mLoopStart);
-          CopyFromBuffer(aStream, aOutput, channels, &written, &currentPosition, mLoopStart + offsetInLoop, mLoopEnd);
+          CopyFromBuffer(aStream, aOutput, channels, &written, &streamPosition, mLoopStart + offsetInLoop, mLoopEnd);
         }
       } else {
-        if (mOffset + t < mDuration) {
-          CopyFromBuffer(aStream, aOutput, channels, &written, &currentPosition, mOffset + t, mDuration);
+        if (t < mDuration) {
+          CopyFromBuffer(aStream, aOutput, channels, &written, &streamPosition, mOffset + t, mOffset + mDuration);
         } else {
-          FillWithZeroes(aOutput, channels, &written, &currentPosition, TRACK_TICKS_MAX);
+          FillWithZeroes(aOutput, channels, &written, &streamPosition, TRACK_TICKS_MAX);
         }
       }
     }
 
     // We've finished if we've gone past mStop, or if we're past mDuration when
     // looping is disabled.
-    if (currentPosition >= mStop ||
-        (!mLoop && currentPosition - mStart + mOffset >= mDuration)) {
+    if (streamPosition >= mStop || (!mLoop && mPosition >= mDuration)) {
       *aFinished = true;
     }
   }
@@ -427,7 +422,7 @@ public:
   int32_t mLoopStart;
   int32_t mLoopEnd;
   int32_t mBufferSampleRate;
-  uint32_t mPosition;
+  int32_t mPosition;
   uint32_t mChannels;
   float mPlaybackRate;
   float mDopplerShift;
@@ -546,13 +541,10 @@ AudioBufferSourceNode::SendOffsetAndDurationParametersToStream(AudioNodeStream* 
                "Only call this when we have a buffer and start() has been called");
 
   float rate = mBuffer->SampleRate();
-  int32_t lengthSamples = mBuffer->Length();
-  double length = double(lengthSamples) / rate;
-  double offset = std::max(0.0, aOffset);
-  double endOffset = aDuration == std::numeric_limits<double>::min() ?
-                     length : std::min(aOffset + aDuration, length);
+  int32_t bufferLength = mBuffer->Length();
+  int32_t offsetSamples = std::max(0, NS_lround(aOffset * rate));
 
-  if (offset >= endOffset) {
+  if (offsetSamples >= bufferLength) {
     // The offset falls past the end of the buffer.  In this case, we need to
     // stop the playback immediately if it's in progress.
     // Note that we can't call Stop() here since that might be overridden if
@@ -562,13 +554,16 @@ AudioBufferSourceNode::SendOffsetAndDurationParametersToStream(AudioNodeStream* 
     }
     return;
   }
-
-  int32_t offsetTicks = NS_lround(offset*rate);
   // Don't set parameter unnecessarily
-  if (offsetTicks > 0) {
-    aStream->SetInt32Parameter(OFFSET, offsetTicks);
+  if (offsetSamples > 0) {
+    aStream->SetInt32Parameter(OFFSET, offsetSamples);
   }
-  aStream->SetInt32Parameter(DURATION, NS_lround(endOffset*rate));
+
+  int32_t playingLength = bufferLength - offsetSamples;
+  if (aDuration != std::numeric_limits<double>::min()) {
+    playingLength = std::min(NS_lround(aDuration * rate), playingLength);
+  }
+  aStream->SetInt32Parameter(DURATION, playingLength);
 }
 
 void
@@ -656,9 +651,9 @@ AudioBufferSourceNode::SendLoopParametersToStream()
     float rate = mBuffer->SampleRate();
     double length = (double(mBuffer->Length()) / mBuffer->SampleRate());
     double actualLoopStart, actualLoopEnd;
-    if (((mLoopStart != 0.0) || (mLoopEnd != 0.0)) &&
-        mLoopStart >= 0.0 && mLoopEnd > 0.0 &&
+    if (mLoopStart >= 0.0 && mLoopEnd > 0.0 &&
         mLoopStart < mLoopEnd) {
+      MOZ_ASSERT(mLoopStart != 0.0 || mLoopEnd != 0.0);
       actualLoopStart = (mLoopStart > length) ? 0.0 : mLoopStart;
       actualLoopEnd = std::min(mLoopEnd, length);
     } else {

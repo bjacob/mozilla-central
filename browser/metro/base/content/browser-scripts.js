@@ -10,8 +10,17 @@ Cu.import("resource://gre/modules/Services.jsm");
  * JS modules
  */
 
-XPCOMUtils.defineLazyModuleGetter(this , "FormHistory",
+XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
+                                  "resource://gre/modules/Downloads.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "FormHistory",
                                   "resource://gre/modules/FormHistory.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
+                                  "resource://gre/modules/FileUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "PageThumbs",
+                                  "resource://gre/modules/PageThumbs.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                   "resource://gre/modules/PluralForm.jsm");
@@ -21,9 +30,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
 
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "PdfJs",
-                                  "resource://pdf.js/PdfJs.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "DownloadUtils",
                                   "resource://gre/modules/DownloadUtils.jsm");
@@ -60,6 +66,9 @@ XPCOMUtils.defineLazyServiceGetter(window, "gFaviconService",
 XPCOMUtils.defineLazyServiceGetter(window, "gFocusManager",
                                    "@mozilla.org/focus-manager;1",
                                    "nsIFocusManager");
+XPCOMUtils.defineLazyServiceGetter(window, "gEventListenerService",
+                                   "@mozilla.org/eventlistenerservice;1",
+                                   "nsIEventListenerService");
 #ifdef MOZ_CRASHREPORTER
 XPCOMUtils.defineLazyServiceGetter(this, "CrashReporter",
                                    "@mozilla.org/xre/app-info;1",
@@ -93,11 +102,10 @@ let ScriptContexts = {};
   ["SelectionHelperUI", "chrome://browser/content/helperui/SelectionHelperUI.js"],
   ["SelectionPrototype", "chrome://browser/content/library/SelectionPrototype.js"],
   ["ChromeSelectionHandler", "chrome://browser/content/helperui/ChromeSelectionHandler.js"],
-  ["AnimatedZoom", "chrome://browser/content/AnimatedZoom.js"],
   ["CommandUpdater", "chrome://browser/content/commandUtil.js"],
   ["ContextCommands", "chrome://browser/content/ContextCommands.js"],
   ["Bookmarks", "chrome://browser/content/bookmarks.js"],
-  ["Downloads", "chrome://browser/content/downloads.js"],
+  ["MetroDownloadsView", "chrome://browser/content/downloads.js"],
   ["ConsolePanelView", "chrome://browser/content/console.js"],
   ["Site", "chrome://browser/content/Site.js"],
   ["TopSites", "chrome://browser/content/TopSites.js"],
@@ -142,10 +150,4 @@ XPCOMUtils.defineLazyGetter(this, "ContentAreaUtils", function() {
   let ContentAreaUtils = {};
   Services.scriptloader.loadSubScript("chrome://global/content/contentAreaUtils.js", ContentAreaUtils);
   return ContentAreaUtils;
-});
-
-XPCOMUtils.defineLazyGetter(this, "ZoomManager", function() {
-  let sandbox = {};
-  Services.scriptloader.loadSubScript("chrome://global/content/viewZoomOverlay.js", sandbox);
-  return sandbox.ZoomManager;
 });

@@ -209,7 +209,7 @@ GamepadService::NewButtonEvent(uint32_t aIndex, uint32_t aButton, bool aPressed,
     --i;
 
     // Only send events to non-background windows
-    if (!listeners[i]->GetOuterWindow() ||
+    if (!listeners[i]->IsCurrentInnerWindow() ||
         listeners[i]->GetOuterWindow()->IsBackground()) {
       continue;
     }
@@ -244,7 +244,7 @@ GamepadService::FireButtonEvent(EventTarget* aTarget,
 {
   nsString name = aValue == 1.0L ? NS_LITERAL_STRING("gamepadbuttondown") :
                                    NS_LITERAL_STRING("gamepadbuttonup");
-  GamepadButtonEventInitInitializer init;
+  GamepadButtonEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;
   init.mGamepad = aGamepad;
@@ -274,7 +274,7 @@ GamepadService::NewAxisMoveEvent(uint32_t aIndex, uint32_t aAxis, double aValue)
     --i;
 
     // Only send events to non-background windows
-    if (!listeners[i]->GetOuterWindow() ||
+    if (!listeners[i]->IsCurrentInnerWindow() ||
         listeners[i]->GetOuterWindow()->IsBackground()) {
       continue;
     }
@@ -307,7 +307,7 @@ GamepadService::FireAxisMoveEvent(EventTarget* aTarget,
                                   uint32_t aAxis,
                                   double aValue)
 {
-  GamepadAxisMoveEventInitInitializer init;
+  GamepadAxisMoveEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;
   init.mGamepad = aGamepad;
@@ -340,7 +340,7 @@ GamepadService::NewConnectionEvent(uint32_t aIndex, bool aConnected)
       --i;
 
       // Only send events to non-background windows
-      if (!listeners[i]->GetOuterWindow() ||
+      if (!listeners[i]->IsCurrentInnerWindow() ||
           listeners[i]->GetOuterWindow()->IsBackground()) {
         continue;
       }
@@ -388,7 +388,7 @@ GamepadService::FireConnectionEvent(EventTarget* aTarget,
 {
   nsString name = aConnected ? NS_LITERAL_STRING("gamepadconnected") :
                                NS_LITERAL_STRING("gamepaddisconnected");
-  GamepadEventInitInitializer init;
+  GamepadEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;
   init.mGamepad = aGamepad;
@@ -452,7 +452,7 @@ GamepadService::SetWindowHasSeenGamepad(nsGlobalWindow* aWindow,
 
   if (aHasSeen) {
     aWindow->SetHasSeenGamepadInput(true);
-    nsCOMPtr<nsISupports> window = nsGlobalWindow::ToSupports(aWindow);
+    nsCOMPtr<nsISupports> window = ToSupports(aWindow);
     nsRefPtr<Gamepad> gamepad = mGamepads[aIndex]->Clone(window);
     aWindow->AddGamepad(aIndex, gamepad);
   } else {
@@ -525,6 +525,7 @@ GamepadServiceTest::CreateService()
 GamepadServiceTest::GamepadServiceTest()
 {
   /* member initializers and constructor code */
+  nsRefPtr<GamepadService> service = GamepadService::GetService();
 }
 
 /* uint32_t addGamepad (in string id, in unsigned long mapping, in unsigned long numButtons, in unsigned long numAxes); */

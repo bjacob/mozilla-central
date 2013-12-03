@@ -51,7 +51,7 @@ struct CallsiteCloneKey {
     typedef CallsiteCloneKey Lookup;
 
     static inline uint32_t hash(CallsiteCloneKey key) {
-        return uint32_t(size_t(key.script->code + key.offset) ^ size_t(key.original));
+        return uint32_t(size_t(key.script->offsetToPC(key.offset)) ^ size_t(key.original));
     }
 
     static inline bool match(const CallsiteCloneKey &a, const CallsiteCloneKey &b) {
@@ -63,6 +63,10 @@ typedef HashMap<CallsiteCloneKey,
                 ReadBarriered<JSFunction>,
                 CallsiteCloneKey,
                 SystemAllocPolicy> CallsiteCloneTable;
+
+JSFunction *
+ExistingCloneFunctionAtCallsite(const CallsiteCloneTable &table, JSFunction *fun,
+                                JSScript *script, jsbytecode *pc);
 
 JSFunction *CloneFunctionAtCallsite(JSContext *cx, HandleFunction fun,
                                     HandleScript script, jsbytecode *pc);
@@ -140,6 +144,13 @@ namespace frontend { struct CompileError; }
 struct ThreadSafeContext : ContextFriendFields,
                            public MallocProvider<ThreadSafeContext>
 {
+    friend struct StackBaseShape;
+    friend UnownedBaseShape *BaseShape::lookupUnowned(ThreadSafeContext *cx,
+                                                      const StackBaseShape &base);
+    friend Shape *JSObject::lookupChildProperty(ThreadSafeContext *cx,
+                                                JS::HandleObject obj, js::HandleShape parent,
+                                                js::StackShape &child);
+
   public:
     enum ContextKind {
         Context_JS,
@@ -162,13 +173,13 @@ struct ThreadSafeContext : ContextFriendFields,
     JSContext *maybeJSContext() const {
         if (isJSContext())
             return (JSContext *) this;
-        return NULL;
+        return nullptr;
     }
 
     JSContext *asJSContext() const {
         // Note: there is no way to perform an unchecked coercion from a
         // ThreadSafeContext to a JSContext. This ensures that trying to use
-        // the context as a JSContext off the main thread will NULL crash
+        // the context as a JSContext off the main thread will nullptr crash
         // rather than race.
         JS_ASSERT(isJSContext());
         return maybeJSContext();
@@ -193,7 +204,7 @@ struct ThreadSafeContext : ContextFriendFields,
     ExclusiveContext *maybeExclusiveContext() const {
         if (isExclusiveContext())
             return (ExclusiveContext *) this;
-        return NULL;
+        return nullptr;
     }
 
     ExclusiveContext *asExclusiveContext() const {
@@ -240,13 +251,16 @@ struct ThreadSafeContext : ContextFriendFields,
 
     template <typename T>
     bool isInsideCurrentZone(T thing) const {
-        return thing->isInsideZone(zone_);
+        return thing->zoneFromAnyThread() == zone_;
     }
 
     template <typename T>
     inline bool isInsideCurrentCompartment(T thing) const {
         return thing->compartment() == compartment_;
     }
+
+    template <typename T>
+    inline bool isThreadLocal(T thing) const;
 
     void *onOutOfMemory(void *p, size_t nbytes) {
         return runtime_->onOutOfMemory(p, nbytes, maybeJSContext());
@@ -264,17 +278,15 @@ struct ThreadSafeContext : ContextFriendFields,
     // Accessors for immutable runtime data.
     JSAtomState &names() { return runtime_->atomState; }
     StaticStrings &staticStrings() { return runtime_->staticStrings; }
+    const JS::AsmJSCacheOps &asmJSCacheOps() { return runtime_->asmJSCacheOps; }
     PropertyName *emptyString() { return runtime_->emptyString; }
     FreeOp *defaultFreeOp() { return runtime_->defaultFreeOp(); }
     bool useHelperThreads() { return runtime_->useHelperThreads(); }
-    size_t helperThreadCount() { return runtime_->helperThreadCount(); }
+    unsigned cpuCount() { return runtime_->cpuCount(); }
+    size_t workerThreadCount() { return runtime_->workerThreadCount(); }
     void *runtimeAddressForJit() { return runtime_; }
     void *stackLimitAddress(StackKind kind) { return &runtime_->mainThread.nativeStackLimit[kind]; }
-
-    // GCs cannot happen while non-main threads are running.
-    uint64_t gcNumber() { return runtime_->gcNumber; }
     size_t gcSystemPageSize() { return runtime_->gcSystemPageSize; }
-    bool isHeapBusy() { return runtime_->isHeapBusy(); }
     bool signalHandlersInstalled() const { return runtime_->signalHandlersInstalled(); }
     bool jitSupportsFloatingPoint() const { return runtime_->jitSupportsFloatingPoint; }
 
@@ -302,7 +314,7 @@ class ExclusiveContext : public ThreadSafeContext
 
     ExclusiveContext(JSRuntime *rt, PerThreadData *pt, ContextKind kind)
       : ThreadSafeContext(rt, pt, kind),
-        workerThread_(NULL),
+        workerThread_(nullptr),
         enterCompartmentDepth_(0)
     {}
 
@@ -340,9 +352,6 @@ class ExclusiveContext : public ThreadSafeContext
     void setWorkerThread(WorkerThread *workerThread);
     WorkerThread *workerThread() const { return workerThread_; }
 
-    // If required, pause this thread until notified to continue by the main thread.
-    inline void maybePause() const;
-
     // Threads with an ExclusiveContext may freely access any data in their
     // compartment and zone.
     JSCompartment *compartment() const {
@@ -358,7 +367,7 @@ class ExclusiveContext : public ThreadSafeContext
 
     // Zone local methods that can be used freely from an ExclusiveContext.
     inline bool typeInferenceEnabled() const;
-    types::TypeObject *getNewType(const Class *clasp, TaggedProto proto, JSFunction *fun = NULL);
+    types::TypeObject *getNewType(const Class *clasp, TaggedProto proto, JSFunction *fun = nullptr);
     types::TypeObject *getLazyType(const Class *clasp, TaggedProto proto);
     inline js::LifoAlloc &typeLifoAlloc();
 
@@ -391,6 +400,7 @@ class ExclusiveContext : public ThreadSafeContext
 
     // Methods specific to any WorkerThread for the context.
     frontend::CompileError &addPendingCompileError();
+    void addPendingOverRecursed();
 };
 
 inline void
@@ -418,7 +428,7 @@ struct JSContext : public js::ExclusiveContext,
     js::Value           exception;           /* most-recently-thrown exception */
 
     /* Per-context options. */
-    unsigned            options_;            /* see jsapi.h for JSOPTION_* */
+    JS::ContextOptions  options_;
 
   public:
     int32_t             reportGranularity;  /* see vm/Probes.h */
@@ -453,7 +463,7 @@ struct JSContext : public js::ExclusiveContext,
     inline void setDefaultCompartmentObject(JSObject *obj);
     inline void setDefaultCompartmentObjectIfUnset(JSObject *obj);
     JSObject *maybeDefaultCompartmentObject() const {
-        JS_ASSERT(!hasOption(JSOPTION_NO_DEFAULT_COMPARTMENT_OBJECT));
+        JS_ASSERT(!options().noDefaultCompartmentObject());
         return defaultCompartmentObject_;
     }
 
@@ -482,20 +492,13 @@ struct JSContext : public js::ExclusiveContext,
      */
     JSVersion findVersion() const;
 
-    void setOptions(unsigned opts) {
-        JS_ASSERT((opts & JSOPTION_MASK) == opts);
-        options_ = opts;
+    const JS::ContextOptions &options() const {
+        return options_;
     }
 
-    unsigned options() const { return options_; }
-
-    bool hasOption(unsigned opt) const {
-        JS_ASSERT((opt & JSOPTION_MASK) == opt);
-        return !!(options_ & opt);
+    JS::ContextOptions &options() {
+        return options_;
     }
-
-    bool hasExtraWarningsOption() const { return hasOption(JSOPTION_EXTRA_WARNINGS); }
-    bool hasWErrorOption() const { return hasOption(JSOPTION_WERROR); }
 
     js::LifoAlloc &tempLifoAlloc() { return runtime()->tempLifoAlloc; }
 
@@ -534,14 +537,14 @@ struct JSContext : public js::ExclusiveContext,
     /*
      * Get the topmost script and optional pc on the stack. By default, this
      * function only returns a JSScript in the current compartment, returning
-     * NULL if the current script is in a different compartment. This behavior
-     * can be overridden by passing ALLOW_CROSS_COMPARTMENT.
+     * nullptr if the current script is in a different compartment. This
+     * behavior can be overridden by passing ALLOW_CROSS_COMPARTMENT.
      */
     enum MaybeAllowCrossCompartment {
         DONT_ALLOW_CROSS_COMPARTMENT = false,
         ALLOW_CROSS_COMPARTMENT = true
     };
-    inline JSScript *currentScript(jsbytecode **pc = NULL,
+    inline JSScript *currentScript(jsbytecode **pc = nullptr,
                                    MaybeAllowCrossCompartment = DONT_ALLOW_CROSS_COMPARTMENT) const;
 
 #ifdef MOZ_TRACE_JSCALLS
@@ -735,6 +738,16 @@ enum ErrorArgumentsType {
     ArgumentsAreASCII
 };
 
+
+/*
+ * Loads and returns a self-hosted function by name. For performance, define
+ * the property name in vm/CommonPropertyNames.h.
+ *
+ * Defined in SelfHosting.cpp.
+ */
+JSFunction *
+SelfHostedFunction(JSContext *cx, HandlePropertyName propName);
+
 } /* namespace js */
 
 #ifdef va_start
@@ -765,10 +778,10 @@ extern void
 ReportUsageError(JSContext *cx, HandleObject callee, const char *msg);
 
 /*
- * Prints a full report and returns true if the given report is non-NULL and
- * the report doesn't have the JSREPORT_WARNING flag set or reportWarnings is
- * true.
- * Returns false otherwise, printing just the message if the report is NULL.
+ * Prints a full report and returns true if the given report is non-nullptr
+ * and the report doesn't have the JSREPORT_WARNING flag set or reportWarnings
+ * is true.
+ * Returns false otherwise, printing just the message if the report is nullptr.
  */
 extern bool
 PrintError(JSContext *cx, FILE *file, const char *message, JSErrorReport *report,
@@ -807,11 +820,11 @@ js_ReportValueErrorFlags(JSContext *cx, unsigned flags, const unsigned errorNumb
 
 #define js_ReportValueError(cx,errorNumber,spindex,v,fallback)                \
     ((void)js_ReportValueErrorFlags(cx, JSREPORT_ERROR, errorNumber,          \
-                                    spindex, v, fallback, NULL, NULL))
+                                    spindex, v, fallback, nullptr, nullptr))
 
 #define js_ReportValueError2(cx,errorNumber,spindex,v,fallback,arg1)          \
     ((void)js_ReportValueErrorFlags(cx, JSREPORT_ERROR, errorNumber,          \
-                                    spindex, v, fallback, arg1, NULL))
+                                    spindex, v, fallback, arg1, nullptr))
 
 #define js_ReportValueError3(cx,errorNumber,spindex,v,fallback,arg1,arg2)     \
     ((void)js_ReportValueErrorFlags(cx, JSREPORT_ERROR, errorNumber,          \
@@ -998,11 +1011,66 @@ bool intrinsic_NewDenseArray(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_UnsafePutElements(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_UnsafeSetReservedSlot(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_UnsafeGetReservedSlot(JSContext *cx, unsigned argc, Value *vp);
-bool intrinsic_NewObjectWithClassPrototype(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_HaveSameClass(JSContext *cx, unsigned argc, Value *vp);
+bool intrinsic_IsPackedArray(JSContext *cx, unsigned argc, Value *vp);
 
 bool intrinsic_ShouldForceSequential(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_NewParallelArray(JSContext *cx, unsigned argc, Value *vp);
+
+class AutoLockForExclusiveAccess
+{
+#ifdef JS_WORKER_THREADS
+    JSRuntime *runtime;
+
+    void init(JSRuntime *rt) {
+        runtime = rt;
+        if (runtime->numExclusiveThreads) {
+            runtime->assertCanLock(JSRuntime::ExclusiveAccessLock);
+            PR_Lock(runtime->exclusiveAccessLock);
+            runtime->exclusiveAccessOwner = PR_GetCurrentThread();
+        } else {
+            JS_ASSERT(!runtime->mainThreadHasExclusiveAccess);
+            runtime->mainThreadHasExclusiveAccess = true;
+        }
+    }
+
+  public:
+    AutoLockForExclusiveAccess(ExclusiveContext *cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
+        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+        init(cx->runtime_);
+    }
+    AutoLockForExclusiveAccess(JSRuntime *rt MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
+        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+        init(rt);
+    }
+    ~AutoLockForExclusiveAccess() {
+        if (runtime->numExclusiveThreads) {
+            JS_ASSERT(runtime->exclusiveAccessOwner == PR_GetCurrentThread());
+#ifdef DEBUG
+            runtime->exclusiveAccessOwner = nullptr;
+#endif
+            PR_Unlock(runtime->exclusiveAccessLock);
+        } else {
+            JS_ASSERT(runtime->mainThreadHasExclusiveAccess);
+            runtime->mainThreadHasExclusiveAccess = false;
+        }
+    }
+#else // JS_WORKER_THREADS
+  public:
+    AutoLockForExclusiveAccess(ExclusiveContext *cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
+        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    }
+    AutoLockForExclusiveAccess(JSRuntime *rt MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
+        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    }
+    ~AutoLockForExclusiveAccess() {
+        // An empty destructor is needed to avoid warnings from clang about
+        // unused local variables of this type.
+    }
+#endif // JS_WORKER_THREADS
+
+    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+};
 
 } /* namespace js */
 

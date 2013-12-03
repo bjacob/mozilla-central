@@ -11,7 +11,7 @@
 #include "nsGfxCIID.h"
 #include "nsView.h"
 #include "nsCOMPtr.h"
-#include "nsGUIEvent.h"
+#include "mozilla/MouseEvents.h"
 #include "nsRegion.h"
 #include "nsCOMArray.h"
 #include "nsIPluginWidget.h"
@@ -27,6 +27,7 @@
 #include "nsLayoutUtils.h"
 #include "Layers.h"
 #include "gfxPlatform.h"
+#include "nsIDocument.h"
 
 /**
    XXX TODO XXX
@@ -44,6 +45,7 @@
    we ask for a specific z-order, we don't assume that widget z-ordering actually works.
 */
 
+using namespace mozilla;
 using namespace mozilla::layers;
 
 #define NSCOORD_NONE      INT32_MIN
@@ -294,6 +296,10 @@ void nsViewManager::Refresh(nsView *aView, const nsIntRegion& aRegion)
 {
   NS_ASSERTION(aView->GetViewManager() == this, "wrong view manager");
 
+  if (mPresShell && mPresShell->IsNeverPainting()) {
+    return;
+  }
+
   // damageRegion is the damaged area, in twips, relative to the view origin
   nsRegion damageRegion = aRegion.ToAppUnits(AppUnitsPerDevPixel());
   // move region from widget coordinates into view coordinates
@@ -303,7 +309,7 @@ void nsViewManager::Refresh(nsView *aView, const nsIntRegion& aRegion)
 #ifdef DEBUG_roc
     nsRect viewRect = aView->GetDimensions();
     nsRect damageRect = damageRegion.GetBounds();
-    printf("XXX Damage rectangle (%d,%d,%d,%d) does not intersect the widget's view (%d,%d,%d,%d)!\n",
+    printf_stderr("XXX Damage rectangle (%d,%d,%d,%d) does not intersect the widget's view (%d,%d,%d,%d)!\n",
            damageRect.x, damageRect.y, damageRect.width, damageRect.height,
            viewRect.x, viewRect.y, viewRect.width, viewRect.height);
 #endif
@@ -331,7 +337,7 @@ void nsViewManager::Refresh(nsView *aView, const nsIntRegion& aRegion)
     if (mPresShell) {
 #ifdef MOZ_DUMP_PAINTING
       if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
-        printf("--COMPOSITE-- %p\n", mPresShell);
+        printf_stderr("--COMPOSITE-- %p\n", mPresShell);
       }
 #endif
       uint32_t paintFlags = nsIPresShell::PAINT_COMPOSITE;
@@ -344,7 +350,7 @@ void nsViewManager::Refresh(nsView *aView, const nsIntRegion& aRegion)
       }
 #ifdef MOZ_DUMP_PAINTING
       if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
-        printf("--ENDCOMPOSITE--\n");
+        printf_stderr("--ENDCOMPOSITE--\n");
       }
 #endif
       mozilla::StartupTimeline::RecordOnce(mozilla::StartupTimeline::FIRST_PAINT);
@@ -366,6 +372,10 @@ void nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
 
   // Protect against a null-view.
   if (!aView) {
+    return;
+  }
+
+  if (mPresShell && mPresShell->IsNeverPainting()) {
     return;
   }
 
@@ -401,7 +411,7 @@ void nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
 
 #ifdef MOZ_DUMP_PAINTING
       if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
-        printf("---- PAINT START ----PresShell(%p), nsView(%p), nsIWidget(%p)\n", mPresShell, aView, widget);
+        printf_stderr("---- PAINT START ----PresShell(%p), nsView(%p), nsIWidget(%p)\n", mPresShell, aView, widget);
       }
 #endif
       nsAutoScriptBlocker scriptBlocker;
@@ -411,9 +421,10 @@ void nsViewManager::ProcessPendingUpdatesForView(nsView* aView,
                         nsIPresShell::PAINT_LAYERS);
 #ifdef MOZ_DUMP_PAINTING
       if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
-        printf("---- PAINT END ----\n");
+        printf_stderr("---- PAINT END ----\n");
       }
 #endif
+
       aView->SetForcedRepaint(false);
       SetPainting(false);
       FlushDirtyRegionToWidget(aView);
@@ -686,18 +697,21 @@ void nsViewManager::DidPaintWindow()
 }
 
 void
-nsViewManager::DispatchEvent(nsGUIEvent *aEvent, nsView* aView, nsEventStatus* aStatus)
+nsViewManager::DispatchEvent(WidgetGUIEvent *aEvent,
+                             nsView* aView,
+                             nsEventStatus* aStatus)
 {
   PROFILER_LABEL("event", "nsViewManager::DispatchEvent");
 
-  if ((aEvent->HasMouseEventMessage() &&
+  WidgetMouseEvent* mouseEvent = aEvent->AsMouseEvent();
+  if ((mouseEvent &&
        // Ignore mouse events that we synthesize.
-       static_cast<nsMouseEvent*>(aEvent)->reason == nsMouseEvent::eReal &&
+       mouseEvent->reason == WidgetMouseEvent::eReal &&
        // Ignore mouse exit and enter (we'll get moves if the user
        // is really moving the mouse) since we get them when we
        // create and destroy widgets.
-       aEvent->message != NS_MOUSE_EXIT &&
-       aEvent->message != NS_MOUSE_ENTER) ||
+       mouseEvent->message != NS_MOUSE_EXIT &&
+       mouseEvent->message != NS_MOUSE_ENTER) ||
       aEvent->HasKeyEventMessage() ||
       aEvent->HasIMEEventMessage() ||
       aEvent->message == NS_PLUGIN_INPUT_EVENT) {

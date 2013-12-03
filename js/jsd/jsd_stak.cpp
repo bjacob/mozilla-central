@@ -486,7 +486,8 @@ jsd_ValToStringInStackFrame(JSDContext* jsdc,
     JS_ASSERT(cx);
 
     exceptionState = JS_SaveExceptionState(cx);
-    retval = JS_ValueToString(cx, val);
+    JS::RootedValue v(cx, val);
+    retval = JS::ToString(cx, v);
     JS_RestoreExceptionState(cx, exceptionState);
 
     return retval;
@@ -544,11 +545,10 @@ JSDValue*
 jsd_GetException(JSDContext* jsdc, JSDThreadState* jsdthreadstate)
 {
     JSContext* cx;
-    JS::RootedValue val(cx);
-
     if(!(cx = _getContextForThreadState(jsdc, jsdthreadstate)))
         return nullptr;
 
+    JS::RootedValue val(cx);
     if(JS_GetPendingException(cx, &val))
         return jsd_NewValue(jsdc, val);
     return nullptr;

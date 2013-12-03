@@ -128,14 +128,20 @@ const JSClass xpc::SafeJSContextGlobalClass = {
     XPCONNECT_GLOBAL_FLAGS,
     JS_PropertyStub, JS_DeletePropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
     JS_EnumerateStub, SafeGlobalResolve, JS_ConvertStub, SafeFinalize,
-    NULL, NULL, NULL, NULL, TraceXPCGlobal
+    nullptr, nullptr, nullptr, nullptr, TraceXPCGlobal
 };
 
 JSContext*
 XPCJSContextStack::GetSafeJSContext()
 {
-    if (mSafeJSContext)
-        return mSafeJSContext;
+    MOZ_ASSERT(mSafeJSContext);
+    return mSafeJSContext;
+}
+
+JSContext*
+XPCJSContextStack::InitSafeJSContext()
+{
+    MOZ_ASSERT(!mSafeJSContext);
 
     // Start by getting the principal holder and principal for this
     // context.  If we can't manage that, don't bother with the rest.

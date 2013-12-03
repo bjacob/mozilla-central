@@ -6,7 +6,6 @@
 
 #include "jswrapper.h"
 
-#include "jsapi.h"
 #include "jscntxt.h"
 #include "jscompartment.h"
 #include "jsexn.h"
@@ -47,8 +46,9 @@ Wrapper::New(JSContext *cx, JSObject *obj, JSObject *proto, JSObject *parent, Wr
     AutoMarkInDeadZone amd(cx->zone());
 
     RootedValue priv(cx, ObjectValue(*obj));
-    return NewProxyObject(cx, handler, priv, proto, parent,
-                          obj->isCallable() ? ProxyIsCallable : ProxyNotCallable);
+    ProxyOptions options;
+    options.setCallable(obj->isCallable());
+    return NewProxyObject(cx, handler, priv, proto, parent, options);
 }
 
 JSObject *
@@ -108,7 +108,7 @@ js::UnwrapOneChecked(JSObject *obj, bool stopAtOuter)
     }
 
     Wrapper *handler = Wrapper::wrapperHandler(obj);
-    return handler->isSafeToUnwrap() ? Wrapper::wrappedObject(obj) : NULL;
+    return handler->isSafeToUnwrap() ? Wrapper::wrappedObject(obj) : nullptr;
 }
 
 bool
@@ -173,7 +173,7 @@ CrossCompartmentWrapper::~CrossCompartmentWrapper()
 {
 }
 
-bool CrossCompartmentWrapper::finalizeInBackground(Value priv)
+bool Wrapper::finalizeInBackground(Value priv)
 {
     if (!priv.isObject())
         return true;
@@ -181,9 +181,12 @@ bool CrossCompartmentWrapper::finalizeInBackground(Value priv)
     /*
      * Make the 'background-finalized-ness' of the wrapper the same as the
      * wrapped object, to allow transplanting between them.
+     *
+     * If the wrapped object is in the nursery then we know it doesn't have a
+     * finalizer, and so background finalization is ok.
      */
     if (IsInsideNursery(priv.toObject().runtimeFromMainThread(), &priv.toObject()))
-        return false;
+        return true;
     return IsBackgroundFinalized(priv.toObject().tenuredGetAllocKind());
 }
 
@@ -363,7 +366,7 @@ struct AutoCloseIterator
 
     ~AutoCloseIterator() { if (obj) CloseIterator(cx, obj); }
 
-    void clear() { obj = NULL; }
+    void clear() { obj = nullptr; }
 
   private:
     JSContext *cx;
@@ -549,10 +552,10 @@ CrossCompartmentWrapper::fun_toString(JSContext *cx, HandleObject wrapper, unsig
         AutoCompartment call(cx, wrappedObject(wrapper));
         str = Wrapper::fun_toString(cx, wrapper, indent);
         if (!str)
-            return NULL;
+            return nullptr;
     }
     if (!cx->compartment()->wrap(cx, str.address()))
-        return NULL;
+        return nullptr;
     return str;
 }
 
@@ -622,7 +625,7 @@ bool
 SecurityWrapper<Base>::preventExtensions(JSContext *cx, HandleObject wrapper)
 {
     // See above.
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_UNWRAP_DENIED);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_UNWRAP_DENIED);
     return false;
 }
 
@@ -631,7 +634,7 @@ bool
 SecurityWrapper<Base>::enter(JSContext *cx, HandleObject wrapper, HandleId id,
                              Wrapper::Action act, bool *bp)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_UNWRAP_DENIED);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_UNWRAP_DENIED);
     *bp = false;
     return false;
 }
@@ -641,7 +644,7 @@ bool
 SecurityWrapper<Base>::nativeCall(JSContext *cx, IsAcceptableThis test, NativeImpl impl,
                                   CallArgs args)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_UNWRAP_DENIED);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_UNWRAP_DENIED);
     return false;
 }
 
@@ -677,8 +680,8 @@ SecurityWrapper<Base>::defineProperty(JSContext *cx, HandleObject wrapper,
 {
     if (desc.getter() || desc.setter()) {
         JSString *str = IdToString(cx, id);
-        const jschar *prop = str ? str->getCharsZ(cx) : NULL;
-        JS_ReportErrorNumberUC(cx, js_GetErrorMessage, NULL,
+        const jschar *prop = str ? str->getCharsZ(cx) : nullptr;
+        JS_ReportErrorNumberUC(cx, js_GetErrorMessage, nullptr,
                                JSMSG_ACCESSOR_DEF_DENIED, prop);
         return false;
     }
@@ -706,7 +709,7 @@ DeadObjectProxy::isExtensible(JSContext *cx, HandleObject proxy, bool *extensibl
 bool
 DeadObjectProxy::preventExtensions(JSContext *cx, HandleObject proxy)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
@@ -714,7 +717,7 @@ bool
 DeadObjectProxy::getPropertyDescriptor(JSContext *cx, HandleObject wrapper, HandleId id,
                                        MutableHandle<PropertyDescriptor> desc, unsigned flags)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
@@ -722,7 +725,7 @@ bool
 DeadObjectProxy::getOwnPropertyDescriptor(JSContext *cx, HandleObject wrapper, HandleId id,
                                           MutableHandle<PropertyDescriptor> desc, unsigned flags)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
@@ -730,7 +733,7 @@ bool
 DeadObjectProxy::defineProperty(JSContext *cx, HandleObject wrapper, HandleId id,
                                 MutableHandle<PropertyDescriptor> desc)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
@@ -738,56 +741,56 @@ bool
 DeadObjectProxy::getOwnPropertyNames(JSContext *cx, HandleObject wrapper,
                                      AutoIdVector &props)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::delete_(JSContext *cx, HandleObject wrapper, HandleId id, bool *bp)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::enumerate(JSContext *cx, HandleObject wrapper, AutoIdVector &props)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::call(JSContext *cx, HandleObject wrapper, const CallArgs &args)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::construct(JSContext *cx, HandleObject wrapper, const CallArgs &args)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::nativeCall(JSContext *cx, IsAcceptableThis test, NativeImpl impl, CallArgs args)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::hasInstance(JSContext *cx, HandleObject proxy, MutableHandleValue v, bool *bp)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::objectClassIs(HandleObject obj, ESClassValue classValue, JSContext *cx)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
@@ -800,20 +803,20 @@ DeadObjectProxy::className(JSContext *cx, HandleObject wrapper)
 JSString *
 DeadObjectProxy::fun_toString(JSContext *cx, HandleObject proxy, unsigned indent)
 {
-    return NULL;
+    return nullptr;
 }
 
 bool
 DeadObjectProxy::regexp_toShared(JSContext *cx, HandleObject proxy, RegExpGuard *g)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::defaultValue(JSContext *cx, HandleObject obj, JSType hint, MutableHandleValue vp)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
@@ -821,14 +824,14 @@ bool
 DeadObjectProxy::getElementIfPresent(JSContext *cx, HandleObject obj, HandleObject receiver,
                                      uint32_t index, MutableHandleValue vp, bool *present)
 {
-    JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_DEAD_OBJECT);
+    JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_DEAD_OBJECT);
     return false;
 }
 
 bool
 DeadObjectProxy::getPrototypeOf(JSContext *cx, HandleObject proxy, MutableHandleObject protop)
 {
-    protop.set(NULL);
+    protop.set(nullptr);
     return true;
 }
 
@@ -836,10 +839,11 @@ DeadObjectProxy DeadObjectProxy::singleton;
 const char DeadObjectProxy::sDeadObjectFamily = 0;
 
 JSObject *
-js::NewDeadProxyObject(JSContext *cx, JSObject *parent)
+js::NewDeadProxyObject(JSContext *cx, JSObject *parent,
+                       const ProxyOptions &options)
 {
     return NewProxyObject(cx, &DeadObjectProxy::singleton, JS::NullHandleValue,
-                          NULL, parent, ProxyNotCallable);
+                          nullptr, parent, options);
 }
 
 bool
@@ -881,7 +885,7 @@ js::NukeCrossCompartmentWrappers(JSContext* cx,
     // Iterate through scopes looking for system cross compartment wrappers
     // that point to an object that shares a global with obj.
 
-    for (CompartmentsIter c(rt); !c.done(); c.next()) {
+    for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next()) {
         if (!sourceFilter.match(c))
             continue;
 
@@ -988,7 +992,7 @@ js::RemapAllWrappersForObject(JSContext *cx, JSObject *oldTargetArg,
     if (!toTransplant.reserve(cx->runtime()->numCompartments))
         return false;
 
-    for (CompartmentsIter c(cx->runtime()); !c.done(); c.next()) {
+    for (CompartmentsIter c(cx->runtime(), SkipAtoms); !c.done(); c.next()) {
         if (WrapperMap::Ptr wp = c->lookupWrapper(origv)) {
             // We found a wrapper. Remember and root it.
             toTransplant.infallibleAppend(WrapperValue(wp));
@@ -1013,7 +1017,7 @@ js::RecomputeWrappers(JSContext *cx, const CompartmentFilter &sourceFilter,
 
     AutoWrapperVector toRecompute(cx);
 
-    for (CompartmentsIter c(cx->runtime()); !c.done(); c.next()) {
+    for (CompartmentsIter c(cx->runtime(), SkipAtoms); !c.done(); c.next()) {
         // Filter by source compartment.
         if (!sourceFilter.match(c))
             continue;

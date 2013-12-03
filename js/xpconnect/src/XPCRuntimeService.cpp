@@ -4,12 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/dom/workers/Workers.h"
 #include "nsContentUtils.h"
 #include "BackstagePass.h"
 #include "nsIProgrammingLanguage.h"
 #include "nsDOMClassInfo.h"
 #include "nsIPrincipal.h"
+
+#include "mozilla/dom/workers/Workers.h"
 
 using mozilla::dom::workers::ResolveWorkerClasses;
 
@@ -52,12 +53,10 @@ BackstagePass::NewResolve(nsIXPConnectWrappedNative *wrapper,
     JS::RootedId id(cx, idArg);
 
     bool resolved;
+    *objpArg = nullptr;
 
     *_retval = !!JS_ResolveStandardClass(cx, obj, id, &resolved);
-    if (!*_retval) {
-        *objpArg = nullptr;
-        return NS_OK;
-    }
+    NS_ENSURE_TRUE(*_retval, NS_ERROR_FAILURE);
 
     if (resolved) {
         *objpArg = obj;
@@ -65,8 +64,15 @@ BackstagePass::NewResolve(nsIXPConnectWrappedNative *wrapper,
     }
 
     JS::RootedObject objp(cx, *objpArg);
-    *_retval = !!ResolveWorkerClasses(cx, obj, id, flags, &objp);
-    *objpArg = objp;
+
+    *_retval = ResolveWorkerClasses(cx, obj, id, flags, &objp);
+    NS_ENSURE_TRUE(*_retval, NS_ERROR_FAILURE);
+
+    if (objp) {
+        *objpArg = objp;
+        return NS_OK;
+    }
+
     return NS_OK;
 }
 

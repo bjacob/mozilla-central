@@ -15,6 +15,7 @@
 #include "jscompartment.h"
 
 #include "jsinferinlines.h"
+#include "jsobjinlines.h"
 
 using namespace js;
 using namespace js::analyze;
@@ -36,7 +37,7 @@ analyze::PrintBytecode(JSContext *cx, HandleScript script, jsbytecode *pc)
     Sprinter sprinter(cx);
     if (!sprinter.init())
         return;
-    js_Disassemble1(cx, script, pc, pc - script->code, true, &sprinter);
+    js_Disassemble1(cx, script, pc, script->pcToOffset(pc), true, &sprinter);
     fprintf(stderr, "%s", sprinter.string());
 }
 #endif
@@ -50,7 +51,7 @@ ScriptAnalysis::addJump(JSContext *cx, unsigned offset,
                         unsigned *currentOffset, unsigned *forwardJump, unsigned *forwardLoop,
                         unsigned stackDepth)
 {
-    JS_ASSERT(offset < script_->length);
+    JS_ASSERT(offset < script_->length());
 
     Bytecode *&code = codeArray[offset];
     if (!code) {
@@ -96,7 +97,7 @@ ScriptAnalysis::analyzeBytecode(JSContext *cx)
 
     numSlots = TotalSlots(script_);
 
-    unsigned length = script_->length;
+    unsigned length = script_->length();
     codeArray = alloc.newArray<Bytecode*>(length);
     escapedSlots = alloc.newArray<bool>(numSlots);
 
@@ -173,7 +174,7 @@ ScriptAnalysis::analyzeBytecode(JSContext *cx)
             forwardCatch = 0;
 
         Bytecode *code = maybeCode(offset);
-        jsbytecode *pc = script_->code + offset;
+        jsbytecode *pc = script_->offsetToPC(offset);
 
         JSOp op = (JSOp)*pc;
         JS_ASSERT(op < JSOP_LIMIT);
@@ -226,7 +227,7 @@ ScriptAnalysis::analyzeBytecode(JSContext *cx)
         switch (op) {
 
           case JSOP_RETURN:
-          case JSOP_STOP:
+          case JSOP_RETRVAL:
             numReturnSites_++;
             break;
 
@@ -252,6 +253,7 @@ ScriptAnalysis::analyzeBytecode(JSContext *cx)
 
           case JSOP_EVAL:
           case JSOP_SPREADEVAL:
+          case JSOP_ENTERLET2:
           case JSOP_ENTERWITH:
             canTrackVars = false;
             break;
@@ -365,7 +367,7 @@ ScriptAnalysis::analyzeBytecode(JSContext *cx)
 
         /* Handle any fallthrough from this opcode. */
         if (BytecodeFallsThrough(op)) {
-            JS_ASSERT(successorOffset < script_->length);
+            JS_ASSERT(successorOffset < script_->length());
 
             Bytecode *&nextcode = codeArray[successorOffset];
 
@@ -439,17 +441,17 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
     }
     unsigned savedCount = 0;
 
-    LoopAnalysis *loop = NULL;
+    LoopAnalysis *loop = nullptr;
 
-    uint32_t offset = script_->length - 1;
-    while (offset < script_->length) {
+    uint32_t offset = script_->length() - 1;
+    while (offset < script_->length()) {
         Bytecode *code = maybeCode(offset);
         if (!code) {
             offset--;
             continue;
         }
 
-        jsbytecode *pc = script_->code + offset;
+        jsbytecode *pc = script_->offsetToPC(offset);
 
         JSOp op = (JSOp) *pc;
 
@@ -518,13 +520,14 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
             /* Restore all saved variables. :FIXME: maybe do this precisely. */
             for (unsigned i = 0; i < savedCount; i++) {
                 LifetimeVariable &var = *saved[i];
-                var.lifetime = alloc.new_<Lifetime>(offset, var.savedEnd, var.saved);
+                uint32_t savedEnd = var.savedEnd;
+                var.lifetime = alloc.new_<Lifetime>(offset, savedEnd, var.saved);
                 if (!var.lifetime) {
                     js_free(saved);
                     setOOM(cx);
                     return;
                 }
-                var.saved = NULL;
+                var.saved = nullptr;
                 saved[i--] = saved[--savedCount];
             }
             savedCount = 0;
@@ -560,7 +563,7 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
                 /* This is a loop back edge, no lifetime to pull in yet. */
 
 #ifdef DEBUG
-                JSOp nop = JSOp(script_->code[targetOffset]);
+                JSOp nop = JSOp(script_->code()[targetOffset]);
                 JS_ASSERT(nop == JSOP_LOOPHEAD);
 #endif
 
@@ -589,7 +592,7 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
                         entry--;
                     } while (!maybeCode(entry));
 
-                    jsbytecode *entrypc = script_->code + entry;
+                    jsbytecode *entrypc = script_->offsetToPC(entry);
 
                     if (JSOp(*entrypc) == JSOP_GOTO)
                         entry += GET_JUMP_OFFSET(entrypc);
@@ -599,8 +602,8 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
                     /* Do-while loop at the start of the script. */
                     entry = targetOffset;
                 }
-                JS_ASSERT(script_->code[entry] == JSOP_LOOPHEAD ||
-                          script_->code[entry] == JSOP_LOOPENTRY);
+                JS_ASSERT(script_->code()[entry] == JSOP_LOOPHEAD ||
+                          script_->code()[entry] == JSOP_LOOPENTRY);
             } else {
                 for (unsigned i = 0; i < savedCount; i++) {
                     LifetimeVariable &var = *saved[i];
@@ -610,13 +613,14 @@ ScriptAnalysis::analyzeLifetimes(JSContext *cx)
                          * Jumping to a place where this variable is live. Make a new
                          * lifetime segment for the variable.
                          */
-                        var.lifetime = alloc.new_<Lifetime>(offset, var.savedEnd, var.saved);
+                        uint32_t savedEnd = var.savedEnd;
+                        var.lifetime = alloc.new_<Lifetime>(offset, savedEnd, var.saved);
                         if (!var.lifetime) {
                             js_free(saved);
                             setOOM(cx);
                             return;
                         }
-                        var.saved = NULL;
+                        var.saved = nullptr;
                         saved[i--] = saved[--savedCount];
                     } else if (loop && !var.savedEnd) {
                         /*
@@ -674,12 +678,13 @@ ScriptAnalysis::addVariable(JSContext *cx, LifetimeVariable &var, unsigned offse
                 }
             }
         }
-        var.lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, var.savedEnd, var.saved);
+        uint32_t savedEnd = var.savedEnd;
+        var.lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, savedEnd, var.saved);
         if (!var.lifetime) {
             setOOM(cx);
             return;
         }
-        var.saved = NULL;
+        var.saved = nullptr;
     }
 }
 
@@ -689,7 +694,8 @@ ScriptAnalysis::killVariable(JSContext *cx, LifetimeVariable &var, unsigned offs
 {
     if (!var.lifetime) {
         /* Make a point lifetime indicating the write. */
-        Lifetime *lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, var.savedEnd, var.saved);
+        uint32_t savedEnd = var.savedEnd;
+        Lifetime *lifetime = cx->typeLifoAlloc().new_<Lifetime>(offset, savedEnd, var.saved);
         if (!lifetime) {
             setOOM(cx);
             return;
@@ -729,7 +735,7 @@ ScriptAnalysis::killVariable(JSContext *cx, LifetimeVariable &var, unsigned offs
     } else {
         var.saved = var.lifetime;
         var.savedEnd = 0;
-        var.lifetime = NULL;
+        var.lifetime = nullptr;
 
         saved[savedCount++] = &var;
     }
@@ -912,8 +918,8 @@ ScriptAnalysis::analyzeSSA(JSContext *cx)
     Vector<uint32_t> exceptionTargets(cx);
 
     uint32_t offset = 0;
-    while (offset < script_->length) {
-        jsbytecode *pc = script_->code + offset;
+    while (offset < script_->length()) {
+        jsbytecode *pc = script_->offsetToPC(offset);
         JSOp op = (JSOp)*pc;
 
         uint32_t successorOffset = offset + GetBytecodeLength(pc);
@@ -1219,7 +1225,6 @@ ScriptAnalysis::analyzeSSA(JSContext *cx)
 
           case JSOP_THROW:
           case JSOP_RETURN:
-          case JSOP_STOP:
           case JSOP_RETRVAL:
             mergeAllExceptionTargets(cx, values, exceptionTargets);
             break;
@@ -1509,7 +1514,7 @@ ScriptAnalysis::freezeNewValues(JSContext *cx, uint32_t offset)
     Bytecode &code = getCode(offset);
 
     Vector<SlotValue> *pending = code.pendingValues;
-    code.pendingValues = NULL;
+    code.pendingValues = nullptr;
 
     unsigned count = pending->length();
     if (count == 0) {
@@ -1566,7 +1571,7 @@ ScriptAnalysis::needsArgsObj(JSContext *cx, SeenVector &seen, SSAUseChain *use)
     if (!use->popped)
         return needsArgsObj(cx, seen, SSAValue::PhiValue(use->offset, use->u.phi));
 
-    jsbytecode *pc = script_->code + use->offset;
+    jsbytecode *pc = script_->offsetToPC(use->offset);
     JSOp op = JSOp(*pc);
 
     if (op == JSOP_POP || op == JSOP_POPN)
@@ -1638,7 +1643,7 @@ ScriptAnalysis::needsArgsObj(JSContext *cx)
     if (localsAliasStack())
         return true;
 
-    unsigned pcOff = script_->argumentsBytecode() - script_->code;
+    unsigned pcOff = script_->pcToOffset(script_->argumentsBytecode());
 
     SeenVector seen(cx);
     if (needsArgsObj(cx, seen, SSAValue::PushedValue(pcOff, 0)))
@@ -1666,12 +1671,12 @@ ScriptAnalysis::printSSA(JSContext *cx)
     printf("\n");
 
     RootedScript script(cx, script_);
-    for (unsigned offset = 0; offset < script_->length; offset++) {
+    for (unsigned offset = 0; offset < script_->length(); offset++) {
         Bytecode *code = maybeCode(offset);
         if (!code)
             continue;
 
-        jsbytecode *pc = script_->code + offset;
+        jsbytecode *pc = script_->offsetToPC(offset);
 
         PrintBytecode(cx, script, pc);
 
