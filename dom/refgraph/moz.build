@@ -6,13 +6,12 @@
 
 LIBXUL_LIBRARY   = True
 FAIL_ON_WARNINGS = True
-MODULE           = 'dom'
 LIBRARY_NAME     = 'domrefgraph_s'
 
 EXPORTS.mozilla.dom += [
     'Refgraph.h',
 ]
 
-CPP_SOURCES += [
+SOURCES += [
     'Refgraph.cpp',
 ]

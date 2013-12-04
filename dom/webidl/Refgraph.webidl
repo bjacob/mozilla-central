@@ -12,7 +12,7 @@ interface RefgraphVertex {
   readonly attribute unsigned long long address;
   readonly attribute unsigned long long size;
   readonly attribute unsigned long edgeCount;
-  [Creator]
+  [NewObject]
   RefgraphEdge? edge(unsigned long index);
 
   readonly attribute unsigned long cycleIndex;
@@ -21,11 +21,11 @@ interface RefgraphVertex {
   readonly attribute unsigned long weakEdgeCount;
   readonly attribute unsigned long backEdgeCount;
   readonly attribute unsigned long backWeakEdgeCount;
-  [Creator]
+  [NewObject]
   RefgraphVertex? weakEdge(unsigned long index);
-  [Creator]
+  [NewObject]
   RefgraphVertex? backEdge(unsigned long index);
-  [Creator]
+  [NewObject]
   RefgraphVertex? backWeakEdge(unsigned long index);
 };
 
@@ -35,17 +35,17 @@ interface RefgraphEdgeRefInfo {
 };
 
 interface RefgraphEdge {
-  [Creator]
+  [NewObject]
   readonly attribute RefgraphVertex target;
   readonly attribute boolean isTraversedByCC;
   readonly attribute DOMString CCName;
   readonly attribute unsigned long refInfoCount;
-  [Creator]
+  [NewObject]
   RefgraphEdgeRefInfo? refInfo(unsigned long index);
 };
 
 interface RefgraphCycle {
-  [Creator]
+  [NewObject]
   RefgraphVertex? vertex(unsigned long index);
   readonly attribute unsigned long vertexCount;
   readonly attribute boolean isTraversedByCC;
@@ -53,14 +53,14 @@ interface RefgraphCycle {
 };
 
 interface Refgraph {
-  [Creator]
+  [NewObject]
   sequence<RefgraphTypeSearchResult> typeSearch(DOMString query);
-  [Creator]
+  [NewObject]
   RefgraphVertex? findVertex(DOMString typeName, RefgraphVertex? previousVertex);
-  [Creator]
+  [NewObject]
   RefgraphVertex? findVertex(unsigned long long address);
 
-  [Creator]
+  [NewObject]
   RefgraphCycle? cycle(unsigned long index);
   readonly attribute unsigned long cycleCount;
 };
@@ -68,6 +68,6 @@ interface Refgraph {
 [Constructor]
 interface RefgraphController {
   void snapshotToFile(DOMString fileName);
-  [Creator]
+  [NewObject]
   Refgraph? loadFromFile(DOMString fileName);
 };
