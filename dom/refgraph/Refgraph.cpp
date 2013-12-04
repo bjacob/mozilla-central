@@ -1176,6 +1176,11 @@ public:
         return NS_ERROR_FAILURE;
     }
 
+    NS_IMETHOD NoteGCedObject(uint64_t, bool, const char*, uint64_t)
+    {
+        return NS_OK;
+    }
+
 private:
     FILE* mFile;
     bool mPrintEdges;
@@ -1186,5 +1191,5 @@ NS_IMPL_ISUPPORTS1(RefgraphCCDumper, nsICycleCollectorListener)
 static void RefgraphCCDump(FILE* f)
 {
     nsCOMPtr<nsICycleCollectorListener> listener = new RefgraphCCDumper(f);
-    nsJSContext::CycleCollectNow(listener, -1, true);
+    nsJSContext::CycleCollectNow(listener, -1);
 }
